@@ -1,8 +1,8 @@
 """Display up to six local images in a resizable 2-row, 3-column grid."""
 
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -36,11 +36,13 @@ class ImageSlot(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self.original is not None:
-            self.setPixmap(self.original.scaled(
-                self.contentsRect().size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            ))
+            self.setPixmap(
+                self.original.scaled(
+                    self.contentsRect().size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
 
 
 class ImageWindow(QWidget):
@@ -49,8 +51,11 @@ class ImageWindow(QWidget):
         self.setWindowTitle("Qt Image Test (2 x 3)")
         self.resize(960, 640)
         paths = sorted(
-            (p for p in directory.iterdir()
-             if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}),
+            (
+                p
+                for p in directory.iterdir()
+                if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            ),
             key=lambda p: p.name.lower(),
         )[:6]
         layout = QGridLayout(self)
@@ -75,7 +80,9 @@ class ImageWindow(QWidget):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("image_dir", type=Path, help="Directory containing PNG/JPG/JPEG files")
+    parser.add_argument(
+        "image_dir", type=Path, help="Directory containing PNG/JPG/JPEG files"
+    )
     args = parser.parse_args()
     if not args.image_dir.is_dir():
         parser.error(f"Not a directory: {args.image_dir}")

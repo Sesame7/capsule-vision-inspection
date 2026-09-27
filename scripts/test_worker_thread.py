@@ -27,7 +27,7 @@ class WorkerWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Worker Thread Test")
         self.resize(360, 160)
-        self.thread = None
+        self.worker_thread: QThread | None = None
         self.worker = None
         self.button = QPushButton("Start Test")
         self.status = QLabel("Ready")
@@ -39,21 +39,21 @@ class WorkerWindow(QWidget):
 
     @Slot()
     def start_test(self):
-        if self.thread is not None:
+        if self.worker_thread is not None:
             return
         self.button.setEnabled(False)
         self.status.setText("Running...")
         self.elapsed.setText("Elapsed: --")
-        self.thread = QThread(self)
+        self.worker_thread = QThread(self)
         self.worker = Worker()
-        self.worker.moveToThread(self.thread)
-        self.thread.started.connect(self.worker.run)
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.complete)
-        self.worker.finished.connect(self.thread.quit)
-        self.thread.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.clean_up)
-        self.thread.finished.connect(self.thread.deleteLater)
-        self.thread.start()
+        self.worker.finished.connect(self.worker_thread.quit)
+        self.worker_thread.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.clean_up)
+        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.worker_thread.start()
 
     @Slot(float)
     def complete(self, seconds: float):
@@ -63,15 +63,15 @@ class WorkerWindow(QWidget):
     @Slot()
     def clean_up(self):
         self.worker = None
-        self.thread = None
+        self.worker_thread = None
         self.button.setEnabled(True)
 
     def closeEvent(self, event):
-        if self.thread is not None:
-            self.thread.requestInterruption()
+        if self.worker_thread is not None:
+            self.worker_thread.requestInterruption()
             # quit() alone cannot stop run(); interruption stops its short waits.
-            self.thread.quit()
-            self.thread.wait()
+            self.worker_thread.quit()
+            self.worker_thread.wait()
         super().closeEvent(event)
 
 
