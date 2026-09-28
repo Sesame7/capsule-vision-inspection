@@ -339,7 +339,8 @@ def summarize(images):
 
 def record_failure(report, records, phase, exc, batch_id=None, vimo=None):
     failure = {
-        "phase": phase, "batch_id": batch_id,
+        "phase": phase,
+        "batch_id": batch_id,
         "filenames": [r["filename"] for r in records],
         "relative_paths": [r["relative_path"] for r in records],
         "exception": exception_details(exc, vimo),
@@ -349,8 +350,12 @@ def record_failure(report, records, phase, exc, batch_id=None, vimo=None):
     for record in records:
         record["status"] = "failed"
         record["failure_ids"].append(failure_id)
-    print(f"[WARN] {phase}: {', '.join(failure['relative_paths'])}: "
-          f"{type(exc).__name__}: {' '.join(str(exc).split())}", file=sys.stderr, flush=True)
+    print(
+        f"[WARN] {phase}: {', '.join(failure['relative_paths'])}: "
+        f"{type(exc).__name__}: {' '.join(str(exc).split())}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def recoverable_inference_error(exc, vimo):
@@ -358,7 +363,8 @@ def recoverable_inference_error(exc, vimo):
     # recoverable; license/runtime/unknown SDK failures stop further GPU calls.
     return (
         isinstance(exc, vimo.VimoException)
-        and exc.code in (vimo.ErrorCode.INVALID_ARGUMENT, vimo.ErrorCode.INVALID_IMAGE_DATA)
+        and exc.code
+        in (vimo.ErrorCode.INVALID_ARGUMENT, vimo.ErrorCode.INVALID_IMAGE_DATA)
     ) or isinstance(exc, (ValueError, TypeError))
 
 
@@ -372,7 +378,12 @@ def decoded_chunks(paths, records, report, vimo, cv2):
         except (OSError, ValueError, cv2.error) as exc:
             record_failure(report, [record], "decode", exc)
             continue
-        record.update(decoded=True, shape=list(image.shape), dtype=str(image.dtype), status="decoded")
+        record.update(
+            decoded=True,
+            shape=list(image.shape),
+            dtype=str(image.dtype),
+            status="decoded",
+        )
         # Keep discovery order and avoid unverified mixed-shape batches.
         if chunk and chunk[0][1].image.shape != image.shape:
             yield chunk
@@ -392,15 +403,21 @@ def decoded_chunks(paths, records, report, vimo, cv2):
         yield chunk
 
 
-def compare_folder(serial_module, batch_module, paths, records, report, warmup, vimo, cv2):
+def compare_folder(
+    serial_module, batch_module, paths, records, report, warmup, vimo, cv2
+):
     warmed = False
-    for batch_id, chunk in enumerate(decoded_chunks(paths, records, report, vimo, cv2), 1):
+    for batch_id, chunk in enumerate(
+        decoded_chunks(paths, records, report, vimo, cv2), 1
+    ):
         batch_records = [item[0] for item in chunk]
         requests = [item[1] for item in chunk]
         batch_record = {
-            "batch_id": batch_id, "size": len(requests),
+            "batch_id": batch_id,
+            "size": len(requests),
             "relative_paths": [r["relative_path"] for r in batch_records],
-            "status": "pending", "inference_attempted": False,
+            "status": "pending",
+            "inference_attempted": False,
         }
         report["batches"].append(batch_record)
         for record in batch_records:
@@ -409,7 +426,10 @@ def compare_folder(serial_module, batch_module, paths, records, report, warmup, 
             phase = "serial warmup"
             affected = batch_records
             try:
-                print(f"Warming both modules: {warmup} rounds, {len(requests)} images", flush=True)
+                print(
+                    f"Warming both modules: {warmup} rounds, {len(requests)} images",
+                    flush=True,
+                )
                 for _ in range(warmup):
                     for record, request in chunk:
                         affected = [record]
@@ -443,7 +463,8 @@ def compare_folder(serial_module, batch_module, paths, records, report, warmup, 
                 serial_results.append(None)
                 record_failure(report, [record], phase, exc, batch_id, vimo)
                 if isinstance(exc, MemoryError) or (
-                    phase == "serial inference" and not recoverable_inference_error(exc, vimo)
+                    phase == "serial inference"
+                    and not recoverable_inference_error(exc, vimo)
                 ):
                     raise
             finally:
@@ -454,37 +475,60 @@ def compare_folder(serial_module, batch_module, paths, records, report, warmup, 
             responses = batch_module.run(requests)
         except Exception as exc:
             batch_record["status"] = "inference_failed"
-            record_failure(report, batch_records, "batch inference", exc, batch_id, vimo)
+            record_failure(
+                report, batch_records, "batch inference", exc, batch_id, vimo
+            )
             if not recoverable_inference_error(exc, vimo):
                 raise
         else:
             if not isinstance(responses, list) or len(responses) != len(requests):
                 batch_record["status"] = "invalid_response"
-                record_failure(report, batch_records, "batch result processing",
-                               ValueError("Batch response count/type does not match submitted requests"), batch_id)
+                record_failure(
+                    report,
+                    batch_records,
+                    "batch result processing",
+                    ValueError(
+                        "Batch response count/type does not match submitted requests"
+                    ),
+                    batch_id,
+                )
             else:
                 batch_record["status"] = "inferred"
-                for record, serial, response in zip(batch_records, serial_results, responses):
+                for record, serial, response in zip(
+                    batch_records, serial_results, responses
+                ):
                     record["batch_inferred"] = True
                     if serial is None:
                         continue
                     try:
-                        result = compare_image(record["filename"], serial, snapshot(response, vimo))
+                        result = compare_image(
+                            record["filename"], serial, snapshot(response, vimo)
+                        )
                         result["relative_path"] = record["relative_path"]
                         result["image_shape"] = record["shape"]
                         result["batch_id"] = batch_id
                         report["per_image"].append(result)
                         record["status"] = "compared"
                     except Exception as exc:
-                        record_failure(report, [record], "comparison/result processing", exc, batch_id, vimo)
+                        record_failure(
+                            report,
+                            [record],
+                            "comparison/result processing",
+                            exc,
+                            batch_id,
+                            vimo,
+                        )
                         if isinstance(exc, MemoryError):
                             raise
         # The report holds measurements only, not raw masks or input arrays.
         serial_results = responses = response = serial = None
         requests = chunk = request = None
         if batch_id % 10 == 0:
-            print(f"Progress: {batch_id} chunks; {len(report['per_image'])} images compared; "
-                  f"{len(report['failures'])} failure events", flush=True)
+            print(
+                f"Progress: {batch_id} chunks; {len(report['per_image'])} images compared; "
+                f"{len(report['failures'])} failure events",
+                flush=True,
+            )
 
 
 def summarize_folder(report):
@@ -493,62 +537,119 @@ def summarize_folder(report):
     summaries = [image["summary"] for image in images]
     high_levels = [image["high_level"] for image in images]
     masks = [s["mask_mismatch_percent"] for s in summaries if s["mask_comparable"]]
-    result.update({
-        "total_discovered_images": len(records),
-        "selected_images": sum(r["status"] != "skipped_limit" for r in records),
-        "decoded_images": sum(r["decoded"] for r in records),
-        "successfully_compared_images": len(images),
-        "failed_images": sum(bool(r["failure_ids"]) for r in records),
-        "failure_events": len(report["failures"]),
-        "fatal_error": report["fatal_error"] is not None,
-        "unreadable_images": sum(f["phase"] == "decode" for f in report["failures"]),
-        "image_status_counts": dict(Counter(r["status"] for r in records)),
-        "aggregation_scope": "Semantic, region and mask statistics use successfully compared image pairs only. "
-                             "Failures and unprocessed images are never counted as OK or equal.",
-        "total_matched_regions": sum(s["matched_regions"] for s in summaries),
-        "total_unmatched_serial_regions": sum(len(i["regions"]["unmatched_serial"]) for i in images),
-        "total_unmatched_batch_regions": sum(len(i["regions"]["unmatched_batch"]) for i in images),
-        "images_containing_unmatched_regions": sum(s["unmatched_regions"] > 0 for s in summaries),
-        "maximum_absolute_area_delta": extrema((s["max_area_delta"] for s in summaries), max),
-        "masks_not_comparable": sum(not s["mask_comparable"] for s in summaries),
-        "masks_different": sum(s["mask_exact_equal"] is False for s in summaries),
-        "mean_mask_mismatch_percent": float(np.mean(masks)) if masks else None,
-        "p95_mask_mismatch_percent": float(np.percentile(masks, 95, method="linear")) if len(masks) >= 2 else None,
-        "mask_statistics_note": "Unweighted across comparable images; P95 uses linear interpolation with >=2 samples, else null.",
-        "batch_size_counts": dict(sorted(Counter(b["size"] for b in report["batches"] if b["inference_attempted"]).items())),
-    })
+    result.update(
+        {
+            "total_discovered_images": len(records),
+            "selected_images": sum(r["status"] != "skipped_limit" for r in records),
+            "decoded_images": sum(r["decoded"] for r in records),
+            "successfully_compared_images": len(images),
+            "failed_images": sum(bool(r["failure_ids"]) for r in records),
+            "failure_events": len(report["failures"]),
+            "fatal_error": report["fatal_error"] is not None,
+            "unreadable_images": sum(
+                f["phase"] == "decode" for f in report["failures"]
+            ),
+            "image_status_counts": dict(Counter(r["status"] for r in records)),
+            "aggregation_scope": "Semantic, region and mask statistics use successfully compared image pairs only. "
+            "Failures and unprocessed images are never counted as OK or equal.",
+            "total_matched_regions": sum(s["matched_regions"] for s in summaries),
+            "total_unmatched_serial_regions": sum(
+                len(i["regions"]["unmatched_serial"]) for i in images
+            ),
+            "total_unmatched_batch_regions": sum(
+                len(i["regions"]["unmatched_batch"]) for i in images
+            ),
+            "images_containing_unmatched_regions": sum(
+                s["unmatched_regions"] > 0 for s in summaries
+            ),
+            "maximum_absolute_area_delta": extrema(
+                (s["max_area_delta"] for s in summaries), max
+            ),
+            "masks_not_comparable": sum(not s["mask_comparable"] for s in summaries),
+            "masks_different": sum(s["mask_exact_equal"] is False for s in summaries),
+            "mean_mask_mismatch_percent": float(np.mean(masks)) if masks else None,
+            "p95_mask_mismatch_percent": float(
+                np.percentile(masks, 95, method="linear")
+            )
+            if len(masks) >= 2
+            else None,
+            "mask_statistics_note": "Unweighted across comparable images; P95 uses linear interpolation with >=2 samples, else null.",
+            "batch_size_counts": dict(
+                sorted(
+                    Counter(
+                        b["size"] for b in report["batches"] if b["inference_attempted"]
+                    ).items()
+                )
+            ),
+        }
+    )
     for mode in ("serial", "batch"):
         for decision in ("OK", "NG"):
-            result[f"{mode}_{decision.lower()}_count"] = sum(h[f"{mode}_ok_ng_proxy"] == decision for h in high_levels)
-    for name, key in (("ok_ng", "ok_ng_equal"), ("label_sets", "labels_equal"),
-                      ("label_map", "label_map_equal"), ("per_label_region_counts", "region_counts_equal")):
+            result[f"{mode}_{decision.lower()}_count"] = sum(
+                h[f"{mode}_ok_ng_proxy"] == decision for h in high_levels
+            )
+    for name, key in (
+        ("ok_ng", "ok_ng_equal"),
+        ("label_sets", "labels_equal"),
+        ("label_map", "label_map_equal"),
+        ("per_label_region_counts", "region_counts_equal"),
+    ):
         count = sum(s[key] for s in summaries)
         result[f"images_with_equal_{name}"] = count
         result[f"images_with_different_{name}"] = len(images) - count
-    labels = sorted({label for h in high_levels for mode in ("serial", "batch")
-                     for label in h[f"{mode}_regions_per_label"]})
+    labels = sorted(
+        {
+            label
+            for h in high_levels
+            for mode in ("serial", "batch")
+            for label in h[f"{mode}_regions_per_label"]
+        }
+    )
     result["per_label"] = {}
     for label in labels:
-        counts = {mode: [h[f"{mode}_regions_per_label"].get(label, 0) for h in high_levels]
-                  for mode in ("serial", "batch")}
+        counts = {
+            mode: [h[f"{mode}_regions_per_label"].get(label, 0) for h in high_levels]
+            for mode in ("serial", "batch")
+        }
         result["per_label"][label] = {
             "serial_images": sum(n > 0 for n in counts["serial"]),
             "batch_images": sum(n > 0 for n in counts["batch"]),
-            "serial_total_regions": sum(counts["serial"]), "batch_total_regions": sum(counts["batch"]),
-            "images_with_different_region_count": sum(a != b for a, b in zip(counts["serial"], counts["batch"])),
+            "serial_total_regions": sum(counts["serial"]),
+            "batch_total_regions": sum(counts["batch"]),
+            "images_with_different_region_count": sum(
+                a != b for a, b in zip(counts["serial"], counts["batch"])
+            ),
         }
     examples = {
-        "semantic_differences": [i["relative_path"] for i in images if not i["summary"]["semantic_result_equal"]][:20],
-        "label_map_differences": [i["relative_path"] for i in images if not i["summary"]["label_map_equal"]][:20],
-        "unmatched_regions": [i["relative_path"] for i in images if i["summary"]["unmatched_regions"]][:20],
+        "semantic_differences": [
+            i["relative_path"]
+            for i in images
+            if not i["summary"]["semantic_result_equal"]
+        ][:20],
+        "label_map_differences": [
+            i["relative_path"] for i in images if not i["summary"]["label_map_equal"]
+        ][:20],
+        "unmatched_regions": [
+            i["relative_path"] for i in images if i["summary"]["unmatched_regions"]
+        ][:20],
     }
-    for name, key in (("largest_mask_mismatch", "mask_mismatch_percent"),
-                      ("largest_relative_region_area_difference", "max_relative_area_delta_percent")):
-        ranked = sorted((i for i in images if i["summary"][key] is not None and i["summary"][key] > 0),
-                        key=lambda i: (-i["summary"][key], i["relative_path"]))
+    for name, key in (
+        ("largest_mask_mismatch", "mask_mismatch_percent"),
+        ("largest_relative_region_area_difference", "max_relative_area_delta_percent"),
+    ):
+        ranked = sorted(
+            (
+                i
+                for i in images
+                if i["summary"][key] is not None and i["summary"][key] > 0
+            ),
+            key=lambda i: (-i["summary"][key], i["relative_path"]),
+        )
         examples[name] = [i["relative_path"] for i in ranked[:20]]
     result["difference_examples"] = examples
-    result["difference_example_note"] = "Relative filenames disambiguate recursive folders; ranked lists include nonzero defined differences only."
+    result["difference_example_note"] = (
+        "Relative filenames disambiguate recursive folders; ranked lists include nonzero defined differences only."
+    )
     return result
 
 
@@ -556,7 +657,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", type=Path, help="Source .vimosln model (read-only)")
     parser.add_argument(
-        "image_dir", type=Path, help="Compare the entire image folder in deterministic filename order"
+        "image_dir",
+        type=Path,
+        help="Compare the entire image folder in deterministic filename order",
     )
     parser.add_argument(
         "--warmup",
@@ -565,7 +668,11 @@ def main():
         help="Warmup rounds per mode on the first usable chunk (default: 5)",
     )
     parser.add_argument("--recursive", action="store_true", help="Include subfolders")
-    parser.add_argument("--limit", type=positive_int, help="Select the first N discovered files (default: all)")
+    parser.add_argument(
+        "--limit",
+        type=positive_int,
+        help="Select the first N discovered files (default: all)",
+    )
     args = parser.parse_args()
     phase = "load inputs"
     report = None
@@ -573,7 +680,7 @@ def main():
     try:
         model, directory = validate_paths(args.model, args.image_dir)
         paths = discover_images(directory, args.recursive)
-        selected = paths if args.limit is None else paths[:args.limit]
+        selected = paths if args.limit is None else paths[: args.limit]
         versions = {}
         for package in ("smartmore.vimo.inference", "smartmore.vimo.inference.custom"):
             try:
@@ -591,20 +698,35 @@ def main():
             "numpy_version": np.__version__,
             "model_sha256": model_hash,
             "images": [
-                {"filename": p.name, "relative_path": p.relative_to(directory).as_posix(),
-                 "status": "not_processed" if index < len(selected) else "skipped_limit",
-                 "decoded": False, "serial_inferred": False, "batch_inferred": False,
-                 "shape": None, "dtype": None, "failure_ids": []}
+                {
+                    "filename": p.name,
+                    "relative_path": p.relative_to(directory).as_posix(),
+                    "status": "not_processed"
+                    if index < len(selected)
+                    else "skipped_limit",
+                    "decoded": False,
+                    "serial_inferred": False,
+                    "batch_inferred": False,
+                    "shape": None,
+                    "dtype": None,
+                    "failure_ids": [],
+                }
                 for index, p in enumerate(paths)
             ],
             "settings": {
-                "image_directory": str(directory), "recursive": args.recursive, "limit": args.limit,
-                "extensions": sorted(EXTENSIONS), "warmup": args.warmup,
+                "image_directory": str(directory),
+                "recursive": args.recursive,
+                "limit": args.limit,
+                "extensions": sorted(EXTENSIONS),
+                "warmup": args.warmup,
                 "ordering": "case-insensitive relative filename, original-case tie break",
                 "limit_policy": "first N discovered files, including unreadable files",
                 "batch_policy": "up to 6 decoded requests in discovery order; flush at shape changes; no padding or duplicates",
             },
-            "per_image": [], "failures": [], "batches": [], "fatal_error": None,
+            "per_image": [],
+            "failures": [],
+            "batches": [],
+            "fatal_error": None,
             "warmup_count": args.warmup,
             "warmup_unit": "first usable chunk per mode; warmup outputs discarded",
             "device_id": 0,
@@ -689,8 +811,16 @@ def main():
                     "SDK did not enable the requested region information flags"
                 )
             phase = "folder decoding, warmup, inference and comparison"
-            compare_folder(serial_module, batch_module, selected, report["images"],
-                           report, args.warmup, vimo, cv2)
+            compare_folder(
+                serial_module,
+                batch_module,
+                selected,
+                report["images"],
+                report,
+                args.warmup,
+                vimo,
+                cv2,
+            )
             phase = "release modules and Solution"
     except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001 - preserve partial results
         interrupted = isinstance(exc, KeyboardInterrupt)
@@ -701,7 +831,13 @@ def main():
         report["fatal_error"] = {"phase": phase, **exception_details(exc)}
 
     try:
-        report["status"] = "aborted" if report["fatal_error"] else "completed_with_errors" if report["failures"] else "completed"
+        report["status"] = (
+            "aborted"
+            if report["fatal_error"]
+            else "completed_with_errors"
+            if report["failures"]
+            else "completed"
+        )
         report["final_summary"] = summarize_folder(report)
         finished = datetime.now(timezone.utc)
         report["completed_at"] = finished.isoformat()
@@ -710,7 +846,8 @@ def main():
         )
         output_dir.mkdir(parents=True, exist_ok=True)
         output = (
-            output_dir / f"consistency_full_{finished.strftime('%Y%m%dT%H%M%S_%fZ')}.json"
+            output_dir
+            / f"consistency_full_{finished.strftime('%Y%m%dT%H%M%S_%fZ')}.json"
         )
         with output.open("x", encoding="utf-8") as stream:
             json.dump(
@@ -724,7 +861,14 @@ def main():
             stream.write("\n")
         print(f"\nSemantic rule: {report['semantic_rule']}")
         print(f"\nFull-folder summary ({report['status']})\n-------------------")
-        print(json.dumps(report["final_summary"], ensure_ascii=False, indent=2, default=json_default))
+        print(
+            json.dumps(
+                report["final_summary"],
+                ensure_ascii=False,
+                indent=2,
+                default=json_default,
+            )
+        )
         print(report["assessment"])
         print(f"Detailed matches, class pixel counts and parameters: {output}")
         if interrupted:
