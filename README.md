@@ -60,6 +60,30 @@ a future UI must invoke it outside its main thread. Use `with` or `close()`.
 Runtime staging/cache defaults to `outputs/vimo_cache/<model-sha256>/`, relative
 to the working directory; the source model remains untouched.
 
+For asynchronous submission, `vimo_demo.runtime.InferenceWorker` creates, uses
+and closes one engine on a dedicated thread. Supply a factory, not an engine:
+
+```python
+from vimo_demo.runtime import InferenceWorker
+
+worker = InferenceWorker(
+    lambda: VimoSegmentationEngine("models/model_trt_fp16.vimosln")
+)
+try:
+    worker.start().result(timeout=120)  # CLI example; never block a GUI thread.
+    result = worker.submit(image_bgr).result(timeout=30)
+finally:
+    worker.request_stop()
+    if not worker.join(timeout=30):
+        raise TimeoutError("Inference worker is still running")
+if worker.failure is not None:
+    raise worker.failure
+```
+
+The queue defaults to one pending image plus one active task. Submitted arrays
+must remain immutable until their Future completes. See [worker lifecycle](docs/runtime-worker.md)
+for cancellation, failures, startup/stop races and opt-in real lifecycle tests.
+
 ## Quality gates
 
 ```powershell
@@ -77,7 +101,7 @@ annotations; unit tests do not import the real SDK.
 Optional GPU regressions using the local model and `images/`:
 
 ```powershell
-uv run --no-sync pytest -m "gpu and not full_reference" --run-gpu --require-gpu -s
+uv run --no-sync pytest tests/integration/test_reference.py -m "gpu and not full_reference" --run-gpu --require-gpu -s
 uv run --no-sync pytest -m full_reference --run-full-reference --require-gpu -s
 ```
 

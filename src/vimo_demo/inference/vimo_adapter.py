@@ -138,7 +138,7 @@ class VimoSegmentationEngine:
             # Validate C++ return values despite the claimed static return type.
             if not isinstance(params, vimo.SegmentationParams):  # pyright: ignore[reportUnnecessaryIsInstance]
                 raise TypeError(f"Expected SegmentationParams, got {type(params)}")
-            # Identical to configure_regions in the Phase 0 reference. Preserve
+            # Preserve the verified Phase 0 settings documented in phase0-findings.md:
             # every threshold, ROI, mask operation, score-map and other default.
             params.with_region_info = True
             flags = vimo.SegRegionInfoFlag
