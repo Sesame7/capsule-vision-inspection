@@ -33,12 +33,17 @@ Current target:
 
 ## Repository structure
 
-- `vendor/`: original vendor files; treat as read-only.
-- `sample_images/`: local test images.
-- `scripts/`: isolated smoke tests and engineering-validation scripts.
-- `app/`: application code.
+- `src/vimo_demo/`: typed inference core; public API is VimoSegmentationEngine.
+- `tests/`: unit/integration tests and the tracked golden `reference/phase0.json`.
+- `models/` and `images/`: local input assets, ignored by Git.
+- `scripts/`: maintained engineering tools using only the public inference API.
 - `outputs/`: generated outputs; do not depend on committed contents.
 - `docs/`: project notes and technical decisions.
+
+Historical experiments are archived in Git. Keep direct ViMo SDK imports inside
+the formal adapter. Preserve model parameters and the golden regression fixture.
+Run Ruff, formatting and strict Pyright on `src tests scripts`; normal pytest
+must remain independent of GPU availability. GPU regressions are opt-in.
 
 ## Validation
 

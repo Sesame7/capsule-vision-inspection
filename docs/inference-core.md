@@ -11,7 +11,7 @@ with VimoSegmentationEngine(model_path, device_id=0) as engine:
 
 Typed models, pure validation/staging helpers and one SDK adapter are sufficient.
 The public engine lives in `vimo_adapter.py`; a separate `backend.py` forwarding
-layer would add no current behavior. Formal code does not import spike scripts.
+layer would add no current behavior. Maintained tools use only the public API.
 Optional keyword-only `module_id` disambiguates segmentation modules; otherwise
 exactly one must exist in SDK metadata. This avoids depending on exported HTML
 while selecting the same verified module `2`. Ambiguity fails explicitly.
@@ -49,11 +49,12 @@ colors. The documented background ID is 0; no background label is fabricated.
 
 Construction stages a checksum-verified model, loads one Solution and creates one
 GPU segmentation module (`device_id=0` by default, `max_batch_size=1`). Default
-`cache_dir` is `outputs/vimo_smoke`, relative to the working directory, reusing
-Phase 0 caches. Runtime files live under `<sha256>/`. Keep cache_dir writable and
-outside vendor content. Sources remain read-only; corrupt staged models fail.
+`cache_dir` is `outputs/vimo_cache`, relative to the working directory. Runtime
+files live under `<sha256>/`. Keep cache_dir writable and separate from source
+models. Sources remain read-only; corrupt staged models fail. The existing
+checksum-keyed cache was moved intact during consolidation; missing caches rebuild.
 
-Setup matches Phase 0 `configure_regions`: enable region output and OR AREA,
+Setup preserves the verified settings: enable region output and OR AREA,
 LONG_SIDE, SHORT_SIDE, BOUNDING_RECT, MIN_AREA_RECT, OUTER_CONTOUR and INNER_CONTOURS.
 Thresholds, ROI and mask operation remain SDK values. No `vimo_params.json` reload.
 Mask-enabled/score-map-disabled defaults are checked, not silently changed. No
@@ -89,13 +90,17 @@ formal source contains no `Any`. NumPy dtype casts follow explicit runtime check
 ## Development and regression
 
 Python is pinned to 3.14.7. The uv lock covers public dependencies; ViMo/custom
-remain external vendor prerequisites installed from now-absent local wheels.
+remain external vendor prerequisites obtained from SmartMore.
 Bootstrap with `uv sync --locked --inexact --no-python-downloads` to retain them;
 use README `uv run --no-sync` commands daily. No runtime/environment changes.
 
 Unit tests use pure arrays and small SDK stand-ins, without real SDK/GPU/model
 access. They cover validation, mask ownership, counts versus IDs, staging,
 parameter preservation, exception chains and cleanup. Normal pytest skips GPU.
+Ruff and strict Pyright cover `src/`, `tests/` and maintained `scripts/`.
+The golden fixture is `tests/reference/phase0.json`; historical raw scan outputs
+and exploration scripts are not runtime or regression dependencies. Git commit
+`be61707` preserves the completed Phase 1A implementation and earlier scripts.
 
 Eight-image regression includes two no-region images and all four labels. It
 checks semantics, mask properties, geometry presence and result lifetime. Full

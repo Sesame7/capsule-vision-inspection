@@ -68,7 +68,7 @@ def unavailable(config: pytest.Config, reason: str) -> NoReturn:
 def engine(
     reference: Reference, pytestconfig: pytest.Config
 ) -> Iterator[VimoSegmentationEngine]:
-    model = ROOT / "vendor/model_trt_fp16.vimosln"
+    model = ROOT / "models/model_trt_fp16.vimosln"
     if not model.is_file() or not (ROOT / "images").is_dir():
         unavailable(pytestconfig, "Local reference model/images unavailable")
     if sha256(model) != reference["model_sha256"]:
@@ -76,7 +76,7 @@ def engine(
             pytestconfig, "Model hash differs; Phase 0 golden counts do not apply"
         )
     try:
-        active = VimoSegmentationEngine(model, cache_dir=ROOT / "outputs/vimo_smoke")
+        active = VimoSegmentationEngine(model, cache_dir=ROOT / "outputs/vimo_cache")
     except VimoInitializationError as exc:
         cause = exc.__cause__
         # Missing DLL/SDK or license are prerequisites; configuration/adapter

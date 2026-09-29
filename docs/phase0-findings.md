@@ -1,14 +1,17 @@
 # Phase 0 verified findings
 
 These are SDK integration findings, not validation of model accuracy or
-annotation quality. Phase 0 scripts remain the reference SDK usage.
+annotation quality. These historical experiments are not continuously rerun.
+Findings are frozen here and in the maintained golden fixture; Git history
+(including the Phase 1A checkpoint `be61707`) preserves exploration code.
+`VimoSegmentationEngine` is now the supported reference API.
 
 ## Environment and model
 
 - Windows 10; Python 3.14.7 x64; RTX 4060 Ti 16 GB; NVIDIA driver 616.92.
 - ViMo SDK/custom 3.20.0.2; active license; working CUDA 12/TensorRT runtime.
 - NumPy 2.5.3, OpenCV 5.0.0.93; Pillow and PySide6 available.
-- Model: `vendor/model_trt_fp16.vimosln`.
+- Current local model: `models/model_trt_fp16.vimosln` (moved without byte changes).
 - SHA-256: `b2380a2c8714b36f0c045e2d79600ff3bed84f9a745822abe473830dd40d982b`.
 - Segmentation module `2`, `分割1`, AlgoVersion 4.0, ModelVersion V2.
 - Area thresholds: 黑点 30, 压痕 100, 破损 30, 变形 1500; other current dimension
@@ -17,6 +20,9 @@ annotation quality. Phase 0 scripts remain the reference SDK usage.
   sides, bounding/minimum-area rectangles, outer/inner contours.
 - Input: uint8 BGR, typically `(960,1056,3)`. Mask `(H,W,1)` is safely squeezed
   only along its last singleton channel; meaningful uint8 IDs are preserved.
+- Reference display colors from the exported model metadata: 黑点 `#D40005`,
+  压痕 `#CCC900`, 破损 `#69CC00`, 变形 `#00CC85`. These are visualization colors
+  keyed by label name, not a mask-ID mapping. Actual IDs come from each result.
 
 ## Observations
 
@@ -59,6 +65,8 @@ false-positive/negative rates were not established.
 SHA-256 fingerprints. Phase 0 did not record image hashes: fingerprints were
 captured during Phase 1A from the user-confirmed local reference folder. No model
 bytes, source images, masks or contour arrays are tracked in this fixture.
+The fixture is self-contained: the original raw scan JSON is not required for
+regression. Keep it tracked under `tests/reference/`, not under `outputs/`.
 
 On 2026-09-28 the formal wrapper passed eight representative images and the full
 400-image regression, matching every recorded semantic result and the totals

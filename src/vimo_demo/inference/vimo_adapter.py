@@ -101,7 +101,7 @@ class VimoSegmentationEngine:
         device_id: int = 0,
         *,
         module_id: str | None = None,
-        cache_dir: str | Path = "outputs/vimo_smoke",
+        cache_dir: str | Path = "outputs/vimo_cache",
     ) -> None:
         self._stack = ExitStack()
         self._module: vimo.SegmentationModule | None = None
