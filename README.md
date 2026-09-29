@@ -1,16 +1,22 @@
 # ViMo Inference Demo
 
-Typed serial segmentation core with maintained engineering tools. The supported
-API is `VimoSegmentationEngine`; historical exploration lives in Git, with
-findings in `docs/` and a golden fixture in `tests/reference/phase0.json`.
-A minimal Qt integration window explores the worker boundary; production UI,
-camera, PLC and acceptance-policy development remain outside the current scope.
+Local industrial-vision integration with a typed `VimoSegmentationEngine`, a
+bounded `InferenceWorker` and a thin `QtInferenceBridge`. The engine runs
+synchronously on its owning Python worker thread; Qt receives queued notifications
+on the GUI thread in the same process. The current window is an **integration
+demo, not the final production UI**.
+
+SDK validation, the formal core, repository consolidation, worker lifecycle and
+Qt integration are complete through Phase 1B-02. Camera, PLC, inspection-cycle
+orchestration and web display are not implemented. See
+[architecture and future direction](docs/architecture.md).
 
 ## Environment and setup
 
 Verified: Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB, ViMo SDK/custom
-**3.20.0.2**, NumPy **2.5.3**, OpenCV **5.0.0.93**, PySide6 **6.11.2**. An active ViMo license and the
-already provisioned CUDA 12/TensorRT runtime are external prerequisites.
+**3.20.0.2**, NumPy **2.5.3**, OpenCV **5.0.0.93**, PySide6 **6.11.2**.
+An active ViMo license and the provisioned CUDA 12/TensorRT runtime are
+external prerequisites.
 
 Obtain SDK wheels/runtime/license through SmartMore when provisioning a machine.
 Vendor packages and manuals are not retained in this checkout. The working
@@ -27,6 +33,8 @@ uv sync --locked --inexact --no-python-downloads
 `--inexact` matters: an exact sync may remove externally provisioned packages.
 Everyday commands use `--no-sync` to leave the working environment unchanged.
 Nothing here installs or changes GPU/runtime components.
+OpenCV is currently in the default development dependency group, included by
+this sync; the inference core itself accepts arrays.
 
 Local inputs belong in root-level `models/` and `images/`, generated data in
 `outputs/`; all three are ignored. The reference model is
@@ -34,7 +42,8 @@ Local inputs belong in root-level `models/` and `images/`, generated data in
 
 ## Minimal API
 
-Run from the repository root after setup:
+This synchronous CLI example uses one engine in one owning context. Run from the
+repository root after setup:
 
 ```python
 from pathlib import Path
@@ -55,35 +64,17 @@ with VimoSegmentationEngine("models/model_trt_fp16.vimosln") as engine:
     # result.mask: owned uint8 (H, W), preserving SDK label IDs.
 ```
 
-`has_defects` means only “SDK returned regions”; it is not production OK/NG.
-Reuse one engine serially in one owning worker context. Inference is synchronous;
-UI callers must invoke it outside their main thread. Use `with` or `close()`.
+Input is a uint8 H x W x 3 BGR ndarray. `ImageResult` owns its normalized mask and
+separates label IDs from region counts. `has_defects` is not a production OK/NG
+decision. See the [engine contract](docs/inference-core.md).
 Runtime staging/cache defaults to `outputs/vimo_cache/<model-sha256>/`, relative
 to the working directory; the source model remains untouched.
 
-For asynchronous submission, `vimo_demo.runtime.InferenceWorker` creates, uses
-and closes one engine on a dedicated thread. Supply a factory, not an engine:
-
-```python
-from vimo_demo.runtime import InferenceWorker
-
-worker = InferenceWorker(
-    lambda: VimoSegmentationEngine("models/model_trt_fp16.vimosln")
-)
-try:
-    worker.start().result(timeout=120)  # CLI example; never block a GUI thread.
-    result = worker.submit(image_bgr).result(timeout=30)
-finally:
-    worker.request_stop()
-    if not worker.join(timeout=30):
-        raise TimeoutError("Inference worker is still running")
-if worker.failure is not None:
-    raise worker.failure
-```
-
-The queue defaults to one pending image plus one active task. Submitted arrays
-must remain immutable until their Future completes. See [worker lifecycle](docs/runtime-worker.md)
-for cancellation, failures, startup/stop races and opt-in real lifecycle tests.
+GUI callers use `InferenceWorker` with an engine factory so construction,
+inference and cleanup stay on its thread. Its bounded queue defaults to one
+pending task plus the active call; submitted arrays remain immutable until Future
+completion. The [worker guide](docs/runtime-worker.md) contains the CLI Future
+example and full lifecycle contract.
 
 ## Minimal Qt integration demo
 
@@ -94,46 +85,46 @@ uv run --no-sync python -m vimo_demo.ui.app models/model_trt_fp16.vimosln
 Click **Start Worker**, wait for READY, select a local image and run inference.
 Optional `--image images/<filename>.png` pre-fills the path. The window remains
 responsive during backend work and defers closing until the worker exits.
+Native calls cannot be forcibly cancelled.
 This is an integration demo, not final UI. See [Qt integration](docs/qt-integration.md)
 for thread/lifetime contracts, timeout behavior and a short manual check.
 
-Optional one-image GPU bridge smoke and existing worker guard:
-
-```powershell
-uv run --no-sync pytest tests/integration/test_qt_vimo.py tests/integration/test_worker_vimo.py::test_worker_one_image --run-gpu --require-gpu -s --tb=short
-```
-
-## Quality gates
+## Quality gates and optional GPU regression
 
 ```powershell
 uv run --no-sync ruff check src tests scripts
 uv run --no-sync ruff format --check src tests scripts
 uv run --no-sync pyright src tests scripts
 uv run --no-sync pytest --tb=short
+git diff --check
 ```
 
-Normal pytest runs unit/headless Qt tests and skips GPU tests. Formal source, tests and
-maintained tools are checked in strict mode. Pytest scratch files live
+Normal pytest runs unit/headless Qt tests and skips GPU tests. Maintained source,
+tests and scripts are checked in strict mode. Pytest scratch files live
 in `outputs/pytest-tmp/` and are disposable. Pyright uses installed vendor inline
 annotations; unit tests do not import the real SDK.
 
 Optional GPU regressions using the local model and `images/`:
 
 ```powershell
+uv run --no-sync pytest tests/integration/test_qt_vimo.py tests/integration/test_worker_vimo.py::test_worker_one_image --run-gpu --require-gpu -s --tb=short
 uv run --no-sync pytest tests/integration/test_reference.py -m "gpu and not full_reference" --run-gpu --require-gpu -s
 uv run --no-sync pytest -m full_reference --run-full-reference --require-gpu -s
 ```
 
-The short test covers eight representative images. Full regression checks all
-400 image hashes and Phase 0 semantic results. Remove `--require-gpu` to allow
-unavailable local prerequisites to skip. Reports go under
-`outputs/phase1a_regression/`; tests do not persist images or masks.
-The tracked golden fixture is self-contained; old Phase 0 scan reports are not
-needed. Full regression is specific to its recorded model and image hashes.
+The commands cover one-image Qt/worker checks, a short engine reference subset,
+and the full reference dataset respectively. Remove `--require-gpu` to skip
+unavailable prerequisites. The tracked `tests/reference/phase0.json` is the
+self-contained golden fixture; old reports and exploration scripts are not
+required. Full regression is specific to its recorded model and 400 image hashes.
+See [regression details](docs/inference-core.md#development-and-regression) and
+[historical findings](docs/phase0-findings.md); SDK regression does not establish
+model accuracy or production acceptance.
 
 ## Maintained tools
 
-Run from the repository root. Replace `images/example.png` with a local filename:
+All tools use the formal inference API. Run from the repository root and replace
+`images/example.png` with a local filename. Use each tool's `--help` for options:
 
 ```powershell
 uv run --no-sync python scripts/example_inference.py models/model_trt_fp16.vimosln images/example.png
@@ -142,25 +133,15 @@ uv run --no-sync python scripts/stress_inference.py models/model_trt_fp16.vimosl
 uv run --no-sync python scripts/visualize_inference.py models/model_trt_fp16.vimosln images --limit 10
 ```
 
-- Example: one inference, concise semantic and region output.
-- Benchmark: one serial engine, predecoded pool (default 6); each round visits
-  the entire pool. Measures `engine.infer()` including normalization/copies,
-  **not** the historical raw SDK timing. Warmup counts individual calls.
-- Stress: one engine, six serial calls per round, fixed predecoded pool. Checks
-  baseline semantics, reports latency/drift and Windows memory; optional
-  `nvidia-smi` samples are outside timing. WDDM unavailable values remain null.
-  Stops on the first exception and saves partial results; mismatch examples are
-  capped at 20. No automatic leak or drift verdict.
-- Visualizer: one image or directory, optional `--filenames name.png ...` or
-  `--limit`. Preserves image coordinates, adds a legend below, and saves raw mask
-  IDs plus compact metadata. Uses existing Pillow/Windows Microsoft YaHei for
-  Chinese labels when available; otherwise ASCII region/ID references link to
-  exact Chinese labels in JSON. No dependency is installed automatically.
+| Tool | Purpose / output |
+| --- | --- |
+| Example | One image; semantic and region output in the terminal |
+| Benchmark | Serial wrapper latency, including normalization/copies; `outputs/benchmark/` |
+| Stress | Six calls per round, semantic checks, latency/resource samples; `outputs/stress/` |
+| Visualizer | Mask, contours, boxes and label legend; `outputs/visualization/` |
 
-All selection is deterministic and non-recursive. Tools write timestamped runs
-under `outputs/benchmark/`, `outputs/stress/`, and `outputs/visualization/`.
-Source images/models are never modified. The 30,000-call historical stress test
-is not part of daily checks.
-
-See [Phase 0 findings](docs/phase0-findings.md) and
-[inference-core design](docs/inference-core.md) for evidence, contracts and limits.
+Selection is deterministic and non-recursive; source models/images are unchanged.
+Wrapper timings differ from historical raw SDK measurements. Long stress runs
+are not daily checks and make no automatic leak verdict. The visualizer uses
+optional existing Pillow/Microsoft YaHei for Chinese labels, otherwise ASCII
+references link to Chinese labels in JSON; it installs nothing automatically.
