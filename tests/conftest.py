@@ -1,4 +1,15 @@
 import pytest
+from PySide6.QtWidgets import QApplication
+
+from vimo_demo.ui.app import DemoApplication
+
+
+@pytest.fixture(scope="session")
+def qapp() -> QApplication:
+    # Headless platform is test-only; the real entry point uses native windows.
+    app = DemoApplication(["qt-tests", "-platform", "offscreen"])
+    app.setQuitOnLastWindowClosed(False)
+    return app
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

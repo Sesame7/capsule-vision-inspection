@@ -3,12 +3,13 @@
 Typed serial segmentation core with maintained engineering tools. The supported
 API is `VimoSegmentationEngine`; historical exploration lives in Git, with
 findings in `docs/` and a golden fixture in `tests/reference/phase0.json`.
-UI, camera, PLC and acceptance-policy development are outside the current scope.
+A minimal Qt integration window explores the worker boundary; production UI,
+camera, PLC and acceptance-policy development remain outside the current scope.
 
 ## Environment and setup
 
 Verified: Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB, ViMo SDK/custom
-**3.20.0.2**, NumPy **2.5.3**, OpenCV **5.0.0.93**. An active ViMo license and the
+**3.20.0.2**, NumPy **2.5.3**, OpenCV **5.0.0.93**, PySide6 **6.11.2**. An active ViMo license and the
 already provisioned CUDA 12/TensorRT runtime are external prerequisites.
 
 Obtain SDK wheels/runtime/license through SmartMore when provisioning a machine.
@@ -56,7 +57,7 @@ with VimoSegmentationEngine("models/model_trt_fp16.vimosln") as engine:
 
 `has_defects` means only “SDK returned regions”; it is not production OK/NG.
 Reuse one engine serially in one owning worker context. Inference is synchronous;
-a future UI must invoke it outside its main thread. Use `with` or `close()`.
+UI callers must invoke it outside their main thread. Use `with` or `close()`.
 Runtime staging/cache defaults to `outputs/vimo_cache/<model-sha256>/`, relative
 to the working directory; the source model remains untouched.
 
@@ -84,6 +85,24 @@ The queue defaults to one pending image plus one active task. Submitted arrays
 must remain immutable until their Future completes. See [worker lifecycle](docs/runtime-worker.md)
 for cancellation, failures, startup/stop races and opt-in real lifecycle tests.
 
+## Minimal Qt integration demo
+
+```powershell
+uv run --no-sync python -m vimo_demo.ui.app models/model_trt_fp16.vimosln
+```
+
+Click **Start Worker**, wait for READY, select a local image and run inference.
+Optional `--image images/<filename>.png` pre-fills the path. The window remains
+responsive during backend work and defers closing until the worker exits.
+This is an integration demo, not final UI. See [Qt integration](docs/qt-integration.md)
+for thread/lifetime contracts, timeout behavior and a short manual check.
+
+Optional one-image GPU bridge smoke and existing worker guard:
+
+```powershell
+uv run --no-sync pytest tests/integration/test_qt_vimo.py tests/integration/test_worker_vimo.py::test_worker_one_image --run-gpu --require-gpu -s --tb=short
+```
+
 ## Quality gates
 
 ```powershell
@@ -93,7 +112,7 @@ uv run --no-sync pyright src tests scripts
 uv run --no-sync pytest --tb=short
 ```
 
-Normal pytest runs pure unit tests and skips GPU tests. Formal source, tests and
+Normal pytest runs unit/headless Qt tests and skips GPU tests. Formal source, tests and
 maintained tools are checked in strict mode. Pytest scratch files live
 in `outputs/pytest-tmp/` and are disposable. Pyright uses installed vendor inline
 annotations; unit tests do not import the real SDK.
