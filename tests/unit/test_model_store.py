@@ -6,7 +6,7 @@ from vimo_demo.inference._model_store import stage_model
 
 
 def test_model_is_staged_once_without_changing_source(tmp_path: Path) -> None:
-    source = tmp_path / "vendor/model.vimosln"
+    source = tmp_path / "models/model.vimosln"
     source.parent.mkdir()
     source.write_bytes(b"small fake model for file handling only")
     runtime, digest = stage_model(source, tmp_path / "cache")
