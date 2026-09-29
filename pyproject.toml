@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vimo-demo"
+version = "0.1.0"
+description = "Typed serial inference core for the locally provisioned ViMo SDK"
+readme = "README.md"
+requires-python = "==3.14.7"
+dependencies = ["numpy==2.5.3"]
+
+[dependency-groups]
+dev = ["opencv-python==5.0.0.93", "pytest==9.1.1", "ruff==0.16.9", "pyright==1.1.414"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vimo_demo = ["py.typed"]
+
+[tool.uv]
+cache-dir = "outputs/uv-cache"
+
+[tool.ruff]
+target-version = "py314"
+src = ["src"]
+extend-exclude = ["scripts", "vendor", "outputs"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.pyright]
+include = ["src", "tests"]
+exclude = ["scripts", "vendor", "outputs", ".venv"]
+pythonVersion = "3.14"
+pythonPlatform = "Windows"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers --basetemp=outputs/pytest-tmp"
+markers = [
+  "gpu: requires explicit --run-gpu and local ViMo runtime/model/images",
+  "full_reference: requires --run-full-reference; complete 400-image regression",
+]

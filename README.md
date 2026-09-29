@@ -1,67 +1,85 @@
 # ViMo Inference Demo
 
-Local industrial-vision inference demo based on the ViMo Windows Python SDK.
+Phase 1A provides a typed serial segmentation core. Phase 0 reference scripts
+remain unchanged in `scripts/`. UI, camera, PLC and acceptance-policy development
+are outside this phase.
 
-## Current goal
+## Environment and setup
 
-Build a minimal but modern demo that:
+Verified: Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB, ViMo SDK/custom
+**3.20.0.2**, NumPy **2.5.3**, OpenCV **5.0.0.93**. An active ViMo license and the
+already provisioned CUDA 12/TensorRT runtime are external prerequisites.
 
-- loads one batch of 6 local images;
-- runs ViMo segmentation inference;
-- displays per-image OK/NG and defect information;
-- reports inference and total batch timing;
-- keeps inference independent from the desktop UI;
-- leaves room for a future read-only web dashboard.
+ViMo was installed with pip from local vendor wheels whose recorded paths no
+longer exist in this checkout. Obtain wheels/runtime/license through SmartMore
+on another machine. No public package URL is assumed. These proprietary packages
+are excluded from `pyproject.toml`/`uv.lock`; the lock covers public dependencies.
 
-## Current environment
+Preserve the existing `.venv`. Install locked public dependencies and the editable
+core while retaining external vendor packages:
 
-- Windows 10
-- Python 3.14.7
-- NVIDIA GeForce RTX 4060 Ti 16 GB
-- smartmore.vimo.inference 3.20.0.2
-- smartmore.vimo.inference.custom 3.20.0.2
-- OpenCV 5.0.0
-- NumPy 2.5.3
-- PySide6
+```powershell
+uv sync --locked --inexact --no-python-downloads
+```
 
-## Status
+`--inexact` matters: an exact sync may remove externally provisioned packages.
+Everyday commands use `--no-sync` to leave the working environment unchanged.
+Nothing here installs or changes GPU/runtime components.
 
-Confirmed:
+## Minimal API
 
-- Python 3.14 virtual environment works.
-- ViMo SDK installs successfully.
-- `import smartmore.vimo.inference` succeeds.
-- OpenCV, NumPy and PySide6 import successfully.
-- `pip check` reports no broken requirements.
-- NVIDIA GPU and driver are visible through `nvidia-smi`.
+Run from the repository root after setup:
 
-Not yet confirmed:
+```python
+from pathlib import Path
 
-- ViMo license activation.
-- `.vimosln` model loading.
-- TensorRT runtime compatibility.
-- Single-image inference.
-- Batch-of-6 inference.
-- Actual latency and GPU memory usage.
+import cv2
+import numpy as np
 
-## Development phases
+from vimo_demo.inference import VimoSegmentationEngine
 
-### Phase 0 — Engineering validation
+path = next(iter(sorted(Path("images").glob("*.png"))))
+image_bgr = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+if image_bgr is None:
+    raise ValueError(f"Cannot decode {path}")
 
-- Qt image-display test
-- background-worker/thread test
-- ViMo model smoke test
-- single-image inference
-- sequential 6-image inference
-- batch=6 inference
-- benchmark
+with VimoSegmentationEngine("vendor/model_trt_fp16.vimosln") as engine:
+    result = engine.infer(image_bgr)
+    print(result.has_defects, result.regions_per_label)
+    # result.mask: owned uint8 (H, W), preserving SDK label IDs.
+```
 
-### Phase 0.1 — Application skeleton
+`has_defects` means only “SDK returned regions”; it is not production OK/NG.
+Reuse one engine serially in one owning worker context. Inference is synchronous;
+a future UI must invoke it outside its main thread. Use `with` or `close()`.
+Runtime staging/cache defaults to `outputs/vimo_smoke/<model-sha256>/`, relative
+to the working directory; the source model remains untouched.
 
-- desktop control UI
-- inference backend abstraction
-- mock backend
-- ViMo backend
-- BatchResult data model
+## Quality gates
 
-A read-only web dashboard will be considered after the inference path is stable.
+```powershell
+uv run --no-sync ruff check src tests
+uv run --no-sync ruff format --check src tests
+uv run --no-sync pyright src tests
+uv run --no-sync pytest
+```
+
+Normal pytest runs pure unit tests and skips GPU tests. Only formal source/tests
+are checked; Phase 0 scripts are outside these gates. Pytest scratch files live
+in `outputs/pytest-tmp/` and are disposable. Pyright uses installed vendor inline
+annotations; unit tests do not import the real SDK.
+
+Optional GPU regressions using the local model and `images/`:
+
+```powershell
+uv run --no-sync pytest -m "gpu and not full_reference" --run-gpu --require-gpu -s
+uv run --no-sync pytest -m full_reference --run-full-reference --require-gpu -s
+```
+
+The short test covers eight representative images. Full regression checks all
+400 image hashes and Phase 0 semantic results. Remove `--require-gpu` to allow
+unavailable local prerequisites to skip. Reports go under
+`outputs/phase1a_regression/`; tests do not persist images or masks.
+
+See [Phase 0 findings](docs/phase0-findings.md) and
+[inference-core design](docs/inference-core.md) for evidence, contracts and limits.
