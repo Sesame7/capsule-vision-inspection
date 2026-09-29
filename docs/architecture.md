@@ -21,9 +21,17 @@ allowed. Runtime and inference are independent of Qt. Direct SDK objects stay
 inside the inference adapter; callers receive our typed `ImageResult`.
 
 One worker means serial, single-image inference with a bounded pending queue.
-It has one lifecycle and is not restarted. The intended six-image inspection
-cycle is not yet an application abstraction. The CLI tools can own an engine
+It has one lifecycle and is not restarted. The CLI tools can own an engine
 directly in a single serial context without running Qt or a worker.
+
+The independent `inspection/` layer now collects explicitly identified frames
+into bounded cycles and converts snapshots to `InspectionCycleResult` through an
+injected serial inspection callable. It depends on inference result models, not
+Qt, SDK objects or camera/PLC libraries. Its [cycle contract](inspection-cycle.md)
+covers duplicate/late frames, missing cameras, deadlines and technical failures.
+The default scenario is six cameras; camera count/order are configured data.
+Fake/local frames validate this layer; the Qt demo is still single-image and does
+not orchestrate cycles. No production inspection pipeline/scheduler is provided.
 
 The GUI observes readiness, results, exceptions and shutdown. It does not own
 inspection decisions, and result availability does not wait for rendering.
@@ -38,15 +46,17 @@ camera adapters / simulation or folder sources
     -> owned frames with stable identity
     -> cycle collection
     -> inspection pipeline (traditional CV + ViMo)
-    -> InspectionResult
+    -> InspectionCycleResult
     -> communication/output adapter
 
 local UI / future read-only web display <- application/runtime state and results
 ```
 
-`InspectionResult` above is a future inspection-level concept, not the existing
-per-image `ImageResult`. No camera, cycle collector, inspection pipeline, PLC or
-web module exists yet. This is direction, not a commitment to class layouts.
+Frame/cycle types, collection and serial callable inspection are implemented;
+`InspectionCycleResult` contains per-frame `ImageResult` outcomes and technical
+status, not acceptance policy. Real camera acquisition, trigger association,
+application scheduling, algorithm/channel rules, PLC and web modules are future
+work. The diagram describes their intended composition, not existing wiring.
 
 - Isolate camera SDKs behind adapters; support simulation/folder sources for
   equipment-free tests. Frames need owned pixels and stable identity.
@@ -71,4 +81,5 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Phase 0 findings](phase0-findings.md) | Frozen experimental evidence and golden provenance |
 | [Inference core](inference-core.md) | Engine/input/result contract and SDK boundary |
 | [Runtime worker](runtime-worker.md) | Ownership, queue, Futures, lifecycle and failure |
+| [Inspection cycle](inspection-cycle.md) | Identity, owned frames, bounded collection and technical cycle results |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |

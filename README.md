@@ -6,9 +6,11 @@ synchronously on its owning Python worker thread; Qt receives queued notificatio
 on the GUI thread in the same process. The current window is an **integration
 demo, not the final production UI**.
 
-SDK validation, the formal core, repository consolidation, worker lifecycle and
-Qt integration are complete through Phase 1B-02. Camera, PLC, inspection-cycle
-orchestration and web display are not implemented. See
+SDK validation, the formal core, worker lifecycle and Qt integration are verified.
+Phase 1C adds [inspection-cycle contracts](docs/inspection-cycle.md) for bounded
+multi-frame collection and deterministic technical results, tested with fake/local
+frames. The Qt demo remains single-image. Real camera/PLC integration, production
+cycle scheduling and web display are not implemented. See
 [architecture and future direction](docs/architecture.md).
 
 ## Environment and setup
