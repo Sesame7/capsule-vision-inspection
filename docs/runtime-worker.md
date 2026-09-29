@@ -3,7 +3,8 @@
 `vimo_demo.runtime.InferenceWorker` owns one engine on one dedicated,
 non-daemon `VimoInferenceWorker-...` thread. Construction of the worker creates
 no engine. Its factory, every `infer()` and exactly one `close()` all execute
-on that thread. The existing inference core and parameters are unchanged.
+on that thread. The [inference core](inference-core.md) and its parameters are
+unchanged. See [architecture](architecture.md) for the layer boundaries.
 `InferenceEngine` is a structural `infer`/`close` Protocol for small test doubles;
 the runtime layer has no SmartMore or Qt imports.
 
@@ -88,15 +89,16 @@ errors are exposed by `failure`; if another fatal error already exists, cleanup
 error context is added as a note. Native SDK calls cannot be forcibly cancelled;
 a permanently blocked call prevents termination of this non-daemon thread.
 
-## Future PySide boundary
+## Future callbacks and Qt integration
 
-No UI callback API exists. Future callbacks use standard-library thread contexts:
+The worker exposes Futures, not Qt callbacks. They use standard-library thread contexts:
 completion generally runs them on the worker, caller cancellation on the caller,
 and registering on an already completed Future can invoke them immediately.
 Keep callbacks short/nonblocking, never raise BaseException, and never manipulate
 widgets or wait for this worker from them. Completions occur outside the worker's
-state lock. Phase 1B-02 must explicitly marshal notifications to Qt's main thread;
-it must not move an already constructed engine across threads.
+state lock. The implemented [QtInferenceBridge](qt-integration.md) marshals
+notifications through queued Qt signals to the GUI thread. It receives an existing
+worker, not an already constructed engine, and does not change this ownership model.
 
 ## Verification
 
@@ -116,8 +118,8 @@ named threads, and verify real entry-point thread ownership. Missing prerequisit
 skip without `--require-gpu`. Ten lifecycles are not evidence of leak absence or
 throughput; the historical long-run test is not repeated here.
 
-Phase 1B-01 validation on 2026-09-29: 13 worker unit cases passed (55 total unit
-cases). The one-image GPU lifecycle and all 10 repeated lifecycles passed with
+Historical Phase 1B-01 validation on 2026-09-29: worker unit tests, the one-image
+GPU lifecycle and all 10 repeated lifecycles passed with
 zero initialization/inference/shutdown failures and no remaining named workers.
 Construct/infer/close IDs matched within each lifecycle and differed from the
 caller. The existing eight-image reference regression also passed. The inference

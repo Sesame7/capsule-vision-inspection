@@ -4,7 +4,8 @@ These are SDK integration findings, not validation of model accuracy or
 annotation quality. These historical experiments are not continuously rerun.
 Findings are frozen here and in the maintained golden fixture; Git history
 (including the Phase 1A checkpoint `be61707`) preserves exploration code.
-`VimoSegmentationEngine` is now the supported reference API.
+`VimoSegmentationEngine` is now the supported reference API. Current contracts
+and future direction belong in [architecture](architecture.md), not this evidence log.
 
 ## Environment and model
 
@@ -60,7 +61,8 @@ false-positive/negative rates were not established.
 
 ## Phase 1A baseline and regression
 
-`tests/reference/phase0.json` freezes label maps and per-label counts from
+[`tests/reference/phase0.json`](../tests/reference/phase0.json) freezes label maps
+and per-label counts from
 `scan_20260928T062857_758498Z.json`, plus model identity and current image-file
 SHA-256 fingerprints. Phase 0 did not record image hashes: fingerprints were
 captured during Phase 1A from the user-confirmed local reference folder. No model

@@ -1,4 +1,7 @@
-# Qt integration exploration (Phase 1B-02)
+# Qt integration contract and demo
+
+This implemented integration demo uses the existing [InferenceWorker](runtime-worker.md).
+See [architecture](architecture.md) for the project overview and future direction.
 
 One process, two ownership contexts:
 
@@ -12,10 +15,9 @@ Python worker thread:       engine factory -> infer -> close
                         Future completion -> queued Qt signal -> GUI slot
 ```
 
-The existing Python worker already provides bounded admission, readiness Futures
-and thread-owned cleanup. It remains unchanged and Qt independent; a QThread
-replacement provides no necessary capability here. Neither the window nor the
-bridge holds a vendor engine. The application supplies an engine factory.
+The Python worker already provides bounded admission, readiness Futures and
+thread-owned cleanup; Qt does not replace it with a QThread. Neither the window
+nor the bridge holds a vendor engine. The application supplies an engine factory.
 
 ## Bridge contract
 
@@ -89,10 +91,10 @@ close retains everything until the worker terminates.
 
 ## Typing and verification
 
-Installed PySide6 **6.11.2** is pinned as a runtime dependency, with matching
-Addons, Essentials and Shiboken in `uv.lock`. No other versions changed. Qt's
-`Signal(object)` boundary is narrowed with `isinstance` in slots; there are no
-new typing suppressions, casts, broad `Any`, or relaxed strict rules.
+PySide6 is a pinned runtime dependency; see [setup](../README.md#environment-and-setup)
+and the project lock for versions. Qt's `Signal(object)` boundary is narrowed with
+`isinstance` in slots; the bridge needs no typing suppressions, casts, broad `Any`
+or relaxed strict rules.
 
 Tests use Qt's offscreen platform, QEventLoop, QTimer, QSignalSpy and event-gated
 fake engines, without pytest-qt or sleeps. They verify GUI/engine thread IDs,
@@ -110,11 +112,12 @@ The real Qt smoke checks one golden defect image, asynchronous result delivery,
 GUI/engine thread identity and clean termination. This is not a model-accuracy,
 performance, 400-image or long-run regression.
 
-Validation on 2026-09-29: all 11 Qt unit cases passed (66 non-GPU cases total;
-5 GPU cases skipped by default). The real Qt one-image smoke and existing worker
-one-image guard both passed, with no residual named workers. Ruff, formatting and
-strict Pyright passed without suppressions. Inference/runtime implementation was
-unchanged; the full dataset and historical stress/benchmark were not rerun.
+Historical Phase 1B-02 validation on 2026-09-29: Qt unit tests, the real Qt one-image
+smoke and existing worker one-image guard passed, with no residual named workers.
+Ruff, formatting and strict Pyright passed without new suppressions.
+Inference/runtime implementation was unchanged; the full dataset and historical
+stress/benchmark were not rerun. This records that validation, not a guarantee
+that GPU tests run in every development cycle.
 
 ## Manual check (about 1–2 minutes)
 
