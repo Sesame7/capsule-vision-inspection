@@ -1,1 +1,1 @@
-"""Tests for the formal package only; Phase 0 scripts are not collected."""
+"""Tests for the inference core and maintained tools; GPU regressions are opt-in."""
