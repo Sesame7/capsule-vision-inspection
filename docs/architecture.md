@@ -30,8 +30,29 @@ injected serial inspection callable. It depends on inference result models, not
 Qt, SDK objects or camera/PLC libraries. Its [cycle contract](inspection-cycle.md)
 covers duplicate/late frames, missing cameras, deadlines and technical failures.
 The default scenario is six cameras; camera count/order are configured data.
-Fake/local frames validate this layer; the Qt demo is still single-image and does
-not orchestrate cycles. No production inspection pipeline/scheduler is provided.
+The pure-Python `RuntimeCoordinator` now owns collection on one serialized thread
+and dispatches READY snapshots through a bounded queue to a serial cycle inspector.
+That inspector calls `inspect_cycle()` using the existing worker's Futures; the
+worker remains the sole engine owner. Collection stays responsive while inference
+runs. A cycle Future returns a technical result with runtime timing, or an explicit
+runtime error. See the [coordinator contract](runtime-coordinator.md) for admission,
+explicit deadline ticks, overload and shutdown.
+
+```text
+simulated sources -> bounded commands -> CycleCoordinator / CycleCollector
+                                              |
+                                       bounded READY queue
+                                              |
+                                       CycleInspector / inspect_cycle
+                                              |
+                                       InferenceWorker -> engine
+                                              |
+                         InspectionCycleResult + timing -> cycle Future consumer
+```
+
+Fake/local frames validate overlapping cycles; one opt-in six-frame GPU test checks
+real wiring. The Qt demo remains single-image and does not orchestrate cycles or
+share a worker with a coordinator. No real camera/PLC composition is implemented.
 
 The GUI observes readiness, results, exceptions and shutdown. It does not own
 inspection decisions, and result availability does not wait for rendering.
@@ -52,11 +73,12 @@ camera adapters / simulation or folder sources
 local UI / future read-only web display <- application/runtime state and results
 ```
 
-Frame/cycle types, collection and serial callable inspection are implemented;
-`InspectionCycleResult` contains per-frame `ImageResult` outcomes and technical
-status, not acceptance policy. Real camera acquisition, trigger association,
-application scheduling, algorithm/channel rules, PLC and web modules are future
-work. The diagram describes their intended composition, not existing wiring.
+Frame/cycle types, collection, runtime coordination and serial inspection are
+implemented. `InspectionCycleResult` contains per-frame `ImageResult` outcomes and
+technical status, not acceptance policy. Real camera acquisition, trigger
+association, hardware deadline-event integration, algorithm/channel rules, PLC
+and web modules are future work. The diagram describes their intended composition,
+not existing wiring.
 
 - Isolate camera SDKs behind adapters; support simulation/folder sources for
   equipment-free tests. Frames need owned pixels and stable identity.
@@ -81,5 +103,6 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Phase 0 findings](phase0-findings.md) | Frozen experimental evidence and golden provenance |
 | [Inference core](inference-core.md) | Engine/input/result contract and SDK boundary |
 | [Runtime worker](runtime-worker.md) | Ownership, queue, Futures, lifecycle and failure |
+| [Runtime coordinator](runtime-coordinator.md) | Serialized collection, bounded cycle dispatch, result Futures and coordinated shutdown |
 | [Inspection cycle](inspection-cycle.md) | Identity, owned frames, bounded collection and technical cycle results |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |

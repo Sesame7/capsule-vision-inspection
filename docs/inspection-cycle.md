@@ -105,8 +105,10 @@ stop its worker. Shutdown does not cancel native calls or revoke external arrays
 `inspect_cycle(cycle, inspect, clock=...)` is synchronous. Run it outside the GUI
 thread, using an engine in its existing owning context or an appropriate callable
 that waits on the existing `InferenceWorker` from a non-GUI context. No new engine
-or worker is constructed here. Tests exercise the latter route with a fake engine.
-No multi-frame worker scheduler or Qt cycle integration is implemented yet.
+or worker is constructed here. The [runtime coordinator](runtime-coordinator.md)
+now uses the latter route with a dedicated serial inspector while its collection
+owner stays responsive. This package remains synchronous; Qt cycle integration
+is not implemented.
 
 | CycleStatus | Meaning |
 | --- | --- |
