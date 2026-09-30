@@ -42,6 +42,9 @@ one image per task and executes serially.
   mutate widgets; marshal notifications through the Qt bridge.
 - Qt is a thin notification/presentation layer. Inspection result delivery must
   not depend on UI rendering. Preserve the same separation for future consumers.
+- A RuntimeCoordinator exclusively owns its collector and worker lifecycle;
+  source threads use its bounded command API. Frame admission acknowledgements
+  are not inspection completion or pixel-buffer return notifications.
 - Shutdown remains observable: stop admission, allow active native work to finish,
   and confirm actual thread termination before releasing ownership. Timeout must
   not pretend success. Native SDK calls cannot be forcibly cancelled.
@@ -49,7 +52,7 @@ one image per task and executes serially.
 ## Repository responsibilities
 
 - `src/vimo_demo/inference/`: synchronous typed engine and SDK boundary.
-- `src/vimo_demo/runtime/`: Qt-independent worker/lifecycle.
+- `src/vimo_demo/runtime/`: Qt-independent worker and bounded cycle coordination.
 - `src/vimo_demo/inspection/`: single-owner cycle collection/results; depends on
   inference models, never UI or vendor APIs. Keep cycle logic out of Qt bridges.
 - `src/vimo_demo/ui/`: Qt bridge and integration demo.

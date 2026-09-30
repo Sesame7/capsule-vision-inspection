@@ -7,10 +7,12 @@ on the GUI thread in the same process. The current window is an **integration
 demo, not the final production UI**.
 
 SDK validation, the formal core, worker lifecycle and Qt integration are verified.
-Phase 1C adds [inspection-cycle contracts](docs/inspection-cycle.md) for bounded
-multi-frame collection and deterministic technical results, tested with fake/local
-frames. The Qt demo remains single-image. Real camera/PLC integration, production
-cycle scheduling and web display are not implemented. See
+The [inspection-cycle contracts](docs/inspection-cycle.md) define bounded collection
+and deterministic technical results. Phase 1D adds a
+[runtime coordinator](docs/runtime-coordinator.md) for overlapping cycles, bounded
+inspection dispatch and coordinated shutdown, verified with 200 fake cycles and
+one six-frame GPU wiring test. The Qt demo remains single-image. Real camera/PLC
+integration, hardware deadline events and web display are not implemented. See
 [architecture and future direction](docs/architecture.md).
 
 ## Environment and setup
@@ -110,12 +112,14 @@ Optional GPU regressions using the local model and `images/`:
 
 ```powershell
 uv run --no-sync pytest tests/integration/test_qt_vimo.py tests/integration/test_worker_vimo.py::test_worker_one_image --run-gpu --require-gpu -s --tb=short
+uv run --no-sync pytest tests/integration/test_coordinator_vimo.py --run-gpu --require-gpu -s --tb=short
 uv run --no-sync pytest tests/integration/test_reference.py -m "gpu and not full_reference" --run-gpu --require-gpu -s
 uv run --no-sync pytest -m full_reference --run-full-reference --require-gpu -s
 ```
 
-The commands cover one-image Qt/worker checks, a short engine reference subset,
-and the full reference dataset respectively. Remove `--require-gpu` to skip
+The commands cover one-image Qt/worker checks, a six-frame coordinator cycle,
+a short engine reference subset, and the full reference dataset respectively.
+Remove `--require-gpu` to skip
 unavailable prerequisites. The tracked `tests/reference/phase0.json` is the
 self-contained golden fixture; old reports and exploration scripts are not
 required. Full regression is specific to its recorded model and 400 image hashes.
