@@ -106,3 +106,4 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Runtime coordinator](runtime-coordinator.md) | Serialized collection, bounded cycle dispatch, result Futures and coordinated shutdown |
 | [Inspection cycle](inspection-cycle.md) | Identity, owned frames, bounded collection and technical cycle results |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
+| [Production UI direction](production-ui-direction.md) | Agreed visual design and flexible review details; reference for future PySide6 work, not implemented production UI |
