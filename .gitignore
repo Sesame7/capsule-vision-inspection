@@ -22,3 +22,6 @@ htmlcov/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Local review captures and real input copies are disposable, not repository assets.
+prototypes/production_ui/
