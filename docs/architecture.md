@@ -54,6 +54,17 @@ Fake/local frames validate overlapping cycles; one opt-in six-frame GPU test che
 real wiring. The Qt demo remains single-image and does not orchestrate cycles or
 share a worker with a coordinator. No real camera/PLC composition is implemented.
 
+Phase 2A adds `inspection.production`: explicit camera/slot/channel layouts,
+lightweight ViMo findings, a synchronous traditional-inspector Protocol and
+`ProductionInspectionResult`. It consumes existing cycle results plus independent
+traditional evidence; no worker, coordinator or lifecycle contract changes.
+ROI overlap maps full-image findings to every affected channel and preserves
+unassigned camera-level defects. Technical execution and product judgment remain
+independent, including ERROR + NG. See the
+[production inspection contract](production-inspection.md) for the initial rules,
+ownership and timing. Runtime scheduling of traditional checks and calibrated
+production configuration remain later composition work.
+
 The GUI observes readiness, results, exceptions and shutdown. It does not own
 inspection decisions, and result availability does not wait for rendering.
 Native calls cannot be forcibly cancelled: a blocked call can delay shutdown,
@@ -66,19 +77,20 @@ integration demo, not a production workstation interface.
 camera adapters / simulation or folder sources
     -> owned frames with stable identity
     -> cycle collection
-    -> inspection pipeline (traditional CV + ViMo)
-    -> InspectionCycleResult
+    -> inspection pipeline (calibrated traditional CV + ViMo)
+    -> ProductionInspectionResult
     -> communication/output adapter
 
 local UI / future read-only web display <- application/runtime state and results
 ```
 
 Frame/cycle types, collection, runtime coordination and serial inspection are
-implemented. `InspectionCycleResult` contains per-frame `ImageResult` outcomes and
-technical status, not acceptance policy. Real camera acquisition, trigger
-association, hardware deadline-event integration, algorithm/channel rules, PLC
-and web modules are future work. The diagram describes their intended composition,
-not existing wiring.
+implemented. `InspectionCycleResult` retains per-frame `ImageResult` outcomes and
+technical status; the additive production layer derives channel judgments and
+lightweight evidence without retaining images/masks. Real camera acquisition,
+trigger association, hardware deadline-event integration, calibrated algorithms
+and recipes, PLC and web modules are future work. The diagram describes their
+intended composition, not existing wiring.
 
 - Isolate camera SDKs behind adapters; support simulation/folder sources for
   equipment-free tests. Frames need owned pixels and stable identity.
@@ -105,5 +117,6 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Runtime worker](runtime-worker.md) | Ownership, queue, Futures, lifecycle and failure |
 | [Runtime coordinator](runtime-coordinator.md) | Serialized collection, bounded cycle dispatch, result Futures and coordinated shutdown |
 | [Inspection cycle](inspection-cycle.md) | Identity, owned frames, bounded collection and technical cycle results |
+| [Production inspection](production-inspection.md) | Channel layout, ROI evidence assignment, traditional boundary and independent technical/product judgments |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
 | [Production UI direction](production-ui-direction.md) | Agreed visual design and flexible review details; reference for future PySide6 work, not implemented production UI |
