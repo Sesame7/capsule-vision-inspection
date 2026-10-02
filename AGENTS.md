@@ -55,6 +55,10 @@ one image per task and executes serially.
 - `src/vimo_demo/runtime/`: Qt-independent worker and bounded cycle coordination.
 - `src/vimo_demo/inspection/`: single-owner cycle collection/results; depends on
   inference models, never UI or vendor APIs. Keep cycle logic out of Qt bridges.
+- `src/vimo_demo/inspection/production/`: channel layouts, evidence assignment and
+  independent technical/product judgments; no runtime scheduling.
+- `src/vimo_demo/configuration/`: Recipe/model/layout persistence, validation and
+  pure resolution into existing inspection types; no activation or active state.
 - `src/vimo_demo/ui/`: Qt bridge and integration demo.
 - `tests/`: unit/integration tests and tracked golden `tests/reference/phase0.json`.
 - `scripts/`: maintained engineering tools using the public inference API.

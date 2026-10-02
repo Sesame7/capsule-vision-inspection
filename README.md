@@ -15,6 +15,14 @@ one six-frame GPU wiring test. The Qt demo remains single-image. Real camera/PLC
 integration, hardware deadline events and web display are not implemented. See
 [architecture and future direction](docs/architecture.md).
 
+Phase 2A provides the [production inspection domain](docs/production-inspection.md):
+channel layouts, defect assignment and separate technical/product judgments.
+Phase 2B provides [Recipe/model/layout configuration](docs/inspection-configuration.md)
+with strict JSON persistence and immutable per-channel resolution. These layers
+do not yet activate Recipes or compose heterogeneous checks into runtime execution.
+Next is **Phase 2C — Production Application State / Runtime Composition**.
+The architecture document also maps all contracts and the production UI design reference.
+
 ## Environment and setup
 
 Verified: Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB, ViMo SDK/custom

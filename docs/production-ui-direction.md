@@ -134,9 +134,11 @@ they need not be permanently prominent. Final visibility, touch disclosure and
 mapping speed require usability testing. Essential meaning must not depend on hover.
 
 **Product NG and technical failure must never look identical.** Product NG means
-inspection executed successfully but the product failed the inspection criteria.
-Technical failure means validity is compromised, such as a missing frame, camera
-timeout, inference failure or system execution problem.
+available inspection evidence indicates a defect. Technical failure means validity
+is compromised, such as a missing frame, camera timeout, inference failure or
+system execution problem. These dimensions can coexist: Phase 2A preserves
+ERROR + NG when defect evidence exists alongside a technical failure. A future
+display must preserve both, following the [production contract](production-inspection.md).
 
 - Product NG: red affected indicator and a local defect overlay. Do not
   automatically turn the whole camera card red.
@@ -164,7 +166,8 @@ precise extent is less important. Avoid large opaque or heavily filled overlays.
 Line width/color, label placement and marker size remain adjustable and must be
 reviewed at 100% on the physical monitor. Thin red marks can vanish in scaled
 screenshots; amber can compete with orange capsules. Actual segmentation and ROI
-geometry must come from future inspection results/calibration, not lab fixtures.
+geometry must come from production inspection results and calibrated configuration,
+not lab fixtures.
 
 ## Operator Event Bar
 

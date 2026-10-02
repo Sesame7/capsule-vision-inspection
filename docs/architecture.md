@@ -1,5 +1,25 @@
 # Architecture and direction
 
+## Checkpoint status
+
+| Status | Phase / responsibility |
+| --- | --- |
+| Implemented | 1A — typed inference core and SDK boundary |
+| Implemented | 1B — serial worker and Qt integration demo |
+| Implemented | 1C — inspection-cycle collection and technical results |
+| Implemented | 1D — bounded runtime coordinator |
+| Implemented | 2A — production inspection domain and result model |
+| Implemented | 2B — Recipe/model/layout persistence and pure configuration resolution |
+| Design reference | Production UI direction; no production workstation UI yet |
+| Next, not implemented | 2C — Production Application State / Runtime Composition |
+| Future | 2D — Production PySide UI |
+| Future | 2E — Archive, events and diagnostics |
+| Future | 3 — Camera, PLC and field integration |
+
+Phase 2C will compose the existing layers and own activation/lifecycle policy.
+Resolved configuration exists; live Recipe/model switching, application counters
+and heterogeneous per-channel execution are not implemented.
+
 ## Currently implemented
 
 The Qt demo runs in one process. Its application entry supplies an engine factory;
@@ -97,8 +117,8 @@ implemented. `InspectionCycleResult` retains per-frame `ImageResult` outcomes an
 technical status; the additive production layer derives channel judgments and
 lightweight evidence without retaining images/masks. Real camera acquisition,
 trigger association, hardware deadline-event integration, calibrated algorithms
-and recipe activation, PLC and web modules are future work. The diagram describes their
-intended composition, not existing wiring.
+and recipe activation, PLC and web modules are future work. The diagram describes
+their intended composition, not existing wiring.
 
 - Isolate camera SDKs behind adapters; support simulation/folder sources for
   equipment-free tests. Frames need owned pixels and stable identity.

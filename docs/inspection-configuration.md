@@ -135,6 +135,11 @@ write failures, and `ModelArtifactError` artifact verification. The latter two
 inherit from the first. Load errors include file context and chained causes;
 normal parse failures do not leak raw JSONDecodeError/KeyError/TypeError.
 
+Known diagnostic limitations: nested unknown-field errors identify the file and
+field name but not the full JSON path; unknown model-ID errors do not distinguish
+the caller default from the Recipe override. More precise context is a future
+usability improvement, not a change to the current validation rules.
+
 Model paths are stored as supplied. Use portable relative paths in shared files.
 `validate_model_artifact(model, base_directory=Path(...))` resolves a relative
 path against the **explicit caller base**, checks readability and streams SHA-256,
