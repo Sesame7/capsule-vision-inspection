@@ -61,6 +61,14 @@ class CoordinatedCycleResult:
 
 
 @dataclass(frozen=True, slots=True)
+class CycleAdmission:
+    """Collector admission and terminal inspection are distinct observations."""
+
+    accepted: Future[None]
+    result: Future[CoordinatedCycleResult]
+
+
+@dataclass(frozen=True, slots=True)
 class CoordinatorSnapshot:
     state: CoordinatorState
     commands: int
@@ -76,6 +84,7 @@ class CoordinatorSnapshot:
 class _Begin:
     cycle_id: CycleId
     future: Future[CoordinatedCycleResult]
+    accepted: Future[None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +133,11 @@ class RuntimeCoordinator:
         max_ready: int = 2,
         max_commands: int = 32,
         clock: Callable[[], float] = monotonic,
+        cycle_inspector: Callable[
+            [CollectedCycle, Callable[[NDArray[np.uint8]], ImageResult]],
+            InspectionCycleResult,
+        ]
+        | None = None,
     ) -> None:
         if worker.state is not WorkerState.NEW:
             raise CoordinatorStateError(
@@ -136,6 +150,7 @@ class RuntimeCoordinator:
         )
         self._worker = worker
         self._clock = clock
+        self._cycle_inspector = cycle_inspector
         self._max_ready = max_ready
         self._max_commands = max_commands
         self._condition = Condition()
@@ -148,6 +163,7 @@ class RuntimeCoordinator:
         self._failure: BaseException | None = None
         self._stop = False
         self._startup: Future[None] = _running(Future())
+        self._finished: Future[None] = _running(Future())
         self._owner = Thread(
             target=self._run, name=f"CycleCoordinator-{id(self):x}", daemon=False
         )
@@ -155,6 +171,11 @@ class RuntimeCoordinator:
             target=self._inspect, name=f"CycleInspector-{id(self):x}", daemon=False
         )
         self._owner_started = self._runner_started = False
+
+    @property
+    def finished(self) -> Future[None]:
+        """Shutdown body completed; inspect failure and join to confirm thread exit."""
+        return self._finished
 
     @property
     def snapshot(self) -> CoordinatorSnapshot:
@@ -196,6 +217,7 @@ class RuntimeCoordinator:
         if error is not None:
             self._worker.request_stop()
             self._reject(self._startup, error)
+            self._resolve(self._finished, None)
         return self._startup
 
     def _enqueue(self, command: _Begin | _Frame | _Tick) -> None:
@@ -213,9 +235,13 @@ class RuntimeCoordinator:
             self._condition.notify_all()
 
     def begin_cycle(self, cycle_id: CycleId) -> Future[CoordinatedCycleResult]:
+        return self.admit_cycle(cycle_id).result
+
+    def admit_cycle(self, cycle_id: CycleId) -> CycleAdmission:
         future: Future[CoordinatedCycleResult] = _running(Future())
-        self._enqueue(_Begin(cycle_id, future))
-        return future
+        accepted: Future[None] = _running(Future())
+        self._enqueue(_Begin(cycle_id, future, accepted))
+        return CycleAdmission(accepted, future)
 
     def submit_frame(self, frame: Frame) -> Future[None]:
         """Acknowledges collector acceptance, not eventual cycle inspection."""
@@ -241,6 +267,7 @@ class RuntimeCoordinator:
             self._condition.notify_all()
         if stop_new:
             self._worker.request_stop()
+            self._resolve(self._finished, None)
 
     def join(self, timeout: float | None = None) -> bool:
         """True confirms all three threads exited, even if cleanup failed."""
@@ -306,6 +333,8 @@ class RuntimeCoordinator:
                 try:
                     self._execute(command)
                 except BaseException as exc:
+                    if isinstance(command, _Begin) and not command.accepted.done():
+                        self._reject(command.accepted, exc)
                     self._reject(command.future, exc)
                     raise
                 finally:
@@ -323,6 +352,7 @@ class RuntimeCoordinator:
             try:
                 self._collector.begin(command.cycle_id)
             except Exception as exc:
+                self._reject(command.accepted, exc)
                 self._reject(command.future, exc)
             else:
                 with self._condition:
@@ -330,6 +360,7 @@ class RuntimeCoordinator:
                     self._peak_collecting = max(
                         self._peak_collecting, len(self._collecting)
                     )
+                self._resolve(command.accepted, None)
         elif isinstance(command, _Frame):
             try:
                 cycle = self._collector.accept(command.frame)
@@ -349,7 +380,7 @@ class RuntimeCoordinator:
             future = self._collecting.pop(cycle.cycle_id)
         try:
             if cycle.status is not CollectionStatus.READY:
-                result = inspect_cycle(cycle, self._infer, clock=self._clock)
+                result = self._inspect_snapshot(cycle)
                 self._resolve(
                     future,
                     CoordinatedCycleResult(
@@ -380,6 +411,11 @@ class RuntimeCoordinator:
             raise _DispatchFailure("InferenceWorker rejected frame dispatch") from exc
         return future.result()  # Exactly one worker task outstanding, no retries.
 
+    def _inspect_snapshot(self, cycle: CollectedCycle) -> InspectionCycleResult:
+        if self._cycle_inspector is not None:
+            return self._cycle_inspector(cycle, self._infer)
+        return inspect_cycle(cycle, self._infer, clock=self._clock)
+
     def _inspect(self) -> None:
         while True:
             with self._condition:
@@ -390,7 +426,7 @@ class RuntimeCoordinator:
                 self._inspecting = job.cycle.cycle_id
             try:
                 started = self._now(job.queued_at)
-                result = inspect_cycle(job.cycle, self._infer, clock=self._clock)
+                result = self._inspect_snapshot(job.cycle)
                 self._resolve(
                     job.future,
                     CoordinatedCycleResult(
@@ -417,6 +453,11 @@ class RuntimeCoordinator:
                 if not self._commands:
                     break
                 command = self._commands.popleft()
+            if isinstance(command, _Begin):
+                self._reject(
+                    command.accepted,
+                    CoordinatorStoppedError("Begin not processed before stop"),
+                )
             self._reject(
                 command.future,
                 CoordinatorStoppedError("Command not processed before stop"),
@@ -458,3 +499,4 @@ class RuntimeCoordinator:
                 if self._failure is not None
                 else CoordinatorState.STOPPED
             )
+        self._resolve(self._finished, None)

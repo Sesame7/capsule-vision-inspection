@@ -1,5 +1,25 @@
 # Architecture and direction
 
+## Checkpoint status
+
+| Status | Phase / responsibility |
+| --- | --- |
+| Implemented | 1A — typed inference core and SDK boundary |
+| Implemented | 1B — serial worker and Qt integration demo |
+| Implemented | 1C — inspection-cycle collection and technical results |
+| Implemented | 1D — bounded runtime coordinator |
+| Implemented | 2A — production inspection domain and result model |
+| Implemented | 2B — Recipe/model/layout persistence and pure configuration resolution |
+| Implemented | 2C — production application state and configured runtime composition |
+| Design reference | Production UI direction; no production workstation UI yet |
+| Next, not implemented | 2D — Production PySide UI |
+| Future | 2E — Archive, events and diagnostics |
+| Future | 3 — Camera, PLC and field integration |
+
+Phase 2C composes existing layers: candidate activation after model warm-up,
+fresh runtime sessions, factual cycle/channel counters and heterogeneous checks.
+Recipe/model changes require stopped inspection; no running-engine hot replacement.
+
 ## Currently implemented
 
 The Qt demo runs in one process. Its application entry supplies an engine factory;
@@ -62,8 +82,8 @@ ROI overlap maps full-image findings to every affected channel and preserves
 unassigned camera-level defects. Technical execution and product judgment remain
 independent, including ERROR + NG. See the
 [production inspection contract](production-inspection.md) for the initial rules,
-ownership and timing. Runtime scheduling of traditional checks and calibrated
-production configuration remain later composition work.
+ownership and timing. Phase 2C schedules configured traditional checks; calibrated
+production algorithms and thresholds remain hardware/commissioning work.
 
 Phase 2B adds the pure `configuration/` layer above `inspection.production`:
 separate model metadata, machine layout and product Recipes resolve once into
@@ -71,7 +91,29 @@ immutable per-channel configuration. It reuses existing layout/identity/policy
 types and provides strict JSON persistence and optional artifact verification.
 It owns no engine, active configuration or runtime lifecycle. See the
 [configuration contract](inspection-configuration.md) for inheritance, ROI
-overrides, explicit label filtering and the future pipeline-composition boundary.
+overrides, explicit label filtering and the pipeline-composition boundary.
+
+`application/` is the Qt-independent owner above configuration and runtime.
+`ProductionApplication` has one lifecycle thread, immutable snapshots and bounded
+outstanding cycle receipts. Each Start creates a fresh `ProductionRuntimeSession`;
+it uses the existing coordinator and worker, with engine warm-up on the worker.
+`ConfiguredProductionPipeline` runs resolved checks on the existing cycle runner,
+reuses Phase 2A assignment/aggregation and publishes lightweight production results.
+No engine ownership moves to application/Qt. See the
+[application contract](production-application.md) for transactional activation,
+state transitions, exact counter semantics, explicit Batch resets and shutdown.
+
+```text
+future UI/source -> ProductionApplication -> ProductionRuntimeSession
+                             |                       |
+                    snapshots/counters        RuntimeCoordinator
+                                                     |
+                                      ConfiguredProductionPipeline
+                                        |                     |
+                                injected checks       InferenceWorker -> engine
+                                        +----------+----------+
+                                         ProductionInspectionResult
+```
 
 The GUI observes readiness, results, exceptions and shutdown. It does not own
 inspection decisions, and result availability does not wait for rendering.
@@ -96,9 +138,9 @@ Frame/cycle types, collection, runtime coordination and serial inspection are
 implemented. `InspectionCycleResult` retains per-frame `ImageResult` outcomes and
 technical status; the additive production layer derives channel judgments and
 lightweight evidence without retaining images/masks. Real camera acquisition,
-trigger association, hardware deadline-event integration, calibrated algorithms
-and recipe activation, PLC and web modules are future work. The diagram describes their
-intended composition, not existing wiring.
+trigger association, hardware deadline-event integration, calibrated algorithms,
+PLC and web modules are future work. Recipe activation and simulated configured
+runtime execution are implemented; the diagram describes future hardware wiring.
 
 - Isolate camera SDKs behind adapters; support simulation/folder sources for
   equipment-free tests. Frames need owned pixels and stable identity.
@@ -127,5 +169,6 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Inspection cycle](inspection-cycle.md) | Identity, owned frames, bounded collection and technical cycle results |
 | [Production inspection](production-inspection.md) | Channel layout, ROI evidence assignment, traditional boundary and independent technical/product judgments |
 | [Inspection configuration](inspection-configuration.md) | Separate Recipes/models/layout, strict JSON, deterministic inheritance and immutable per-channel policies |
+| [Production application](production-application.md) | Transactional activation, warm-up, runtime sessions, configured execution, factual counters and Batch lifecycle |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
 | [Production UI direction](production-ui-direction.md) | Agreed visual design and flexible review details; reference for future PySide6 work, not implemented production UI |

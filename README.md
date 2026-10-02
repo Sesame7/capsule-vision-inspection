@@ -15,6 +15,15 @@ one six-frame GPU wiring test. The Qt demo remains single-image. Real camera/PLC
 integration, hardware deadline events and web display are not implemented. See
 [architecture and future direction](docs/architecture.md).
 
+Phase 2A provides the [production inspection domain](docs/production-inspection.md):
+channel layouts, defect assignment and separate technical/product judgments.
+Phase 2B provides [Recipe/model/layout configuration](docs/inspection-configuration.md)
+with strict JSON persistence and immutable per-channel resolution. Phase 2C adds
+[ProductionApplication](docs/production-application.md): transactional activation,
+worker-owned warm-up, disposable runtime sessions, configured checks and factual
+cycle/channel counters. Next is **Phase 2D — Production PySide UI**.
+The architecture document also maps all contracts and the production UI design reference.
+
 ## Environment and setup
 
 Verified: Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB, ViMo SDK/custom
@@ -113,11 +122,13 @@ Optional GPU regressions using the local model and `images/`:
 ```powershell
 uv run --no-sync pytest tests/integration/test_qt_vimo.py tests/integration/test_worker_vimo.py::test_worker_one_image --run-gpu --require-gpu -s --tb=short
 uv run --no-sync pytest tests/integration/test_coordinator_vimo.py --run-gpu --require-gpu -s --tb=short
+uv run --no-sync pytest tests/integration/test_application_vimo.py --run-gpu --require-gpu -s --tb=short
 uv run --no-sync pytest tests/integration/test_reference.py -m "gpu and not full_reference" --run-gpu --require-gpu -s
 uv run --no-sync pytest -m full_reference --run-full-reference --require-gpu -s
 ```
 
 The commands cover one-image Qt/worker checks, a six-frame coordinator cycle,
+application startup/warm-up/cleanup,
 a short engine reference subset, and the full reference dataset respectively.
 Remove `--require-gpu` to skip
 unavailable prerequisites. The tracked `tests/reference/phase0.json` is the

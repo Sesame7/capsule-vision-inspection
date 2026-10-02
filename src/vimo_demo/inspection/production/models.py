@@ -333,6 +333,7 @@ class ProductionInspectionResult:
     inspection_started_at: float | None
     result_ready_at: float
     aggregation_ms: float
+    frame_failures_in_checks: bool = False
 
     def __post_init__(self) -> None:
         nonnegative_integer(self.cycle_id, "cycle_id")
@@ -371,5 +372,12 @@ class ProductionInspectionResult:
     def assessment(self) -> Assessment:
         return combine(
             tuple(camera.assessment for camera in self.cameras),
-            error=self.cycle_status is not CycleStatus.COMPLETE,
+            # Configured composition can account for every frame failure using
+            # enabled/required check policies. Legacy cycle consumers retain the
+            # original unconditional FAILED-cycle error by default.
+            error=self.cycle_status is not CycleStatus.COMPLETE
+            and not (
+                self.cycle_status is CycleStatus.FAILED
+                and self.frame_failures_in_checks
+            ),
         )
