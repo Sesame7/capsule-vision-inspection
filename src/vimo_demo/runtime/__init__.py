@@ -8,6 +8,7 @@ from .coordinator import (
     CoordinatorState,
     CoordinatorStateError,
     CoordinatorStoppedError,
+    CycleAdmission,
     RuntimeCoordinator,
 )
 from .inference_worker import (
@@ -26,6 +27,7 @@ __all__ = [
     "CoordinatorState",
     "CoordinatorStateError",
     "CoordinatorStoppedError",
+    "CycleAdmission",
     "InferenceEngine",
     "InferenceWorker",
     "RuntimeCoordinator",

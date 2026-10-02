@@ -9,7 +9,7 @@ imports the SmartMore SDK or loads a model.
 MachineLayoutDefinition + RecipeDefinition + ModelRegistry + caller default ID
     -> resolve_configuration()
     -> immutable ResolvedInspectionConfiguration
-    -> future application/pipeline composition
+    -> application/pipeline composition
 ```
 
 ## Separate persisted definitions
@@ -59,8 +59,9 @@ classes. Each config exposes the existing Phase 2A `.policy: CheckPolicy`.
 Traditional checks start disabled because calibrated implementations are absent.
 This is a new configuration constructor default, **not a change to Phase 2A's
 enabled/required pipeline defaults**. Enabling an unparameterized check describes
-intent; it does not certify an algorithm as ready. Later activation must verify
-available implementations and required calibration. Area bounds are nonnegative
+intent; it does not certify an algorithm as ready. Phase 2C reports an enabled
+but unavailable check as technical ERROR during execution. Production calibration
+and readiness gating remain future hardware work. Area bounds are nonnegative
 with min <= max when both exist. Zero is valid data, not an invented sentinel.
 
 Resolution applies **default -> camera -> channel** for each leaf. Missing or
@@ -190,6 +191,6 @@ hashes and Phase 2A policy compatibility:
 uv run --no-sync pytest tests/unit/test_configuration.py tests/integration/test_configuration_pipeline.py --tb=short
 ```
 
-Phase 2C still owns activation/application lifecycle, safe model load/warmup and
-replacement, counters and live-change policy. Production UI, camera/PLC work,
-calibration and traditional algorithms are outside this configuration contract.
+The [Phase 2C application](production-application.md) owns activation/lifecycle,
+safe model load/warm-up, stopped-state replacement and counters. Production UI,
+camera/PLC work, calibration and traditional algorithms are outside this contract.

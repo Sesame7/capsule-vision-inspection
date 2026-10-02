@@ -6,6 +6,17 @@ SmartMore objects and camera/PLC libraries. It adds no production OK/NG rule.
 See [inspection-cycle](inspection-cycle.md) for frame/result semantics and
 [runtime-worker](runtime-worker.md) for engine ownership.
 
+Phase 2C adds three optional composition observations/hooks without changing the
+default path: `admit_cycle()` returns separate accepted/result Futures (accepted
+only after collector admission), `finished` signals shutdown-body completion,
+and `cycle_inspector` can replace the synchronous snapshot inspection callable.
+`begin_cycle()` still returns its existing result Future. `join()` remains the
+authority for actual thread termination, not `finished`. An injected inspector
+must preserve cycle identity, host monotonic timestamps and incomplete-cycle
+no-inference semantics; it runs on the cycle runner for READY snapshots, or the
+collection owner for lightweight incomplete-result finalization. See
+[application composition](production-application.md).
+
 ## Ownership and scheduling
 
 Three non-daemon threads have distinct responsibilities:

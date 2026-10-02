@@ -45,6 +45,9 @@ one image per task and executes serially.
 - A RuntimeCoordinator exclusively owns its collector and worker lifecycle;
   source threads use its bounded command API. Frame admission acknowledgements
   are not inspection completion or pixel-buffer return notifications.
+- ProductionApplication owns candidate activation and disposable runtime sessions.
+  Warm-up is readiness work, never production data. Counters measure admitted
+  cycles/channel judgments, not physical products; only explicit Batch resets them.
 - Shutdown remains observable: stop admission, allow active native work to finish,
   and confirm actual thread termination before releasing ownership. Timeout must
   not pretend success. Native SDK calls cannot be forcibly cancelled.
@@ -59,6 +62,8 @@ one image per task and executes serially.
   independent technical/product judgments; no runtime scheduling.
 - `src/vimo_demo/configuration/`: Recipe/model/layout persistence, validation and
   pure resolution into existing inspection types; no activation or active state.
+- `src/vimo_demo/application/`: Qt-independent activation, lifecycle, snapshots,
+  factual counters and resolved-check composition using the existing runtime.
 - `src/vimo_demo/ui/`: Qt bridge and integration demo.
 - `tests/`: unit/integration tests and tracked golden `tests/reference/phase0.json`.
 - `scripts/`: maintained engineering tools using the public inference API.

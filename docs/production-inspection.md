@@ -58,9 +58,10 @@ print(production.assessment.technical_status, production.assessment.judgment)
 
 Alternatively, pass `coordinator_future.result().result` to `from_cycle()` with
 separately obtained traditional outcomes. Tests demonstrate both paths. This is
-consumer-side composition, not a new coordinator scheduling hook. The future
-application must schedule traditional work outside Qt and bound any retained
-frames/results. Do not run this work in a blocking worker/coordinator callback.
+consumer-side composition. The [Phase 2C application](production-application.md)
+additionally uses an optional coordinator cycle-inspector hook to schedule resolved
+checks on the serial cycle runner, outside Qt. Do not run algorithm work in a
+blocking worker/coordinator callback.
 
 ## Layout and identity
 
@@ -165,8 +166,8 @@ The `TraditionalInspector.inspect(frame, layout)` Protocol returns one
 `TraditionalChannelCheck` per configured channel in any order. Each wraps a
 `CheckResult` with structured `Reason` codes and optional named numeric
 `Measurement` values/units. No Blob, color, size, position or presence thresholds
-are implemented. A future inspector may combine several checks using the same
-evidence-first aggregation before returning its source result.
+are implemented. Phase 2C combines injected presence/blob/color checks using this
+evidence-first aggregation before returning its traditional source result.
 
 Reasons identify source (VIMO/TRADITIONAL/COLLECTION), stable code, optional defect
 label/rectangle and exception type. Codes include `defect_region`,
@@ -220,7 +221,11 @@ channel accuracy. Existing Phase 1 tests and behavior remain unchanged.
 
 Recipe persistence and pure resolution now live in the additive
 [Phase 2B configuration layer](inspection-configuration.md). Deferred: calibrated
-ROIs/thresholds, algorithm/configuration composition; Phase 2C activation/application
-state/counters; Phase 2D production Qt UI and configuration editor; Phase
-2E archive/events/history; Phase 3 cameras, buffer leases, PLC mapping/handshake,
+ROIs/thresholds and calibrated algorithms; Phase 2D production Qt UI and configuration
+editor; Phase 2E archive/events/history; Phase 3 cameras, buffer leases, PLC mapping/handshake,
 unassigned-finding machine policy and measured hardware throughput/FAT/SAT.
+
+Phase 2C now implements activation, configured check execution and counters. Its
+additive `frame_failures_in_checks` result flag applies enabled/required policies
+to frame failures while preserving raw FAILED cycle status. The default remains
+False for existing Phase 2A consumers; timeout/shutdown still force technical ERROR.
