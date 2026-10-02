@@ -218,7 +218,9 @@ cleanup. The optional one-image GPU check preserves real region evidence after
 engine cleanup without retaining its mask. Synthetic ROIs do not validate physical
 channel accuracy. Existing Phase 1 tests and behavior remain unchanged.
 
-Deferred: Phase 2B Recipe persistence/editor, calibrated ROIs/thresholds and model
-activation; Phase 2C application state/counters; Phase 2D production Qt UI; Phase
+Recipe persistence and pure resolution now live in the additive
+[Phase 2B configuration layer](inspection-configuration.md). Deferred: calibrated
+ROIs/thresholds, algorithm/configuration composition; Phase 2C activation/application
+state/counters; Phase 2D production Qt UI and configuration editor; Phase
 2E archive/events/history; Phase 3 cameras, buffer leases, PLC mapping/handshake,
 unassigned-finding machine policy and measured hardware throughput/FAT/SAT.

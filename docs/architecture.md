@@ -65,6 +65,14 @@ independent, including ERROR + NG. See the
 ownership and timing. Runtime scheduling of traditional checks and calibrated
 production configuration remain later composition work.
 
+Phase 2B adds the pure `configuration/` layer above `inspection.production`:
+separate model metadata, machine layout and product Recipes resolve once into
+immutable per-channel configuration. It reuses existing layout/identity/policy
+types and provides strict JSON persistence and optional artifact verification.
+It owns no engine, active configuration or runtime lifecycle. See the
+[configuration contract](inspection-configuration.md) for inheritance, ROI
+overrides, explicit label filtering and the future pipeline-composition boundary.
+
 The GUI observes readiness, results, exceptions and shutdown. It does not own
 inspection decisions, and result availability does not wait for rendering.
 Native calls cannot be forcibly cancelled: a blocked call can delay shutdown,
@@ -89,7 +97,7 @@ implemented. `InspectionCycleResult` retains per-frame `ImageResult` outcomes an
 technical status; the additive production layer derives channel judgments and
 lightweight evidence without retaining images/masks. Real camera acquisition,
 trigger association, hardware deadline-event integration, calibrated algorithms
-and recipes, PLC and web modules are future work. The diagram describes their
+and recipe activation, PLC and web modules are future work. The diagram describes their
 intended composition, not existing wiring.
 
 - Isolate camera SDKs behind adapters; support simulation/folder sources for
@@ -118,5 +126,6 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Runtime coordinator](runtime-coordinator.md) | Serialized collection, bounded cycle dispatch, result Futures and coordinated shutdown |
 | [Inspection cycle](inspection-cycle.md) | Identity, owned frames, bounded collection and technical cycle results |
 | [Production inspection](production-inspection.md) | Channel layout, ROI evidence assignment, traditional boundary and independent technical/product judgments |
+| [Inspection configuration](inspection-configuration.md) | Separate Recipes/models/layout, strict JSON, deterministic inheritance and immutable per-channel policies |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
 | [Production UI direction](production-ui-direction.md) | Agreed visual design and flexible review details; reference for future PySide6 work, not implemented production UI |

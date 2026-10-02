@@ -1,0 +1,26 @@
+{
+  "defaults": {
+    "blob": {
+      "enabled": true,
+      "max_area": 1800,
+      "min_area": 0,
+      "required": true
+    },
+    "color": {
+      "enabled": false,
+      "required": true
+    },
+    "presence": {
+      "enabled": true,
+      "required": true
+    },
+    "vimo": {
+      "disabled_labels": [],
+      "enabled": true,
+      "required": true
+    }
+  },
+  "display_name": "产品甲（合成示例）",
+  "recipe_id": "product-a",
+  "schema_version": 1
+}
