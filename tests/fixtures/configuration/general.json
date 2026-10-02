@@ -1,0 +1,8 @@
+{
+  "display_name": "通用模型",
+  "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "model_id": "general",
+  "model_path": "models/synthetic.vimosln",
+  "module_id": "2",
+  "schema_version": 1
+}

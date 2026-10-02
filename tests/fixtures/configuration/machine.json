@@ -1,0 +1,395 @@
+{
+  "cameras": [
+    {
+      "camera_id": "CAM1",
+      "slots": [
+        {
+          "channel_id": 1,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 0,
+            "y": 0
+          },
+          "slot": 0
+        },
+        {
+          "channel_id": 2,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 10,
+            "y": 0
+          },
+          "slot": 1
+        },
+        {
+          "channel_id": 3,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 20,
+            "y": 0
+          },
+          "slot": 2
+        },
+        {
+          "channel_id": 4,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 30,
+            "y": 0
+          },
+          "slot": 3
+        },
+        {
+          "channel_id": 5,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 40,
+            "y": 0
+          },
+          "slot": 4
+        },
+        {
+          "channel_id": 6,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 50,
+            "y": 0
+          },
+          "slot": 5
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM2",
+      "slots": [
+        {
+          "channel_id": 7,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 0,
+            "y": 0
+          },
+          "slot": 0
+        },
+        {
+          "channel_id": 8,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 10,
+            "y": 0
+          },
+          "slot": 1
+        },
+        {
+          "channel_id": 9,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 20,
+            "y": 0
+          },
+          "slot": 2
+        },
+        {
+          "channel_id": 10,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 30,
+            "y": 0
+          },
+          "slot": 3
+        },
+        {
+          "channel_id": 11,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 40,
+            "y": 0
+          },
+          "slot": 4
+        },
+        {
+          "channel_id": 12,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 50,
+            "y": 0
+          },
+          "slot": 5
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM3",
+      "slots": [
+        {
+          "channel_id": 13,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 0,
+            "y": 0
+          },
+          "slot": 0
+        },
+        {
+          "channel_id": 14,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 10,
+            "y": 0
+          },
+          "slot": 1
+        },
+        {
+          "channel_id": 15,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 20,
+            "y": 0
+          },
+          "slot": 2
+        },
+        {
+          "channel_id": 16,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 30,
+            "y": 0
+          },
+          "slot": 3
+        },
+        {
+          "channel_id": 17,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 40,
+            "y": 0
+          },
+          "slot": 4
+        },
+        {
+          "channel_id": 18,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 50,
+            "y": 0
+          },
+          "slot": 5
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM4",
+      "slots": [
+        {
+          "channel_id": 19,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 0,
+            "y": 0
+          },
+          "slot": 0
+        },
+        {
+          "channel_id": 20,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 10,
+            "y": 0
+          },
+          "slot": 1
+        },
+        {
+          "channel_id": 21,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 20,
+            "y": 0
+          },
+          "slot": 2
+        },
+        {
+          "channel_id": 22,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 30,
+            "y": 0
+          },
+          "slot": 3
+        },
+        {
+          "channel_id": 23,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 40,
+            "y": 0
+          },
+          "slot": 4
+        },
+        {
+          "channel_id": 24,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 50,
+            "y": 0
+          },
+          "slot": 5
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM5",
+      "slots": [
+        {
+          "channel_id": 25,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 0,
+            "y": 0
+          },
+          "slot": 0
+        },
+        {
+          "channel_id": 26,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 10,
+            "y": 0
+          },
+          "slot": 1
+        },
+        {
+          "channel_id": 27,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 20,
+            "y": 0
+          },
+          "slot": 2
+        },
+        {
+          "channel_id": 28,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 30,
+            "y": 0
+          },
+          "slot": 3
+        },
+        {
+          "channel_id": 29,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 40,
+            "y": 0
+          },
+          "slot": 4
+        },
+        {
+          "channel_id": 30,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 50,
+            "y": 0
+          },
+          "slot": 5
+        }
+      ]
+    },
+    {
+      "camera_id": "CAM6",
+      "slots": [
+        {
+          "channel_id": 31,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 0,
+            "y": 0
+          },
+          "slot": 0
+        },
+        {
+          "channel_id": 32,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 10,
+            "y": 0
+          },
+          "slot": 1
+        },
+        {
+          "channel_id": 33,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 20,
+            "y": 0
+          },
+          "slot": 2
+        },
+        {
+          "channel_id": 34,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 30,
+            "y": 0
+          },
+          "slot": 3
+        },
+        {
+          "channel_id": 35,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 40,
+            "y": 0
+          },
+          "slot": 4
+        },
+        {
+          "channel_id": 36,
+          "roi": {
+            "height": 10,
+            "width": 8,
+            "x": 50,
+            "y": 0
+          },
+          "slot": 5
+        }
+      ]
+    }
+  ],
+  "schema_version": 1
+}
