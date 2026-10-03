@@ -23,9 +23,11 @@ from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
 
 from .camera_card import CameraCard
 from .display_frames import DisplayFrame, DisplaySnapshot
+from .parameters_page import ParametersPage
 from .production_bridge import QtProductionBridge, RecipeChoice
 from .production_presentation import controls, grid_columns
 from .production_style import Language, Style, navigation_icon, stylesheet, text
+from .recipe_editor import RecipeEditorSession
 
 PAGES = ("production", "parameters", "diagnostics", "history", "settings")
 
@@ -38,6 +40,7 @@ class ProductionWindow(QMainWindow):
         *,
         language: Language = "zh",
         simulation: bool = False,
+        recipe_editor: RecipeEditorSession | None = None,
     ) -> None:
         super().__init__()
         if (
@@ -165,7 +168,12 @@ class ProductionWindow(QMainWindow):
         )
         page.addWidget(workspace, 1)
         self.placeholders: dict[str, QLabel] = {}
+        self.parameters = ParametersPage(bridge, recipe_editor)
+        self.parameters.applied.connect(self._recipe_applied)
         for name in PAGES[1:]:
+            if name == "parameters":
+                self.pages.addWidget(self.parameters)
+                continue
             placeholder = QWidget()
             container = QVBoxLayout(placeholder)
             label = QLabel()
@@ -228,6 +236,7 @@ class ProductionWindow(QMainWindow):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        self.parameters.set_language(language)
         self.language_button.setText("English" if language == "zh" else "中文")
         for key, button in zip(PAGES, self.navigation, strict=True):
             button.setText(text(key, language))
@@ -245,6 +254,20 @@ class ProductionWindow(QMainWindow):
     @Slot(int)
     def _select_recipe(self, index: int) -> None:
         self.bridge.select_recipe(self.choices[index])
+
+    @Slot(object)
+    def _recipe_applied(self, choice: object) -> None:
+        if not isinstance(choice, RecipeChoice):
+            return
+        identity = choice.prepared.configuration.recipe_id
+        choices = [
+            c for c in self.choices if c.prepared.configuration.recipe_id != identity
+        ]
+        choices.append(choice)
+        self.choices = tuple(choices)
+        self.recipe.clear()
+        self.recipe.addItems([c.label for c in self.choices])
+        self._render()
 
     @Slot()
     def _batch_dialog(self) -> None:
@@ -409,6 +432,10 @@ class ProductionWindow(QMainWindow):
             event.accept()
         else:
             event.ignore()
-            self._closing = True
-            self._render()
-            self.bridge.close()
+            if not self._closing:
+                self.parameters.request_close(self._begin_close)
+
+    def _begin_close(self) -> None:
+        self._closing = True
+        self._render()
+        self.bridge.close()

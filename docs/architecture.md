@@ -13,7 +13,8 @@
 | Implemented | 2C — production application state and configured runtime composition |
 | Implemented | 2D-1 — PySide Production shell, bounded display frames and simulated source |
 | Design reference | Production UI direction; physical workstation tuning remains |
-| Next, not implemented | 2D-2 — remaining production UI work |
+| Implemented | 2D-2A — Parameters / Recipe drafts, validation, persistence and candidate Apply |
+| Next, not implemented | 2D-2B — graphical ROI editing |
 | Future | 2E — Archive, events and diagnostics |
 | Future | 3 — Camera, PLC and field integration |
 
@@ -132,10 +133,18 @@ The bridge polls changed snapshots/display revisions; lifecycle Futures cross
 queued Qt signals. The independent latest-frame store owns immutable display
 copies. Generation/cycle/frame/shape matching prevents stale overlays. Widgets
 do not control runtime internals or duplicate judgments/counters. The same six
-cards rearrange between portrait and landscape; other pages are placeholders.
+cards rearrange between portrait and landscape.
 The launcher uses real application/runtime composition with a fake engine and
 synthetic inputs. See the [Production UI contract](production-ui.md) for ownership,
 nonblocking shutdown, localization, layout and physical-screen limitations.
+
+Phase 2D-2A replaces Parameters with an editor backed by a Qt-free draft/session
+and small file catalog. It calls existing Phase 2B validation/resolution/atomic
+persistence. Save never applies; explicit Apply prepares a saved clean Recipe
+off the GUI thread and installs it through ProductionApplication. Only successful
+Start activates it. Diagnostics, History and Settings remain placeholders. See
+the [Recipe UI contract](recipe-configuration-ui.md); domain/runtime contracts and
+inference behavior are unchanged.
 
 ## Planned direction — not implemented
 
@@ -188,4 +197,5 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Production application](production-application.md) | Transactional activation, warm-up, runtime sessions, configured execution, factual counters and Batch lifecycle |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
 | [Production UI](production-ui.md) | Implemented shell/bridge, display ownership, identity matching, controls and review |
+| [Recipe configuration UI](recipe-configuration-ui.md) | Parameters drafts, inheritance preview, Save/Apply, catalog and dirty-close workflow |
 | [Production UI direction](production-ui-direction.md) | Agreed visual direction and flexible review details; not an exact implementation specification |

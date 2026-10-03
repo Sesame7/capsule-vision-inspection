@@ -6,7 +6,7 @@ All simulation below is launcher-only; no business state is copied into widgets.
 import argparse
 import hashlib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic
@@ -25,11 +25,18 @@ from vimo_demo.application import (
     prepare_configuration,
 )
 from vimo_demo.configuration import (
+    BlobCheckConfig,
+    BlobOverride,
+    CameraOverride,
+    ChannelOverride,
+    CheckConfiguration,
+    CheckOverrides,
     MachineLayoutDefinition,
     ModelDefinition,
     ModelRegistry,
     RecipeDefinition,
     resolve_configuration,
+    save_recipe,
 )
 from vimo_demo.inference import BoundingRect, DefectRegion, ImageResult, RotatedRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
@@ -43,12 +50,36 @@ from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
 from vimo_demo.ui.production_style import Language
 from vimo_demo.ui.production_window import ProductionWindow
+from vimo_demo.ui.recipe_catalog import RecipeCatalog
+from vimo_demo.ui.recipe_editor import RecipeEditorSession
 
 type Scenario = Literal["normal", "ng", "warning", "fault"]
 
 
 class DemoTerminalFailure(BaseException):
     """Explicit fake worker-terminal failure for FAULT presentation review."""
+
+
+def demo_recipes() -> tuple[RecipeDefinition, ...]:
+    defaults = CheckConfiguration(blob=BlobCheckConfig(max_area=1800))
+    return (
+        RecipeDefinition("demo-A", "Demo A", defaults),
+        RecipeDefinition(
+            "demo-B",
+            "Demo B",
+            defaults,
+            camera_overrides=(
+                CameraOverride(
+                    CameraId("CAM3"), CheckOverrides(blob=BlobOverride(max_area=1850))
+                ),
+            ),
+            channel_overrides=(
+                ChannelOverride(
+                    ChannelId(17), CheckOverrides(blob=BlobOverride(max_area=1900))
+                ),
+            ),
+        ),
+    )
 
 
 class DemoEngine:
@@ -194,15 +225,15 @@ def demo_choices(
             prepare_configuration(
                 resolve_configuration(
                     machine,
-                    RecipeDefinition(f"demo-{name}", f"Demo {name}"),
+                    recipe,
                     ModelRegistry((model,)),
                     model.model_id,
                 ),
                 base_directory=folder,
             ),
-            f"Demo {name}",
+            recipe.display_name,
         )
-        for name in ("A", "B")
+        for recipe in demo_recipes()
     )
 
 
@@ -261,6 +292,7 @@ class DemoComposition:
     store: LatestDisplayFrameStore
     choices: tuple[RecipeChoice, ...]
     source: DemoSource
+    editor: RecipeEditorSession
 
 
 def compose(
@@ -283,15 +315,38 @@ def compose(
             cycle_timeout=30,
         )
 
-    app = ProductionApplication(factory)
-    app.configure(choices[0].prepared)
     store = LatestDisplayFrameStore(choices[0].prepared.configuration.layout.camera_ids)
     for camera, image in zip(store.cameras, images, strict=True):
         store.publish(
             Frame(FrameId(CycleId(0), camera, 0), monotonic(), image.copy()),
             generation=0,
         )
-    return DemoComposition(app, store, choices, DemoSource(app, store, images))
+    directory = folder / "recipes"
+    directory.mkdir(parents=True, exist_ok=True)
+    for recipe in demo_recipes():
+        path = directory / f"{recipe.recipe_id}.recipe.json"
+        if not path.exists():
+            save_recipe(path, recipe)
+    model = choices[0].prepared.configuration.model
+    editor = RecipeEditorSession(
+        RecipeCatalog(directory),
+        MachineLayoutDefinition(choices[0].prepared.configuration.layout),
+        ModelRegistry(
+            (
+                model,
+                replace(
+                    model,
+                    model_id="synthetic-alt",
+                    display_name="Synthetic alternative",
+                ),
+            )
+        ),
+        model.model_id,
+        folder,
+    )
+    app = ProductionApplication(factory)
+    app.configure(choices[0].prepared)
+    return DemoComposition(app, store, choices, DemoSource(app, store, images), editor)
 
 
 def main() -> int:
@@ -318,7 +373,11 @@ def main() -> int:
     application = QApplication(sys.argv[:1])
     bridge = QtProductionBridge(composition.application, composition.store)
     window = ProductionWindow(
-        bridge, composition.choices, language=language, simulation=True
+        bridge,
+        composition.choices,
+        language=language,
+        simulation=True,
+        recipe_editor=composition.editor,
     )
     window.resize(width, height)
     window.show()

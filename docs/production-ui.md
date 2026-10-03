@@ -1,7 +1,8 @@
 # Production UI — Phase 2D-1
 
-The Production page is implemented; Parameters, Diagnostics, History and Settings
-are localized navigation placeholders. This is a simulated workstation shell,
+The Production page is implemented. Phase 2D-2A adds the
+[Parameters Recipe editor](recipe-configuration-ui.md); Diagnostics, History and
+Settings remain localized placeholders. This is a simulated workstation shell,
 not commissioned camera/PLC software. The [design direction](production-ui-direction.md)
 remains a visual reference, not an exact implementation specification.
 
@@ -27,6 +28,8 @@ Prepared Recipe selection, Batch and Reset call cheap application operations;
 there is no parsing, model IO or inference on the GUI thread. Unchanged display
 revisions do not trigger pixel conversions. Polling may skip intermediate display
 results; authoritative counters and result delivery do not depend on painting.
+Parameters separately validates saved candidate artifacts on one preparation
+thread before application configuration; it never constructs an engine.
 
 ## Display ownership and identity
 
@@ -108,7 +111,9 @@ event history, traceback, internal path or raw vendor error.
 
 ## Closing
 
-Close ignores the initial window event, disables operational controls and requests
+Close first resolves any dirty Parameters draft and waits asynchronously for any
+outstanding Recipe preparation. Once approved, it ignores the initial window
+event, disables operational controls and requests
 application close once. Qt remains responsive. Successful Future completion is
 followed by nonblocking `application.join(0)` observation before the window closes.
 The default 30-second bridge timeout reports continued waiting and retains
@@ -151,6 +156,6 @@ they do not copy/install them. See [AGENTS](../AGENTS.md) for full quality gates
 
 Physical portrait-monitor validation remains necessary for Windows 100/125/150%
 scaling, viewing distance, touch targets and brightness/contrast. Offscreen review
-does not establish those ergonomics or camera throughput. Recipe editing and the
-other pages, Phase 2E archive/events/diagnostics, and Phase 3 hardware integration
+does not establish those ergonomics or camera throughput. Graphical ROI editing,
+the remaining pages, Phase 2E archive/events/diagnostics, and Phase 3 hardware integration
 remain out of scope.
