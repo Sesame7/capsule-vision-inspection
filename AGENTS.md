@@ -51,6 +51,9 @@ one image per task and executes serially.
 - Production UI commands go through ProductionApplication. Display pixels remain
   separate from business results in a bounded latest-per-camera store; overlays
   require matching generation, cycle, frame identity and image dimensions.
+- Recipe editing uses the existing configuration resolver/atomic persistence.
+  Save does not Apply; Apply installs only a saved clean candidate. Activation
+  still requires successful Start. Keep artifact hashing off the GUI thread.
 - Shutdown remains observable: stop admission, allow active native work to finish,
   and confirm actual thread termination before releasing ownership. Timeout must
   not pretend success. Native SDK calls cannot be forcibly cancelled.

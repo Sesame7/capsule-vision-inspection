@@ -11,6 +11,93 @@ from .production_presentation import Indicator
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "new_recipe": ("新建", "New"),
+    "reload": ("重新加载", "Reload"),
+    "validate": ("验证", "Validate"),
+    "save": ("保存", "Save"),
+    "save_as": ("另存为", "Save As"),
+    "apply": ("应用为候选", "Apply candidate"),
+    "discard": ("放弃修改", "Discard"),
+    "cancel": ("取消", "Cancel"),
+    "dirty_question": (
+        "草稿尚未保存。保存、放弃修改或取消？",
+        "Unsaved draft. Save, discard changes, or cancel?",
+    ),
+    "editing": ("编辑草稿", "Editing draft"),
+    "saved": ("已保存", "Saved"),
+    "unsaved": ("未保存修改", "Unsaved changes"),
+    "new_draft": ("新草稿 · 尚未保存", "New draft · not saved"),
+    "valid": ("验证通过", "Valid"),
+    "invalid": ("验证失败", "Invalid"),
+    "unchecked": ("尚未验证", "Not validated"),
+    "candidate": ("候选配置", "Candidate"),
+    "read_only": ("当前状态仅可查看", "View only in current application state"),
+    "apply_help": (
+        "保存不会应用。仅已保存且无修改的有效配方可应用；启动成功后才激活。",
+        "Save does not Apply. Apply a valid saved draft without edits; activation requires successful Start.",
+    ),
+    "preparing": (
+        "正在校验模型文件；界面可响应",
+        "Verifying model artifact; UI remains responsive",
+    ),
+    "no_catalog": ("未配置配方目录", "No Recipe catalog configured"),
+    "recipe_id": ("配方 ID", "Recipe ID"),
+    "display_name": ("配方名称", "Recipe name"),
+    "product_code": ("产品代码（可选）", "Product code (optional)"),
+    "model_choice": ("模型选择", "Model selection"),
+    "default_model": ("使用默认模型", "Use default model"),
+    "model_details": ("模型信息（只读）", "Model metadata (read only)"),
+    "layout_details": (
+        "机器布局与基础 ROI（只读）",
+        "Machine layout / base ROI (read only)",
+    ),
+    "defaults": ("默认参数", "Defaults"),
+    "camera_scope": ("相机覆盖", "Camera override"),
+    "channel_scope": ("通道覆盖", "Channel override"),
+    "inherit": ("继承", "Inherit"),
+    "override": ("覆盖", "Override"),
+    "set_bound": ("设置边界值", "Set bound"),
+    "not_set": ("未设置", "Not set"),
+    "true": ("是", "Yes"),
+    "false": ("否", "No"),
+    "enabled": ("启用", "Enabled"),
+    "required": ("必需", "Required"),
+    "policy_help": (
+        "启用决定是否执行；必需决定已启用检查的技术失败是否影响有效性。",
+        "Enabled controls execution; Required controls how an enabled check's technical failure affects validity.",
+    ),
+    "presence": ("存在检查", "Presence"),
+    "blob": ("连通区域检查", "Blob"),
+    "color": ("颜色检查", "Color"),
+    "vimo": ("ViMo", "ViMo"),
+    "min_area": ("最小面积 (px²)", "Minimum area (px²)"),
+    "max_area": ("最大面积 (px²)", "Maximum area (px²)"),
+    "disabled_labels": (
+        "禁用标签（每行一个；空列表有效）",
+        "Disabled labels (one per line; empty list is valid)",
+    ),
+    "effective": ("实际生效", "Effective"),
+    "roi_numeric": ("通道 ROI 数值覆盖", "Channel ROI numeric override"),
+    "roi_x": ("x", "x"),
+    "roi_y": ("y", "y"),
+    "roi_width": ("宽度", "Width"),
+    "roi_height": ("高度", "Height"),
+    "camera_count": ("相机数", "Cameras"),
+    "channel_count": ("通道数", "Channels"),
+    "module_id": ("模块 ID", "Module ID"),
+    "roi_help": (
+        "仅通道模式可覆盖矩形；取消覆盖恢复基础 ROI。无图形编辑。",
+        "Channel mode only. Clear Override to restore the base rectangle. No visual editor.",
+    ),
+    "inherit_help": (
+        "覆盖中的空值表示继承；无法用空值清除上层面积边界。",
+        "Inherited area bounds cannot be cleared with null in schema v1.",
+    ),
+    "catalog_issues": ("配方目录问题", "Recipe catalog issues"),
+    "id_save_as": (
+        "已保存的 ID 不可直接修改，请使用另存为。",
+        "Use Save As to give a saved Recipe a new identity.",
+    ),
     "production": ("生产", "Production"),
     "parameters": ("参数", "Parameters"),
     "diagnostics": ("诊断", "Diagnostics"),
@@ -146,6 +233,18 @@ def stylesheet() -> str:
     QLineEdit {{ background: {Style.surface}; padding: 8px; border: 1px solid {Style.border}; }}
     QDialog {{ background: {Style.background}; }}
     QComboBox QAbstractItemView {{ background: {Style.raised}; color: {Style.primary}; }}
+    QWidget#recipeEditor {{ background: {Style.background}; }}
+    QWidget#parameters QScrollArea {{ background: {Style.background}; border: 1px solid {Style.border}; }}
+    QWidget#parameters QGroupBox {{ background: {Style.surface}; border: 1px solid {Style.border}; border-radius: 8px; margin-top: 18px; padding: 12px; }}
+    QWidget#parameters QGroupBox::title {{ subcontrol-origin: margin; left: 12px; color: {Style.accent}; }}
+    QWidget#parameters QPlainTextEdit {{ background: {Style.background}; border: 1px solid {Style.border}; color: {Style.primary}; }}
+    QWidget#parameters QCheckBox {{ background: transparent; spacing: 8px; }}
+    QWidget#parameters QCheckBox::indicator {{ width: 20px; height: 20px; }}
+    QWidget#parameters QLineEdit:disabled {{ color: {Style.secondary}; }}
+    QWidget#parameters QScrollBar:vertical {{ background: {Style.background}; width: 16px; }}
+    QWidget#parameters QScrollBar::handle:vertical {{ background: {Style.raised}; min-height: 40px; border-radius: 6px; }}
+    QWidget#parameters QScrollBar::add-line:vertical, QWidget#parameters QScrollBar::sub-line:vertical {{ height: 0px; }}
+    QWidget#parameters QScrollBar::add-page:vertical, QWidget#parameters QScrollBar::sub-page:vertical {{ background: none; }}
     """
 
 

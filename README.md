@@ -22,8 +22,10 @@ with strict JSON persistence and immutable per-channel resolution. Phase 2C adds
 [ProductionApplication](docs/production-application.md): transactional activation,
 worker-owned warm-up, disposable runtime sessions, configured checks and factual
 cycle/channel counters. Phase 2D-1 adds the [Production screen](docs/production-ui.md),
-driven by application snapshots with separate bounded display frames. The four
-other pages remain placeholders; there is no commissioned camera/PLC integration.
+driven by application snapshots with separate bounded display frames. Phase 2D-2A
+adds [Parameters / Recipe editing](docs/recipe-configuration-ui.md), with distinct
+Validate, Save and Apply actions. Diagnostics, History and Settings remain
+placeholders; there is no commissioned camera/PLC integration.
 The architecture document also maps all contracts and the production UI design reference.
 
 ## Environment and setup
@@ -102,6 +104,10 @@ uv run --no-sync python scripts/run_production_ui.py --language zh --size 1080x1
 Click **Start inspection**. Use `--scenario ng`, `warning` or `fault` to review
 abnormal states; `--language en --size 1920x1080` shows the landscape layout.
 Counters represent channel judgment occurrences, not physical capsule counts.
+Open **Parameters** for the synthetic Demo A/B Recipe editor. Save explicitly;
+Apply installs a candidate, and successful Start activates it. Parameters remain
+viewable but read-only while running. See the
+[Recipe acceptance walkthrough](docs/recipe-configuration-ui.md#presentation-and-synthetic-acceptance-walkthrough).
 See the [UI contract and review guide](docs/production-ui.md) for ownership,
 shutdown, alternate sizes and remaining physical-screen validation.
 
