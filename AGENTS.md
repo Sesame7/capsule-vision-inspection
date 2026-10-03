@@ -2,8 +2,8 @@
 
 ## Project and workflow
 
-Local industrial-vision integration: typed ViMo inference, a Python worker and
-a minimal PySide6 demo. The demo is not the final production UI. Read
+Local industrial-vision integration: typed ViMo inference, bounded runtime and
+a PySide6 Production shell with simulated input. Read
 [architecture](docs/architecture.md) for implemented boundaries and future direction.
 The intended inspection cycle contains six images; the current worker accepts
 one image per task and executes serially.
@@ -48,6 +48,9 @@ one image per task and executes serially.
 - ProductionApplication owns candidate activation and disposable runtime sessions.
   Warm-up is readiness work, never production data. Counters measure admitted
   cycles/channel judgments, not physical products; only explicit Batch resets them.
+- Production UI commands go through ProductionApplication. Display pixels remain
+  separate from business results in a bounded latest-per-camera store; overlays
+  require matching generation, cycle, frame identity and image dimensions.
 - Shutdown remains observable: stop admission, allow active native work to finish,
   and confirm actual thread termination before releasing ownership. Timeout must
   not pretend success. Native SDK calls cannot be forcibly cancelled.
@@ -64,7 +67,7 @@ one image per task and executes serially.
   pure resolution into existing inspection types; no activation or active state.
 - `src/vimo_demo/application/`: Qt-independent activation, lifecycle, snapshots,
   factual counters and resolved-check composition using the existing runtime.
-- `src/vimo_demo/ui/`: Qt bridge and integration demo.
+- `src/vimo_demo/ui/`: thin Qt bridges, Production presentation and integration demo.
 - `tests/`: unit/integration tests and tracked golden `tests/reference/phase0.json`.
 - `scripts/`: maintained engineering tools using the public inference API.
 - `models/`, `images/`: ignored local inputs; `outputs/`: ignored generated data.
