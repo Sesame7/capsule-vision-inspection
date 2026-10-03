@@ -16,7 +16,7 @@ class _Emitter(QObject):
     completed = Signal(str, object, object)
 
 
-class _Delivery:
+class FutureDelivery:
     """Callbacks retain this gate, never a window/bridge. Detach serializes emit.
 
     The unparented sender survives destruction of the receiving bridge until
@@ -82,7 +82,7 @@ class QtInferenceBridge(QObject):
         self._stopped = False
         self._detached = False
         self._state = worker.state
-        self._delivery = _Delivery()
+        self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
             self._completed, Qt.ConnectionType.QueuedConnection
         )

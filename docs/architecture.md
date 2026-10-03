@@ -11,8 +11,9 @@
 | Implemented | 2A — production inspection domain and result model |
 | Implemented | 2B — Recipe/model/layout persistence and pure configuration resolution |
 | Implemented | 2C — production application state and configured runtime composition |
-| Design reference | Production UI direction; no production workstation UI yet |
-| Next, not implemented | 2D — Production PySide UI |
+| Implemented | 2D-1 — PySide Production shell, bounded display frames and simulated source |
+| Design reference | Production UI direction; physical workstation tuning remains |
+| Next, not implemented | 2D-2 — remaining production UI work |
 | Future | 2E — Archive, events and diagnostics |
 | Future | 3 — Camera, PLC and field integration |
 
@@ -104,7 +105,7 @@ No engine ownership moves to application/Qt. See the
 state transitions, exact counter semantics, explicit Batch resets and shutdown.
 
 ```text
-future UI/source -> ProductionApplication -> ProductionRuntimeSession
+Production UI/source -> ProductionApplication -> ProductionRuntimeSession
                              |                       |
                     snapshots/counters        RuntimeCoordinator
                                                      |
@@ -118,8 +119,23 @@ future UI/source -> ProductionApplication -> ProductionRuntimeSession
 The GUI observes readiness, results, exceptions and shutdown. It does not own
 inspection decisions, and result availability does not wait for rendering.
 Native calls cannot be forcibly cancelled: a blocked call can delay shutdown,
-and a timeout retains ownership rather than claiming termination. This is an
-integration demo, not a production workstation interface.
+and a timeout retains ownership rather than claiming termination.
+
+Phase 2D-1 adds a separate six-camera Production shell:
+
+```text
+ProductionApplication -> snapshot / command Future -> QtProductionBridge -> widgets
+accepted source Frame -> bounded LatestDisplayFrameStore -> CameraCard
+```
+
+The bridge polls changed snapshots/display revisions; lifecycle Futures cross
+queued Qt signals. The independent latest-frame store owns immutable display
+copies. Generation/cycle/frame/shape matching prevents stale overlays. Widgets
+do not control runtime internals or duplicate judgments/counters. The same six
+cards rearrange between portrait and landscape; other pages are placeholders.
+The launcher uses real application/runtime composition with a fake engine and
+synthetic inputs. See the [Production UI contract](production-ui.md) for ownership,
+nonblocking shutdown, localization, layout and physical-screen limitations.
 
 ## Planned direction — not implemented
 
@@ -171,4 +187,5 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Inspection configuration](inspection-configuration.md) | Separate Recipes/models/layout, strict JSON, deterministic inheritance and immutable per-channel policies |
 | [Production application](production-application.md) | Transactional activation, warm-up, runtime sessions, configured execution, factual counters and Batch lifecycle |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
-| [Production UI direction](production-ui-direction.md) | Agreed visual design and flexible review details; reference for future PySide6 work, not implemented production UI |
+| [Production UI](production-ui.md) | Implemented shell/bridge, display ownership, identity matching, controls and review |
+| [Production UI direction](production-ui-direction.md) | Agreed visual direction and flexible review details; not an exact implementation specification |

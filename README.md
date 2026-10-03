@@ -1,10 +1,10 @@
 # ViMo Inference Demo
 
 Local industrial-vision integration with a typed `VimoSegmentationEngine`, a
-bounded `InferenceWorker` and a thin `QtInferenceBridge`. The engine runs
+bounded `InferenceWorker` and a PySide production shell. The engine runs
 synchronously on its owning Python worker thread; Qt receives queued notifications
-on the GUI thread in the same process. The current window is an **integration
-demo, not the final production UI**.
+on the GUI thread in the same process. The original single-image integration demo
+remains available alongside the simulated six-camera Production page.
 
 SDK validation, the formal core, worker lifecycle and Qt integration are verified.
 The [inspection-cycle contracts](docs/inspection-cycle.md) define bounded collection
@@ -21,7 +21,9 @@ Phase 2B provides [Recipe/model/layout configuration](docs/inspection-configurat
 with strict JSON persistence and immutable per-channel resolution. Phase 2C adds
 [ProductionApplication](docs/production-application.md): transactional activation,
 worker-owned warm-up, disposable runtime sessions, configured checks and factual
-cycle/channel counters. Next is **Phase 2D — Production PySide UI**.
+cycle/channel counters. Phase 2D-1 adds the [Production screen](docs/production-ui.md),
+driven by application snapshots with separate bounded display frames. The four
+other pages remain placeholders; there is no commissioned camera/PLC integration.
 The architecture document also maps all contracts and the production UI design reference.
 
 ## Environment and setup
@@ -89,7 +91,21 @@ pending task plus the active call; submitted arrays remain immutable until Futur
 completion. The [worker guide](docs/runtime-worker.md) contains the CLI Future
 example and full lifecycle contract.
 
-## Minimal Qt integration demo
+## Production screen and integration demo
+
+The six-camera shell needs no GPU or local assets for its simulated input:
+
+```powershell
+uv run --no-sync python scripts/run_production_ui.py --language zh --size 1080x1920
+```
+
+Click **Start inspection**. Use `--scenario ng`, `warning` or `fault` to review
+abnormal states; `--language en --size 1920x1080` shows the landscape layout.
+Counters represent channel judgment occurrences, not physical capsule counts.
+See the [UI contract and review guide](docs/production-ui.md) for ownership,
+shutdown, alternate sizes and remaining physical-screen validation.
+
+The older one-image SDK integration demo is separate:
 
 ```powershell
 uv run --no-sync python -m vimo_demo.ui.app models/model_trt_fp16.vimosln

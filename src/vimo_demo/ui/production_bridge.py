@@ -1,0 +1,172 @@
+"""Application Futures/snapshots to queued Qt notifications, never runtime ownership."""
+
+from collections.abc import Callable
+from concurrent.futures import Future
+from dataclasses import dataclass
+from time import monotonic
+
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+
+from vimo_demo.application import (
+    PreparedConfiguration,
+    ProductionApplication,
+    ProductionApplicationSnapshot,
+)
+
+from .display_frames import LatestDisplayFrameStore
+from .inference_bridge import FutureDelivery
+
+
+@dataclass(frozen=True, slots=True)
+class RecipeChoice:
+    prepared: PreparedConfiguration
+    label: str
+
+
+class QtProductionBridge(QObject):
+    snapshot_changed = Signal(object)
+    frames_changed = Signal(object)
+    command_finished = Signal(str)
+    command_failed = Signal(str, object)
+    shutdown_finished = Signal()
+
+    def __init__(
+        self,
+        application: ProductionApplication,
+        frames: LatestDisplayFrameStore,
+        parent: QObject | None = None,
+        *,
+        poll_ms: int = 100,
+        close_timeout_ms: int = 30_000,
+    ) -> None:
+        super().__init__(parent)
+        if min(poll_ms, close_timeout_ms) <= 0:
+            raise ValueError("Timer intervals must be positive")
+        self.application = application
+        self.frames = frames
+        self._snapshot: ProductionApplicationSnapshot | None = None
+        self._revision = -1
+        self._closing = False
+        self._closed = False
+        self._close_succeeded = False
+        self._deadline = 0.0
+        self._timeout = close_timeout_ms / 1000
+        self._timeout_reported = False
+        self._detached = False
+        # Reuse the established destruction-safe Future delivery gate unchanged.
+        self._delivery = FutureDelivery()
+        self._delivery.emitter.completed.connect(
+            self._completed, Qt.ConnectionType.QueuedConnection
+        )
+        self.destroyed.connect(
+            self._delivery.detach, Qt.ConnectionType.DirectConnection
+        )
+        self.timer = QTimer(self)
+        self.timer.setInterval(poll_ms)
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def closing(self) -> bool:
+        return self._closing
+
+    def _check_thread(self) -> None:
+        if self._detached or QThread.currentThread() != self.thread():
+            raise RuntimeError("Bridge requires its live GUI thread")
+
+    def _command(self, name: str, command: Callable[[], Future[None]]) -> None:
+        self._check_thread()
+        try:
+            future = command()
+        except Exception as exc:
+            self.command_failed.emit(name, exc)
+        else:
+            self._delivery.watch(name, future)
+        self.refresh()
+
+    def _immediate(self, name: str, command: Callable[[], None]) -> None:
+        # Prepared selection/reset/batch are cheap locked application operations;
+        # no parsing, artifact IO, engine construction or waiting occurs here.
+        def perform() -> Future[None]:
+            command()
+            future: Future[None] = Future()
+            future.set_result(None)
+            return future
+
+        self._command(name, perform)
+
+    @Slot()
+    def start(self) -> None:
+        self._command("start", self.application.start)
+
+    @Slot()
+    def stop(self) -> None:
+        self._command("stop", self.application.stop)
+
+    @Slot()
+    def reset(self) -> None:
+        self._immediate("reset", self.application.reset_fault)
+
+    def select_recipe(self, choice: RecipeChoice) -> None:
+        self._immediate("recipe", lambda: self.application.configure(choice.prepared))
+
+    def start_batch(self, batch_id: str | None) -> None:
+        self._immediate("batch", lambda: self.application.start_batch(batch_id))
+
+    @Slot()
+    def close(self) -> None:
+        self._check_thread()
+        if self._closing or self._closed:
+            return
+        self._closing = True
+        self._deadline = monotonic() + self._timeout
+        self._timeout_reported = False
+        self._command("close", self.application.close)
+
+    @Slot(str, object, object)
+    def _completed(self, name: str, value: object, error: object) -> None:
+        if self._detached:
+            return
+        if isinstance(error, BaseException):
+            if name == "close":
+                self._closing = False  # Explicit retry possible; never quit on failure.
+            self.command_failed.emit(name, error)
+        else:
+            if name == "close":
+                self._close_succeeded = True
+            self.command_finished.emit(name)
+        self.refresh()
+
+    @Slot()
+    def refresh(self) -> None:
+        self._check_thread()
+        snapshot = self.application.snapshot()
+        if snapshot != self._snapshot:
+            self._snapshot = snapshot
+            self.snapshot_changed.emit(snapshot)
+        display = self.frames.snapshot()
+        revision = display.revision
+        if revision != self._revision:
+            self._revision = revision
+            self.frames_changed.emit(display)
+        if self._closing:
+            if self._close_succeeded and self.application.join(0):
+                self._closed = True
+                self.timer.stop()
+                self.shutdown_finished.emit()
+            elif not self._timeout_reported and monotonic() >= self._deadline:
+                self._timeout_reported = True
+                self.command_failed.emit(
+                    "close", TimeoutError("Still waiting for owned runtime")
+                )
+
+    def detach(self) -> None:
+        if not self._detached:
+            self._check_thread()
+            self._detached = True
+            self.timer.stop()
+            self._delivery.detach()
