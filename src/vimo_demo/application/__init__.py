@@ -1,6 +1,7 @@
 """Production application lifecycle and configured runtime composition, without Qt."""
 
 from .application import ProductionApplication
+from .ingress import LocalCycleIngress
 from .models import (
     ApplicationCapacityError,
     ApplicationError,
@@ -25,6 +26,7 @@ __all__ = [
     "ChannelInspector",
     "ConfigurationIdentity",
     "ConfiguredProductionPipeline",
+    "LocalCycleIngress",
     "PreparedConfiguration",
     "ProductionApplication",
     "ProductionApplicationSnapshot",

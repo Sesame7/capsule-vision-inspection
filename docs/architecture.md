@@ -16,7 +16,8 @@
 | Implemented | 2D-2A — Parameters / Recipe drafts, validation, persistence and candidate Apply |
 | Implemented | 2D-2B — graphical channel ROI editing against frozen reference frames |
 | Future | 2E — Archive, events and diagnostics |
-| Future | 3 — Camera, PLC and field integration |
+| Implemented | 3A — minimal local image-set acquisition ingress |
+| Future | Remaining Phase 3 — Camera, PLC and field integration |
 
 Phase 2C composes existing layers: candidate activation after model warm-up,
 fresh runtime sessions, factual cycle/channel counters and heterogeneous checks.
@@ -150,6 +151,14 @@ Phase 2D-2B adds a focused [graphical ROI editor](graphical-roi-editor.md) insid
 Parameters. Pure geometry helpers share the Production image transform; the Qt
 canvas edits existing draft rectangles against one frozen owned display frame.
 It introduces no new schema, runtime ownership or activation behavior.
+
+Phase 3A adds `application.LocalCycleIngress`: one ordered local image set is
+copied into existing owned Frames with a session-local cycle ID, admitted through
+`ProductionApplication`, and exposed through its existing `ProductionCycle` result
+Future. It uses configured camera order and adds no queue, thread, lifecycle or
+UI changes. See [local ingress](production-application.md#local-image-set-ingress--phase-3a)
+for buffer reuse, explicit rejections and source/session coordination requirements.
+Real acquisition/trigger/PLC association remains unimplemented.
 
 ## Planned direction — not implemented
 

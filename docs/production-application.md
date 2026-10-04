@@ -57,6 +57,67 @@ owners, and must not modify widgets. Future handles are observations, not promis
 callers may settle or cancel. Exceptions retain their causes; immutable snapshots
 retain only compact issue type/message data, never exception tracebacks.
 
+## Local image-set ingress — Phase 3A
+
+`LocalCycleIngress` is a small synchronous admission helper in `application/`.
+It starts no thread, queue, source plugin or lifecycle. Supply the configuration
+layout used by the running session and one ordered set of decoded BGR arrays:
+
+```python
+from vimo_demo.application import LocalCycleIngress
+
+# After app.start() succeeds; non-GUI source context only.
+ingress = LocalCycleIngress(app, prepared.configuration.layout)
+cycle = ingress.submit(images_bgr)  # One array per configured camera, in layout order.
+# The external arrays can now be reused, even while inference is still running.
+result = cycle.result.result()     # Existing ProductionInspectionResult, no wrapper.
+```
+
+Create one ingress per runtime session and use it serially as that session's sole
+cycle-ID source. Each valid iteration gets local `CycleId(1), (2), ...`; admission
+rejections can leave gaps and never trigger retries. This identity is correlation
+only, not a physical-product/PLC counter or persistent ID. Invalid input detected
+before begin consumes no ID and creates no partial cycle. Camera count/order comes
+from the supplied layout (six for this workstation), not hard-coded camera paths.
+`sequence=0` and local `monotonic()` capture metadata do not determine membership
+or collector deadlines. The caller decodes local files; ingress never changes BGR
+meaning, dtype, dimensions or orientation.
+
+Before beginning a cycle, all arrays are checked and copied into independently
+owned C-contiguous uint8 H×W×3 storage, then wrapped in the existing `Frame` type.
+Even already-owned arrays are copied because external aliases/reuse are allowed.
+Keep source arrays and the input sequence stable during `submit()`. No leases or
+zero-copy path are introduced. Only the current input set is held locally; any
+admitted frames/results follow existing bounded application/runtime ownership.
+
+`submit()` waits for the existing cycle-admission Future and each frame-admission
+acknowledgement, then returns the existing `ProductionCycle`. It does not wait for
+inspection; observe `cycle.result` for the result or an explicit terminal error.
+Neither these waits nor waiting for results belongs on the GUI or runtime callback
+thread. Native inference still executes exclusively on the existing worker.
+
+Input errors and synchronous/asynchronous admission errors propagate unchanged.
+For example, READY-backlog overflow remains an exception on `cycle.result`, never
+a manufactured product judgment. Submission is not transactional: if a later frame
+is rejected, already accepted frames/cycle remain application-owned. The caller
+must use existing expiration or Stop/Close cleanup, which may produce a technical
+incomplete result. The helper does not silently rollback, retry, stop the machine,
+schedule deadlines or redefine failure semantics.
+
+Ingress binds the current running generation and rejects later use while stopped
+or after restart. Stop/drain the source before restarting/replacing the session;
+construct a new ingress afterward. Application begin/frame commands do not accept
+an atomic generation token, so snapshot checks are **not** protection against a
+concurrent Stop/Start between checking and submission. This phase keeps that
+existing single-source/lifecycle coordination requirement rather than redesigning
+application admission. The existing UI simulation is unchanged.
+
+Focused equipment-independent verification:
+
+```powershell
+uv run --no-sync pytest tests/integration/test_local_ingress.py --tb=short
+```
+
 ## State and transactional activation
 
 | From | Action/outcome | To |
