@@ -6,6 +6,10 @@ Settings remain localized placeholders. This is a simulated workstation shell,
 not commissioned camera/PLC software. The [design direction](production-ui-direction.md)
 remains a visual reference, not an exact implementation specification.
 
+The [graphical ROI editor](graphical-roi-editor.md) now opens from Parameters /
+Channel. It retains a frozen display reference and shares the image transform;
+Production cards, result matching and application lifecycle are unchanged.
+
 ## Boundaries and updates
 
 ```text
@@ -156,6 +160,6 @@ they do not copy/install them. See [AGENTS](../AGENTS.md) for full quality gates
 
 Physical portrait-monitor validation remains necessary for Windows 100/125/150%
 scaling, viewing distance, touch targets and brightness/contrast. Offscreen review
-does not establish those ergonomics or camera throughput. Graphical ROI editing,
-the remaining pages, Phase 2E archive/events/diagnostics, and Phase 3 hardware integration
+does not establish those ergonomics or camera throughput. The remaining pages,
+Phase 2E archive/events/diagnostics, and Phase 3 hardware integration
 remain out of scope.

@@ -82,8 +82,10 @@ Model choice is Default or an existing registered model. Name/ID, path, expected
 SHA-256 and module ID are read-only; changing selection never loads a model.
 Machine details show camera/channel counts, mapping and base ROIs. The schema
 has no machine name/ID, so none is invented. Numeric ROI reset removes only that
-channel's override. Image-bound checks still require actual frame dimensions at
-execution. There are no graphical handles, polygons or drag editing.
+channel's ROI override and refreshes inherited numbers. Phase 2D-2B adds a focused
+[graphical ROI editor](graphical-roi-editor.md) using the same draft and resolver.
+Known reference bounds constrain gestures; runtime still validates actual frame
+dimensions. No polygon or schema extension is introduced.
 
 ## State, validation and shutdown
 
@@ -147,6 +149,6 @@ while Blob stays disabled; these are not calibrated algorithm settings.
 Automated application tests also demonstrate active A / candidate B / failed B
 startup with A retained. No GPU or customer assets are needed.
 
-Phase 2D-2B is the graphical ROI editor. Roles/login, model/machine management,
+Phase 2D-2B implements the graphical ROI editor. Roles/login, model/machine management,
 Recipe deletion/versioning, watching, calibration, archive and camera/PLC integration
 remain separate future work.
