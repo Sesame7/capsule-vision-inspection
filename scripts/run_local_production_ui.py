@@ -210,6 +210,7 @@ def compose(
         registry,
         model.model_id,
         model_file.resolve().parent,
+        machine_path=machine_file.resolve(),
     )
 
     def factory(config: PreparedConfiguration, generation: int) -> LocalRuntimeSession:

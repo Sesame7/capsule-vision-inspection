@@ -20,8 +20,8 @@ from tests.qt_support import until
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.configuration import load_model_definition, save_model_definition
-from vimo_demo.inference import VimoInitializationError
-from vimo_demo.inspection.production import TechnicalStatus
+from vimo_demo.inference import BoundingRect, VimoInitializationError
+from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
 from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_presentation import matching_camera
 from vimo_demo.ui.production_window import ProductionWindow
@@ -61,6 +61,21 @@ def test_real_local_ui(
     window.resize(1080, 1920)
     window.show()
     try:
+        assert composition.store.cameras == tuple(f"CAM{i}" for i in range(1, 7))
+        # Explicit wiring ROI, not calibration: slot 0 covers each reference,
+        # guaranteeing that known real findings exercise channel NG assignment.
+        draft = composition.editor.machine_editor
+        for frame in composition.store.snapshot().frames:
+            camera = frame.frame_id.camera_id
+            height, width = frame.image.shape[:2]
+            draft.bounds[camera] = (width, height)
+            rects = [s.rect for s in draft.camera(camera).slots]
+            rects[0] = BoundingRect(0, 0, width, height)
+            draft.replace_rects(camera, tuple(rects))
+        draft.save()
+        window.parameters.apply()
+        until(lambda: not window.parameters.busy)
+        assert window.choices[-1].prepared.configuration.layout == draft.saved.layout
         startup = app.start()
         until(startup.done, int(TIMEOUT * 1000))
         error = startup.exception()
@@ -92,6 +107,8 @@ def test_real_local_ui(
             composition.store.snapshot().frames, result.cameras, rows, strict=True
         ):
             assert matching_camera(frame, snapshot) is camera
+            if row["regions_per_label"]:
+                assert camera.channels[0].assessment.judgment is ProductJudgment.NG
             findings = {
                 item.finding.region_index: item.finding
                 for item in camera.assigned_findings
@@ -103,6 +120,9 @@ def test_real_local_ui(
         qapp.processEvents()
         assert any(card.viewport.boxes for card in window.cards)
         assert window.grab().save(str(tmp_path / "local-production.png"))
+        print(
+            "CAM1 -> CAM6; saved machine ROI -> Apply -> Start; known findings -> slot-0 channel NG"
+        )
         print(
             f"Real local UI: {snapshot.counters.cycles_completed} cycles; six real frames/cycle; matched overlays; Stop -> READY"
         )

@@ -14,10 +14,11 @@
 | Implemented | 2D-1 — PySide Production shell, bounded display frames and simulated source |
 | Design reference | Production UI direction; physical workstation tuning remains |
 | Implemented | 2D-2A — Parameters / Recipe drafts, validation, persistence and candidate Apply |
-| Implemented | 2D-2B — graphical channel ROI editing against frozen reference frames |
+| Superseded by 3C | 2D-2B — initial graphical ROI editor |
 | Future | 2E — Archive, events and diagnostics |
 | Implemented | 3A — minimal local image-set acquisition ingress |
 | Implemented | 3B — opt-in local six-image Production UI with real serial ViMo |
+| Implemented | 3C — machine-only six-channel ROI setup and saved layout activation |
 | Future | Remaining Phase 3 — Camera, PLC and field integration |
 
 Phase 2C composes existing layers: candidate activation after model warm-up,
@@ -94,8 +95,8 @@ separate model metadata, machine layout and product Recipes resolve once into
 immutable per-channel configuration. It reuses existing layout/identity/policy
 types and provides strict JSON persistence and optional artifact verification.
 It owns no engine, active configuration or runtime lifecycle. See the
-[configuration contract](inspection-configuration.md) for inheritance, ROI
-overrides, explicit label filtering and the pipeline-composition boundary.
+[configuration contract](inspection-configuration.md) for check inheritance, machine-owned
+ROI geometry, explicit label filtering and the pipeline-composition boundary.
 
 `application/` is the Qt-independent owner above configuration and runtime.
 `ProductionApplication` has one lifecycle thread, immutable snapshots and bounded
@@ -148,10 +149,15 @@ Start activates it. Diagnostics, History and Settings remain placeholders. See
 the [Recipe UI contract](recipe-configuration-ui.md); domain/runtime contracts and
 inference behavior are unchanged.
 
-Phase 2D-2B adds a focused [graphical ROI editor](graphical-roi-editor.md) inside
-Parameters. Pure geometry helpers share the Production image transform; the Qt
-canvas edits existing draft rectangles against one frozen owned display frame.
-It introduces no new schema, runtime ownership or activation behavior.
+Phase 3C makes MachineLayout the sole ROI owner. The [machine ROI editor](graphical-roi-editor.md)
+shows six labeled rectangles on one frozen camera reference, reuses source-pixel
+geometry/gestures, and supports common size and two-axis center interpolation.
+Recipe geometry overrides are removed from the current schema, drafts and UI.
+The canvas workspace combines Save and apply: the machine draft saves atomically
+and existing preparation resolves the selected saved
+Recipe against it, with artifact verification off Qt and successful Start still
+required for activation. One rectangular ROI per physical channel is sufficient
+for the current workflow; multiple views/ROIs and calibration are not implemented.
 
 Phase 3A adds `application.LocalCycleIngress`: one ordered local image set is
 copied into existing owned Frames with a session-local cycle ID, admitted through
@@ -223,5 +229,5 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
 | [Production UI](production-ui.md) | Implemented shell/bridge, display ownership, identity matching, controls and review |
 | [Recipe configuration UI](recipe-configuration-ui.md) | Parameters drafts, inheritance preview, Save/Apply, catalog and dirty-close workflow |
-| [Graphical ROI editor](graphical-roi-editor.md) | Frozen reference ownership, source-pixel geometry, gestures, numeric synchronization and read-only state |
+| [Graphical ROI editor](graphical-roi-editor.md) | Frozen reference ownership, source-pixel geometry, gestures, camera tabs, Save and apply, and read-only state |
 | [Production UI direction](production-ui-direction.md) | Agreed visual direction and flexible review details; not an exact implementation specification |

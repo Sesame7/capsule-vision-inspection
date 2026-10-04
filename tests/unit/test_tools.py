@@ -1,13 +1,16 @@
 """Maintained tool behavior without SDK, GPU or reference assets."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 from _tool_helpers import image_paths, load_pool, statistics
+from run_production_ui import demo_choices
 from stress_inference import drift, memory_value
 from visualize_inference import render, save_png
 
+from vimo_demo.configuration import load_machine_layout, save_machine_layout
 from vimo_demo.inference import BoundingRect, ImageResult, RotatedRect
 
 
@@ -70,3 +73,55 @@ def test_overlay_uses_actual_mask_id_without_moving_image() -> None:
     assert np.array_equal(overlay[2, 4], image[2, 4])
     assert np.all(image == 100)
     assert mask[3, 4] == 17
+
+
+@pytest.mark.parametrize("width,height", [(1056, 960), (641, 37), (7, 3), (6, 1)])
+def test_initial_machine_partitions_cover_every_pixel(
+    tmp_path: Path, width: int, height: int
+) -> None:
+    # Distinct dimensions ensure each camera uses its own reference, not CAM1's.
+    images = tuple(
+        np.zeros((height + i, width + i, 3), dtype=np.uint8) for i in range(6)
+    )
+    machine = demo_choices(images, tmp_path)[0].prepared.configuration.layout
+    assert machine.camera_ids == tuple(f"CAM{i}" for i in range(1, 7))
+    for index, (camera, image) in enumerate(zip(machine.cameras, images, strict=True)):
+        h, w = image.shape[:2]
+        camera.validate_shape((h, w, 3))
+        coverage = np.zeros((h, w), dtype=np.uint8)
+        for slot, roi in enumerate(camera.slots):
+            rect = roi.rect
+            assert roi.slot == slot and roi.channel_id == index * 6 + slot + 1
+            assert rect.y == 0 and rect.height == h and rect.width > 0
+            assert rect.x >= 0 and rect.x + rect.width <= w
+            coverage[:, rect.x : rect.x + rect.width] += 1
+        assert np.all(coverage == 1)  # No missing or multiply covered pixels.
+        assert (
+            max(r.rect.width for r in camera.slots)
+            - min(r.rect.width for r in camera.slots)
+            <= 1
+        )
+    if width == 1056:
+        assert [r.rect for r in machine.cameras[0].slots] == [
+            BoundingRect(x, 0, 176, 960) for x in (0, 176, 352, 528, 704, 880)
+        ]
+
+
+def test_demo_seed_preserves_saved_machine_geometry(tmp_path: Path) -> None:
+    images = tuple(np.zeros((20, 61, 3), dtype=np.uint8) for _ in range(6))
+    demo_choices(images, tmp_path)
+    path = tmp_path / "machine.json"
+    saved = load_machine_layout(path)
+    first, *others = saved.layout.cameras
+    slots = (replace(first.slots[0], rect=BoundingRect(3, 2, 4, 7)), *first.slots[1:])
+    custom = replace(
+        saved,
+        layout=replace(saved.layout, cameras=(replace(first, slots=slots), *others)),
+    )
+    save_machine_layout(path, custom)
+    payload = path.read_bytes()
+    # A later launch with different reference dimensions must not re-seed it.
+    different_images = tuple(np.zeros((40, 120, 3), dtype=np.uint8) for _ in range(6))
+    choices = demo_choices(different_images, tmp_path)
+    assert choices[0].prepared.configuration.layout == custom.layout
+    assert path.read_bytes() == payload

@@ -71,7 +71,7 @@ come from `resolve_configuration()` for the selected channel, never UI precedenc
 
 Only existing fields are exposed: Presence/Color enabled and required; Blob
 enabled/required and optional integer min/max area (px²); ViMo enabled/required
-and disabled labels; channel rectangle x/y/width/height.
+and disabled labels. ROI geometry is not Recipe data.
 Enabled requests execution; Required controls an enabled check's technical-validity
 contribution. Explicit False, zero and empty disabled-label list remain distinct
 from inherit. Labels are exact text, one per line; empty text with Override selected
@@ -80,12 +80,14 @@ area bound with null, because null means inherit; the page explains this limitat
 
 Model choice is Default or an existing registered model. Name/ID, path, expected
 SHA-256 and module ID are read-only; changing selection never loads a model.
-Machine details show camera/channel counts, mapping and base ROIs. The schema
-has no machine name/ID, so none is invented. Numeric ROI reset removes only that
-channel's ROI override and refreshes inherited numbers. Phase 2D-2B adds a focused
-[graphical ROI editor](graphical-roi-editor.md) using the same draft and resolver.
-Known reference bounds constrain gestures; runtime still validates actual frame
-dimensions. No polygon or schema extension is introduced.
+Machine details show camera/channel mapping and saved machine ROIs. Parameters
+also opens the separate [machine six-ROI workspace](graphical-roi-editor.md).
+Its draft and geometry operations affect the machine layout, never the Recipe. Its combined
+Save and apply action saves geometry and then uses existing background preparation
+to resolve the selected saved Recipe against it. Recipe edits must first be saved;
+the workspace never silently saves them. Successful Start still activates changes.
+Application close resolves both drafts; switching Recipes retains the independent
+machine draft. The launcher supplies the machine JSON path.
 
 ## State, validation and shutdown
 
@@ -107,7 +109,8 @@ it runs. GUI code never loads a model, warms up, infers or waits on unfinished w
 Recipe switch, New, Reload and close resolve dirty drafts with an asynchronous
 Save / Discard / Cancel dialog. Save continues only after successful persistence;
 Discard reloads the saved baseline (or resets a new draft); Cancel stays. Switching
-shell pages retains the draft, so no discard prompt is necessary. Close waits for
+shell pages retains Recipe drafts. Leaving the Machine ROI workspace separately
+resolves machine edits with Save and apply / Discard / Cancel. Close waits for
 preparation termination, suppresses late Apply, then uses existing asynchronous
 application close/actual-thread-termination behavior. No native call is cancelled.
 
@@ -143,12 +146,12 @@ while Blob stays disabled; these are not calibrated algorithm settings.
    successful Start. Production counters remain unchanged.
 9. Edit a name; attempt Recipe switch, New or close. Exercise Cancel, Discard, Save.
    Invalid data must prevent the Save continuation.
-10. Switch languages and sizes. Scroll to numeric ROI/model/layout. Try width=0
-    and Validate: it fails without clamping. Reset ROI to Inherit.
+10. Switch languages and sizes; inspect model/layout details. Open Machine ROI
+    setup for geometry editing independent of Recipe check inheritance.
 
 Automated application tests also demonstrate active A / candidate B / failed B
 startup with A retained. No GPU or customer assets are needed.
 
-Phase 2D-2B implements the graphical ROI editor. Roles/login, model/machine management,
+Phase 3C replaces Recipe geometry editing with machine six-ROI setup. Roles/login, model management,
 Recipe deletion/versioning, watching, calibration, archive and camera/PLC integration
 remain separate future work.

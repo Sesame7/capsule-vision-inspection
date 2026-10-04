@@ -1,7 +1,6 @@
 """Pure resolution and separately requested artifact verification."""
 
 import hashlib
-from dataclasses import replace
 from pathlib import Path
 
 from vimo_demo.inspection.production import CameraLayout, ChannelROI, InspectionLayout
@@ -104,8 +103,6 @@ def resolve_configuration(
                     raise ConfigurationError(
                         f"Recipe {recipe.recipe_id!r}, CH{slot.channel_id}: {exc}"
                     ) from exc
-                if override.roi is not None:
-                    slot = replace(slot, rect=override.roi)
             slots.append(slot)
             channels.append(
                 ResolvedChannelConfiguration(

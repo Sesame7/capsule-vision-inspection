@@ -69,7 +69,7 @@ def drag_rect(
 
 @dataclass
 class RoiInteractionModel:
-    """Drawable projection plus presentation state; RecipeDraft is authoritative."""
+    """Drawable projection plus presentation state; machine draft is authoritative."""
 
     size: tuple[int, int] | None = None
     rect: BoundingRect | None = None

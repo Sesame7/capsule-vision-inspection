@@ -226,6 +226,13 @@ class ProductionWindow(QMainWindow):
         super().resizeEvent(event)
 
     def navigate(self, index: int) -> None:
+        if (
+            self.pages.currentWidget() is self.parameters
+            and index != 1
+            and self.parameters.roi_workspace is not None
+        ):
+            self.parameters.leave_workspace(lambda: self.navigate(index))
+            return
         self.pages.setCurrentIndex(index)
         for i, button in enumerate(self.navigation):
             button.setChecked(i == index)
@@ -261,7 +268,10 @@ class ProductionWindow(QMainWindow):
             return
         identity = choice.prepared.configuration.recipe_id
         choices = [
-            c for c in self.choices if c.prepared.configuration.recipe_id != identity
+            c
+            for c in self.choices
+            if c.prepared.configuration.recipe_id != identity
+            and c.prepared.configuration.layout == choice.prepared.configuration.layout
         ]
         choices.append(choice)
         self.choices = tuple(choices)

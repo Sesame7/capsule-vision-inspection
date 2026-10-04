@@ -24,10 +24,10 @@ from vimo_demo.configuration import (
     load_recipe,
     resolve_configuration,
 )
-from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ChannelId
 
+from .machine_editor import MachineLayoutDraft
 from .recipe_catalog import RecipeCatalog, RecipeEntry
 
 type Group = Literal["presence", "blob", "color", "vimo"]
@@ -106,7 +106,6 @@ class RecipeDraft:
     channels: dict[ChannelId, dict[Group, CheckDraft]] = field(
         default_factory=lambda: {}
     )
-    rois: dict[ChannelId, tuple[str, str, str, str]] = field(default_factory=lambda: {})
 
     @classmethod
     def from_recipe(cls, recipe: RecipeDefinition) -> RecipeDraft:
@@ -118,16 +117,6 @@ class RecipeDraft:
             draft_checks(recipe.defaults),
             {c.camera_id: draft_checks(c.checks) for c in recipe.camera_overrides},
             {c.channel_id: draft_checks(c.checks) for c in recipe.channel_overrides},
-            {
-                c.channel_id: (
-                    str(c.roi.x),
-                    str(c.roi.y),
-                    str(c.roi.width),
-                    str(c.roi.height),
-                )
-                for c in recipe.channel_overrides
-                if c.roi is not None
-            },
         )
 
     def to_recipe(self) -> RecipeDefinition:
@@ -159,21 +148,8 @@ class RecipeDraft:
             ViMoCheckConfig(vimo.enabled, vimo.required, labels),
         )
         channels: list[ChannelOverride] = []
-        for channel in sorted(self.channels.keys() | self.rois.keys()):
-            checks = (
-                overrides(self.channels[channel])
-                if channel in self.channels
-                else CheckOverrides()
-            )
-            roi = None
-            if channel in self.rois:
-                values = tuple(number(s, "ROI") for s in self.rois[channel])
-                if any(v is None for v in values):
-                    raise ConfigurationError("ROI requires four integers")
-                # Every value originates from a required string and was parsed above.
-                x, y, width, height = (int(s) for s in self.rois[channel])
-                roi = BoundingRect(x, y, width, height)
-            channels.append(ChannelOverride(channel, checks, roi))
+        for channel, rows in sorted(self.channels.items()):
+            channels.append(ChannelOverride(channel, overrides(rows)))
         return RecipeDefinition(
             self.recipe_id,
             self.display_name,
@@ -197,11 +173,18 @@ class RecipeEditorSession:
         registry: ModelRegistry,
         default_model_id: str,
         base_directory: Path,
+        machine_path: Path | None = None,
     ) -> None:
-        self.catalog, self.machine, self.registry = catalog, machine, registry
+        self.machine_path = machine_path
+        self.machine_editor = MachineLayoutDraft(machine, machine_path)
+        self.catalog, self.registry = catalog, registry
         self.default_model_id, self.base_directory = default_model_id, base_directory
         self.entry: RecipeEntry | None = None
         self.draft = RecipeDraft("", "")
+
+    @property
+    def machine(self) -> MachineLayoutDefinition:
+        return self.machine_editor.saved
 
     @property
     def dirty(self) -> bool:
@@ -265,7 +248,7 @@ class RecipeEditorSession:
 
     def apply_recipe(self) -> RecipeDefinition:
         """Capture immutable saved data on GUI thread, before asynchronous hashing."""
-        if self.entry is None or self.dirty:
+        if self.entry is None or self.dirty or self.machine_editor.dirty:
             raise ConfigurationError("Save changes before Apply")
         saved = load_recipe(self.entry.path)
         if saved != self.entry.recipe:

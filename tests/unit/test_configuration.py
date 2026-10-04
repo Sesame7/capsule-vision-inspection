@@ -135,24 +135,19 @@ def test_precedence_false_zero_and_empty_filter_override() -> None:
     assert not resolved.channels[12].checks.vimo.label_enabled("黑点")
 
 
-def test_roi_override_preserves_other_35_and_mirrored_identity() -> None:
+def test_machine_roi_preserves_mirrored_identity_for_all_recipes() -> None:
     base = machine(mirrored=True)
-    roi = BoundingRect(42, 2, 7, 9)
-    recipe = RecipeDefinition(
-        "a", "A", channel_overrides=(ChannelOverride(ChannelId(17), roi=roi),)
-    )
-    resolved = resolve_configuration(base, recipe, registry(), "general")
-    original = {
-        slot.channel_id: slot for camera in base.layout.cameras for slot in camera.slots
-    }
-    for row in resolved.channels:
-        assert row.roi == (
-            roi if row.channel_id == 17 else original[row.channel_id].rect
-        )
-        assert row.slot == original[row.channel_id].slot
-    assert resolved.channels[16].camera_id == "CAM3"
-    assert resolved.channels[16].slot == 1
-    assert original[ChannelId(17)].rect != roi
+    original = {slot.channel_id: slot for c in base.layout.cameras for slot in c.slots}
+    for recipe in (
+        RecipeDefinition("a", "A"),
+        RecipeDefinition("b", "B", channel_overrides=(ChannelOverride(ChannelId(17)),)),
+    ):
+        resolved = resolve_configuration(base, recipe, registry(), "general")
+        for row in resolved.channels:
+            assert row.roi == original[row.channel_id].rect
+            assert row.slot == original[row.channel_id].slot
+        assert resolved.channels[16].camera_id == "CAM3"
+        assert resolved.channels[16].slot == 1
 
 
 def test_optional_enabled_is_independent_and_model_override_selects() -> None:
@@ -252,7 +247,6 @@ def test_invalid_references_and_merged_ranges(
         lambda: ViMoOverride(disabled_labels=("bad\nlabel",)),
         lambda: CameraOverride(CameraId(" ")),
         lambda: ChannelOverride(ChannelId(0)),
-        lambda: ChannelOverride(ChannelId(1), roi=BoundingRect(0, 0, 0, 2)),
         lambda: ModelRegistry((model(), model())),
         lambda: RecipeDefinition(
             "a",
@@ -312,7 +306,6 @@ def test_round_trip_all_families_and_deterministic_utf8(tmp_path: Path) -> None:
             ChannelOverride(
                 ChannelId(17),
                 CheckOverrides(blob=BlobOverride(max_area=200)),
-                BoundingRect(1, 2, 3, 4),
             ),
         ),
     )
@@ -564,3 +557,19 @@ def test_json_key_order_does_not_change_resolution(tmp_path: Path) -> None:
     assert resolve_configuration(
         machine(), load_recipe(path), registry(), "general"
     ) == resolve_configuration(machine(), recipe, registry(), "general")
+
+
+def test_recipe_roi_field_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "old.recipe.json"
+    path.write_text(
+        '{"schema_version":1,"recipe_id":"a","display_name":"A","defaults":{},"channel_overrides":[{"channel_id":1,"roi":{"x":0,"y":0,"width":1,"height":1}}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigurationError, match="roi"):
+        load_recipe(path)
+    assert "roi" not in ChannelOverride.__dataclass_fields__
+    save_recipe(
+        path,
+        RecipeDefinition("a", "A", channel_overrides=(ChannelOverride(ChannelId(1)),)),
+    )
+    assert '"roi"' not in path.read_text(encoding="utf-8")

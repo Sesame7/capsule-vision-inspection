@@ -188,12 +188,11 @@ def _recipe(value: object) -> RecipeDefinition:
             CameraOverride(CameraId(_str(row["camera_id"])), _overrides(row["checks"]))
         )
     for entry in _array(data.get("channel_overrides", [])):
-        row = _object(entry, "channel_id checks roi", "channel_id")
+        row = _object(entry, "channel_id checks", "channel_id")
         channels.append(
             ChannelOverride(
                 ChannelId(_int(row["channel_id"])),
                 _overrides(row.get("checks", {})),
-                _optional(row.get("roi"), _rect),
             )
         )
     return RecipeDefinition(
@@ -377,8 +376,6 @@ def save_recipe(path: Path, recipe: RecipeDefinition) -> None:
             checks = _checks_data(row.checks)
             if checks:
                 entry["checks"] = checks
-            if row.roi is not None:
-                entry["roi"] = _rect_data(row.roi)
             channels.append(entry)
         data["channel_overrides"] = channels
     _save(path, data)

@@ -72,11 +72,12 @@ objects/arrays must have their stated types; `null` is not an entire check objec
 Schema v1 cannot clear an inherited area bound using null; null means inherit.
 
 Camera overrides are an array of `{camera_id, checks}` objects. Channel overrides
-are an array of `{channel_id, checks?, roi?}` objects. Duplicate/unknown IDs fail.
-Only ROI geometry can be overridden: camera, channel ID and physical slot cannot
-be remapped by a Recipe. Other channels retain their base geometry. Image-bound
-validation still uses Phase 2A `CameraLayout.validate_shape()` when actual frame
-dimensions are available; parsing cannot validate against unknown camera shapes.
+are an array of `{channel_id, checks?}` objects. Duplicate/unknown IDs fail.
+**MachineLayoutDefinition is the sole ROI owner.** Every Recipe resolves the same
+machine geometry; Recipes cannot remap camera/channel/slot identity or override
+rectangles. Recipe `roi` fields are rejected as unknown fields, including null.
+The current schema remains v1 and is updated in place; no legacy loader or migration
+is supported. Image bounds are checked against reference/actual frame dimensions.
 
 Ranges are checked after each merge, so invalid inherited combinations fail with
 Recipe/camera/channel context before any resolved object is returned.
@@ -181,7 +182,7 @@ Product B selects `special`:
 | --- | --- | --- | --- | --- |
 | CAM1 / CH01 | base (0,0,8,10) | enabled/required | 1800, default | enabled/required, all labels |
 | CAM3 / CH13 | base (0,0,8,10) | enabled/required | 1850, camera override | enabled/required, all labels |
-| CAM3 / CH17 | override (41,1,7,9) | enabled/required | 1900, channel override | enabled/required, 黑点 filtered |
+| CAM3 / CH17 | machine (40,0,8,10) | enabled/required | 1900, channel override | enabled/required, 黑点 filtered |
 
 GPU-independent tests cover all three JSON families, inheritance, references,
 geometry, immutable resolution, filtering, atomic failure preservation, artifact

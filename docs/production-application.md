@@ -244,3 +244,13 @@ tests remain part of normal gates. Production UI is Phase 2D; archive/events/his
 are Phase 2E. Camera/PLC trigger gating, physical counting, buffer leases, calibrated
 ROIs/CV, machine handling of unassigned findings and field throughput/FAT/SAT require
 Phase 3 hardware knowledge. This application state is not a machine safety system.
+
+## Machine geometry preparation
+
+MachineLayout is the sole channel-ROI source. Machine Save only persists geometry;
+explicit Apply resolves the selected saved Recipe with that saved layout and
+prepares a new immutable candidate. No running configuration is mutated, and
+successful Start remains the activation boundary. Geometry changes do not reset
+counters or create a new Recipe identity. Snapshot IDs are not geometry revisions.
+The UI drops previously prepared choices with obsolete layouts after Apply;
+other Recipes can be selected and prepared again against the current machine.

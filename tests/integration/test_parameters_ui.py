@@ -150,15 +150,10 @@ def test_hierarchy_effective_values_roi_and_distinct_explicit_values(
     page.scope.setCurrentIndex(2)
     page.camera.setCurrentIndex(2)
     page.channel.setCurrentIndex(4)
-    page.roi_override.setChecked(False)
-    assert ChannelId(17) not in session.draft.rois
-    assert "width=8" in page.roi_effective.text()
-    page.roi_override.setChecked(True)
-    edit(page.roi_values[2], "0")
-    assert not page.validate() and not page.save()
-    assert session.dirty and "ROI" in page.status.text()
-    edit(page.roi_values[2], "7")
-    assert page.save()
+    assert (
+        session.resolve().channels[16].roi
+        == session.machine.layout.cameras[2].slots[4].rect
+    )
 
 
 def test_save_apply_and_failed_candidate_preserve_active(

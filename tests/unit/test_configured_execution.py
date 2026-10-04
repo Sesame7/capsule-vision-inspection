@@ -127,7 +127,7 @@ def test_defaults_camera_channel_parameters_and_disabled_execution(
         blobs[ChannelId(13)].checks.blob.max_area,
         blobs[ChannelId(17)].checks.blob.max_area,
     ) == (1800, 1850, 1900)
-    assert blobs[ChannelId(17)].roi == BoundingRect(41, 1, 7, 9)
+    assert blobs[ChannelId(17)].roi == BoundingRect(40, 0, 8, 10)
     assert not any(
         row.channel_id == 1 and kind is TraditionalCheck.PRESENCE
         for row, kind in fake.seen

@@ -6,8 +6,7 @@ Settings remain localized placeholders. This is a simulated workstation shell,
 not commissioned camera/PLC software. The [design direction](production-ui-direction.md)
 remains a visual reference, not an exact implementation specification.
 
-The [graphical ROI editor](graphical-roi-editor.md) now opens from Parameters /
-Channel. It retains a frozen display reference and shares the image transform;
+The [graphical ROI editor](graphical-roi-editor.md) now opens as a dedicated canvas workspace inside Parameters. It retains a frozen display reference and shares the image transform;
 Production cards, result matching and application lifecycle are unchanged.
 
 ## Boundaries and updates
@@ -223,6 +222,8 @@ The real test activates the verified model, observes at least two six-frame cycl
 and existing defect boxes in an offscreen Production window, then verifies Stop,
 Close and actual thread termination. It uses explicit **uncalibrated test ROIs**
 and writes its configuration/screenshot into pytest's ignored temporary directory.
+The current fixture uses explicit CAM1→CAM6 machine order. A full-reference slot-0
+ROI exercises known finding → channel NG assignment through machine Save/Apply.
 It establishes wiring, not production channel acceptance: unassigned defects may
 show camera-level boxes/NG while individual fixture channels show OK. No model
 accuracy, calibration, physical-screen, camera, PLC, FAT/SAT or throughput claim

@@ -12,6 +12,7 @@ from vimo_demo.configuration import (
     ModelRegistry,
     RecipeDefinition,
     load_recipe,
+    save_machine_layout,
     save_recipe,
 )
 from vimo_demo.inspection import CameraId
@@ -28,12 +29,15 @@ def editor(tmp_path: Path) -> RecipeEditorSession:
         recipe = load_recipe(FIXTURES / f"{name}.json")
         save_recipe(folder / f"{name}.recipe.json", recipe)
     registry = ModelRegistry((config.model, replace(config.model, model_id="special")))
+    machine_path = tmp_path / "machine.json"
+    save_machine_layout(machine_path, MachineLayoutDefinition(config.layout))
     session = RecipeEditorSession(
         RecipeCatalog(folder),
         MachineLayoutDefinition(config.layout),
         registry,
         config.model.model_id,
         tmp_path,
+        machine_path=machine_path,
     )
     session.load(
         next(
@@ -164,10 +168,9 @@ def test_invalid_and_io_failure_keep_draft(
     assert session.dirty and session.entry.path.read_bytes() == before
 
 
-def test_roi_model_prepare_and_external_changes(tmp_path: Path) -> None:
+def test_model_prepare_and_external_changes(tmp_path: Path) -> None:
     session = editor(tmp_path)
     original = session.resolve()
-    session.draft.rois[ChannelId(17)] = ("41", "1", "7", "9")
     session.draft.model_override_id = "special"
     session.save()
     resolved = session.resolve()
@@ -175,13 +178,7 @@ def test_roi_model_prepare_and_external_changes(tmp_path: Path) -> None:
     assert all(
         a.roi == b.roi
         for a, b in zip(original.channels, resolved.channels, strict=True)
-        if a.channel_id != 17
     )
-    assert resolved.channels[16].roi.x == 41
-    session.draft.rois[ChannelId(17)] = ("1", "1", "0", "5")
-    with pytest.raises(ConfigurationError):
-        session.resolve()
-    session.draft.rois.pop(ChannelId(17))
     session.draft.model_override_id = None
     session.save()
     assert session.resolve().channels[16].roi == original.channels[16].roi

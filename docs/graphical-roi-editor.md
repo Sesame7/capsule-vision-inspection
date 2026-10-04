@@ -1,146 +1,141 @@
-# Graphical ROI editor — Phase 2D-2B
+# Machine ROI workspace — Phase 3C
 
-Parameters → Channel → Camera/channel → **Graphical ROI editor** opens a focused,
-nonblocking Qt dialog. It edits the existing schema-v1 integer `BoundingRect`
-override in the same `RecipeDraft`. No model, runtime, persistence or acceptance
-logic belongs to the dialog.
+MachineLayoutDefinition owns exactly one integer `BoundingRect` per physical
+channel. Recipes contain checks/product/model data only; Recipe ROI fields are
+rejected. The current schema is updated in place, with no migration or legacy
+support. Multiple views/ROIs per channel are not implemented.
 
-## Components and draft contract
+## Workspace and ownership
 
-- `roi_geometry.py`: Qt-free `RoiInteractionModel`, inverse mapping, hit testing,
-  deterministic rounding and bounded move/resize calculations. Its rectangle is
-  a drawable projection, not a second configuration store.
-- `roi_canvas.py`: detached BGR `QImage`, overlay painting and mouse delivery.
-- `roi_editor.py`: selected draft/camera/channel, frozen display reference,
-  numeric controls and explicit override/reset actions.
-- `ParametersPage`: existing validation/dirty/Save/Apply workflow and lifecycle
-  editability. The graphical entry remains available when numeric editing is locked.
+Parameters → **Machine ROI setup** replaces the Parameters form with a dedicated
+canvas workspace inside the existing application window. It is not a nested ROI
+dialog. The rest of Parameters and the Production screen are unchanged.
 
-The existing Phase 2B resolver supplies effective ROI. Inherited geometry has a
-dashed outline and no handles. **Create override** copies the current effective
-rectangle. An editable override has a solid highlighted outline, black contrast
-halo and eight square handles. **Reset to inherit** removes only that channel's
-ROI override, retaining its check overrides and the immutable machine layout.
-Both operations modify only the draft; equality with its persisted baseline still
-defines dirty state (undoing every edit can therefore return to clean).
+- `machine_editor.py`: Qt-free machine draft, atomic geometry operations and save.
+- `roi_geometry.py`: existing source-pixel transform, rounding and bounded gestures.
+- `roi_canvas.py`: frozen BGR image, six labeled ROIs, selected handles, zoom/pan.
+- `roi_editor.py`: camera tabs, canvas overlays, common size and Save and apply.
+- `ParametersPage`: existing asynchronous preparation and application-state guards.
 
-The dialog and existing page numeric fields project the same four draft strings.
-Mouse edits update both immediately. Numeric input may temporarily be empty,
-noninteger or invalid; it is preserved verbatim and existing validation reports
-the error. The canvas retains its last valid rectangle, disables gestures and
-shows the error until resolution succeeds. Out-of-reference-bounds numeric ROI
-is shown with a warning, never silently clamped/rescaled. Domain validation and
-runtime frame-shape validation retain their existing responsibilities.
+The machine draft is independent of Recipe drafts. Camera tabs follow explicit
+MachineLayout order, never parsed/sorted names; normal local configuration is
+CAM1→CAM6. All six actual ChannelIds are labeled on the canvas. There is no channel
+selector or permanent per-ROI coordinate form. Selected geometry is informational
+text (`CH03 · x374 y14 · 182×860`). Only common Width and Height remain editable
+numeric controls. The integer geometry API remains available to code/tests.
 
-Close retains the draft without saving/applying. Close the dialog to select
-another channel/camera on Parameters; returning restores unsaved edits without a
-Save prompt. Recipe switch/New/Reload/application close retain the existing dirty
-workflow. The editor holds the original draft identity and cannot write into a
-replacement draft.
+The canvas fills available content space. Camera entry/switch and Refresh fit the
+complete frozen image with aspect ratio preserved. Left drag moves/resizes ROIs;
+mouse wheel zooms around the pointer where bounded pan permits; middle drag pans.
+The compact corner tools are Fit, 1:1 and Refresh reference, with accessible names
+and tooltips. No zoom buttons or large instructional panel are present.
 
-**Validate → Save → Apply → successful Start → Active** is unchanged. Save alone
-does not configure a candidate; Apply uses saved clean data. Failed startup
-preserves the last-known-good active configuration. ROI editing never resets
-production counters. No configuration/schema-version change was made.
+## Save, navigation and activation
 
-## Reference pixels and geometry
+**Save and apply** validates known bounds, atomically writes the supplied machine
+JSON through `save_machine_layout()`, and prepares the currently selected saved
+Recipe against that saved layout using the existing background preparation thread.
+It then calls `ProductionApplication.configure()`. Successful **Start** remains the
+only activation boundary. Success feedback says changes take effect on the next
+successful Start; there is no hot modification of RUNNING configuration.
 
-Opening/reopening or explicit **Refresh frame** selects the latest display frame
-for the selected camera. The editor retains one immutable, byte-backed
-`DisplayFrame` from `LatestDisplayFrameStore`, plus one `QImage.copy()` using
-`Format_BGR888`. New publications cannot replace this frozen reference or reuse
-its pixels. No camera acquisition, polling, history, masks or inference is added.
-Closing releases the reference and Qt image. Overlay painting never modifies pixels.
+An unsaved/new Recipe must first be saved on Parameters. The workspace never
+silently saves Recipe edits. Machine write failure preserves the previous saved
+baseline and dirty geometry. Preparation/configuration failure after a successful
+save leaves geometry saved, reports the error and does not claim successful Apply.
+Cached prepared Recipe choices with an older layout are removed on successful
+configuration; select/apply other Recipes again through Parameters.
 
-The header identifies camera, generation, cycle, frame sequence and source size;
-the demo additionally labels simulated input. No frame means no invented dimensions:
-the blank canvas cannot drag, a neutral message explains the state, and numeric
-editing remains available when lifecycle permits. Refresh after a resolution
-change keeps draft values exactly; an ROI outside new bounds warns and blocks
-dragging until the numbers or reference are corrected.
+Back, shell navigation away and normal application close cannot silently lose
+machine edits. A clean workspace leaves immediately. Dirty geometry prompts
+**Save and apply / Discard / Cancel**. Save continues navigation only after successful
+preparation/configuration; Discard restores saved geometry; Cancel stays. Camera
+switches retain edits. Preparation disables repeat submission and Back; application
+close still observes thread termination and suppresses late configuration as before.
 
-Production overlays and this editor share `ImageTransform` / `image_transform()`.
-The original Fit defaults remain unchanged. The additive options support fixed
-scale and pan; `source_point()` applies the exact inverse:
+UNCONFIGURED/READY allow changes. STARTING/RUNNING/STOPPING/FAULT/CLOSED, preparation
+and closing prohibit geometry edits. Gesture commits and actions recheck current
+application state. Fit/zoom/pan and viewing remain usable. No reference means no
+invented image dimensions and no geometry editing. Invalid batch operations report
+errors without disabling subsequent visual correction of valid rectangles.
 
-```text
-display = centered image origin + pan + source * scale
-source  = (display - origin - pan) / scale
-```
+This is a single-writer local configuration tool, with no external-edit watcher,
+conflict merging or history. Save modifies the supplied machine JSON only, never
+models, source images or Recipe geometry.
 
-Qt coordinates are logical widget pixels; Qt handles device DPI. Fit uses the
-largest aspect-preserving destination rectangle, with letterboxing. Paint and
-hit testing use that same transform. Presses in letterbox space cannot begin ROI
-gestures. Invalid/zero viewport dimensions produce no interactive transform.
+## Geometry and reference contract
 
-Integer commits use **nearest integer, exact halves toward positive infinity**
-(`floor(value + 0.5)`). Every gesture calculates from its original rectangle and
-pointer position, avoiding accumulated rounding. Only source-image integers are
-written to the draft; display coordinates never enter Recipe JSON.
+Common size changes all six widths/heights while retaining their prior centers
+with deterministic integer rounding. Distribute uses configured slots 0 and 5 as
+endpoints, interpolates both center X and Y at i/5 for slots 1–4, and retains each
+intermediate ROI's current size. Endpoints are unchanged. Both operations validate
+all six rectangles before committing. Nonpositive/out-of-bounds geometry rejects
+atomically; no silent clamping or invented production layout.
 
-| Interaction | Contract |
-| --- | --- |
-| Left drag inside override | Move; preserve width/height and clamp whole ROI to image |
-| Left drag handle | Resize selected edges only; eight corner/edge handles |
-| Resize past opposite edge | Clamp at one pixel; no handle flipping |
-| Handle targeting | Nearest handle within 12 logical pixels per axis; stable tie order |
-| Fit | Recompute centered aspect fit on viewport resize |
-| Zoom − / 100% / Zoom + | Fixed logical-pixel scale, factor-two steps bounded to 5–800% |
-| Middle drag | Pan enlarged image, bounded to its extents; fitting axes stay centered |
-| Resize/zoom/Refresh | Cancel any in-progress gesture; presentation only |
+Rounding is nearest pixel, exact halves toward positive infinity
+(`floor(value + 0.5)`). Gestures use the original drag rectangle and existing bounded
+move/resize calculations. Fit, zoom, pan, window size and DPI never persist display
+coordinates. Canvas zoom is bounded to 5–800%; fitting axes remain centered.
 
-Fit, fixed zoom and window resize never modify ROI. Selecting zoom/Fit or resizing
-recenters pan; fixed zoom remains fixed across resize. Pan never doubles as a left
-ROI drag. Handle targets and strokes remain logical-pixel sized at every zoom.
+Existing hit rules remain: a hit on the selected ROI/its handles takes precedence;
+otherwise the first containing ROI in configured slot order is selected. Overlapping
+fixtures may require moving/resizing the selected rectangle to expose another.
+The intended commissioned layout has six nearly non-overlapping rectangles.
 
-## Lifecycle and presentation
+Camera switching/Refresh retains one immutable display-store reference and detached
+BGR QImage. New runtime frames do not replace it until requested. The canvas shows
+camera/source dimensions and simulation labeling when applicable. Leaving releases
+pixel references. Runtime retains actual-frame bounds validation. An out-of-bounds
+starting layout requires a suitable reference or correction through the existing
+configuration API; no hidden coordinate dialog or automatic repair is added.
 
-UNCONFIGURED/READY permit changes; STARTING/RUNNING/STOPPING/FAULT/CLOSED, candidate
-preparation and closing are read-only. Both the canvas gesture and draft commit
-recheck current application editability, so writes cannot slip through before a
-queued Qt snapshot arrives. Numeric edits, Create and Reset have the same guard.
-Viewing, Refresh, Fit, zoom and pan remain available while RUNNING.
+## Manual review
 
-The normal resizable dialog uses the shared dark tokens and Chinese/English
-catalog, minimum 700×620 logical pixels, an expanding canvas and visible numeric
-and action rows. Automated offscreen checks cover 1080×1920, 1920×1080 and
-900×1200 parent windows in both languages. Physical Windows DPI/touch ergonomics
-still require workstation review; this is not a kiosk/calibration wizard.
-
-## Equipment-free acceptance walkthrough
+From the repository root:
 
 ```powershell
 uv run --no-sync python scripts/run_production_ui.py --language zh --size 1080x1920
 uv run --no-sync python scripts/run_production_ui.py --language en --size 1920x1080
 ```
 
-The existing launcher provides six synthetic frozen references without GPU work.
-Newly seeded Demo B has a CH17 ROI override initially equal to its base rectangle.
-Existing saved demo files are deliberately not overwritten; if an older Demo B
-has no ROI override, explicitly Create override. Initial full-height geometry can
-move horizontally; shrink it with an edge/corner to allow vertical movement.
+These use fake inference and synthetic images. Optional `--frames-dir images`
+uses local reference images with the same fake engine. The fake machine layout
+persists at `outputs/production_ui_demo/machine.json`. Only when that file is absent,
+the demo initializes six full-height vertical partitions per reference image, using
+integer boundaries `i * width // 6` for i=0..6. Adjacent boundaries determine each
+width, including remainder pixels. Existing saved layouts are always loaded as-is;
+opening or refreshing the workspace never regenerates geometry.
 
-1. Parameters → Demo B → Channel → CAM3 → CH17 → Graphical ROI editor.
-2. Confirm reference identity and override/inherited text. Fit; create override
-   if inherited. Move, then resize a corner and an edge; observe numeric updates.
-3. Change a numeric coordinate. Try invalid text: it stays visible, error appears,
-   handles stop. Correct it; try 100%, zoom and middle-drag pan without data changes.
-4. Close, select CH18/CAM4 and return to CAM3/CH17; unsaved ROI remains.
-5. Reset to inherit, then Create override; geometry comes from effective inheritance.
-6. Close, Validate and Save: candidate unchanged. Apply: candidate changes, active
-   unchanged. Successful Start activates it.
-7. While RUNNING reopen: geometry is visible, edits disabled, zoom/pan still work.
-   New source frames do not move the frozen background; Refresh replaces it without
-   changing ROI. Close, Stop, reopen: editing returns.
-8. Automated tests additionally cover absent references, changed-resolution bounds,
-   failed candidate activation and immediate state changes before Qt notification.
+Real ViMo uses the unchanged
+`run_local_production_ui.py` and supplied `--machine-config` path. Old local Recipes
+containing ROI fields fail validation rather than being silently rewritten.
 
-Focused tests (offscreen platform comes from the shared fixture):
+1. Open Parameters → Machine ROI setup; select a camera tab.
+2. Set common Width/Height and Apply size to all.
+3. Drag the first and last configured slot ROIs into position.
+4. Distribute evenly, then fine-tune middle rectangles directly.
+5. Switch cameras and repeat; edits remain in the machine draft.
+6. Save and apply; next successful Start activates the saved layout.
+7. Exercise dirty Back → Cancel / Discard / Save and apply.
+8. While RUNNING, inspect using Fit/wheel/pan; geometry edits are unavailable.
+
+The ignored local `outputs/manual_phase3c/` configuration, when prepared, provides
+real-model wiring-only geometry for manual calibration; it is not a shipped fixture.
+Neither test rectangles nor screenshot geometry constitute production calibration.
+
+## Verification and limits
 
 ```powershell
-uv run --no-sync pytest tests/unit/test_roi_geometry.py tests/integration/test_roi_editor.py --tb=short
+uv run --no-sync pytest tests/unit/test_machine_editor.py tests/unit/test_roi_geometry.py tests/integration/test_roi_editor.py tests/unit/test_configuration.py --tb=short
 ```
 
-No polygons, rotated/multiple ROIs, bulk copy, automatic ROI generation,
-calibration, physical units, live acquisition/tuning, model management, autosave
-or auto-Apply are implemented. Those require separately scoped work.
+Focused tests cover camera order, direct selection, source-pixel move/resize,
+view-only transforms, frozen BGR references, atomic batch rejection, combined Save
+and apply, activation boundary, save/preparation failures, dirty navigation and
+bilingual portrait/landscape layout. Normal suites retain fake Production and
+real-local launcher tests with fake engines. No inference/runtime contract changed.
+
+Offscreen screenshots check composition, not final usability. Physical Windows
+DPI/touch, commissioning with actual images, real camera/PLC timing and calibrated
+geometry still require human/hardware acceptance. Historical 400-image regression,
+long stress and benchmarking are not required for this presentation correction.

@@ -1,25 +1,24 @@
 from collections.abc import Iterator
+from dataclasses import replace
 
 import numpy as np
 import pytest
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QMessageBox
 from tests.integration.test_parameters_ui import configured_screen as configured_screen
-from tests.integration.test_parameters_ui import edit
 from tests.qt_support import until
 from tests.unit.test_production_application import FakeSession
 
-from vimo_demo.application import ApplicationState, PreparedConfiguration
-from vimo_demo.configuration import load_recipe
+from vimo_demo.application import ApplicationState
+from vimo_demo.configuration import load_machine_layout
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
-from vimo_demo.inspection.production import ChannelId
 from vimo_demo.ui.production_style import Language, text
 from vimo_demo.ui.production_window import ProductionWindow
 from vimo_demo.ui.recipe_editor import RecipeEditorSession
-from vimo_demo.ui.roi_editor import RoiEditorDialog
+from vimo_demo.ui.roi_editor import MachineRoiWorkspace
 
 type Screen = tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]]
 
@@ -34,20 +33,23 @@ def publish(
     )
 
 
-def open_editor(window: ProductionWindow) -> RoiEditorDialog:
+def open_editor(window: ProductionWindow) -> MachineRoiWorkspace:
     page = window.parameters
     page.scope.setCurrentIndex(2)
     page.camera.setCurrentIndex(2)
     page.channel.setCurrentIndex(4)
     page.open_roi.click()
-    dialog = page.roi_dialog
+    dialog = page.roi_workspace
     assert dialog is not None
+    dialog.select_roi(4)
     QApplication.processEvents()
     return dialog
 
 
 @pytest.fixture
-def roi_screen(configured_screen: Screen) -> Iterator[tuple[Screen, RoiEditorDialog]]:
+def roi_screen(
+    configured_screen: Screen,
+) -> Iterator[tuple[Screen, MachineRoiWorkspace]]:
     window, session, _ = configured_screen
     index = next(
         i
@@ -58,11 +60,12 @@ def roi_screen(configured_screen: Screen) -> Iterator[tuple[Screen, RoiEditorDia
     publish(window)
     dialog = open_editor(window)
     yield configured_screen, dialog
-    if window.parameters.roi_dialog is not None:
-        window.parameters.roi_dialog.close()
+    if window.parameters.roi_workspace is not None:
+        session.machine_editor.discard()
+        window.parameters.roi_workspace.request_back()
 
 
-def point(dialog: RoiEditorDialog, x: float, y: float) -> QPoint:
+def point(dialog: MachineRoiWorkspace, x: float, y: float) -> QPoint:
     canvas = dialog.canvas
     t = canvas.model.transform(canvas.width(), canvas.height())
     assert t is not None
@@ -70,7 +73,7 @@ def point(dialog: RoiEditorDialog, x: float, y: float) -> QPoint:
 
 
 def drag(
-    dialog: RoiEditorDialog,
+    dialog: MachineRoiWorkspace,
     start: QPoint,
     end: QPoint,
     button: Qt.MouseButton = Qt.MouseButton.LeftButton,
@@ -90,202 +93,112 @@ def drag(
     QTest.mouseRelease(canvas, button, pos=end)
 
 
-def test_move_resize_numeric_navigation_reset_and_save(
-    roi_screen: tuple[Screen, RoiEditorDialog],
-) -> None:
-    (window, session, _), dialog = roi_screen
-    page = window.parameters
-    base = session.machine
-    before = session.draft.to_recipe()
-    other_rois = {
-        c.channel_id: c.roi for c in session.resolve().channels if c.channel_id != 17
-    }
-    assert dialog.canvas.model.rect == BoundingRect(41, 1, 7, 9)
-    assert "CAM3" in dialog.identity.text() and "CH17" in dialog.identity.text()
-    drag(dialog, point(dialog, 44.5, 5.5), point(dialog, 46.5, 8.5))
-    assert dialog.canvas.model.rect == BoundingRect(43, 4, 7, 9)
-    drag(dialog, point(dialog, 50, 13), point(dialog, 53, 15))
-    assert dialog.canvas.model.rect == BoundingRect(43, 4, 10, 11)
-    drag(dialog, point(dialog, 53, 9.5), point(dialog, 55, 9.5))
-    assert dialog.canvas.model.rect == BoundingRect(43, 4, 12, 11)
-    assert (
-        tuple(line.text() for line in page.roi_values)
-        == session.draft.rois[ChannelId(17)]
-    )
-    edit(dialog.values[0], "44")
-    assert dialog.canvas.model.rect == BoundingRect(44, 4, 12, 11)
-    assert session.dirty
-    assert {
-        c.channel_id: c.roi for c in session.resolve().channels if c.channel_id != 17
-    } == other_rois
-    edited = session.draft.rois[ChannelId(17)]
-    assert session.draft.to_recipe().camera_overrides == before.camera_overrides
-    assert (
-        session.draft.to_recipe().channel_overrides[0].checks
-        == before.channel_overrides[0].checks
-    )
-    dialog.close()
-    page.channel.setCurrentIndex(5)
-    page.camera.setCurrentIndex(3)
-    page.camera.setCurrentIndex(2)
-    page.channel.setCurrentIndex(4)
-    assert tuple(line.text() for line in page.roi_values) == edited
-    dialog = open_editor(window)
-    dialog.reset_override()
-    assert ChannelId(17) not in session.draft.rois
-    assert dialog.canvas.model.rect == BoundingRect(40, 0, 8, 10)
-    assert not dialog.canvas.model.can_drag
-    unchanged = session.draft.to_recipe()
-    drag(dialog, point(dialog, 44, 5), point(dialog, 46, 6))
-    assert session.draft.to_recipe() == unchanged
-    dialog.create_override()
-    assert session.draft.rois[ChannelId(17)] == ("40", "0", "8", "10")
-    drag(dialog, point(dialog, 44, 5), point(dialog, 45, 6))
-    expected = dialog.canvas.model.rect
-    dialog.close()
-    candidate = window.bridge.application.snapshot().candidate
-    assert page.validate() and page.save()
-    assert session.entry is not None
-    assert load_recipe(session.entry.path).channel_overrides[0].roi == expected
-    assert window.bridge.application.snapshot().candidate == candidate
-    assert session.machine == base
-
-
-def test_invalid_text_no_clamping_and_recovery(
-    roi_screen: tuple[Screen, RoiEditorDialog],
-) -> None:
-    (window, session, _), dialog = roi_screen
-    previous = dialog.canvas.model.rect
-    for value in ("", "not a number", "0", "-1"):
-        edit(dialog.values[2], value)
-        assert dialog.values[2].text() == value
-        assert session.draft.rois[ChannelId(17)][2] == value
-        assert dialog.canvas.model.rect == previous
-        assert not dialog.canvas.model.can_drag
-        assert not window.parameters.validate()
-    edit(dialog.values[2], "8")
-    assert dialog.canvas.model.rect == BoundingRect(41, 1, 8, 9)
-    assert dialog.canvas.model.can_drag and window.parameters.validate()
-    edit(dialog.values[0], "999")
-    assert dialog.values[0].text() == "999" and not dialog.canvas.model.can_drag
-    assert text("roi_outside", dialog.language) in dialog.status.text()
-
-
-def test_no_frame_refresh_frozen_ownership_and_resolution(
-    configured_screen: Screen,
-) -> None:
-    window, session, _ = configured_screen
-    dialog = open_editor(window)
-    before = session.draft.to_recipe()
-    assert dialog.frame is None and dialog.canvas.model.size is None
-    assert text("roi_no_frame", dialog.language) in dialog.reference.text()
-    assert not dialog.canvas.model.can_drag and session.draft.to_recipe() == before
-    dialog.create_override()
-    edit(dialog.values[0], "41")
-    assert not dialog.values[0].isReadOnly()
-    publish(window)
-    assert dialog.frame is None
-    dialog.refresh_frame()
-    assert dialog.frame is not None
-    original = dialog.frame
-    assert not original.image.flags.writeable
-    assert dialog.canvas.model.can_drag
-    before_roi = session.draft.rois.copy()
-    publish(window, 2, (20, 20))
-    window.bridge.refresh()
-    assert dialog.frame is original
-    assert dialog.canvas.model.size == (120, 60)
-    dialog.refresh_frame()
-    assert dialog.frame is not None and dialog.frame.frame_id.sequence == 2
-    assert dialog.canvas.model.size == (20, 20) and not dialog.canvas.model.can_drag
-    assert text("roi_outside", dialog.language) in dialog.status.text()
-    assert session.draft.rois == before_roi
-    assert int(original.image[0, 0, 0]) == 40
-    dialog.close()
-    assert dialog.frame is None
-
-
-def test_zoom_resize_pan_do_not_modify_draft(
-    roi_screen: tuple[Screen, RoiEditorDialog],
+def test_six_rois_selection_move_resize_and_camera_switch(
+    roi_screen: tuple[Screen, MachineRoiWorkspace],
 ) -> None:
     (_, session, _), dialog = roi_screen
-    before = session.draft.to_recipe()
-    for scale in (None, 0.5, 1, 2):
-        dialog.canvas.zoom(scale)
-        dialog.resize(820, 700)
-        QApplication.processEvents()
-        assert session.draft.to_recipe() == before
-    dialog.canvas.zoom(8)
-    before_pan = dialog.canvas.model.pan
-    drag(dialog, QPoint(400, 200), QPoint(360, 180), Qt.MouseButton.MiddleButton)
-    assert dialog.canvas.model.pan != before_pan
-    assert session.draft.to_recipe() == before
-    dialog.buttons["roi_fit"].click()
-    assert dialog.canvas.model.scale is None and dialog.canvas.model.pan == (0, 0)
+    before = session.machine
+    recipe = session.draft.to_recipe()
+    assert len(dialog.canvas.rois) == 6
+    assert [s.channel_id for s in dialog.canvas.rois] == list(range(13, 19))
+    assert dialog.canvas.model.rect == BoundingRect(40, 0, 8, 10)
+    drag(dialog, point(dialog, 44, 5), point(dialog, 46, 8))
+    assert dialog.canvas.model.rect == BoundingRect(42, 3, 8, 10)
+    drag(dialog, point(dialog, 50, 13), point(dialog, 52, 15))
+    assert dialog.canvas.model.rect == BoundingRect(42, 3, 10, 12)
+    draft = session.machine_editor
+    assert draft.dirty and not session.dirty and session.draft.to_recipe() == recipe
+    assert session.machine == before
+    for a, b in zip(
+        before.layout.cameras[2].slots,
+        draft.camera(CameraId("CAM3")).slots,
+        strict=True,
+    ):
+        if a.channel_id != 17:
+            assert a == b
+    dialog.camera_tabs.setCurrentIndex(3)
+    assert dialog.frame is None and not dialog.canvas.model.can_drag
+    dialog.camera_tabs.setCurrentIndex(2)
+    dialog.select_roi(4)
+    assert dialog.canvas.model.rect == BoundingRect(42, 3, 10, 12)
+    QTest.mouseClick(dialog.canvas, Qt.MouseButton.LeftButton, pos=point(dialog, 24, 5))
+    assert dialog.selected_index == 2
+    assert dialog.canvas.model.rect == BoundingRect(20, 0, 8, 10)
+    draft.discard()
+    dialog.request_back()
 
 
-def test_save_apply_start_and_running_read_only(
-    roi_screen: tuple[Screen, RoiEditorDialog],
-    monkeypatch: pytest.MonkeyPatch,
+def test_invalid_batch_is_atomic(
+    roi_screen: tuple[Screen, MachineRoiWorkspace],
+) -> None:
+    (_, session, _), dialog = roi_screen
+    before = session.machine_editor.definition
+    dialog.common_width.setText("999")
+    dialog.common_height.setText("10")
+    dialog.common_size()
+    assert session.machine_editor.definition == before
+    assert "rejected" in dialog.message.text()
+    assert (
+        dialog.canvas.model.can_drag
+    )  # Invalid batch does not disable visual recovery.
+    dialog.request_back()
+
+
+def test_save_apply_start_and_no_running_edits(
+    roi_screen: tuple[Screen, MachineRoiWorkspace],
 ) -> None:
     (window, session, runtimes), dialog = roi_screen
     page, bridge = window.parameters, window.bridge
-    app = bridge.application
-    received: list[PreparedConfiguration] = []
-
-    def factory(prepared: PreparedConfiguration, _generation: int) -> FakeSession:
-        received.append(prepared)
-        runtime = FakeSession(automatic_start=False)
-        runtimes.append(runtime)
-        return runtime
-
-    # Capture the actual startup boundary, not just the UI's candidate identity.
-    monkeypatch.setattr(app, "_factory", factory)
-    edit(dialog.values[0], "42")
-    expected = session.resolve()
-    counters = app.snapshot().counters
-    original = app.snapshot().candidate
-    dialog.close()
-    assert page.save()
-    assert app.snapshot().candidate == original
-    page.apply()
+    before_choice = window.choices[0].prepared
+    dialog.commit_geometry(BoundingRect(42, 0, 8, 10))
+    assert window.choices[0].prepared == before_choice
+    dialog.buttons["roi_save_apply"].click()
+    assert session.machine_path is not None
+    assert load_machine_layout(session.machine_path) == session.machine
+    assert not session.machine_editor.dirty
     until(lambda: not page.busy)
-    candidate = app.snapshot().candidate
-    assert candidate is not None and candidate.recipe_id == expected.recipe_id
-    assert app.snapshot().active is None
-    assert window.choices[-1].prepared.configuration == expected
-    dialog = open_editor(window)
+    assert window.choices[-1].prepared.configuration.channels[16].roi.x == 42
+    assert bridge.application.snapshot().active is None
     bridge.start()
+    before = session.machine_editor.definition
+    dialog.commit_geometry(BoundingRect(44, 0, 8, 10))
+    dialog.common_size()
+    assert session.machine_editor.definition == before
     until(lambda: len(runtimes) == 1)
     runtimes[0].ready.set_result(None)
-    until(lambda: app.snapshot().state is ApplicationState.RUNNING)
+    until(lambda: bridge.application.snapshot().state is ApplicationState.RUNNING)
     bridge.refresh()
-    assert app.snapshot().active == candidate
-    assert received[0].configuration == expected
-    assert page.open_roi.isEnabled()
-    before = session.draft.to_recipe()
-    assert all(line.isReadOnly() for line in dialog.values)
-    assert not dialog.buttons["roi_create"].isEnabled()
-    assert not dialog.buttons["roi_reset"].isEnabled()
-    assert not dialog.canvas.model.can_drag
-    drag(dialog, point(dialog, 45, 5), point(dialog, 47, 6))
-    drag(dialog, point(dialog, 49, 10), point(dialog, 51, 12))
-    dialog.create_override()
-    dialog.reset_override()
-    dialog.commit_geometry(BoundingRect(0, 0, 2, 2))
-    dialog.numeric_changed()
-    assert session.draft.to_recipe() == before
-    dialog.buttons["roi_actual"].click()
-    assert dialog.canvas.model.scale == 1
+    assert (
+        bridge.application.snapshot().active == bridge.application.snapshot().candidate
+    )
+    assert all(
+        line.isReadOnly() for line in (dialog.common_width, dialog.common_height)
+    )
+    assert not dialog.buttons["roi_save_apply"].isEnabled()
     dialog.canvas.zoom(8)
-    drag(dialog, QPoint(400, 200), QPoint(380, 200), Qt.MouseButton.MiddleButton)
-    assert session.draft.to_recipe() == before
+    drag(dialog, QPoint(400, 200), QPoint(360, 180), Qt.MouseButton.MiddleButton)
+    assert session.machine_editor.definition == before
     bridge.stop()
-    until(lambda: app.snapshot().state is ApplicationState.READY)
+    until(lambda: bridge.application.snapshot().state is ApplicationState.READY)
     bridge.refresh()
-    assert dialog.canvas.model.can_drag and not dialog.values[0].isReadOnly()
-    assert app.snapshot().counters == counters
-    dialog.close()
+    assert dialog.canvas.model.can_drag
+    dialog.request_back()
+
+
+def test_reference_frozen_and_bgr(
+    roi_screen: tuple[Screen, MachineRoiWorkspace],
+) -> None:
+    (window, session, _), dialog = roi_screen
+    first = dialog.frame
+    assert first is not None
+    color = dialog.canvas.grab().toImage().pixelColor(point(dialog, 100, 30))
+    assert (color.red(), color.green(), color.blue()) == (0, 0, 40)
+    publish(window, 2)
+    assert dialog.frame is first
+    dialog.refresh_frame()
+    assert dialog.frame is not first
+    assert not session.machine_editor.dirty
+    dialog.request_back()
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -298,114 +211,208 @@ def test_responsive_bilingual_editor(
     window.resize(*size)
     publish(window)
     dialog = open_editor(window)
-    assert dialog.windowTitle() == text("roi_editor", language)
+    assert dialog.title.text() == text("roi_workspace", language)
+    assert not dialog.findChildren(QComboBox)
+    assert len(dialog.findChildren(QLineEdit)) == 2
     assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
     for button in dialog.buttons.values():
-        assert dialog.rect().contains(button.geometry())
+        assert dialog.rect().contains(button.mapTo(dialog, QPoint(0, 0)))
         assert (
-            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 15
+            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 12
         )
-    for line in dialog.values:
-        assert dialog.rect().contains(line.geometry())
+    assert dialog.canvas.height() > dialog.height() * 0.7
     assert not session.dirty
-    dialog.close()
+    dialog.request_back()
 
 
-def test_existing_numeric_reset_creates_effective_roi(
-    roi_screen: tuple[Screen, RoiEditorDialog],
+def test_fast_placement_buttons(roi_screen: tuple[Screen, MachineRoiWorkspace]) -> None:
+    (_, session, _), dialog = roi_screen
+    dialog.common_width.setText("6")
+    dialog.common_height.setText("8")
+    dialog.buttons["roi_common"].click()
+    assert all((s.rect.width, s.rect.height) == (6, 8) for s in dialog.canvas.rois)
+    dialog.select_roi(5)
+    dialog.commit_geometry(BoundingRect(61, 21, 6, 8))
+    dialog.buttons["roi_distribute"].click()
+    assert [s.rect.x for s in dialog.canvas.rois] == [1, 13, 25, 37, 49, 61]
+    assert [s.rect.y for s in dialog.canvas.rois] == [1, 5, 9, 13, 17, 21]
+    session.machine_editor.discard()
+    dialog.request_back()
+
+
+@pytest.mark.parametrize("decision", ["cancel", "discard", "roi_save_apply"])
+def test_dirty_navigation_requires_decision(
+    roi_screen: tuple[Screen, MachineRoiWorkspace], decision: str
 ) -> None:
     (window, session, _), dialog = roi_screen
-    dialog.close()
-    page = window.parameters
-    page.roi_override.setChecked(False)
-    assert tuple(line.text() for line in page.roi_values) == ("40", "0", "8", "10")
-    page.roi_override.setChecked(True)
-    assert session.draft.rois[ChannelId(17)] == ("40", "0", "8", "10")
-
-
-def test_failed_roi_candidate_start_preserves_active(
-    roi_screen: tuple[Screen, RoiEditorDialog],
-) -> None:
-    (window, session, runtimes), dialog = roi_screen
-    bridge, page = window.bridge, window.parameters
-    app = bridge.application
-    bridge.start()
-    until(lambda: len(runtimes) == 1)
-    runtimes[0].ready.set_result(None)
-    until(lambda: app.snapshot().state is ApplicationState.RUNNING)
-    active = app.snapshot().active
-    bridge.stop()
-    until(lambda: app.snapshot().state is ApplicationState.READY)
-    bridge.refresh()
-    edit(dialog.values[0], "42")
-    dialog.close()
-    assert page.save()
-    page.apply()
-    until(lambda: not page.busy)
-    candidate = app.snapshot().candidate
-    assert candidate != active
-    bridge.start()
-    until(lambda: len(runtimes) == 2)
-    runtimes[1].ready.set_exception(RuntimeError("ROI candidate fake warmup failure"))
-    until(lambda: app.snapshot().state is ApplicationState.READY)
-    bridge.refresh()
-    assert app.snapshot().active == active and app.snapshot().candidate == candidate
-    dialog = open_editor(window)
-    assert dialog.canvas.model.rect == BoundingRect(42, 1, 7, 9)
-    assert dialog.canvas.model.can_drag and not session.dirty
-    dialog.close()
-
-
-def test_state_guard_before_qt_notification_and_bgr_ownership(
-    roi_screen: tuple[Screen, RoiEditorDialog],
-) -> None:
-    (window, session, runtimes), dialog = roi_screen
-    image = dialog.canvas.grab().toImage()
-    color = image.pixelColor(point(dialog, 100, 30))
-    assert (color.red(), color.green(), color.blue()) == (0, 0, 40)
-    before = session.draft.to_recipe()
-    window.bridge.application.start()
-    # Deliberately do not deliver the snapshot signal before attempted gestures.
-    drag(dialog, point(dialog, 44.5, 5.5), point(dialog, 46.5, 8.5))
-    dialog.reset_override()
-    dialog.numeric_changed()
-    assert session.draft.to_recipe() == before
-    until(lambda: len(runtimes) == 1)
-    runtimes[0].ready.set_result(None)
-    until(
-        lambda: window.bridge.application.snapshot().state is ApplicationState.RUNNING
+    dialog.commit_geometry(BoundingRect(42, 0, 8, 10))
+    window.navigate(0)
+    boxes = dialog.findChildren(QMessageBox)
+    assert len(boxes) == 1 and session.machine_editor.dirty
+    box = boxes[0]
+    button = next(
+        b for b in box.buttons() if b.text() == text(decision, dialog.language)
     )
-    dialog.close()
+    button.click()
+    if decision == "cancel":
+        assert window.pages.currentWidget() is window.parameters
+        assert (
+            window.parameters.roi_workspace is dialog and session.machine_editor.dirty
+        )
+    else:
+        until(lambda: window.parameters.roi_workspace is None)
+        assert window.pages.currentIndex() == 0
+        assert not session.machine_editor.dirty
+        if decision == "roi_save_apply":
+            assert session.machine_path is not None
+            assert (
+                load_machine_layout(session.machine_path)
+                .layout.cameras[2]
+                .slots[4]
+                .rect.x
+                == 42
+            )
+            assert window.bridge.application.snapshot().active is None
 
 
-def test_running_pan_survives_snapshot_refresh(
-    roi_screen: tuple[Screen, RoiEditorDialog],
+def test_compact_tools_wheel_and_pan_preserve_geometry(
+    roi_screen: tuple[Screen, MachineRoiWorkspace],
 ) -> None:
-    (window, session, runtimes), dialog = roi_screen
-    window.bridge.start()
-    until(lambda: len(runtimes) == 1)
-    runtimes[0].ready.set_result(None)
-    until(
-        lambda: window.bridge.application.snapshot().state is ApplicationState.RUNNING
-    )
-    dialog.resize(800, 700)
-    QApplication.processEvents()
-    dialog.canvas.zoom(8)
+    (window, session, _), dialog = roi_screen
+    before = session.machine_editor.definition
     canvas = dialog.canvas
-    before = session.draft.to_recipe()
-    QTest.mousePress(canvas, Qt.MouseButton.MiddleButton, pos=QPoint(400, 200))
-    window.parameters.refresh_state()  # New production snapshot during an active pan.
-    end = QPoint(360, 180)
-    event = QMouseEvent(
-        QEvent.Type.MouseMove,
-        QPointF(end),
-        QPointF(canvas.mapToGlobal(end)),
+    for key, scale in (("roi_actual", 1), ("roi_fit", None)):
+        dialog.buttons[key].click()
+        assert canvas.model.scale == scale
+    center = QPointF(canvas.width() / 2, canvas.height() / 2)
+    wheel = QWheelEvent(
+        center,
+        center,
+        QPoint(),
+        QPoint(0, 120),
         Qt.MouseButton.NoButton,
-        Qt.MouseButton.MiddleButton,
         Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(canvas, wheel)
+    assert canvas.model.scale is not None
+    canvas.zoom(8)
+    drag(dialog, QPoint(400, 200), QPoint(360, 180), Qt.MouseButton.MiddleButton)
+    publish(window, 7)
+    dialog.buttons["roi_refresh"].click()
+    assert dialog.frame is not None and dialog.frame.frame_id.sequence == 7
+    assert canvas.model.scale is None
+    assert session.machine_editor.definition == before
+
+
+def test_prepare_failure_keeps_saved_machine_and_workspace(
+    roi_screen: tuple[Screen, MachineRoiWorkspace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (window, session, _), dialog = roi_screen
+    candidate = window.bridge.application.snapshot().candidate
+
+    def fail(_recipe: object) -> None:
+        raise ValueError("artifact unavailable")
+
+    monkeypatch.setattr(session, "prepare", fail)
+    dialog.commit_geometry(BoundingRect(42, 0, 8, 10))
+    dialog.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert "artifact unavailable" in dialog.message.text()
+    assert not session.machine_editor.dirty
+    assert window.bridge.application.snapshot().candidate == candidate
+    assert window.parameters.roi_workspace is dialog
+
+
+def test_camera_tabs_use_custom_configured_order(configured_screen: Screen) -> None:
+    window, session, _ = configured_screen
+    draft = session.machine_editor
+    layout = replace(
+        draft.definition.layout,
+        cameras=tuple(reversed(draft.definition.layout.cameras)),
+    )
+    draft.definition = draft.saved = replace(draft.definition, layout=layout)
+    publish(window)
+    workspace = open_editor(window)
+    assert [workspace.camera_tabs.tabText(i) for i in range(6)] == [
+        str(c.camera_id) for c in layout.cameras
+    ]
+    QTest.mouseClick(
+        workspace.camera_tabs,
+        Qt.MouseButton.LeftButton,
+        pos=workspace.camera_tabs.tabRect(3).center(),
+    )
+    assert workspace.camera == CameraId("CAM3")
+    assert workspace.frame is not None and len(workspace.canvas.rois) == 6
+    workspace.request_back()
+
+
+def test_wheel_anchor_and_pan(roi_screen: tuple[Screen, MachineRoiWorkspace]) -> None:
+    (window, session, _), workspace = roi_screen
+    publish(window, 9, (1600, 1200))
+    workspace.refresh_frame()
+    canvas = workspace.canvas
+    before = session.machine_editor.definition
+    canvas.zoom(2)
+    point = QPointF(canvas.width() / 2 + 40, canvas.height() / 2 + 30)
+    transform = canvas.model.transform(canvas.width(), canvas.height())
+    assert transform is not None
+    source = transform.source_point(point.x(), point.y())
+    event = QWheelEvent(
+        point,
+        point,
+        QPoint(),
+        QPoint(0, 120),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
     )
     QApplication.sendEvent(canvas, event)
-    assert canvas.model.pan == (-40, -20)
-    QTest.mouseRelease(canvas, Qt.MouseButton.MiddleButton, pos=end)
-    assert session.draft.to_recipe() == before
-    dialog.close()
+    zoomed = canvas.model.transform(canvas.width(), canvas.height())
+    assert zoomed is not None and zoomed.scale == pytest.approx(2.4)
+    assert zoomed.source_point(point.x(), point.y()) == pytest.approx(source)
+    pan = canvas.model.pan
+    drag(workspace, QPoint(400, 400), QPoint(360, 380), Qt.MouseButton.MiddleButton)
+    assert canvas.model.pan == pytest.approx((pan[0] - 40, pan[1] - 20))
+    assert session.machine_editor.definition == before
+
+
+def test_machine_save_failure_does_not_prepare(
+    roi_screen: tuple[Screen, MachineRoiWorkspace], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (window, session, _), workspace = roi_screen
+    saved = session.machine_editor.saved
+    candidate = window.bridge.application.snapshot().candidate
+
+    def fail() -> None:
+        raise ValueError("machine file is read-only")
+
+    monkeypatch.setattr(session.machine_editor, "save", fail)
+    workspace.commit_geometry(BoundingRect(42, 0, 8, 10))
+    workspace.save_and_apply()
+    assert session.machine_editor.saved == saved and session.machine_editor.dirty
+    assert "read-only" in workspace.message.text()
+    assert not window.parameters.busy
+    assert window.bridge.application.snapshot().candidate == candidate
+
+
+def test_workspace_open_refresh_and_reopen_never_reinitialize_saved_layout(
+    roi_screen: tuple[Screen, MachineRoiWorkspace],
+) -> None:
+    (window, session, _), workspace = roi_screen
+    # This fixture intentionally has tiny, nonpartitioned rectangles.
+    saved = session.machine_editor.saved
+    assert session.machine_path is not None
+    payload = session.machine_path.read_bytes()
+    for _ in range(2):
+        workspace.refresh_frame()
+        workspace.camera_tabs.setCurrentIndex(0)
+        workspace.camera_tabs.setCurrentIndex(2)
+        assert session.machine_editor.definition == saved
+        workspace.request_back()
+        workspace = open_editor(window)
+    assert session.machine_editor.definition == saved
+    assert not session.machine_editor.dirty
+    assert session.machine_path.read_bytes() == payload
