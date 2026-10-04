@@ -17,6 +17,7 @@
 | Implemented | 2D-2B — graphical channel ROI editing against frozen reference frames |
 | Future | 2E — Archive, events and diagnostics |
 | Implemented | 3A — minimal local image-set acquisition ingress |
+| Implemented | 3B — opt-in local six-image Production UI with real serial ViMo |
 | Future | Remaining Phase 3 — Camera, PLC and field integration |
 
 Phase 2C composes existing layers: candidate activation after model warm-up,
@@ -159,6 +160,16 @@ Future. It uses configured camera order and adds no queue, thread, lifecycle or
 UI changes. See [local ingress](production-application.md#local-image-set-ingress--phase-3a)
 for buffer reuse, explicit rejections and source/session coordination requirements.
 Real acquisition/trigger/PLC association remains unimplemented.
+
+Phase 3B adds the opt-in `scripts/run_local_production_ui.py` composition. It loads
+existing Recipe/model/layout JSON and six fixed local files, and uses the same
+Production window, application, runtime session, coordinator and real engine.
+Its launcher-local session subclass stops/joins one source thread alongside the
+existing runtime; it does not change lower-layer scheduling or engine ownership.
+The source waits for RUNNING, uses `LocalCycleIngress`, and waits for each cycle
+before submitting another. Existing display identity checks remain authoritative.
+See [local real-inference mode](production-ui.md#local-real-inference-mode--phase-3b)
+for configuration, failure and shutdown behavior.
 
 ## Planned direction — not implemented
 

@@ -30,6 +30,12 @@ Phase 2D-2B adds the [graphical ROI editor](docs/graphical-roi-editor.md): sourc
 rectangle editing against a frozen reference, using the same Recipe draft.
 The architecture document also maps all contracts and the production UI design reference.
 
+Phase 3B adds an opt-in [local real-inference Production mode](docs/production-ui.md#local-real-inference-mode--phase-3b):
+`scripts/run_local_production_ui.py` loads supplied Recipe/model/layout JSON and
+repeatedly inspects one fixed six-image set using the real ViMo worker. The existing
+fake Production launcher is unchanged. Configuration/launch commands and the short
+GPU UI smoke are documented there; calibrated channel layouts are not bundled.
+
 ## Environment and setup
 
 Verified: Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB, ViMo SDK/custom
