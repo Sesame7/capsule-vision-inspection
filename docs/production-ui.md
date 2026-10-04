@@ -163,3 +163,67 @@ scaling, viewing distance, touch targets and brightness/contrast. Offscreen revi
 does not establish those ergonomics or camera throughput. The remaining pages,
 Phase 2E archive/events/diagnostics, and Phase 3 hardware integration
 remain out of scope.
+
+## Local real-inference mode — Phase 3B
+
+`run_local_production_ui.py` is explicitly real ViMo; `run_production_ui.py`
+remains the unchanged fake-engine demo, even with its `--frames-dir` option.
+The real launcher reads the existing schema-v1 model description, machine layout
+and Recipe, validates the model hash, and decodes exactly six files before showing
+the window. It never supplies placeholder images or generates/calibrates ROIs.
+Relative `model_path` values resolve against the **model JSON's directory**.
+
+From the repository root, with your actual configuration files:
+
+```powershell
+uv run --no-sync python scripts/run_local_production_ui.py --model-config models/model.json --machine-config models/machine.json --recipe models/recipes/local.recipe.json --frames-dir images --language zh --size 1080x1920
+```
+
+These JSON paths are examples, not bundled calibrated configurations. The model
+description must point to the real `.vimosln`, with its actual SHA-256 and module ID.
+The repository currently contains synthetic configuration fixtures only; the
+verified local model does not by itself provide a commissioned 36-channel layout.
+Use existing configuration persistence/editor workflows to supply the layout and
+Recipe; see [configuration](inspection-configuration.md).
+The supplied Recipe's directory is the existing Parameters catalog. This launcher
+registers only the supplied model; Recipes requiring another model fail validation.
+
+`--frames-dir` selects the first six common image files in deterministic
+case-insensitive filename order; a corrupt selected file fails rather than being
+skipped. Alternatively use `--images path1 path2 path3 path4 path5 path6` in
+**configured camera order**, regardless of filenames. Images/ROIs must fit; no
+resizing, orientation change or filename-based camera association occurs.
+Initial display frames are reference-only. Click Start to load/warm the engine;
+startup and warm-up remain on the existing worker and have no production effects.
+
+After RUNNING, one session-owned source thread submits through `LocalCycleIngress`
+and waits for the production result. It publishes separate display copies with
+the actual admitted frame identity and generation, then allows a short interruptible
+250 ms viewing interval. This is not fixed-FPS or throughput control. Images are
+decoded once; no result history, dataset queue or second renderer is introduced.
+The same full-camera serial inference and resolved channel policies are used.
+
+Stop/Close signal the source, finalize/finish existing runtime work, and join both
+runtime and source before READY/CLOSED. Qt only observes asynchronous completion.
+An explicit subsequent Start creates a fresh session/ingress (cycle IDs restart
+within a new generation); no automatic restart or retry occurs. Ordinary image
+inference errors retain technical result evidence. Source/admission failures end
+the source, request Stop, and cross the existing queued command-error presentation;
+the original exception is printed in the launching terminal. Runtime terminal
+failure remains application FAULT. No failure is fabricated as product NG.
+
+Focused tests and one opt-in real smoke:
+
+```powershell
+uv run --no-sync pytest tests/integration/test_local_production_ui.py tests/integration/test_local_ingress.py tests/integration/test_production_ui.py --tb=short
+uv run --no-sync pytest tests/integration/test_local_production_vimo.py --run-gpu --require-gpu -s --tb=short
+```
+
+The real test activates the verified model, observes at least two six-frame cycles
+and existing defect boxes in an offscreen Production window, then verifies Stop,
+Close and actual thread termination. It uses explicit **uncalibrated test ROIs**
+and writes its configuration/screenshot into pytest's ignored temporary directory.
+It establishes wiring, not production channel acceptance: unassigned defects may
+show camera-level boxes/NG while individual fixture channels show OK. No model
+accuracy, calibration, physical-screen, camera, PLC, FAT/SAT or throughput claim
+is made. Real hardware integration remains future work.
