@@ -26,8 +26,9 @@ driven by application snapshots with separate bounded display frames. Phase 2D-2
 adds [Parameters / Recipe editing](docs/recipe-configuration-ui.md), with distinct
 Validate, Save and Apply actions. Diagnostics, History and Settings remain
 placeholders; there is no commissioned camera/PLC integration.
-Phase 2D-2B adds the [graphical ROI editor](docs/graphical-roi-editor.md): source-pixel
-rectangle editing against a frozen reference, using the same Recipe draft.
+Phase 3C provides [machine ROI setup](docs/graphical-roi-editor.md): six labeled
+source-pixel rectangles on a frozen camera reference. MachineLayout is the sole
+geometry owner; Recipes configure checks/products/models only.
 The architecture document also maps all contracts and the production UI design reference.
 
 Phase 3B adds an opt-in [local real-inference Production mode](docs/production-ui.md#local-real-inference-mode--phase-3b):
@@ -116,7 +117,7 @@ Open **Parameters** for the synthetic Demo A/B Recipe editor. Save explicitly;
 Apply installs a candidate, and successful Start activates it. Parameters remain
 viewable but read-only while running. See the
 [Recipe acceptance walkthrough](docs/recipe-configuration-ui.md#presentation-and-synthetic-acceptance-walkthrough).
-For graphical ROI review, select Channel / CAM3 / CH17, then open the editor.
+For machine ROI review, open Parameters → Machine ROI setup and choose a camera.
 The [ROI walkthrough](docs/graphical-roi-editor.md#equipment-free-acceptance-walkthrough)
 covers move/resize, numeric synchronization, reference refresh and Save/Apply.
 See the [UI contract and review guide](docs/production-ui.md) for ownership,

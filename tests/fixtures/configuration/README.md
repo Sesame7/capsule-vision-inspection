@@ -9,7 +9,7 @@ must fail unless replaced with real, verified metadata. Parsing needs no model.
 - `general.json`, `special.json`: separate model definitions with portable paths.
 - `defaults.json`: Product A uses caller-selected model and common check settings.
 - `overrides.json`: Product B selects `special`, changes CAM3 blob maximum, then
-  overrides CH17 maximum/ROI and filters 黑点 for that channel only.
+  overrides CH17 maximum and filters 黑点 for that channel only.
 
 Presence/blob are explicitly enabled to demonstrate configuration, not because
 an algorithm or production threshold is ready. Color is disabled. ViMo remains

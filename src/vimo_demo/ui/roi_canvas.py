@@ -11,10 +11,12 @@ from PySide6.QtGui import (
     QPaintEvent,
     QPen,
     QResizeEvent,
+    QWheelEvent,
 )
 from PySide6.QtWidgets import QWidget
 
 from vimo_demo.inference import BoundingRect
+from vimo_demo.inspection.production import ChannelROI
 
 from .display_frames import DisplayFrame
 from .production_style import Style
@@ -35,10 +37,12 @@ CURSORS: dict[Handle, Qt.CursorShape] = {
 
 class RoiCanvas(QWidget):
     geometry_changed = Signal(object)
+    selected = Signal(int)
 
     def __init__(self, allowed: Callable[[], bool]) -> None:
         super().__init__()
         self.model = RoiInteractionModel()
+        self.rois: tuple[ChannelROI, ...] = ()
         self._allowed = allowed
         self._image = QImage()
         self._drag: tuple[BoundingRect, Handle, float, float] | None = None
@@ -78,10 +82,30 @@ class RoiCanvas(QWidget):
         self.model.scale, self.model.pan = scale, (0, 0)
         self.update()
 
-    def zoom_step(self, factor: float) -> None:
+    def wheelEvent(self, event: QWheelEvent) -> None:
         transform = self.model.transform(self.width(), self.height())
-        if transform is not None:
-            self.zoom(min(8.0, max(0.05, transform.scale * factor)))
+        if transform is None or event.angleDelta().y() == 0:
+            event.ignore()
+            return
+        self.cancel_gesture()
+        point = event.position()
+        sx, sy = transform.source_point(point.x(), point.y())
+        scale = min(
+            8.0, max(0.05, transform.scale * 1.2 ** (event.angleDelta().y() / 120))
+        )
+        self.model.scale = scale
+        assert self.model.size is not None
+        width, height = self.model.size
+        # Keep the pointed source pixel fixed where bounded pan permits it.
+        mx, my = (
+            max(0, (width * scale - self.width()) / 2),
+            max(0, (height * scale - self.height()) / 2),
+        )
+        px = point.x() - sx * scale - (self.width() - width * scale) / 2
+        py = point.y() - sy * scale - (self.height() - height * scale) / 2
+        self.model.pan = min(mx, max(-mx, px)), min(my, max(-my, py))
+        self.update()
+        event.accept()
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -94,6 +118,15 @@ class RoiCanvas(QWidget):
         )
         painter.drawImage(destination, self._image)
         painter.setClipRect(destination)
+        for slot in self.rois:
+            outline = QRectF(*transform.rectangle(slot.rect))
+            painter.setPen(QPen(QColor(Style.primary), 1))
+            painter.drawRect(outline)
+            painter.drawText(
+                outline.adjusted(3, 3, 0, 0),
+                Qt.AlignmentFlag.AlignTop,
+                f"CH{slot.channel_id:02d}",
+            )
         rect = self.model.rect
         if rect is None:
             return
@@ -106,7 +139,7 @@ class RoiCanvas(QWidget):
         painter.setPen(pen)
         painter.drawRect(outline)
         if self.model.can_drag:
-            # Halo and square handles distinguish overrides without color alone.
+            # Selected rectangle has handles; the other five retain their labels.
             painter.setPen(QPen(QColor("black"), 2))
             painter.setBrush(QColor(Style.accent))
             for x, y in handle_points(rect, transform):
@@ -122,7 +155,18 @@ class RoiCanvas(QWidget):
             if transform.width > self.width() or transform.height > self.height():
                 self._pan_start = point, self.model.pan
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        elif event.button() == Qt.MouseButton.LeftButton and self._allowed():
+        elif event.button() == Qt.MouseButton.LeftButton:
+            sx, sy = transform.source_point(point.x(), point.y())
+            # Keep selected handles reachable; otherwise pick the first hit in
+            # configured slot order (deterministic even for overlapping ROIs).
+            if self.model.hit(point.x(), point.y(), transform) is None:
+                for index, slot in enumerate(self.rois):
+                    r = slot.rect
+                    if r.x <= sx <= r.x + r.width and r.y <= sy <= r.y + r.height:
+                        self.selected.emit(index)
+                        break
+            if not self._allowed():
+                return
             handle = self.model.hit(point.x(), point.y(), transform)
             if handle is not None and self.model.rect is not None:
                 self._drag = (

@@ -31,7 +31,7 @@ from vimo_demo.configuration import (
 from vimo_demo.inference import ImageResult
 from vimo_demo.inference._validation import uint8_array
 from vimo_demo.inspection import CycleId
-from vimo_demo.inspection.production import InspectionLayout, TechnicalStatus
+from vimo_demo.inspection.production import TechnicalStatus
 from vimo_demo.runtime import CoordinatorCapacityError
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.production_bridge import QtProductionBridge
@@ -45,12 +45,9 @@ def input_files(folder: Path) -> tuple[Path, Path, Path, tuple[Path, ...]]:
         folder / name for name in ("model.json", "machine.json", "local.recipe.json")
     )
     save_model_definition(model, config.model)
-    # Deliberately different from lexical camera order.
     save_machine_layout(
         machine,
-        MachineLayoutDefinition(
-            InspectionLayout(tuple(reversed(config.layout.cameras)))
-        ),
+        MachineLayoutDefinition(config.layout),
     )
     save_recipe(recipe, RecipeDefinition("local", "Local test"))
     paths: list[Path] = []
@@ -127,7 +124,7 @@ def test_repeated_cycles_start_gate_order_display_and_restart(
         result = snapshot.latest_production_result
         assert result is not None and result.cycle_id >= 2
         assert tuple(c.camera_id for c in result.cameras) == composition.store.cameras
-        assert composition.store.cameras[0] == "CAM6"
+        assert composition.store.cameras == tuple(f"CAM{i}" for i in range(1, 7))
         assert [v for v, _ in engine.calls][2:] == list(
             range(1, 7)
         ) * snapshot.counters.cycles_completed

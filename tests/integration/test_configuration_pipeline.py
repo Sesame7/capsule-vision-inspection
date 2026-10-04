@@ -60,7 +60,7 @@ def test_json_resolution_supplies_layout_and_exact_policies() -> None:
         camera_override.checks.blob.max_area,
         special.checks.blob.max_area,
     ) == (1800, 1850, 1900)
-    assert special.roi == BoundingRect(41, 1, 7, 9)
+    assert special.roi == BoundingRect(40, 0, 8, 10)
     assert special.checks.presence.policy == CheckPolicy(True, True)
     assert not special.checks.vimo.label_enabled("黑点")
     assert ordinary.checks.vimo.label_enabled("黑点")

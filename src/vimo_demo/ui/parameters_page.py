@@ -7,7 +7,6 @@ from typing import Literal
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -34,7 +34,7 @@ from .production_style import Language, Style, text
 from .recipe_catalog import RecipeEntry
 from .recipe_editor import GROUPS, CheckDraft, Group, RecipeEditorSession, draft_checks
 from .recipe_fields import CheckFields
-from .roi_editor import RoiEditorDialog
+from .roi_editor import MachineRoiWorkspace
 
 type DirtyDecision = Literal["save", "discard", "cancel"]
 
@@ -53,7 +53,8 @@ class ParametersPage(QWidget):
         self.setObjectName("parameters")
         self.bridge, self.session = bridge, session
         self.simulation = simulation
-        self.roi_dialog: RoiEditorDialog | None = None
+        self.roi_workspace: MachineRoiWorkspace | None = None
+        self._apply_finished: Callable[[str], None] | None = None
         self.language: Language = "zh"
         self._loading = False
         self._entries: tuple[RecipeEntry, ...] = ()
@@ -76,7 +77,11 @@ class ParametersPage(QWidget):
         self._monitor = QTimer(self)
         self._monitor.setInterval(20)
         self._monitor.timeout.connect(self._finish_preparation)
-        root = QVBoxLayout(self)
+        self._pages = QStackedLayout(self)
+        self._pages.setContentsMargins(0, 0, 0, 0)
+        self._form = QWidget()
+        self._pages.addWidget(self._form)
+        root = QVBoxLayout(self._form)
         root.setContentsMargins(0, 0, 0, 0)
         selection = QHBoxLayout()
         self.recipes = QComboBox()
@@ -132,38 +137,11 @@ class ParametersPage(QWidget):
         for box in self.groups.values():
             content.addWidget(box)
             box.changed.connect(self._checks_changed)
-        self.roi_box = QGroupBox()
-        roi_layout = QVBoxLayout(self.roi_box)
-        self.roi_help = QLabel()
-        self.roi_help.setWordWrap(True)
-        roi_layout.addWidget(self.roi_help)
-        self.roi_override = QCheckBox()
-        self.roi_override.setMinimumHeight(Style.touch)
-        roi_layout.addWidget(self.roi_override)
-        row = QHBoxLayout()
-        self.roi_values = tuple(QLineEdit() for _ in range(4))
-        for name, value in zip(
-            ("x", "y", "width", "height"), self.roi_values, strict=True
-        ):
-            column = QVBoxLayout()
-            label = QLabel()
-            self.labels["roi_" + name] = label
-            column.addWidget(label)
-            value.setMinimumHeight(Style.touch)
-            column.addWidget(value)
-            row.addLayout(column, 1)
-            value.textEdited.connect(self._roi_changed)
-        roi_layout.addLayout(row)
-        self.roi_effective = QLabel()
-        self.roi_effective.setWordWrap(True)
-        roi_layout.addWidget(self.roi_effective)
-        content.addWidget(self.roi_box)
-        # Outside the disabled numeric group: diagnostics stay viewable while running.
+        # Machine geometry has its own draft and persistence; Recipe checks stay here.
         self.open_roi = QPushButton()
         self.open_roi.setMinimumHeight(Style.touch)
         self.open_roi.clicked.connect(self.open_roi_editor)
         content.addWidget(self.open_roi)
-        self.roi_override.toggled.connect(self._roi_changed)
         self.details: dict[str, tuple[QGroupBox, QLabel]] = {}
         for key in ("model_details", "layout_details"):
             group, label = QGroupBox(), QLabel()
@@ -215,6 +193,8 @@ class ParametersPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        if self.roi_workspace is not None:
+            self.roi_workspace.set_language(language)
         self.recipes.setAccessibleName(text("recipe", language))
         self.camera.setAccessibleName(text("camera_scope", language))
         self.channel.setAccessibleName(text("channel_scope", language))
@@ -235,10 +215,7 @@ class ParametersPage(QWidget):
         self.help.setText(
             text("policy_help", language) + "\n" + text("inherit_help", language)
         )
-        self.roi_box.setTitle(text("roi_numeric", language))
         self.open_roi.setText(text("roi_editor", language))
-        self.roi_help.setText(text("roi_help", language))
-        self.roi_override.setText(text("override", language))
         for key, (group, _) in self.details.items():
             group.setTitle(text(key, language))
         self._loading = False
@@ -339,22 +316,6 @@ class ParametersPage(QWidget):
         rows = draft_checks(CheckOverrides()) if rows is None else rows
         for key, widget in self.groups.items():
             widget.show_row(rows[key], root=scope == 0, language=self.language)
-        base = next(
-            s.rect
-            for c in session.machine.layout.cameras
-            for s in c.slots
-            if s.channel_id == channel
-        )
-        roi = draft.rois.get(channel)
-        self.roi_override.setChecked(roi is not None)
-        self.roi_override.setText(
-            text("override" if roi is not None else "inherit", self.language)
-        )
-        values = roi or (str(base.x), str(base.y), str(base.width), str(base.height))
-        for line, value in zip(self.roi_values, values, strict=True):
-            line.setText(value)
-            line.setEnabled(scope == 2 and roi is not None)
-        self.roi_override.setEnabled(scope == 2)
         if session.entry is not None:
             index = next(
                 (
@@ -397,43 +358,6 @@ class ParametersPage(QWidget):
             self.session.draft.channels[channel] = rows
         self.changed()
 
-    def _roi_changed(self) -> None:
-        if self._loading or not self.editable() or self.session is None:
-            return
-        _, channel = self.selected_ids()
-        self.roi_override.setText(
-            text(
-                "override" if self.roi_override.isChecked() else "inherit",
-                self.language,
-            )
-        )
-        if self.roi_override.isChecked():
-            if channel not in self.session.draft.rois:
-                try:
-                    roi = next(
-                        r.roi
-                        for r in self.session.resolve().channels
-                        if r.channel_id == channel
-                    )
-                except (ConfigurationError, ValueError) as exc:
-                    self._error = str(exc)
-                    self.show_draft()
-                    return
-                for line, value in zip(
-                    self.roi_values, (roi.x, roi.y, roi.width, roi.height), strict=True
-                ):
-                    line.setText(str(value))
-            x, y, width, height = (line.text() for line in self.roi_values)
-            self.session.draft.rois[channel] = (x, y, width, height)
-        else:
-            self.session.draft.rois.pop(channel, None)
-        for line in self.roi_values:
-            line.setEnabled(self.roi_override.isChecked())
-        self.changed()
-
-        if not self.roi_override.isChecked():
-            self.show_draft()  # Reset displays inherited numbers, not stale override text.
-
     def changed(self) -> None:
         self._validation, self._error = "unchecked", ""
         self.preview()
@@ -453,13 +377,10 @@ class ParametersPage(QWidget):
                 strict=True,
             ):
                 self.groups[key].show_effective(value)
-            self.roi_effective.setText(
-                f"CH{channel:02d} · {text('effective', self.language)}: {row.roi}"
-            )
         except (ConfigurationError, ValueError) as exc:
             for widget in self.groups.values():
                 widget.show_effective(None)
-            self.roi_effective.setText(str(exc))
+            self._error = str(exc)
         try:
             model = session.registry.get(
                 session.draft.model_override_id or session.default_model_id
@@ -487,16 +408,17 @@ class ParametersPage(QWidget):
         snapshot = self.bridge.application.snapshot()
         allowed = self.editable()
         self.open_roi.setEnabled(
-            session is not None and self.scope.currentIndex() == 2 and not self._closing
+            session is not None
+            and session.machine_path is not None
+            and not self._closing
         )
-        if self.roi_dialog is not None:
-            self.roi_dialog.refresh()
+        if self.roi_workspace is not None:
+            self.roi_workspace.refresh()
         # Keep hierarchy navigation and details available while production runs.
         for widget in (
             *self.metadata.values(),
             self.model,
             *self.groups.values(),
-            self.roi_box,
         ):
             widget.setEnabled(allowed)
         self.recipes.setEnabled(
@@ -514,6 +436,7 @@ class ParametersPage(QWidget):
                     and session is not None
                     and session.entry is not None
                     and not session.dirty
+                    and not session.machine_editor.dirty
                 )
                 if enabled and session is not None:
                     try:
@@ -555,35 +478,43 @@ class ParametersPage(QWidget):
         )
 
     def open_roi_editor(self) -> None:
-        if self.session is None or self.scope.currentIndex() != 2 or self._closing:
+        if self.session is None or self.session.machine_path is None or self._closing:
             return
-        if self.roi_dialog is not None:
-            self.roi_dialog.raise_()
+        if self.roi_workspace is not None:
             return
-        camera, channel = self.selected_ids()
-        dialog = RoiEditorDialog(
+        camera, _ = self.selected_ids()
+        workspace = MachineRoiWorkspace(
             self.session,
             camera,
-            channel,
             self.bridge.frames,
             self.editable,
             self._graphical_roi_changed,
+            lambda completed: self.apply(completed=completed),
+            self._roi_closed,
             language=self.language,
             simulation=self.simulation,
             parent=self,
         )
-        self.roi_dialog = dialog
-        dialog.finished.connect(self._roi_closed)
-        dialog.open()
+        self.roi_workspace = workspace
+        self._pages.addWidget(workspace)
+        self._pages.setCurrentWidget(workspace)
 
     def _graphical_roi_changed(self) -> None:
         self.changed()
         self.show_draft()
 
     def _roi_closed(self) -> None:
-        if self.roi_dialog is not None:
-            self.roi_dialog.deleteLater()
-            self.roi_dialog = None
+        if self.roi_workspace is not None:
+            workspace, self.roi_workspace = self.roi_workspace, None
+            self._pages.setCurrentWidget(self._form)
+            self._pages.removeWidget(workspace)
+            workspace.deleteLater()
+
+    def leave_workspace(self, after: Callable[[], None]) -> None:
+        if self.roi_workspace is None:
+            after()
+        else:
+            self.roi_workspace.request_back(after)
 
     def validate(self) -> bool:
         if not self.editable() or self.session is None:
@@ -733,15 +664,20 @@ class ParametersPage(QWidget):
         self._dialog = dialog
         dialog.open()
 
-    def apply(self) -> None:
+    def apply(self, *, completed: Callable[[str], None] | None = None) -> None:
         if not self.editable() or self.session is None:
+            if completed is not None:
+                completed(text("read_only", self.language))
             return
         try:
             recipe = self.session.apply_recipe()
         except ConfigurationError as exc:
             self._error = str(exc)
             self.refresh_state()
+            if completed is not None:
+                completed(self._error)
             return
+        self._apply_finished = completed
         session = self.session
         future: Future[PreparedConfiguration] = Future()
 
@@ -785,12 +721,50 @@ class ParametersPage(QWidget):
             except Exception as exc:
                 self._error = str(exc)
         self.refresh_state()
+        if self._apply_finished is not None:
+            completed, self._apply_finished = self._apply_finished, None
+            completed(
+                text("read_only", self.language) if self._closing else self._error
+            )
         if self._after_busy is not None:
             callback, self._after_busy = self._after_busy, None
             self._closing = False
             callback()
 
-    def request_close(self, callback: Callable[[], None]) -> None:
+    def guard_machine(self, callback: Callable[[], None]) -> None:
+        if self.session is None or not self.session.machine_editor.dirty:
+            callback()
+            return
+        draft = self.session.machine_editor
+
+        def decided(decision: DirtyDecision) -> None:
+            if decision == "cancel":
+                return
+            try:
+                if decision == "save":
+                    if not self.editable():
+                        self._error = text("read_only", self.language)
+                        self.refresh_state()
+                        return
+                    draft.save()
+                else:
+                    draft.discard()
+            except (ConfigurationError, ValueError) as exc:
+                self._error = str(exc)
+                self.refresh_state()
+                return
+            callback()
+
+        self.confirm_dirty(decided)
+
+    def request_close(self, final: Callable[[], None]) -> None:
+        if self.roi_workspace is not None and not self.busy:
+            self.leave_workspace(lambda: self.request_close(final))
+            return
+
+        def callback() -> None:
+            self.guard_machine(final)
+
         if self.busy:
             self._closing = True  # Do not apply a late preparation while closing.
             self._after_busy = lambda: self.guard_dirty(callback)

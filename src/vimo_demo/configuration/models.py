@@ -11,7 +11,6 @@ from vimo_demo.inspection.production import (
     CheckPolicy,
     InspectionLayout,
 )
-from vimo_demo.inspection.production.layout import valid_rect
 
 from .errors import ConfigurationError
 
@@ -162,15 +161,9 @@ class CameraOverride:
 class ChannelOverride:
     channel_id: ChannelId
     checks: CheckOverrides = field(default_factory=CheckOverrides)
-    roi: BoundingRect | None = None
 
     def __post_init__(self) -> None:
         integer(self.channel_id, "channel_id", 1)
-        if self.roi is not None:
-            try:
-                valid_rect(self.roi)
-            except ValueError as exc:
-                raise ConfigurationError(f"CH{self.channel_id} ROI: {exc}") from exc
 
 
 @dataclass(frozen=True, slots=True)

@@ -35,7 +35,9 @@ from vimo_demo.configuration import (
     ModelDefinition,
     ModelRegistry,
     RecipeDefinition,
+    load_machine_layout,
     resolve_configuration,
+    save_machine_layout,
     save_recipe,
 )
 from vimo_demo.inference import BoundingRect, DefectRegion, ImageResult, RotatedRect
@@ -60,7 +62,7 @@ class DemoTerminalFailure(BaseException):
     """Explicit fake worker-terminal failure for FAULT presentation review."""
 
 
-def demo_recipes(roi: BoundingRect | None = None) -> tuple[RecipeDefinition, ...]:
+def demo_recipes() -> tuple[RecipeDefinition, ...]:
     defaults = CheckConfiguration(blob=BlobCheckConfig(max_area=1800))
     return (
         RecipeDefinition("demo-A", "Demo A", defaults),
@@ -75,7 +77,7 @@ def demo_recipes(roi: BoundingRect | None = None) -> tuple[RecipeDefinition, ...
             ),
             channel_overrides=(
                 ChannelOverride(
-                    ChannelId(17), CheckOverrides(blob=BlobOverride(max_area=1900)), roi
+                    ChannelId(17), CheckOverrides(blob=BlobOverride(max_area=1900))
                 ),
             ),
         ),
@@ -203,23 +205,34 @@ def demo_choices(
         hashlib.sha256(payload).hexdigest(),
         "demo",
     )
-    cameras: list[CameraLayout] = []
-    for index, image in enumerate(images):
-        height, width = image.shape[:2]
-        cameras.append(
-            CameraLayout(
-                CameraId(f"CAM{index + 1}"),
-                tuple(
-                    ChannelROI(
-                        slot,
-                        ChannelId(index * 6 + slot + 1),
-                        BoundingRect(slot * width // 6, 0, width // 6, height),
-                    )
-                    for slot in range(6)
-                ),
+    machine_path = folder / "machine.json"
+    if machine_path.exists():
+        machine = load_machine_layout(machine_path)
+    else:
+        # Initialization only: saved machine geometry is always authoritative.
+        cameras: list[CameraLayout] = []
+        for index, image in enumerate(images):
+            height, width = image.shape[:2]
+            cameras.append(
+                CameraLayout(
+                    CameraId(f"CAM{index + 1}"),
+                    tuple(
+                        ChannelROI(
+                            slot,
+                            ChannelId(index * 6 + slot + 1),
+                            BoundingRect(
+                                slot * width // 6,
+                                0,
+                                (slot + 1) * width // 6 - slot * width // 6,
+                                height,
+                            ),
+                        )
+                        for slot in range(6)
+                    ),
+                )
             )
-        )
-    machine = MachineLayoutDefinition(InspectionLayout(tuple(cameras)))
+        machine = MachineLayoutDefinition(InspectionLayout(tuple(cameras)))
+        save_machine_layout(machine_path, machine)
     return tuple(
         RecipeChoice(
             prepare_configuration(
@@ -233,7 +246,7 @@ def demo_choices(
             ),
             recipe.display_name,
         )
-        for recipe in demo_recipes(cameras[2].slots[4].rect)
+        for recipe in demo_recipes()
     )
 
 
@@ -323,9 +336,7 @@ def compose(
         )
     directory = folder / "recipes"
     directory.mkdir(parents=True, exist_ok=True)
-    for recipe in demo_recipes(
-        choices[0].prepared.configuration.layout.cameras[2].slots[4].rect
-    ):
+    for recipe in demo_recipes():
         path = directory / f"{recipe.recipe_id}.recipe.json"
         if not path.exists():
             save_recipe(path, recipe)
@@ -345,6 +356,7 @@ def compose(
         ),
         model.model_id,
         folder,
+        machine_path=folder / "machine.json",
     )
     app = ProductionApplication(factory)
     app.configure(choices[0].prepared)
