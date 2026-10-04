@@ -26,6 +26,8 @@ driven by application snapshots with separate bounded display frames. Phase 2D-2
 adds [Parameters / Recipe editing](docs/recipe-configuration-ui.md), with distinct
 Validate, Save and Apply actions. Diagnostics, History and Settings remain
 placeholders; there is no commissioned camera/PLC integration.
+Phase 2D-2B adds the [graphical ROI editor](docs/graphical-roi-editor.md): source-pixel
+rectangle editing against a frozen reference, using the same Recipe draft.
 The architecture document also maps all contracts and the production UI design reference.
 
 ## Environment and setup
@@ -108,6 +110,9 @@ Open **Parameters** for the synthetic Demo A/B Recipe editor. Save explicitly;
 Apply installs a candidate, and successful Start activates it. Parameters remain
 viewable but read-only while running. See the
 [Recipe acceptance walkthrough](docs/recipe-configuration-ui.md#presentation-and-synthetic-acceptance-walkthrough).
+For graphical ROI review, select Channel / CAM3 / CH17, then open the editor.
+The [ROI walkthrough](docs/graphical-roi-editor.md#equipment-free-acceptance-walkthrough)
+covers move/resize, numeric synchronization, reference refresh and Save/Apply.
 See the [UI contract and review guide](docs/production-ui.md) for ownership,
 shutdown, alternate sizes and remaining physical-screen validation.
 

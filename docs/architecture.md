@@ -14,7 +14,7 @@
 | Implemented | 2D-1 — PySide Production shell, bounded display frames and simulated source |
 | Design reference | Production UI direction; physical workstation tuning remains |
 | Implemented | 2D-2A — Parameters / Recipe drafts, validation, persistence and candidate Apply |
-| Next, not implemented | 2D-2B — graphical ROI editing |
+| Implemented | 2D-2B — graphical channel ROI editing against frozen reference frames |
 | Future | 2E — Archive, events and diagnostics |
 | Future | 3 — Camera, PLC and field integration |
 
@@ -146,6 +146,11 @@ Start activates it. Diagnostics, History and Settings remain placeholders. See
 the [Recipe UI contract](recipe-configuration-ui.md); domain/runtime contracts and
 inference behavior are unchanged.
 
+Phase 2D-2B adds a focused [graphical ROI editor](graphical-roi-editor.md) inside
+Parameters. Pure geometry helpers share the Production image transform; the Qt
+canvas edits existing draft rectangles against one frozen owned display frame.
+It introduces no new schema, runtime ownership or activation behavior.
+
 ## Planned direction — not implemented
 
 ```text
@@ -198,4 +203,5 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
 | [Production UI](production-ui.md) | Implemented shell/bridge, display ownership, identity matching, controls and review |
 | [Recipe configuration UI](recipe-configuration-ui.md) | Parameters drafts, inheritance preview, Save/Apply, catalog and dirty-close workflow |
+| [Graphical ROI editor](graphical-roi-editor.md) | Frozen reference ownership, source-pixel geometry, gestures, numeric synchronization and read-only state |
 | [Production UI direction](production-ui-direction.md) | Agreed visual direction and flexible review details; not an exact implementation specification |

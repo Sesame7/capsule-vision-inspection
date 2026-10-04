@@ -60,7 +60,7 @@ class DemoTerminalFailure(BaseException):
     """Explicit fake worker-terminal failure for FAULT presentation review."""
 
 
-def demo_recipes() -> tuple[RecipeDefinition, ...]:
+def demo_recipes(roi: BoundingRect | None = None) -> tuple[RecipeDefinition, ...]:
     defaults = CheckConfiguration(blob=BlobCheckConfig(max_area=1800))
     return (
         RecipeDefinition("demo-A", "Demo A", defaults),
@@ -75,7 +75,7 @@ def demo_recipes() -> tuple[RecipeDefinition, ...]:
             ),
             channel_overrides=(
                 ChannelOverride(
-                    ChannelId(17), CheckOverrides(blob=BlobOverride(max_area=1900))
+                    ChannelId(17), CheckOverrides(blob=BlobOverride(max_area=1900)), roi
                 ),
             ),
         ),
@@ -233,7 +233,7 @@ def demo_choices(
             ),
             recipe.display_name,
         )
-        for recipe in demo_recipes()
+        for recipe in demo_recipes(cameras[2].slots[4].rect)
     )
 
 
@@ -323,7 +323,9 @@ def compose(
         )
     directory = folder / "recipes"
     directory.mkdir(parents=True, exist_ok=True)
-    for recipe in demo_recipes():
+    for recipe in demo_recipes(
+        choices[0].prepared.configuration.layout.cameras[2].slots[4].rect
+    ):
         path = directory / f"{recipe.recipe_id}.recipe.json"
         if not path.exists():
             save_recipe(path, recipe)

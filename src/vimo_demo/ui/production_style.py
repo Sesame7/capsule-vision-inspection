@@ -11,6 +11,31 @@ from .production_presentation import Indicator
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "roi_editor": ("图形 ROI 编辑器", "Graphical ROI editor"),
+    "roi_reference": ("冻结参考帧", "Frozen reference frame"),
+    "roi_generation": ("代次", "Generation"),
+    "roi_cycle": ("周期", "Cycle"),
+    "roi_sequence": ("帧序号", "Frame sequence"),
+    "roi_no_frame": (
+        "无参考帧；可编辑数值，尚无图像尺寸",
+        "No reference frame; numeric editing available, image dimensions unknown",
+    ),
+    "roi_outside": (
+        "ROI 超出当前参考图像；请编辑数值或刷新参考帧。未自动更改草稿。",
+        "ROI exceeds reference bounds; edit numbers or refresh the frame. Draft unchanged.",
+    ),
+    "roi_fit": ("适应窗口", "Fit"),
+    "roi_minus": ("缩小 −", "Zoom −"),
+    "roi_actual": ("100%", "100%"),
+    "roi_plus": ("放大 +", "Zoom +"),
+    "roi_refresh": ("刷新参考帧", "Refresh frame"),
+    "roi_create": ("创建覆盖", "Create override"),
+    "roi_reset": ("恢复继承", "Reset to inherit"),
+    "roi_close": ("关闭（保留草稿）", "Close (keep draft)"),
+    "roi_gestures": (
+        "左键移动／拖动控制点缩放；中键平移放大图像。关闭不保存、不应用。",
+        "Left drag to move / resize handles; middle drag to pan enlarged image. Close does not Save or Apply.",
+    ),
     "new_recipe": ("新建", "New"),
     "reload": ("重新加载", "Reload"),
     "validate": ("验证", "Validate"),
@@ -218,7 +243,7 @@ class Style:
 def stylesheet() -> str:
     return f"""
     QWidget {{ color: {Style.primary}; font-size: {Style.body}px; }}
-    QMainWindow, QWidget#shell {{ background: {Style.background}; }}
+    QMainWindow, QWidget#shell, QDialog#roiEditor {{ background: {Style.background}; }}
     QFrame#summary, QFrame#camera, QFrame#event {{ background: {Style.surface}; border: 1px solid {Style.border}; border-radius: {Style.radius}px; }}
     QLabel {{ background: transparent; border: none; }}
     QLabel[role="secondary"] {{ color: {Style.secondary}; }}

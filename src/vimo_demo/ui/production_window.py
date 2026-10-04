@@ -168,7 +168,7 @@ class ProductionWindow(QMainWindow):
         )
         page.addWidget(workspace, 1)
         self.placeholders: dict[str, QLabel] = {}
-        self.parameters = ParametersPage(bridge, recipe_editor)
+        self.parameters = ParametersPage(bridge, recipe_editor, simulation=simulation)
         self.parameters.applied.connect(self._recipe_applied)
         for name in PAGES[1:]:
             if name == "parameters":
