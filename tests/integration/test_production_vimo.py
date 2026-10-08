@@ -13,7 +13,6 @@ from vimo_demo.inspection.production import (
     CameraLayout,
     ChannelId,
     ChannelROI,
-    CheckPolicy,
     InspectionLayout,
     ProductionPipeline,
     ProductJudgment,
@@ -46,9 +45,7 @@ def test_real_image_to_lightweight_production_evidence(
             for slot in range(6)
         ),
     )
-    pipeline = ProductionPipeline(
-        InspectionLayout((camera,)), traditional=CheckPolicy(False)
-    )
+    pipeline = ProductionPipeline(InspectionLayout((camera,)))
     trace: list[tuple[str, int]] = []
     worker = InferenceWorker(lambda: RecordedEngine(trace))
     try:

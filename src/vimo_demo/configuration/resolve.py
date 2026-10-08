@@ -7,10 +7,7 @@ from vimo_demo.inspection.production import CameraLayout, ChannelROI, Inspection
 
 from .errors import ConfigurationError, ModelArtifactError
 from .models import (
-    BlobCheckConfig,
-    CheckConfig,
     CheckConfiguration,
-    CheckOverride,
     CheckOverrides,
     MachineLayoutDefinition,
     ModelDefinition,
@@ -26,28 +23,11 @@ def _inherit[T](base: T, override: T | None) -> T:
     return base if override is None else override
 
 
-def _policy(base: CheckConfig, override: CheckOverride) -> CheckConfig:
-    return CheckConfig(
-        _inherit(base.enabled, override.enabled),
-        _inherit(base.required, override.required),
-    )
-
-
 def _merge(base: CheckConfiguration, override: CheckOverrides) -> CheckConfiguration:
-    blob = _policy(base.blob, override.blob)
-    vimo = _policy(base.vimo, override.vimo)
     return CheckConfiguration(
-        presence=_policy(base.presence, override.presence),
-        blob=BlobCheckConfig(
-            blob.enabled,
-            blob.required,
-            _inherit(base.blob.min_area, override.blob.min_area),
-            _inherit(base.blob.max_area, override.blob.max_area),
-        ),
-        color=_policy(base.color, override.color),
         vimo=ViMoCheckConfig(
-            vimo.enabled,
-            vimo.required,
+            _inherit(base.vimo.enabled, override.vimo.enabled),
+            _inherit(base.vimo.required, override.vimo.required),
             _inherit(base.vimo.disabled_labels, override.vimo.disabled_labels),
         ),
     )

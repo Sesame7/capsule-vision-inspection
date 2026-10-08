@@ -156,7 +156,7 @@ Show where a finding occurred without covering the underlying physical defect.
 | Finding | Preferred overlay concept |
 | --- | --- |
 | ViMo segmentation defect | Thin contour / hollow outline |
-| Blob size or position judgment | Hollow rectangle or corner brackets |
+| Capsule size or position judgment | Hollow rectangle or corner brackets |
 | Missing product | Dashed expected ROI + X / missing marker |
 | Color judgment | Subtle ROI edge + compact status marker |
 | Technical invalidity | Camera/header/global treatment, no fake image defect |

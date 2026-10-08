@@ -1,19 +1,5 @@
 {
   "defaults": {
-    "blob": {
-      "enabled": true,
-      "max_area": 1800,
-      "min_area": 0,
-      "required": true
-    },
-    "color": {
-      "enabled": false,
-      "required": true
-    },
-    "presence": {
-      "enabled": true,
-      "required": true
-    },
     "vimo": {
       "disabled_labels": [],
       "enabled": true,

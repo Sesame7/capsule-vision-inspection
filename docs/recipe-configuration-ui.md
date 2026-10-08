@@ -1,10 +1,10 @@
-# Recipe UI — Phase 3D / additive Phase 3E-1
+# Recipe UI — Size/Color and ViMo configuration
 
 The normal page is **Recipe / 配方**. It presents product-level identity and model
 selection, using the existing Qt-free `RecipeEditorSession`, `RecipeDraft` and
 `RecipeCatalog`. Configuration schema, persistence, inspection and application
 lifecycle remain authoritative. Phase 3E-1 adds demonstration Size/Color settings
-and a draft-only tuning workspace; legacy policy editing stays hidden.
+and a draft-only tuning workspace. Only ViMo policies retain hidden overrides.
 
 ## Normal operator surface
 
@@ -16,7 +16,7 @@ and a draft-only tuning workspace; legacy policy editing stays hidden.
 - One primary **Save and apply** action.
 
 There is no long scrolling form, raw Recipe ID, model path/hash/module dump,
-Defaults/Camera/Channel navigation, Inherit/Override UI, legacy enabled/required controls,
+Defaults/Camera/Channel navigation, Inherit/Override UI, traditional enabled/required forms,
 permanent traditional-threshold forms, raw disabled-label editor, or machine-layout dump.
 The old `CheckFields` presentation was removed, not folded into an advanced panel.
 
@@ -29,8 +29,8 @@ summary instead of falsely claiming all labels participate.
 
 Recipes with camera/channel overrides show one exceptional notice that these data
 are not editable here. Name/product/model edits and duplication preserve all hidden
-defaults, camera/channel policies, thresholds and label filters through the existing
-draft round trip. Explicit False, zero, empty lists and inheritance stay distinct.
+ViMo defaults, camera/channel policies and label filters through the existing
+draft round trip. Explicit False, empty lists and inheritance stay distinct.
 Normal Recipes without overrides do not show the override notice.
 
 ## New, Duplicate and persistence
@@ -96,7 +96,7 @@ uv run --no-sync pytest tests/integration/test_parameters_ui.py tests/integratio
 ```
 
 The fake demo uses local synthetic Demo A/B files without GPU. Demo B retains its
-historical camera/channel settings and therefore shows the exceptional notice.
+ViMo camera/channel settings and therefore shows the exceptional notice.
 The real-local launcher and supplied configuration paths are unchanged.
 
 Review the Recipe page for simplicity, unnecessary remaining information, obvious
@@ -106,7 +106,8 @@ navigation, both languages and portrait/landscape. Offscreen screenshots/tests d
 not replace usability, physical DPI or touch acceptance.
 
 The [Size/Color preview](capsule-inspection.md) shares demonstration measurement and
-judgment with production. Calibration and final legacy cleanup remain deferred.
+judgment with production. Calibration remains deferred. Obsolete traditional configuration and draft helpers
+have been removed; removed Recipe fields fail strict validation.
 Technical `required` policy, raw ViMo label filtering and hierarchy
 remain backend capabilities, documented in [configuration](inspection-configuration.md).
 Model-export metadata/label integration is deferred. No accuracy, throughput,

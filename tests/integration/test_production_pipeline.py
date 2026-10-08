@@ -11,7 +11,6 @@ from tests.unit.test_production_inspection import (
     NG,
     SUCCESS,
     Clock,
-    FakeTraditional,
     inferred,
     layout,
     source_frame,
@@ -22,7 +21,6 @@ from vimo_demo.inspection import CycleCollector, CycleId, CycleStatus, inspect_c
 from vimo_demo.inspection.production import (
     Assessment,
     ProductionPipeline,
-    TraditionalCameraResult,
 )
 from vimo_demo.runtime import InferenceWorker, RuntimeCoordinator
 
@@ -47,17 +45,14 @@ class FakeEngine:
 
 
 @pytest.mark.parametrize("fail_one", [False, True])
-def test_collected_cycle_worker_and_traditional_results_compose(fail_one: bool) -> None:
+def test_collected_cycle_worker_and_production_results_compose(fail_one: bool) -> None:
     config, clock = layout(), Clock()
     collector = CycleCollector(config.camera_ids, timeout=10, clock=clock)
     pipeline = ProductionPipeline(config, clock=clock)
     collector.begin(CycleId(1))
     snapshot = None
-    traditional: list[TraditionalCameraResult] = []
-    fake = FakeTraditional()
     for camera in reversed(config.cameras):
         frame = source_frame(camera.camera_id)
-        traditional.append(pipeline.inspect_traditional(frame, fake))
         snapshot = collector.accept(frame)
     assert snapshot is not None
     trace: list[tuple[str, int]] = []
@@ -67,7 +62,7 @@ def test_collected_cycle_worker_and_traditional_results_compose(fail_one: bool) 
         raw = inspect_cycle(
             snapshot, lambda image: worker.submit(image).result(5), clock=clock
         )
-        result = pipeline.from_cycle(raw, traditional)
+        result = pipeline.from_cycle(raw)
     finally:
         worker.request_stop()
         assert worker.join(5)
@@ -75,7 +70,7 @@ def test_collected_cycle_worker_and_traditional_results_compose(fail_one: bool) 
     assert result.cycle_status is (
         CycleStatus.FAILED if fail_one else CycleStatus.COMPLETE
     )
-    assert len(result.channels) == 36 and fake.calls == 6
+    assert len(result.channels) == 36
     assert [item.channel_id for item in result.channels] == list(range(1, 37))
     assert [event for event, _ in trace] == ["construct", *["infer"] * 6, "close"]
     assert len({ident for _, ident in trace}) == 1 and trace[0][1] != get_ident()
@@ -91,17 +86,15 @@ def test_existing_coordinator_future_consumed_without_new_threads_or_inference_c
     coordinator = RuntimeCoordinator(
         InferenceWorker(lambda: FakeEngine(trace)), config.camera_ids, timeout=10
     )
-    traditional: list[TraditionalCameraResult] = []
     try:
         coordinator.start().result(5)
         future = coordinator.begin_cycle(CycleId(1))
         for camera in reversed(config.cameras):
             frame = source_frame(camera.camera_id)
-            traditional.append(pipeline.inspect_traditional(frame, FakeTraditional()))
             coordinator.submit_frame(frame).result(5)
         # Ordinary non-GUI consumer, not a blocking Future callback.
         envelope = future.result(5)
-        result = pipeline.from_cycle(envelope.result, traditional)
+        result = pipeline.from_cycle(envelope.result)
         assert result.assessment == Assessment(SUCCESS, NG)
         assert result.inspection_started_at is not None
         assert result.result_ready_at >= envelope.result_ready_at

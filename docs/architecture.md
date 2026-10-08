@@ -21,6 +21,7 @@
 | Implemented | 3C — machine-only six-channel ROI setup and saved layout activation |
 | Implemented | 3D — simplified Recipe UI, hidden policy preservation and Settings ROI entry |
 | Implemented | 3E-1 — demonstration capsule Size/Color and isolated Recipe preview |
+| Implemented | 3E-2 — sole capsule traditional path and strict Recipe consolidation |
 | Future | Remaining Phase 3 — Camera, PLC and field integration |
 
 Phase 2C composes existing layers: candidate activation after model warm-up,
@@ -82,9 +83,9 @@ real wiring. The Qt demo remains single-image and does not orchestrate cycles or
 share a worker with a coordinator. No real camera/PLC composition is implemented.
 
 Phase 2A adds `inspection.production`: explicit camera/slot/channel layouts,
-lightweight ViMo findings, a synchronous traditional-inspector Protocol and
+lightweight ViMo findings, capsule check evidence and
 `ProductionInspectionResult`. It consumes existing cycle results plus independent
-traditional evidence; no worker, coordinator or lifecycle contract changes.
+capsule evidence; no worker, coordinator or lifecycle contract changes.
 ROI overlap maps full-image findings to every affected channel and preserves
 unassigned camera-level defects. Technical execution and product judgment remain
 independent, including ERROR + NG. See the
@@ -117,7 +118,7 @@ Production UI/source -> ProductionApplication -> ProductionRuntimeSession
                                                      |
                                       ConfiguredProductionPipeline
                                         |                     |
-                                injected checks       InferenceWorker -> engine
+                                capsule Size/Color     InferenceWorker -> engine
                                         +----------+----------+
                                          ProductionInspectionResult
 ```
@@ -145,7 +146,7 @@ nonblocking shutdown, localization, layout and physical-screen limitations.
 
 Phase 3D simplifies the earlier Parameters editor into a Recipe page: display
 name, optional product code, registered model and Save and apply. New/Duplicate
-use generated identities. Hidden checks and camera/channel overrides remain in
+use generated identities. Hidden ViMo policies and camera/channel overrides remain in
 the existing Qt-free draft/configuration backend, unchanged by unrelated edits.
 Save and apply combines atomic persistence with existing off-thread preparation
 and configuration; successful Start alone activates. Settings hosts the existing
@@ -183,10 +184,11 @@ for configuration, failure and shutdown behavior.
 Phase 3E-1 adds [capsule Size/Color screening](capsule-inspection.md): one shared
 measurement per enabled channel on the existing cycle inspector, combined with
 unchanged full-camera ViMo and production aggregation. Product-level Recipe settings
-are additive and separate from legacy traditional policies. The tuning workspace
+now provide the sole traditional path after Phase 3E-2 consolidation. ViMo policies
+and overrides remain separate. The tuning workspace
 uses frozen references, one bounded background measurement job and cached judgments;
-it never submits cycles or changes counters/configuration. Algorithms are uncalibrated;
-legacy configuration removal remains Phase 3E-2.
+it never submits cycles or changes counters/configuration. Algorithms remain uncalibrated;
+removed Recipe fields are rejected, with no runtime migration.
 
 ## Planned direction — not implemented
 

@@ -198,6 +198,7 @@ optional existing Pillow/Microsoft YaHei for Chinese labels, otherwise ASCII
 references link to Chinese labels in JSON; it installs nothing automatically.
 
 Capsule Size/Color and isolated Recipe tuning preview are now available as an
-uncalibrated demonstration. Both default off; legacy policies remain preserved.
+uncalibrated demonstration. Both default off; ViMo policy overrides remain independent. Removed traditional
+Recipe fields are rejected; see the configuration contract before using older files.
 See [capsule inspection and manual review](docs/capsule-inspection.md) for controls,
 limits and equipment-free/real-local launch commands.

@@ -8,7 +8,7 @@ from threading import enumerate as threads
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from tests.unit.test_configured_execution import Traditional, config
+from tests.unit.test_configured_execution import config
 from tests.unit.test_production_application import WAIT, close, prepared
 from tests.unit.test_production_inspection import inferred
 
@@ -65,7 +65,6 @@ def test_real_composition_warmup_cycles_stop_and_restart(tmp_path: Path) -> None
         session = ProductionRuntimeSession(
             candidate,
             generation,
-            traditional=Traditional(),
             warmup=lambda _: (
                 np.zeros((20, 60, 3), dtype=np.uint8),
                 np.ones((20, 60, 3), dtype=np.uint8),
@@ -152,7 +151,6 @@ def test_active_whole_cycle_finishes_queued_cycle_rejected_and_backlog_bounded(
     session = ProductionRuntimeSession(
         candidate,
         1,
-        traditional=Traditional(),
         warmup_iterations=1,
         warmup=lambda _: (np.zeros((20, 60, 3), dtype=np.uint8),),
         engine_factory=engine_factory,
@@ -269,7 +267,6 @@ def test_runtime_frame_failure_is_not_confused_with_lifecycle_failure(
         warmup_iterations=1,
         warmup=lambda _: (np.zeros((20, 60, 3), dtype=np.uint8),),
         engine_factory=lambda _: FailingEngine(trace),
-        traditional=Traditional(),
     )
     app = ProductionApplication(lambda _prepared, _generation: session)
     try:

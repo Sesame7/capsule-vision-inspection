@@ -6,62 +6,36 @@ SDK, Qt, a camera library or PLC code. It creates no engines, threads, queues,
 timers or result history. Production criteria here are initial domain rules,
 not calibrated thresholds or an accuracy/acceptance claim.
 
-## Composition with Phase 1
+## Composition
 
 ```text
-owned Frame + CameraLayout -> TraditionalInspector -> TraditionalCameraResult
-
-six full Frames -> existing CycleCollector / inspect_cycle / InferenceWorker
-                -> InspectionCycleResult (or coordinator envelope.result)
-                                      |
-                  ProductionPipeline.from_cycle(..., traditional_results)
-                                      |
-                          ProductionInspectionResult
+CollectedCycle -> ConfiguredProductionPipeline (existing serial cycle runner)
+                 |                         |
+       capsule measurement/judgment   InferenceWorker -> full-camera ViMo
+                 |                         |
+       TRADITIONAL CheckResult       ProductionPipeline.camera_result
+                 +------------+------------+
+                     ProductionInspectionResult
 ```
 
-`ProductionPipeline.inspect_traditional(frame, inspector)` invokes a synchronous
-typed protocol with immutable source pixels and explicit layout. It produces
-lightweight results keyed by the complete existing `FrameId`. The original protocol tests use deterministic fakes. Phase 3E-1 additionally supplies
-the [capsule demonstration](capsule-inspection.md) in configured application execution.
+The application pipeline reads owned frame pixels and resolved channel ROIs;
+Size/Color share one measurement per enabled channel. No traditional plugin or
+injected dispatch interface remains. It produces the same lightweight check and
+measurement evidence used by preview. The [application contract](production-application.md)
+owns scheduling and activation; [capsule inspection](capsule-inspection.md) owns
+the measurement/judgment details.
 
-`camera_result(layout, frame_outcome, traditional_result)` consumes a single
-existing `FrameInspectionResult`. `from_cycle()` consumes the unchanged cycle
-result and joins traditional evidence by exact cycle/camera/sequence identity.
-No membership is inferred from ordering or timing. Mismatched/duplicate identities
-or missing configured channel entries in supplied traditional results raise
-`ValueError`. Unavailable required evidence instead produces explicit ERROR/UNKNOWN.
+`ProductionPipeline.camera_result(layout, frame_outcome)` maps existing full-camera
+ViMo results. `from_cycle()` also supports direct synchronous conversion of an
+existing `InspectionCycleResult`, validating cycle/camera/frame identity and missing
+camera metadata. This mapping-only path explicitly marks traditional evidence
+DISABLED; configured execution replaces it with the actual capsule check result.
+It never claims that an enabled capsule check was inspected.
 
-The existing runtime remains responsible for collection, deadlines, bounded
-dispatch, worker ownership and shutdown. Its nominal path still makes **six
-full-camera-image ViMo calls**, never 36 crop calls. Production conversion performs
-zero additional inference calls. The package can consume a completed coordinator
-Future without modifying its envelope or scheduling policy.
-
-An ordinary non-GUI composition context can use:
-
-```python
-from vimo_demo.inspection import inspect_cycle
-from vimo_demo.inspection.production import ProductionPipeline
-
-pipeline = ProductionPipeline(layout)
-# Given a READY CollectedCycle, a started worker and a traditional inspector:
-traditional = tuple(
-    pipeline.inspect_traditional(entry.frame, traditional_inspector)
-    for entry in collected.frames
-)
-raw_cycle = inspect_cycle(
-    collected, lambda image: worker.submit(image).result()
-)
-production = pipeline.from_cycle(raw_cycle, traditional)
-print(production.assessment.technical_status, production.assessment.judgment)
-```
-
-Alternatively, pass `coordinator_future.result().result` to `from_cycle()` with
-separately obtained traditional outcomes. Tests demonstrate both paths. This is
-consumer-side composition. The [Phase 2C application](production-application.md)
-additionally uses an optional coordinator cycle-inspector hook to schedule resolved
-checks on the serial cycle runner, outside Qt. Do not run algorithm work in a
-blocking worker/coordinator callback.
+The runtime still owns collection, deadlines, bounded dispatch, worker ownership
+and shutdown. The configured path makes at most six full-camera ViMo calls, never
+36 crop calls. Result conversion performs no extra inference. No algorithm runs
+in a blocking worker/coordinator callback or on Qt.
 
 ## Layout and identity
 
@@ -152,32 +126,28 @@ production technical status ERROR; it is not renamed or converted to six NG
 channels. Missing/uninspected frames carry structured COLLECTION reasons and
 unknown checks. Independent existing NG evidence remains NG despite another error.
 
-`CheckPolicy(enabled, required)` is explicit construction-time data for each source,
-not a Recipe system. Both sources default to enabled/required: an absent traditional
-implementation must not silently pass. Explicitly disable an uncalibrated source
-when appropriate. A protocol implementation cannot silently disable a source that
-the pipeline policy requested; this is treated as unavailable evidence. Policies
-govern consumption, **not the unchanged coordinator's call scheduling**. Disabling
-ViMo here does not suppress Phase 1 calls or erase a recorded cycle failure.
+`CheckPolicy(enabled, required)` remains shared technical-validity data. Configured
+ViMo policies retain both controls; enabled capsule Size/Color checks are required.
+The lower-level mapping pipeline's ViMo consumption policy does not alter upstream
+inference scheduling or erase recorded cycle failure.
 
 ## Traditional evidence and errors
 
-The `TraditionalInspector.inspect(frame, layout)` Protocol returns one
-`TraditionalChannelCheck` per configured channel in any order. Each wraps a
-`CheckResult` with structured `Reason` codes and optional named numeric
-`Measurement` values/units. The legacy protocol has no built-in Blob/presence implementation. Phase 3E-1 adds
-separate product-level capsule Size/Color measurement and judgment. Phase 2C combines
-injected legacy presence/blob/color checks using this
-evidence-first aggregation before returning its traditional source result.
+`measure_capsule()` and `judge_capsule()` are the only traditional implementation.
+The configured pipeline skips measurement when both checks are disabled; otherwise
+it measures each channel once and returns one combined TRADITIONAL `CheckResult`.
+`Measurement` carries scalar upper/lower values, `Reason` carries structured
+invalid-content or out-of-limit evidence. No plugin adapters or parallel legacy
+results remain.
 
 Reasons identify source (VIMO/TRADITIONAL/COLLECTION), stable code, optional defect
 label/rectangle and exception type. Codes include `defect_region`,
-`result_unavailable`, `check_unavailable`, `execution_error`, `invalid_result`,
+`result_unavailable`, `capsule.execution_error`, `execution_error`, `invalid_result`,
 `cycle_timed_out` and `cycle_shutdown`. Labels remain actual model labels; no
 localized operator prose is embedded. Reasons are not a large defect taxonomy.
 
-Ordinary traditional execution exceptions become ERROR/UNKNOWN results with an
-`execution_error` code and exception type. No exception object/traceback frames are
+Ordinary traditional execution exceptions become ERROR/UNKNOWN results with a
+`capsule.execution_error` code and exception type. No exception object/traceback frames are
 retained. Malformed identities/channel mappings are programming-contract errors
 and raise; process-control BaseExceptions propagate. There are no retries.
 
@@ -187,14 +157,14 @@ Production dataclasses are frozen; collections are tuples, including snapshots
 of supplied collections. They retain neither `Frame`, `ImageResult`, ndarray,
 mask nor SDK object. Immutable bbox/scalar data remains valid after engine cleanup.
 Source pixels follow the existing Frame ownership contract, with no new copies.
-Traditional inspectors must not mutate or retain frames. A caller retaining an
+Capsule measurement must not mutate or retain frames. A caller retaining an
 original coordinator Future/cycle result still retains its masks; conversion
 does not clear caller-owned Phase 1 objects. Release those separately.
 
-All new clock readings use an injectable monotonic clock in the existing host
-time domain; negative/nonfinite/backward intervals fail explicitly. Per camera:
+Mapping clock readings use an injectable monotonic clock; configured stage timings
+use monotonic time in the same host time domain; negative/nonfinite/backward intervals fail explicitly. Per camera:
 
-- `traditional_ms`: measured traditional stage, or None when not supplied/disabled.
+- `traditional_ms`: configured traditional stage (including the disabled fast path), or None when not run.
 - `vimo_ms`: existing frame inspection interval, including worker wait/normalization,
   or None when not measured/disabled; it is not a raw GPU kernel measurement.
 - `mapping_ms`: extraction, assignment and channel assembly duration.
@@ -222,8 +192,8 @@ channel accuracy. Existing Phase 1 tests and behavior remain unchanged.
 
 Recipe persistence and pure resolution now live in the additive
 [Phase 2B configuration layer](inspection-configuration.md). Deferred: calibrated
-ROIs/thresholds and calibrated algorithms; Phase 2D production Qt UI and configuration
-editor; Phase 2E archive/events/history; Phase 3 cameras, buffer leases, PLC mapping/handshake,
+ROIs/thresholds and calibrated algorithms; archive/events/history; real cameras,
+buffer leases, PLC mapping/handshake,
 unassigned-finding machine policy and measured hardware throughput/FAT/SAT.
 
 Phase 2C now implements activation, configured check execution and counters. Its

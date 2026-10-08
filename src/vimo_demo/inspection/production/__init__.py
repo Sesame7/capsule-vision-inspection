@@ -20,9 +20,6 @@ from .models import (
 )
 from .pipeline import (
     ProductionPipeline,
-    TraditionalCameraResult,
-    TraditionalChannelCheck,
-    TraditionalInspector,
     assign_vimo_findings,
     extract_vimo_findings,
 )
@@ -47,9 +44,6 @@ __all__ = [
     "ProductionPipeline",
     "Reason",
     "TechnicalStatus",
-    "TraditionalCameraResult",
-    "TraditionalChannelCheck",
-    "TraditionalInspector",
     "ViMoFinding",
     "aggregate",
     "assign_vimo_findings",

@@ -19,7 +19,7 @@ All three JSON families require integer `schema_version: 1`.
 | Definition | Required JSON fields besides version | Optional fields |
 | --- | --- | --- |
 | `ModelDefinition` | `model_id`, `display_name`, `model_path`, `expected_sha256`, `module_id` | None |
-| `RecipeDefinition` | `recipe_id`, `display_name`, `defaults` | `product_code`, `model_override_id`, `camera_overrides`, `channel_overrides` |
+| `RecipeDefinition` | `recipe_id`, `display_name`, `defaults` | `product_code`, `model_override_id`, `camera_overrides`, `channel_overrides`, `capsule` |
 | `MachineLayoutDefinition` | `cameras` | None |
 
 Recipes and models are independent: many Recipes can use one model. Resolution
@@ -44,32 +44,22 @@ remain data, independent of camera names or image orientation.
 
 ## Defaults and inheritance
 
-`defaults` contains optional `presence`, `blob`, `color`, `vimo` objects.
-`CheckConfiguration` contains exact values; `CheckOverrides` contains optional
-leaf values. Presence and color use `CheckConfig` rather than redundant identical
-classes. Each config exposes the existing Phase 2A `.policy: CheckPolicy`.
+`defaults` contains only the optional `vimo` object. `ViMoCheckConfig` holds
+`enabled` (default true), `required` (default true) and `disabled_labels` (default
+empty). `CheckConfiguration` / `CheckOverrides` retain the JSON grouping and
+ViMo's immutable exact/partial values; they no longer dispatch traditional checks.
 
-| Check | Initial policy | Additional parameters |
-| --- | --- | --- |
-| Presence | disabled, required | None; no guessed detection threshold |
-| Blob | disabled, required | Optional integer `min_area`, `max_area`, in pixels² |
-| Color | disabled, required | None; no justified color-space/algorithm contract yet |
-| ViMo | enabled, required | `disabled_labels`, initially empty |
+Resolution applies **default -> camera -> channel** for each ViMo leaf. Missing or
+JSON `null` leaves inherit. Explicit `false` and an empty label list override;
+a label list replaces rather than merges. At defaults, missing/null leaves use
+constructor defaults. Structural objects/arrays must have their stated types;
+`null` is not an entire check object.
 
-Traditional checks start disabled because calibrated implementations are absent.
-This is a new configuration constructor default, **not a change to Phase 2A's
-enabled/required pipeline defaults**. Enabling an unparameterized check describes
-intent; it does not certify an algorithm as ready. Phase 2C reports an enabled
-but unavailable check as technical ERROR during execution. Production calibration
-and readiness gating remain future hardware work. Area bounds are nonnegative
-with min <= max when both exist. Zero is valid data, not an invented sentinel.
-
-Resolution applies **default -> camera -> channel** for each leaf. Missing or
-JSON `null` leaf values inherit. Explicit `false`, zero and an empty label list
-override. A label list replaces the inherited list rather than merging it.
-At defaults, missing/null leaves use the constructor defaults above. Structural
-objects/arrays must have their stated types; `null` is not an entire check object.
-Schema v1 cannot clear an inherited area bound using null; null means inherit.
+Traditional inspection uses only root `capsule.size` and `capsule.color`, uniformly
+across channels, with no `required` setting or camera/channel overrides. Omission
+leaves both disabled. Removed `presence`, `blob` and old unparameterized `color`
+fields are rejected even if disabled or null. Schema v1 is updated in place,
+without runtime migration/fallback. See [capsule settings](capsule-inspection.md).
 
 Camera overrides are an array of `{camera_id, checks}` objects. Channel overrides
 are an array of `{channel_id, checks?}` objects. Duplicate/unknown IDs fail.
@@ -78,9 +68,6 @@ machine geometry; Recipes cannot remap camera/channel/slot identity or override
 rectangles. Recipe `roi` fields are rejected as unknown fields, including null.
 The current schema remains v1 and is updated in place; no legacy loader or migration
 is supported. Image bounds are checked against reference/actual frame dimensions.
-
-Ranges are checked after each merge, so invalid inherited combinations fail with
-Recipe/camera/channel context before any resolved object is returned.
 
 ## Resolved output and Phase 2A boundary
 
@@ -105,15 +92,13 @@ validated; membership in a real model's complete label catalog is deferred until
 reliable metadata is available. It neither mutates `ImageResult`/findings nor
 changes SDK thresholds, masks, label IDs or parameters.
 
-The layout and individual `.policy` values already use Phase 2A types. Uniform
-policies can be passed to the existing `ProductionPipeline`. Its current policies
-are source-wide: heterogeneous per-channel checks/filtering are **not automatically
-applied by that pipeline**. Future explicit composition will consume the resolved
-channel configuration, apply filtering at the appropriate channel and combine
-traditional subchecks. Do not filter a shared full-camera result globally using
-one channel's list or discard unassigned findings. That composition and the
-policy for unassigned evidence with heterogeneous filters remain later work.
-No Phase 1/2A execution or judgment behavior is changed in this phase.
+`ConfiguredProductionPipeline` consumes the resolved channel policies, executes
+ViMo once per camera when needed, filters each channel's assigned evidence, and
+keeps unassigned findings if any enabled channel accepts their label. The
+synchronous `ProductionPipeline` beneath it maps full-camera evidence and retains
+shared identity/aggregation validation; it does not resolve Recipes or run algorithms.
+Shared capsule measurement and judgment produce the TRADITIONAL check result.
+Neither path changes SDK parameters or globally filters a shared inference result.
 
 ## Persistence and artifact verification
 
@@ -170,7 +155,7 @@ resolved = resolve_configuration(
     load_recipe(folder / "overrides.json"), models, "general",
 )
 channel = resolved.channels[16]  # Stable ascending view: CH17.
-print(resolved.recipe_id, resolved.model.model_id, channel.checks.blob.max_area)
+print(resolved.recipe_id, resolved.model.model_id, channel.checks.vimo.policy)
 ```
 
 [Fixtures](../tests/fixtures/configuration/README.md) are synthetic/non-calibrated;
@@ -178,11 +163,11 @@ model paths and zero hashes are placeholders, not deployable model metadata.
 Product A has defaults only and shares the caller's model with any similar Recipe.
 Product B selects `special`:
 
-| Channel | ROI | Presence | Blob max_area | ViMo |
-| --- | --- | --- | --- | --- |
-| CAM1 / CH01 | base (0,0,8,10) | enabled/required | 1800, default | enabled/required, all labels |
-| CAM3 / CH13 | base (0,0,8,10) | enabled/required | 1850, camera override | enabled/required, all labels |
-| CAM3 / CH17 | machine (40,0,8,10) | enabled/required | 1900, channel override | enabled/required, 黑点 filtered |
+| Channel | Machine ROI | ViMo |
+| --- | --- | --- |
+| CAM1 / CH01 | (0,0,8,10) | enabled/required, all labels (default) |
+| CAM3 / CH13 | (0,0,8,10) | enabled/optional, all labels (camera override) |
+| CAM3 / CH17 | (40,0,8,10) | enabled/required, 黑点 filtered (channel override) |
 
 GPU-independent tests cover all three JSON families, inheritance, references,
 geometry, immutable resolution, filtering, atomic failure preservation, artifact
@@ -196,11 +181,10 @@ The [Phase 2C application](production-application.md) owns activation/lifecycle,
 safe model load/warm-up, stopped-state replacement and counters. Production UI,
 camera/PLC work, calibration and traditional algorithms are outside this contract.
 
-## Phase 3E-1 additive capsule settings
+## Product-level capsule settings
 
 `RecipeDefinition.capsule` and `ResolvedInspectionConfiguration.capsule` carry uniform
 product-level `SizeSettings`/`ColorSettings`. Optional root `capsule` JSON defaults
-to both disabled and has no inheritance or ROI fields. The existing legacy checks
-are preserved with their original semantics. See [capsule inspection](capsule-inspection.md)
-for exact ranges/defaults, execution and preview; this is additive schema-v1 support,
-not the deferred Phase 3E-2 cleanup.
+to both disabled and has no inheritance or ROI fields. These are the only supported
+traditional settings. See [capsule inspection](capsule-inspection.md) for exact
+ranges/defaults, execution and preview. ViMo inheritance remains independent.

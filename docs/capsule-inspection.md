@@ -3,7 +3,7 @@
 This is an **uncalibrated demonstration**, currently checked with yellow capsules
 on black backgrounds. It is not industrial accuracy acceptance or a foreign-object
 classifier. Other colors, lighting/cameras and severe powder contamination require
-future evaluation. Phase 3E-2 legacy cleanup is explicitly deferred.
+future evaluation. Size/Color are the sole supported traditional inspection path.
 
 ## Measurement and judgment
 
@@ -41,10 +41,10 @@ measurements name the upper/lower view. The existing aggregation retains indepen
 technical and product states, including ERROR + NG with other defect evidence.
 ViMo still runs once per enabled full camera, unchanged. No parallel result system.
 
-## Additive Recipe contract
+## Recipe contract
 
-Optional root `capsule` data in schema v1 is explicitly separate from the preserved
-legacy `defaults.presence/blob/color` and camera/channel overrides:
+Optional root `capsule` data in schema v1 supplies uniform product-level settings.
+`defaults` and camera/channel overrides contain only ViMo policies:
 
 ```json
 "capsule": {
@@ -59,7 +59,7 @@ values, not pilot production requirements. Size targets are positive integers,
 tolerances nonnegative integers; Hue is 0–179, tolerance 0–90. No operator `required`
 or camera/channel override exists for these settings. Unknown fields/types are
 rejected. Draft, duplicate, atomic persistence and immutable resolution retain
-both new and legacy settings. ROI remains exclusively MachineLayout-owned.
+capsule settings and independent ViMo policies. ROI remains exclusively MachineLayout-owned.
 
 ## Preview isolation and lifecycle
 
@@ -124,5 +124,16 @@ uv run --no-sync python scripts/run_local_production_ui.py --model-config "$conf
    itself never increments counters. Saved changes activate only through Start.
 
 Screenshots and automated checks do not replace human usability/accuracy acceptance.
-Legacy traditional controls stay hidden; legacy data/execution remain intact until
-Phase 3E-2. No camera/PLC, history, calibration or throughput work is included.
+Removed traditional fields are rejected; no compatibility execution exists.
+No camera/PLC, history, calibration or throughput work is included.
+
+
+## Existing local manual Recipe
+
+After schema consolidation, `outputs/manual_phase3c/local.recipe.json` may still
+contain old disabled checks. Edit it explicitly before launching: remove only
+`defaults.presence`, `defaults.blob` and `defaults.color`. Keep `defaults.vimo`,
+root `capsule` values, identity and model selection. Apply the same removal inside
+camera/channel `checks` if present. Do **not** remove `capsule.color`.
+There is no automatic migration. Never replace the saved machine layout to fix a
+Recipe schema error; model, image and ROI files are independent and unchanged.

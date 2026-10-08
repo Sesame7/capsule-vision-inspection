@@ -30,7 +30,6 @@ app = ProductionApplication(
     lambda prepared, generation: ProductionRuntimeSession(
         prepared, generation,
         warmup=lambda _: warmup_images,
-        traditional=channel_inspector,
     )
 )
 app.configure(prepared)
@@ -204,13 +203,12 @@ inspection result or silent eviction. Callers must observe exceptional Futures.
 
 `ConfiguredProductionPipeline` consumes already resolved per-channel configuration;
 there is no JSON or inheritance resolution in the hot path. It runs on the existing
-serial cycle runner. For each camera it invokes enabled traditional checks using
-`ChannelInspector.inspect(frame, resolved_channel, TraditionalCheck)` for presence,
-blob and color. This passes exact ROI, thresholds, enabled and required policies.
-The additive [capsule checks](capsule-inspection.md) share one per-channel measurement
-on this same runner when either Size/Color is enabled, then combine with legacy
-evidence. These are demonstration algorithms, not calibrated CV. Missing legacy implementations and ordinary
-exceptions become explicit check ERROR; disabled checks are never called.
+serial cycle runner. Product-level [capsule settings](capsule-inspection.md) directly
+control the sole traditional path: both disabled skips measurement; either enabled
+runs one shared Size/Color measurement per channel. Valid content that is missing,
+competing, truncated or outside limits produces NG; execution failure produces
+ERROR/UNKNOWN. Incomplete cycles run no measurement. No legacy dispatch/injected
+inspector exists, and no extra scheduling thread is introduced.
 
 ViMo runs once on the full camera image if any channel enables it, otherwise zero
 times. It never performs per-channel native inference. Phase 2A bbox assignment is

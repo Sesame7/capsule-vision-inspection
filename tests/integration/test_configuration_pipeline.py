@@ -56,19 +56,18 @@ def test_json_resolution_supplies_layout_and_exact_policies() -> None:
         overrides.channels[16],
     )
     assert (
-        ordinary.checks.blob.max_area,
-        camera_override.checks.blob.max_area,
-        special.checks.blob.max_area,
-    ) == (1800, 1850, 1900)
+        ordinary.checks.vimo.required,
+        camera_override.checks.vimo.required,
+        special.checks.vimo.required,
+    ) == (True, False, True)
     assert special.roi == BoundingRect(40, 0, 8, 10)
-    assert special.checks.presence.policy == CheckPolicy(True, True)
+    assert special.checks.vimo.policy == CheckPolicy(True, True)
     assert not special.checks.vimo.label_enabled("黑点")
     assert ordinary.checks.vimo.label_enabled("黑点")
     # For uniform policies this is already directly consumable by Phase 2A.
     # Per-channel heterogeneous composition is intentionally not activated here.
     pipeline = ProductionPipeline(
         defaults.layout,
-        traditional=CheckPolicy(False),
         vimo=ordinary.checks.vimo.policy,
     )
     camera = pipeline.camera_result(
