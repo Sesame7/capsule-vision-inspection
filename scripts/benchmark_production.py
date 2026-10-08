@@ -65,6 +65,8 @@ MODES = (
     Mode("B", True, True, False),
     Mode("C", True, True, True),
     Mode("D", False, True, True),
+    Mode("E", True, False, True),
+    Mode("F", False, False, True),
 )
 METRICS = {
     "cycle_e2e_ms": "perf_counter immediately before ingress.submit to result.result returning; formal results only (including ERROR).",
@@ -363,6 +365,9 @@ def metadata(
         "git_commit": command_info(["git", "rev-parse", "HEAD"]),
         "git_status": command_info(["git", "status", "--short"]),
         "tool_sha256": digest(Path(__file__)),
+        "capsule_sha256": digest(
+            ROOT / "src/vimo_demo/inspection/production/capsule.py"
+        ),
         "gpu": command_info(
             [
                 "nvidia-smi",
@@ -405,7 +410,7 @@ def comparisons(runs: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for index in sorted({int(str(r["round"])) for r in runs}):
         group = {str(r["mode_name"]): r for r in runs if r["round"] == index}
-        for left, right in (("B", "A"), ("C", "A"), ("C", "B")):
+        for left, right in (("B", "A"), ("E", "A"), ("C", "A"), ("C", "E"), ("D", "F")):
             if left not in group or right not in group:
                 continue
             delta: dict[str, object] = {"round": index, "comparison": f"{left}-{right}"}
@@ -464,7 +469,7 @@ def markdown_report(runs: Sequence[dict[str, object]]) -> str:
         [
             "",
             "Descriptive differences of independently sampled means/percentiles, not additive cost decomposition.",
-            "Size-only already computes Hue; C-B does not isolate Hue extraction.",
+            "Size and Color are independent enabled-check workloads; percentile differences are not additive.",
             "",
             "| Round | Difference | Mean ms | P95 ms |",
             "| --- | --- | --- | --- |",
@@ -499,7 +504,17 @@ def main() -> int:
     )
     parser.add_argument("--cycles", type=positive_int, default=300)
     parser.add_argument("--repetitions", type=positive_int, default=3)
+    parser.add_argument(
+        "--modes",
+        nargs="+",
+        choices=[m.name for m in MODES],
+        default=[m.name for m in MODES],
+        help="Selected modes in initial execution order",
+    )
     args = parser.parse_args()
+    if len(set(args.modes)) != len(args.modes):
+        parser.error("--modes must not contain duplicates")
+    modes = tuple(next(m for m in MODES if m.name == name) for name in args.modes)
     model = load_model_definition(args.model_config)
     base = resolve_configuration(
         load_machine_layout(args.machine_config),
@@ -521,12 +536,12 @@ def main() -> int:
             "repetitions": args.repetitions,
             "engine_warmup_calls_per_shape": 2,
         },
-        "modes": [asdict(m) for m in MODES],
+        "modes": [asdict(m) for m in modes],
         "metric_boundaries": METRICS,
         "percentiles": "NumPy linear interpolation; >100 ms excludes exactly 100 ms. Formal ERROR samples included; exceptional attempts separate.",
         "limitations": [
             "Fixed local images, unknown physical camera origins; not verified machine throughput.",
-            "Size-only also computes Hue in the current shared measurement; C-B is not full Color feature-extraction cost.",
+            "Size/Color workloads differ; independent percentile differences are descriptive, not additive.",
             "Mode order rotates per repetition, not a fully counterbalanced thermal study.",
             "No isolated dispatch timing exposed by ProductionApplication; overlapping stage metrics must not be added.",
         ],
@@ -563,7 +578,8 @@ def main() -> int:
             writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
             for repetition in range(args.repetitions):
-                order = MODES[repetition % 4 :] + MODES[: repetition % 4]
+                offset = repetition % len(modes)
+                order = modes[offset:] + modes[:offset]
                 for mode in order:
                     print(
                         f"Round {repetition + 1}/{args.repetitions}, mode {mode.name}: warmup={args.warmup}, measured={args.cycles}",
@@ -610,7 +626,7 @@ def main() -> int:
                         return 1
     finally:
         report["comparisons_ms"] = comparisons(runs)
-        report["completed"] = len(runs) == args.repetitions * 4 and all(
+        report["completed"] = len(runs) == args.repetitions * len(modes) and all(
             r["completed"] for r in runs
         )
         write_json(destination / "report.json", report)

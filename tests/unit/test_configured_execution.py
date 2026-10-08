@@ -34,6 +34,7 @@ from vimo_demo.inspection.production import (
     ProductJudgment,
     TechnicalStatus,
 )
+from vimo_demo.inspection.production.capsule import CapsuleSettings
 
 
 def config(tmp_path: Path) -> ResolvedInspectionConfiguration:
@@ -151,9 +152,9 @@ def test_inference_failure_uses_each_enabled_required_policy(
 
     from vimo_demo.inspection.production.capsule import measure_capsule
 
-    measured = measure_capsule(bodies(), ROI)
+    measured = measure_capsule(bodies(), ROI, SETTINGS)
 
-    def measure(image: NDArray[np.uint8], roi: BoundingRect):
+    def measure(image: NDArray[np.uint8], roi: BoundingRect, settings: CapsuleSettings):
         return measured
 
     monkeypatch.setattr("vimo_demo.application.pipeline.measure_capsule", measure)
@@ -218,9 +219,9 @@ def test_resolved_vimo_required_overrides_drive_execution(
 
     from vimo_demo.inspection.production.capsule import measure_capsule
 
-    measured = measure_capsule(bodies(), ROI)
+    measured = measure_capsule(bodies(), ROI, SETTINGS)
 
-    def measure(image: NDArray[np.uint8], roi: BoundingRect):
+    def measure(image: NDArray[np.uint8], roi: BoundingRect, settings: CapsuleSettings):
         return measured
 
     monkeypatch.setattr("vimo_demo.application.pipeline.measure_capsule", measure)

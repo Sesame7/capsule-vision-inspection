@@ -1,9 +1,9 @@
-# Inspection performance — Phase 3F-1 baseline and Phase 3F-2A
+# Inspection performance — baseline and selective Size/Color
 
 `scripts/benchmark_production.py` is an opt-in, Qt-free fixed-image experiment.
 It uses `ProductionApplication -> ProductionRuntimeSession -> RuntimeCoordinator`
-and its existing configured pipeline/worker. No production code, algorithm,
-queue capacity, engine ownership or judgment rule is changed.
+and its existing configured pipeline/worker. The benchmark selects enabled checks
+without altering algorithms, queue capacities, engine ownership or judgment rules.
 
 ## Workload and invocation
 
@@ -20,6 +20,7 @@ uv run --no-sync python scripts/benchmark_production.py --model-config "$config/
 ```
 
 For a short wiring check use `--warmup 2 --cycles 3 --repetitions 1`.
+Optional `--modes A B C E F` selects a subset; repeated mode names are rejected.
 The model path is resolved against the repository root as in existing tools.
 Recipes must use the current schema; old fields are rejected, never migrated.
 The script reads the supplied files and never persists its mode configurations.
@@ -30,23 +31,27 @@ The script reads the supplied files and never persists its mode configurations.
 | B | on | on | off |
 | C | on | on | on |
 | D | off | on | on |
+| E | on | off | on |
+| F | off | off | on |
 
 Only enabled flags change in memory (ViMo on/off for all configured channels).
 Model/module, ROIs, thresholds, required policies and label filters stay identical.
-B and C share the same full capsule measurement, including Hue extraction even in
-B; C-B describes adding Color judgment, **not** the full cost of computing color.
+B executes geometry only; E/F execute independent view Color without body geometry.
+C/D execute both. Disabled capabilities generate no fabricated measurements.
+These are different enabled-check workloads; see [Color semantics](capsule-inspection.md).
 NG is valid product evidence, not an execution failure. No thresholds are tuned to
 force OK and no bad content is replaced by synthetic measurements.
 
 Defaults are 30 untimed complete warm-up cycles and 300 measured cycles per mode,
 with three repetitions. Each mode/repetition owns one new application/session/engine
 and ends with Stop, Close and actual application-thread join. Existing engine
-startup still warms twice per unique image shape, including D; D has no per-cycle
+startup still warms twice per unique image shape, including D/F; D/F have no per-cycle
 ViMo calls. Engine startup/warm-up is outside measurement. Cycle warm-up uses real
 cycles in the disposable application and is recorded separately, without latency
 samples. It is never included in measured statistics.
 
-Order rotates deterministically: ABCD, BCDA, CDAB. This records/reduces a fixed
+Default order rotates deterministically: ABCDEF, BCDEFA, CDEFAB. A selected subset
+rotates in the supplied order. This records/reduces a fixed
 ordering bias but is not a fully counterbalanced thermal experiment. There is one
 cycle in flight, no playback sleep and no added concurrency. Avoid other heavy
 CPU/GPU tasks while collecting comparable runs.
@@ -83,10 +88,10 @@ Each run creates `outputs/inspection_performance/<UTC timestamp>/` containing:
 - `cycles.csv`: per-cycle scalar timing, judgment, channel/check counts, reason/error
   counts, measurement count and exception text. Warm-up rows are explicitly marked
   and have no latency samples. UTF-8 with BOM supports Chinese labels.
-- `report.json`: environment/Git/tool identity, verified model hash, exact resolved
+- `report.json`: environment/Git/tool and capsule source identity, verified model hash, exact resolved
   settings, original configuration fingerprints, six file/pixel hashes and camera
   assignments, execution order, per-mode/per-round statistics and lifecycle status.
-- `report.md`: concise cycle/stage tables and B-A, C-A, C-B comparisons.
+- `report.md`: concise cycle/stage tables and B-A, E-A, C-A, C-E, D-F comparisons.
 
 Reports contain no source images, masks, contours, models or full result objects.
 CSV streams one row at a time. Only the current session's bounded
@@ -321,3 +326,130 @@ require its own agreed semantics. No additional optimization was accumulated.
 Final gates: Ruff/format/strict Pyright clean; 495 tests passed, 10 opt-in GPU/full
 reference tests skipped. The actual four-mode GPU experiment passed separately.
 Historical 400-image and 30,000-call experiments were not repeated.
+
+## Selective execution and fast Color — Phase 3F-2B
+
+Accepted Phase 3F-2A baseline `7e0496c` was committed before edits. Original
+reports above remain historical evidence. This phase intentionally changes Color
+from eroded body-interior sampling to independent view screening; it preserves
+Size and ViMo execution. The new [Color contract](capsule-inspection.md) must be
+considered when comparing costs or judgments with the earlier experiment.
+
+### CPU reference and local choices
+
+Ignored artifacts are under `outputs/capsule_profiling/phase3f2b/`.
+`reference_capsule.py` is the committed 3F-2A oracle; `selective_initial.py` freezes
+the correct independent implementation before local mask optimization.
+`compare_cpu.py selective_final_cpu` decodes outside timing and measures the same
+36 saved ROIs. Each entry has 5 untimed warm-ups and 25 complete CPU measurement
+loops; timings exclude judgment, GPU, decoding and serialization. Actual saved
+layout/Recipe and six input fingerprints agree with the previous GPU report.
+
+| 36-ROI measurement | Initial selective mean / P95, ms | Final mean / P95, ms |
+| --- | --- | --- |
+| Size only | 18.13 / 19.05 | 18.25 / 18.45 |
+| Color only | 15.22 / 17.28 | 13.36 / 17.21 |
+| Combined | 38.04 / 39.78 | 33.40 / 34.62 |
+
+Committed shared measurement reruns ranged 46.18–51.58 ms mean (53.54–58.43 ms
+P95); the earlier preliminary local run was 54.49 ms mean. These are independent,
+short CPU distributions, not paired operation costs or acceptance throughput.
+Raw samples and source fingerprints are in `selective_initial_cpu.json`,
+`selective_inRange_cpu.json` and `selective_final_cpu.json`.
+
+Accepted local changes:
+
+- Size-only uses exact BGR `inRange`/inversion for V >20, with no HSV or Hue work.
+  Compared exact foreground variants; NumPy axis reduction was much slower and
+  was rejected. Dominant component selection/Size rules are unchanged.
+- Color creates one whole-ROI HSV usable mask with `inRange`, then counts/selects
+  each view. The 72-view mask/count/Hue-selection probe (50 samples, HSV precomputed)
+  measured NumPy 7.69–8.02 ms mean versus OpenCV 5.94–6.18 ms.
+- Combined Size reuses Color's HSV Value. A 50-sample foreground-only probe measured
+  BGR range 5.01 ms, HSV range 3.89 ms, HSV NumPy threshold 3.94 ms, and
+  `extractChannel` + binary threshold 1.67 ms. The exact last variant was retained
+  only when HSV is already needed. No global OpenCV thread setting changed.
+
+The final measurements equal the initial selective oracle for every real ROI.
+All 72 real Size view boxes/reasons and 36 Size judgments match the committed
+reference; comparison omits historical Hue evidence intentionally absent in
+Size-only. `synthetic_semantics.json` additionally compares valid, missing,
+competing, truncated and invalid-geometry Size cases. New Color can pass the
+bright truncated/competing cases that historical Color rejected. On these six
+real images, all 72 representative Hues happened to agree; this does not establish
+general equivalence of the intentionally changed pixel-selection semantics.
+
+### Short real production-path measurement
+
+Reproduce from the repository root:
+
+```powershell
+$config = "outputs/manual_phase3c"
+uv run --no-sync python scripts/benchmark_production.py --model-config "$config/model.json" --machine-config "$config/machine.json" --recipe "$config/local.recipe.json" --frames-dir images --warmup 10 --cycles 60 --repetitions 2
+```
+
+All six modes were retained to include the D-F comparison. For the focused five-mode
+experiment append `--modes A B C E F`. This run used ABCDEF then BCDEFA, with
+120 measured cycles per mode, the same six images/configuration/model as Phase
+3F-2A, and existing default queue capacities. The SDK/driver/environment versions
+remain as recorded above. Initialization and untimed warm-up remain excluded.
+
+Artifacts: `outputs/inspection_performance/20261008T170442_094840Z/` contains
+`cycles.csv`, `report.json`, `report.md` and the post-run pooled `comparison.json`.
+The local guard recorded `outputs/capsule_profiling/phase3f2b/gpu_lifecycle.json`.
+All 720 measured cycles and 120 untimed warm-up cycles succeeded, with zero
+technical/check errors or exceptional Futures. All 12 sessions terminated, no
+additional Python threads remained, OpenCV stayed at 20 threads, and inputs,
+manual configuration and production source fingerprints remained unchanged.
+
+| Mode | Mean | P50 | P95 | P99 | Traditional mean | >100 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| A: ViMo only | 38.13 | 37.54 | 43.04 | 43.87 | disabled | 0% |
+| B: ViMo + Size | 56.37 | 55.90 | 60.79 | 62.22 | 18.53 | 0% |
+| C: ViMo + Size + Color | 70.03 | 69.59 | 73.29 | 76.23 | 31.65 | 0% |
+| D: Size + Color | 38.56 | 38.31 | 40.79 | 43.68 | 33.31 | 0% |
+| E: ViMo + Color | 54.47 | 53.45 | 60.18 | 62.74 | 15.30 | 0% |
+| F: Color only | 19.02 | 18.81 | 21.04 | 25.15 | 14.22 | 0% |
+
+| Comparison | Mean difference, ms | P95 difference, ms |
+| --- | --- | --- |
+| B-A: Size enabled | +18.24 | +17.75 |
+| E-A: Color enabled | +16.34 | +17.15 |
+| C-A: both enabled | +31.90 | +30.25 |
+| C-E: added Size | +15.56 | +13.10 |
+| D-F: added Size without ViMo | +19.53 | +19.75 |
+
+These compare different enabled-check workloads and independent distributions;
+percentiles and stage metrics are not additive. B/C/D formerly all generated
+216 scalar measurements including Hue. Now B generates 144 dimensions, E/F 144
+usable-count/Hue values, and C/D 288 combined values when every view is valid.
+No disabled feature fabricates measurements. All F results were OK; the other
+modes were NG under the unchanged settings/input content. NG is not a test error.
+
+| Complete-cycle comparison | Phase 3F-2A mean / P95, ms | Current short run mean / P95, ms |
+| --- | --- | --- |
+| A | 38.19 / 41.65 | 38.13 / 43.04 |
+| B | 85.59 / 95.29 | 56.37 / 60.79 |
+| C | 86.60 / 93.34 | 70.03 / 73.29 |
+| D | 52.19 / 56.78 | 38.56 / 40.79 |
+
+Historical rows have 900 samples per mode versus 120 now; desktop/thermal effects
+were uncontrolled and Color semantics differ. Current C P95 is 26.71 ms below
+100 ms and lies in the preferred 70–80 ms interval. Its two round P95 values were
+74.02 and 72.72 ms; maximum was 77.41 ms. This is useful short-run evidence, not a
+hard deadline or production-throughput guarantee. No full repeated GPU benchmark,
+400-image regression or 30,000-call soak was rerun.
+
+The remaining dominant costs are six serial ViMo intervals (C mean 32.88 ms)
+and traditional geometry/Color work (31.65 ms). Current evidence supports stopping
+further optimization here. Thread tuning, native extensions or scheduling changes
+need a separate measured decision. Whole-view Color remains provisional and
+uncalibrated; contamination/lighting and real acquisition/PLC timing need future
+validation.
+
+Verification: 522 tests passed, 10 opt-in tests skipped; Ruff, formatting and strict
+Pyright are clean. The full normal suite ran once after stabilization. Two OpenCV
+static dtype diagnostics were subsequently resolved with uint8 `copy=False`
+normalization; the relevant 19 selective tests and strict typing were rerun clean.
+Preview coverage includes capability-cache invalidation, stale-job suppression,
+threshold-only rejudgment and body-independent sampling without production effects.

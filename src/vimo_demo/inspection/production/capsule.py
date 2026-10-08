@@ -71,22 +71,34 @@ class CapsuleSettings:
 
 @dataclass(frozen=True, slots=True)
 class BodyMeasurement:
-    """Original full-image coordinates. Missing hue is unusable chroma, not zero."""
+    """Size geometry in original full-image coordinates."""
 
     bounding_rect: BoundingRect
+
+
+@dataclass(frozen=True, slots=True)
+class ColorMeasurement:
+    """View-level evidence, independent of body geometry. No invented Hue."""
+
     hue: float | None
+    usable_pixels: int
+    minimum_pixels: int
+    invalid_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ViewMeasurement:
     name: str
-    body: BodyMeasurement | None
+    body: BodyMeasurement | None = None
     invalid_reason: str | None = None
+    color: ColorMeasurement | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class CapsuleMeasurement:
     views: tuple[ViewMeasurement, ViewMeasurement]
+    size_measured: bool
+    color_measured: bool
 
 
 def hue_distance(left: float, right: float) -> float:
@@ -139,11 +151,57 @@ def median_pixel_hue(values: NDArray[np.uint8]) -> float | None:
     return float((center + (lower + upper) / 2 - 90) % 180)
 
 
-def measure_capsule(image: NDArray[np.uint8], roi: BoundingRect) -> CapsuleMeasurement:
-    """Borrow pixels; never mutate, resize or retain source data.
+def _geometry(
+    foreground: NDArray[np.uint8], x_origin: int, y_origin: int
+) -> tuple[BodyMeasurement | None, str | None]:
+    """Same 8-connected body selection and bounds as the accepted Size path."""
+    count, _, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=8)
+    minimum = max(12, int(foreground.size * 0.005))
+    candidates = sorted(
+        (i for i in range(1, count) if int(stats[i, cv2.CC_STAT_AREA]) >= minimum),
+        key=lambda i: (-int(stats[i, cv2.CC_STAT_AREA]), i),
+    )
+    if not candidates:
+        return None, "missing_body"
+    dominant = candidates[0]
+    area = int(stats[dominant, cv2.CC_STAT_AREA])
+    if (
+        len(candidates) > 1
+        and int(stats[candidates[1], cv2.CC_STAT_AREA]) >= area * 0.25
+    ):
+        return None, "competing_bodies"
+    x, y, width, height = (int(v) for v in stats[dominant, :4])
+    if (
+        x == 0
+        or y == 0
+        or x + width == foreground.shape[1]
+        or y + height == foreground.shape[0]
+    ):
+        return None, "truncated_body"
+    if min(width, height) < 3:
+        return None, "invalid_geometry"
+    return BodyMeasurement(
+        BoundingRect(x_origin + x, y_origin + y, width, height)
+    ), None
 
-    Provisional constants: V > 20; particles below max(12px, 0.5% of view);
-    competing bodies >= 25% of dominant area. Boundary contact means truncated.
+
+def _color(pixels: NDArray[np.uint8], usable: NDArray[np.uint8]) -> ColorMeasurement:
+    # S/V requirements imply V > 20 foreground; no component or erosion needed.
+    count = cv2.countNonZero(usable)
+    # Provisional: >=ceil(5% of view area), with a 12-pixel floor. Not presence.
+    minimum = max(12, (usable.size + 19) // 20)
+    if count < minimum:
+        return ColorMeasurement(None, count, minimum, "insufficient_foreground")
+    hue = median_pixel_hue(pixels[:, :, 0][usable != 0])
+    return ColorMeasurement(hue, count, minimum, "unusable" if hue is None else None)
+
+
+def measure_capsule(
+    image: NDArray[np.uint8], roi: BoundingRect, settings: CapsuleSettings
+) -> CapsuleMeasurement:
+    """Borrow pixels; selectively measure geometry and/or independent view color.
+
+    Targets/tolerances do not affect measurement. No resizing or retained arrays.
     """
     if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
         raise ValueError("Expected uint8 H x W x 3 BGR image")
@@ -152,52 +210,47 @@ def measure_capsule(image: NDArray[np.uint8], roi: BoundingRect) -> CapsuleMeasu
         raise ValueError("Capsule ROI exceeds image bounds")
     if roi.height < 2:
         raise ValueError("Capsule ROI needs two nonempty views")
+    size, color = settings.size.enabled, settings.color.enabled
+    if not settings.enabled:
+        return CapsuleMeasurement(
+            (ViewMeasurement("upper"), ViewMeasurement("lower")), False, False
+        )
     crop = image[roi.y : roi.y + roi.height, roi.x : roi.x + roi.width]
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).astype(np.uint8, copy=False)
+    hsv = (
+        cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).astype(np.uint8, copy=False)
+        if color
+        else None
+    )
+    foreground = None
+    if size:
+        # Reuse Color's HSV Value when available. Size-only never converts to HSV.
+        foreground = (
+            cv2.threshold(cv2.extractChannel(hsv, 2), 20, 255, cv2.THRESH_BINARY)[1]
+            if hsv is not None
+            else cv2.bitwise_not(cv2.inRange(crop, (0, 0, 0), (20, 20, 20)))
+        ).astype(np.uint8, copy=False)
+    usable = (
+        cv2.inRange(hsv, (0, 40, 40), (179, 255, 255)).astype(np.uint8, copy=False)
+        if hsv is not None
+        else None
+    )
     middle = roi.height // 2
 
     def view(name: str, start: int, end: int) -> ViewMeasurement:
-        pixels = hsv[start:end]
-        foreground = (pixels[:, :, 2] > 20).astype(np.uint8)
-        count, labels, stats, _ = cv2.connectedComponentsWithStats(
-            foreground, connectivity=8
+        body, reason = (
+            _geometry(foreground[start:end], roi.x, roi.y + start)
+            if foreground is not None
+            else (None, None)
         )
-        minimum = max(12, int(foreground.size * 0.005))
-        candidates = sorted(
-            (i for i in range(1, count) if int(stats[i, cv2.CC_STAT_AREA]) >= minimum),
-            key=lambda i: (-int(stats[i, cv2.CC_STAT_AREA]), i),
+        evidence = (
+            _color(hsv[start:end], usable[start:end])
+            if hsv is not None and usable is not None
+            else None
         )
-        if not candidates:
-            return ViewMeasurement(name, None, "missing_body")
-        dominant = candidates[0]
-        area = int(stats[dominant, cv2.CC_STAT_AREA])
-        if (
-            len(candidates) > 1
-            and int(stats[candidates[1], cv2.CC_STAT_AREA]) >= area * 0.25
-        ):
-            return ViewMeasurement(name, None, "competing_bodies")
-        x, y, width, height = (int(v) for v in stats[dominant, :4])
-        if x == 0 or y == 0 or x + width == roi.width or y + height == end - start:
-            return ViewMeasurement(name, None, "truncated_body")
-        if min(width, height) < 3:
-            return ViewMeasurement(name, None, "invalid_geometry")
-        body_mask = (labels == dominant).astype(np.uint8)
-        # Erosion is only an interior sampling mask, never body/size morphology.
-        interior = cv2.erode(body_mask, np.ones((3, 3), dtype=np.uint8)) != 0
-        suitable = interior & (pixels[:, :, 1] >= 40) & (pixels[:, :, 2] >= 40)
-        enough = np.count_nonzero(suitable) >= max(
-            5, int(np.count_nonzero(interior) * 0.1)
-        )
-        hue = median_pixel_hue(pixels[:, :, 0][suitable]) if enough else None
-        return ViewMeasurement(
-            name,
-            BodyMeasurement(
-                BoundingRect(roi.x + x, roi.y + start + y, width, height), hue
-            ),
-        )
+        return ViewMeasurement(name, body, reason, evidence)
 
     return CapsuleMeasurement(
-        (view("upper", 0, middle), view("lower", middle, roi.height))
+        (view("upper", 0, middle), view("lower", middle, roi.height)), size, color
     )
 
 
@@ -210,49 +263,65 @@ def judge_capsule(
         return CheckResult(
             source, Assessment(TechnicalStatus.DISABLED, ProductJudgment.UNKNOWN)
         )
+    if (settings.size.enabled and not measured.size_measured) or (
+        settings.color.enabled and not measured.color_measured
+    ):
+        raise ValueError("Enabled inspection has no measured evidence")
     reasons: list[Reason] = []
     values: list[Measurement] = []
     for view in measured.views:
-        body = view.body
-        if body is None:
-            reasons.append(Reason(source, f"capsule.{view.name}.{view.invalid_reason}"))
-            continue
-        rect = body.bounding_rect
-        values.extend(
-            (
-                Measurement(f"capsule.{view.name}.width", rect.width, "px"),
-                Measurement(f"capsule.{view.name}.height", rect.height, "px"),
-            )
-        )
-        if body.hue is not None:
-            values.append(
-                Measurement(f"capsule.{view.name}.hue", body.hue, "opencv_hue")
-            )
-        size, color = settings.size, settings.color
+        body, size, color = view.body, settings.size, settings.color
         if size.enabled:
-            for name, actual, target, tolerance in (
-                ("width", rect.width, size.target_width, size.width_tolerance),
-                ("height", rect.height, size.target_height, size.height_tolerance),
-            ):
-                if abs(actual - target) > tolerance:
-                    reasons.append(
-                        Reason(
-                            source,
-                            f"capsule.size.{view.name}.{name}",
-                            bounding_rect=rect,
-                        )
+            if body is None:
+                if view.invalid_reason is None:
+                    raise ValueError("Size evidence missing")
+                reasons.append(
+                    Reason(source, f"capsule.{view.name}.{view.invalid_reason}")
+                )
+            else:
+                rect = body.bounding_rect
+                values.extend(
+                    (
+                        Measurement(f"capsule.{view.name}.width", rect.width, "px"),
+                        Measurement(f"capsule.{view.name}.height", rect.height, "px"),
                     )
-        if color.enabled and (
-            body.hue is None
-            or hue_distance(body.hue, color.target_hue) > color.hue_tolerance
-        ):
-            reasons.append(
-                Reason(
-                    source,
-                    f"capsule.color.{view.name}.{'unusable' if body.hue is None else 'tolerance'}",
-                    bounding_rect=rect,
+                )
+                for name, actual, target, tolerance in (
+                    ("width", rect.width, size.target_width, size.width_tolerance),
+                    ("height", rect.height, size.target_height, size.height_tolerance),
+                ):
+                    if abs(actual - target) > tolerance:
+                        reasons.append(
+                            Reason(
+                                source,
+                                f"capsule.size.{view.name}.{name}",
+                                bounding_rect=rect,
+                            )
+                        )
+        if color.enabled:
+            evidence = view.color
+            if evidence is None:
+                raise ValueError("Color evidence missing")
+            values.append(
+                Measurement(
+                    f"capsule.{view.name}.usable_pixels", evidence.usable_pixels, "px"
                 )
             )
+            if evidence.hue is None:
+                reasons.append(
+                    Reason(
+                        source,
+                        f"capsule.color.{view.name}.{evidence.invalid_reason or 'unusable'}",
+                    )
+                )
+            else:
+                values.append(
+                    Measurement(f"capsule.{view.name}.hue", evidence.hue, "opencv_hue")
+                )
+                if hue_distance(evidence.hue, color.target_hue) > color.hue_tolerance:
+                    reasons.append(
+                        Reason(source, f"capsule.color.{view.name}.tolerance")
+                    )
     return CheckResult(
         source,
         Assessment(

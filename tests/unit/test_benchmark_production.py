@@ -47,6 +47,8 @@ def test_modes_preserve_workload_and_all_non_enablement_settings(
         ("B", True, True, False),
         ("C", True, True, True),
         ("D", False, True, True),
+        ("E", True, False, True),
+        ("F", False, False, True),
     ]
     for mode in bench.MODES:
         selected = bench.select_mode(base, mode)
@@ -177,7 +179,7 @@ def test_statistics_boundaries_errors_and_percentile_comparisons() -> None:
         }
         for i, m in enumerate(bench.MODES)
     ]
-    assert [r["p95_ms"] for r in bench.comparisons(runs)] == [10, 20, 10]
+    assert [r["p95_ms"] for r in bench.comparisons(runs)] == [10, 40, 20, -20, -20]
 
 
 def test_exception_attempt_is_visible_and_not_successful_latency() -> None:
@@ -241,8 +243,9 @@ def test_real_runtime_warmup_exclusion_and_bounded_ownership(
     assert all(np.all(image == 0) for image in images)
 
 
+@pytest.mark.parametrize("names", ["ABCDEF", "ABCEF"])
 def test_cli_outputs_metadata_and_readonly_inputs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, names: str
 ) -> None:
     from vimo_demo.configuration import (
         MachineLayoutDefinition,
@@ -303,6 +306,8 @@ def test_cli_outputs_metadata_and_readonly_inputs(
         "sys.argv",
         [
             "benchmark_production",
+            "--modes",
+            *names,
             "--model-config",
             str(model),
             "--machine-config",
@@ -322,7 +327,7 @@ def test_cli_outputs_metadata_and_readonly_inputs(
     assert bench.main() == 0
     data = json.loads((output / "report.json").read_text(encoding="utf-8"))
     assert data["completed"] and len(data["inputs"]) == 6
-    assert [r["mode_name"] for r in data["runs"]] == list("ABCDBCDA")
+    assert [r["mode_name"] for r in data["runs"]] == list(names + names[1:] + names[:1])
     assert len(data["configuration_files"]) == 3
     assert all(
         len(r["file_sha256"]) == 64 and len(r["pixels_sha256"]) == 64
@@ -339,7 +344,9 @@ def test_cli_outputs_metadata_and_readonly_inputs(
         "comparisons_ms",
     } <= data.keys()
     rows = list(csv.DictReader((output / "cycles.csv").open(encoding="utf-8-sig")))
-    assert len(rows) == 24 and sum(r["phase"] == "measured" for r in rows) == 16
+    assert len(rows) == 6 * len(names) and sum(
+        r["phase"] == "measured" for r in rows
+    ) == 4 * len(names)
     assert all(r["cycle_e2e_ms"] == "" for r in rows if r["phase"] == "warmup")
     assert all(p.read_bytes() == content for p, content in before.items())
 

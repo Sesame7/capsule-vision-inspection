@@ -5,49 +5,64 @@ on black backgrounds. It is not industrial accuracy acceptance or a foreign-obje
 classifier. Other colors, lighting/cameras and severe powder contamination require
 future evaluation. Size/Color are the sole supported traditional inspection path.
 
-## Measurement and judgment
+## Selective measurement and judgment — Phase 3F-2B
 
 `inspection.production.capsule` is synchronous and Qt/SDK independent. It borrows
-the existing BGR frame without resizing, mutation or retained arrays. Each saved
-MachineLayout channel ROI is split at `height // 2` into upper/lower view regions.
-One `measure_capsule()` call supplies both Size and Color. Production skips it
-entirely when both are disabled; measurement runs on the existing cycle inspector,
-never on Qt or a new engine thread.
+BGR pixels without resizing, mutation or retained arrays. Each saved MachineLayout
+ROI is split at `height // 2` into upper/lower views. Production skips measurement
+when both checks are disabled; enabled work runs on the existing cycle inspector.
 
-Provisional internal constants (not Recipe settings): HSV Value > 20 foreground;
-8-connected components; ignore areas below max(12 pixels, 0.5% of view area);
-a second component at least 25% of the dominant area is competing. A body touching
-any view edge, including the midpoint, is truncated; width/height below 3 pixels
-is invalid. Small disconnected particles do not change the dominant bbox. Connected
-powder can still change its size: this simple algorithm does not solve contamination.
-No rotated geometry, physical units or segmentation morphology is implemented.
+| Size | Color | Measurement |
+| --- | --- | --- |
+| off | off | None |
+| on | off | Geometry only; no HSV, Hue or Color sampling mask |
+| off | on | View Color only; no components, body boxes or dimensions |
+| on | on | Independent geometry and Color, with one shared HSV conversion |
 
-Valid bodies retain full-image axis-aligned boxes and exact pixel widths/heights.
-For color, a one-pixel eroded interior mask excludes edges without changing the size
-measurement. Pixels need S >= 40 and V >= 40; at least max(5, 10% of interior) usable
-pixels are required. Hue is unwrapped about a circular center, then median-reduced;
-an ambiguous circular mean magnitude < 0.5 is unusable. Hue distance uses the
-OpenCV period 180, including wrap-around. These constants are provisional too.
+`measure_capsule(image, roi, settings)` records capability flags. Each view has
+optional body geometry, a Size rejection reason, and optional `ColorMeasurement`
+(Hue, usable pixel count, minimum count and rejection reason). Disabled paths do
+not fabricate evidence. Targets/tolerances affect `judge_capsule()`, not measurement;
+requesting an enabled capability absent from the measurement is a technical error.
 
-Integer Hue samples use a 180-bin histogram and reusable unit-vector lookup to
-compute the same circular center and median ranks. Near the magnitude 0.5 branch
-or center-rounding ties, computation falls back to the original pixel-order
-floating reduction. This changes computation cost, not rejection limits, body
-selection, width/height, required two-view behavior or evidence. Production and
-preview still share `measure_capsule()`; see the
-[performance measurements](inspection-performance.md).
+**Size is unchanged.** Foreground is HSV Value >20, equivalently at least one BGR
+channel >20. Size-only uses a BGR range mask; combined mode reuses HSV Value with
+an exact binary threshold. Eight-connected components below max(12 pixels, 0.5%
+of view area) are ignored. A second component at least 25% of dominant area is
+competing. Touching any view edge (including the midpoint) is truncated; either
+dimension below 3 pixels is invalid. Valid bodies retain full-image axis-aligned
+boxes, pixel width/height and existing inclusive target/tolerance limits. Missing,
+competing, truncated and invalid geometry retain their existing reason codes.
+Small disconnected particles do not change the dominant bbox; connected powder can.
 
-`judge_capsule()` uses cached scalar measurements. Both views must satisfy enabled
-inclusive width/height limits or circular color tolerance. Missing/competing/truncated
-bodies are SUCCESS + NG, with no invented measurements for that view. Unusable
-chroma is Color NG but need not invalidate Size. Execution/ROI failures are
-ERROR + UNKNOWN. New enabled checks are always required internally.
+**Color is an independent whole-view screen.** Only pixels with S >=40 and V >=40
+are usable; these already satisfy black-background foreground V >20. Each view
+requires **max(12, ceil(view area / 20))** usable pixels (5% with a 12-pixel floor).
+This provisional internal rule is not a Recipe setting. The current six real images'
+72 views contained 25.3–37.3% usable pixels; that observation does not calibrate a
+presence criterion. No component selection or erosion is performed for Color.
 
-Results reuse TRADITIONAL `CheckResult`, `Measurement` and `Reason`; `capsule.size.*`,
-`capsule.color.*`, and `capsule.<view>.<invalid_reason>` distinguish failures. Scalar
-measurements name the upper/lower view. The existing aggregation retains independent
-technical and product states, including ERROR + NG with other defect evidence.
-ViMo still runs once per enabled full camera, unchanged. No parallel result system.
+Integer Hue uses the existing optimized 180-bin circular-center/median algorithm
+with its numerical fallback guards. Circular mean magnitude <0.5 is ambiguous;
+distance uses OpenCV's period 180. Each view must have sufficient pixels, usable Hue
+and inclusive target/tolerance agreement. Both views must pass. Explicit reasons
+are `capsule.color.<view>.insufficient_foreground`, `.unusable` and `.tolerance`.
+Color evidence records usable pixels and, only when available, Hue; Color reasons
+have no invented body rectangle. Shape invalidity does not suppress Color evidence.
+Either enabled check's rejection contributes NG to the one traditional result.
+
+Color deliberately replaces the former eroded body-interior sampling. It can pass
+a bright truncated/competing scene that Size rejects. Background contamination or
+multiple objects may affect whole-view Hue; this is not physical capsule-presence,
+shape or multi-color classification. No bit-exact equivalence with historical Color
+results is claimed, even when representative yellow-image Hues happen to agree.
+
+Content rejection remains SUCCESS + NG. Execution/ROI/configuration failure remains
+ERROR + UNKNOWN. Results still use TRADITIONAL `CheckResult`, `Measurement` and
+`Reason`; production aggregation retains independent technical/product states,
+including ERROR + NG with other evidence. ViMo still runs once per enabled full
+camera through the same serial worker, with no lifecycle or parameter changes.
+See [performance measurements](inspection-performance.md).
 
 ## Recipe contract
 
@@ -84,14 +99,17 @@ readable labels cannot fit, zoom in; offscreen bodies do not acquire pinned labe
 The preview suppresses the shell's ordinary production event strip, without clearing
 its history/counters; technical, command, runtime fault and shutdown feedback remains.
 Returning to Production restores its usual event presentation. Width/height controls or the color tolerance slider judge cached measurements
-immediately. Color sampling uses only complete valid two-view channels with usable
-chroma; unavailable/ambiguous samples leave the target unchanged and explain why.
+immediately. Color sampling uses channels with usable Color evidence in both views,
+independent of body boxes; unavailable/ambiguous samples leave the target unchanged and explain why.
 
 A frozen immutable display-store frame and saved layout identify each measurement.
 Refresh/camera switches clear results; at most one `CapsulePreview` background job
 and one latest desired reference exist. Stale completions are discarded. No algorithm
 runs on Qt. With both checks disabled no new measurement starts. Threshold changes
-reuse cached evidence; source publication alone never replaces the frozen image.
+reuse cached evidence. Enabled Size/Color flags identify cache capabilities: changing
+them clears/recomputes evidence, and any old in-flight completion is discarded before
+one latest job starts. Turning both off clears results without starting a job.
+Source publication alone never replaces the frozen image.
 Leaving releases the workspace, including on shell navigation, so reopening uses the
 current saved machine layout. Close waits asynchronously for actual job termination.
 

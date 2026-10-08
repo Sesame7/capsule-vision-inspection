@@ -23,7 +23,7 @@ from vimo_demo.inspection.production import (
     InspectionLayout,
     ProductJudgment,
 )
-from vimo_demo.inspection.production.capsule import judge_capsule
+from vimo_demo.inspection.production.capsule import CapsuleSettings, judge_capsule
 from vimo_demo.ui.display_frames import DisplayFrame
 from vimo_demo.ui.machine_editor import MachineLayoutDraft
 from vimo_demo.ui.production_style import Language
@@ -206,11 +206,11 @@ def test_stale_job_and_observable_close(
     entered, release = Event(), Event()
 
     def blocked(
-        frame: DisplayFrame, camera: CameraLayout
+        frame: DisplayFrame, camera: CameraLayout, settings: CapsuleSettings
     ) -> tuple[module.PreviewMeasurement, ...]:
         entered.set()
         assert release.wait(5)
-        return original(frame, camera)
+        return original(frame, camera, settings)
 
     monkeypatch.setattr(module, "measure_reference", blocked)
     preview.refresh_reference()
@@ -222,7 +222,8 @@ def test_stale_job_and_observable_close(
     assert preview.frame and preview.frame.frame_id.camera_id == "CAM2"
     assert preview.measurements[0].measured
     assert preview.measurements[0].measured.views[0].body
-    assert preview.measurements[0].measured.views[0].body.hue == 31
+    assert preview.measurements[0].measured.views[0].color
+    assert preview.measurements[0].measured.views[0].color.hue == 31
     entered.clear()
     release.clear()
     preview.refresh_reference()
@@ -278,10 +279,10 @@ def test_disabled_preview_never_segments(
     original = module.measure_reference
 
     def observed(
-        frame: DisplayFrame, camera: CameraLayout
+        frame: DisplayFrame, camera: CameraLayout, settings: CapsuleSettings
     ) -> tuple[module.PreviewMeasurement, ...]:
         calls.append(True)
-        return original(frame, camera)
+        return original(frame, camera, settings)
 
     monkeypatch.setattr(module, "measure_reference", observed)
     window.parameters.open_preview("size")
@@ -473,3 +474,132 @@ def test_preview_scopes_ng_event_but_preserves_errors(
         and text("ng_note", language) in window.event_label.text()
     )
     assert app.snapshot() == before
+
+
+def test_color_only_sampling_without_body_geometry(configured_screen: Screen) -> None:
+    window, session, runtimes = configured_screen
+    preview = setup(configured_screen)
+    preview.mode_tabs.setCurrentIndex(1)
+    session.draft.capsule = replace(
+        SETTINGS,
+        size=replace(SETTINGS.size, enabled=False),
+        color=replace(SETTINGS.color, target_hue=80),
+    )
+    preview.show_settings()
+    until(lambda: not preview.busy)
+    # Entire colored views touch all edges: Size would reject each body.
+    image = np.tile(bodies()[10, 20], (120, 480, 1)).copy()
+    # A channel with only one usable view must not contribute a target sample.
+    image[:60, :80] = bodies(80)[10, 20]
+    image[60:, :80] = 0
+    before = window.bridge.application.snapshot()
+    window.bridge.frames.publish(
+        Frame(FrameId(CycleId(2), CameraId("CAM1"), 2), 2, image), generation=0
+    )
+    preview.refresh_reference()
+    until(lambda: not preview.busy)
+    assert all(
+        row.measured
+        and row.measured.color_measured
+        and not row.measured.size_measured
+        and all(v.body is None for v in row.measured.views)
+        for row in preview.measurements
+    )
+    preview.sample.click()
+    assert session.draft.capsule.color.target_hue == 30
+    assert (
+        preview.results[0]
+        and preview.results[0].assessment.judgment is ProductJudgment.NG
+    )
+    assert all(
+        r and r.assessment.judgment is ProductJudgment.OK for r in preview.results[1:]
+    )
+    assert all(
+        r and not any(m.name.endswith((".width", ".height")) for m in r.measurements)
+        for r in preview.results
+    )
+    assert window.bridge.application.snapshot() == before and not runtimes
+    preview.back.click()
+
+
+def test_preview_capability_changes_recompute_but_thresholds_rejudge(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vimo_demo.ui.traditional_preview as module
+
+    _, session, _ = configured_screen
+    preview = setup(configured_screen)
+    original = module.measure_reference
+    calls: list[tuple[bool, bool]] = []
+
+    def observed(frame: DisplayFrame, camera: CameraLayout, settings: CapsuleSettings):
+        calls.append((settings.size.enabled, settings.color.enabled))
+        return original(frame, camera, settings)
+
+    monkeypatch.setattr(module, "measure_reference", observed)
+    preview.enabled.setChecked(False)  # Color-only
+    until(lambda: not preview.busy)
+    assert calls == [(False, True)]
+    preview.mode_tabs.setCurrentIndex(1)
+    preview.tolerance.setValue(12)
+    preview.sample.click()
+    assert calls == [(False, True)]  # Targets and tolerances only rejudge.
+    preview.enabled.setChecked(False)  # Neither: clear stale evidence, no job.
+    assert not preview.busy and not preview.measurements and not preview.results
+    assert calls == [(False, True)]
+    preview.mode_tabs.setCurrentIndex(0)
+    preview.enabled.setChecked(True)  # Size-only
+    until(lambda: not preview.busy)
+    assert calls[-1] == (True, False)
+    assert all(
+        row.measured
+        and row.measured.size_measured
+        and not row.measured.color_measured
+        and all(v.color is None for v in row.measured.views)
+        for row in preview.measurements
+    )
+    session.draft.capsule = replace(
+        session.draft.capsule, color=replace(session.draft.capsule.color, enabled=True)
+    )
+    preview.show_settings()
+    until(lambda: not preview.busy)
+    assert calls == [(False, True), (True, False), (True, True)]
+    preview.back.click()
+
+
+def test_capability_change_discards_inflight_job_and_uses_latest_snapshot(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import vimo_demo.ui.traditional_preview as module
+
+    _, session, _ = configured_screen
+    preview = setup(configured_screen)
+    original = module.measure_reference
+    entered, release = Event(), Event()
+    calls: list[tuple[bool, bool]] = []
+
+    def blocked(frame: DisplayFrame, camera: CameraLayout, settings: CapsuleSettings):
+        calls.append((settings.size.enabled, settings.color.enabled))
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(5)
+        return original(frame, camera, settings)
+
+    monkeypatch.setattr(module, "measure_reference", blocked)
+    preview.refresh_reference()
+    until(entered.is_set)
+    try:
+        session.draft.capsule = replace(
+            SETTINGS, size=replace(SETTINGS.size, enabled=False)
+        )
+        preview.show_settings()
+        assert preview.busy and not preview.measurements and len(calls) == 1
+    finally:
+        release.set()
+    until(lambda: not preview.busy)
+    assert calls == [(True, True), (False, True)]
+    assert all(
+        row.measured and not row.measured.size_measured for row in preview.measurements
+    )
+    assert not any(t.name == "CapsulePreview" for t in threads())
+    preview.back.click()
