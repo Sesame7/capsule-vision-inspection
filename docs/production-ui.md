@@ -228,3 +228,11 @@ It establishes wiring, not production channel acceptance: unassigned defects may
 show camera-level boxes/NG while individual fixture channels show OK. No model
 accuracy, calibration, physical-screen, camera, PLC, FAT/SAT or throughput claim
 is made. Real hardware integration remains future work.
+
+### Traditional-preview event scope
+
+While the Size/Color tuning preview is visible, the normal production-event strip
+is hidden so a previous cycle's NG does not describe the frozen preview. Technical
+errors, application issues, failed commands, FAULT and shutdown messages remain
+visible. This is page-scoped presentation only: results, counters and application
+state are retained, and the Production page's normal event behavior is unchanged.

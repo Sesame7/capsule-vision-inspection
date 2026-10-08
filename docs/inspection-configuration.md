@@ -195,3 +195,12 @@ uv run --no-sync pytest tests/unit/test_configuration.py tests/integration/test_
 The [Phase 2C application](production-application.md) owns activation/lifecycle,
 safe model load/warm-up, stopped-state replacement and counters. Production UI,
 camera/PLC work, calibration and traditional algorithms are outside this contract.
+
+## Phase 3E-1 additive capsule settings
+
+`RecipeDefinition.capsule` and `ResolvedInspectionConfiguration.capsule` carry uniform
+product-level `SizeSettings`/`ColorSettings`. Optional root `capsule` JSON defaults
+to both disabled and has no inheritance or ROI fields. The existing legacy checks
+are preserved with their original semantics. See [capsule inspection](capsule-inspection.md)
+for exact ranges/defaults, execution and preview; this is additive schema-v1 support,
+not the deferred Phase 3E-2 cleanup.

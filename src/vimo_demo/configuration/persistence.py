@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +15,11 @@ from vimo_demo.inspection.production import (
     ChannelId,
     ChannelROI,
     InspectionLayout,
+)
+from vimo_demo.inspection.production.capsule import (
+    CapsuleSettings,
+    ColorSettings,
+    SizeSettings,
 )
 
 from .errors import ConfigurationError, ConfigurationIOError
@@ -174,10 +180,33 @@ def _machine(value: object) -> MachineLayoutDefinition:
     return MachineLayoutDefinition(InspectionLayout(tuple(cameras)))
 
 
+def _capsule(value: object) -> CapsuleSettings:
+    row = _object(value, "size color")
+    size = _object(
+        row.get("size", {}),
+        "enabled target_width width_tolerance target_height height_tolerance",
+    )
+    color = _object(row.get("color", {}), "enabled target_hue hue_tolerance")
+    return CapsuleSettings(
+        SizeSettings(
+            _bool(size.get("enabled", False)),
+            _int(size.get("target_width", 1)),
+            _int(size.get("width_tolerance", 0)),
+            _int(size.get("target_height", 1)),
+            _int(size.get("height_tolerance", 0)),
+        ),
+        ColorSettings(
+            _bool(color.get("enabled", False)),
+            _int(color.get("target_hue", 0)),
+            _int(color.get("hue_tolerance", 0)),
+        ),
+    )
+
+
 def _recipe(value: object) -> RecipeDefinition:
     data = _schema(
         value,
-        "recipe_id display_name defaults product_code model_override_id camera_overrides channel_overrides",
+        "recipe_id display_name defaults product_code model_override_id camera_overrides channel_overrides capsule",
         "recipe_id display_name defaults",
     )
     cameras: list[CameraOverride] = []
@@ -203,6 +232,7 @@ def _recipe(value: object) -> RecipeDefinition:
         _optional(data.get("model_override_id"), _str),
         tuple(cameras),
         tuple(channels),
+        capsule=_capsule(data.get("capsule", {})),
     )
 
 
@@ -357,6 +387,7 @@ def save_recipe(path: Path, recipe: RecipeDefinition) -> None:
         "recipe_id": recipe.recipe_id,
         "display_name": recipe.display_name,
         "defaults": _checks_data(recipe.defaults),
+        "capsule": asdict(recipe.capsule),
     }
     for key, value in (
         ("product_code", recipe.product_code),

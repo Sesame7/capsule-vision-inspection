@@ -21,8 +21,8 @@ six full Frames -> existing CycleCollector / inspect_cycle / InferenceWorker
 
 `ProductionPipeline.inspect_traditional(frame, inspector)` invokes a synchronous
 typed protocol with immutable source pixels and explicit layout. It produces
-lightweight results keyed by the complete existing `FrameId`. No production
-traditional algorithm is supplied; tests use deterministic fakes.
+lightweight results keyed by the complete existing `FrameId`. The original protocol tests use deterministic fakes. Phase 3E-1 additionally supplies
+the [capsule demonstration](capsule-inspection.md) in configured application execution.
 
 `camera_result(layout, frame_outcome, traditional_result)` consumes a single
 existing `FrameInspectionResult`. `from_cycle()` consumes the unchanged cycle
@@ -165,8 +165,9 @@ ViMo here does not suppress Phase 1 calls or erase a recorded cycle failure.
 The `TraditionalInspector.inspect(frame, layout)` Protocol returns one
 `TraditionalChannelCheck` per configured channel in any order. Each wraps a
 `CheckResult` with structured `Reason` codes and optional named numeric
-`Measurement` values/units. No Blob, color, size, position or presence thresholds
-are implemented. Phase 2C combines injected presence/blob/color checks using this
+`Measurement` values/units. The legacy protocol has no built-in Blob/presence implementation. Phase 3E-1 adds
+separate product-level capsule Size/Color measurement and judgment. Phase 2C combines
+injected legacy presence/blob/color checks using this
 evidence-first aggregation before returning its traditional source result.
 
 Reasons identify source (VIMO/TRADITIONAL/COLLECTION), stable code, optional defect

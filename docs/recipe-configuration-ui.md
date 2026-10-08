@@ -1,9 +1,10 @@
-# Recipe UI — Phase 3D first pass
+# Recipe UI — Phase 3D / additive Phase 3E-1
 
 The normal page is **Recipe / 配方**. It presents product-level identity and model
 selection, using the existing Qt-free `RecipeEditorSession`, `RecipeDraft` and
 `RecipeCatalog`. Configuration schema, persistence, inspection and application
-lifecycle remain authoritative; this is a presentation/workflow simplification.
+lifecycle remain authoritative. Phase 3E-1 adds demonstration Size/Color settings
+and a draft-only tuning workspace; legacy policy editing stays hidden.
 
 ## Normal operator surface
 
@@ -11,11 +12,12 @@ lifecycle remain authoritative; this is a presentation/workflow simplification.
 - Recipe name and optional product code.
 - Inspection model using registered display names. A single model is read-only.
 - A concise detection-rule summary, saved/unsaved/preparing state and error feedback.
+- Compact Size/Color enablement and summaries, with **Tune preview**.
 - One primary **Save and apply** action.
 
 There is no long scrolling form, raw Recipe ID, model path/hash/module dump,
-Defaults/Camera/Channel navigation, Inherit/Override UI, enabled/required controls,
-traditional-check forms, raw disabled-label editor, or machine-layout dump.
+Defaults/Camera/Channel navigation, Inherit/Override UI, legacy enabled/required controls,
+permanent traditional-threshold forms, raw disabled-label editor, or machine-layout dump.
 The old `CheckFields` presentation was removed, not folded into an advanced panel.
 
 Model selection maps to the existing default/override semantics. Unrelated edits
@@ -99,12 +101,13 @@ The real-local launcher and supplied configuration paths are unchanged.
 
 Review the Recipe page for simplicity, unnecessary remaining information, obvious
 switch/New/Duplicate actions and understandable Save and apply. Check that there is
-room for future size/color parameters without introducing them now. Exercise dirty
+a compact entry for Size/Color with detailed controls only in preview. Exercise dirty
 navigation, both languages and portrait/landscape. Offscreen screenshots/tests do
 not replace usability, physical DPI or touch acceptance.
 
-Traditional capsule size/color UI is deferred until algorithms and calibrated
-parameters exist. Technical `required` policy, raw ViMo label filtering and hierarchy
+The [Size/Color preview](capsule-inspection.md) shares demonstration measurement and
+judgment with production. Calibration and final legacy cleanup remain deferred.
+Technical `required` policy, raw ViMo label filtering and hierarchy
 remain backend capabilities, documented in [configuration](inspection-configuration.md).
 Model-export metadata/label integration is deferred. No accuracy, throughput,
 production calibration, camera/PLC or GPU regression claim follows from this UI pass.

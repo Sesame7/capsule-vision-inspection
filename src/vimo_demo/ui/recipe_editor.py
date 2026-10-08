@@ -26,6 +26,7 @@ from vimo_demo.configuration import (
 )
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ChannelId
+from vimo_demo.inspection.production.capsule import CapsuleSettings
 
 from .machine_editor import MachineLayoutDraft
 from .recipe_catalog import RecipeCatalog, RecipeEntry
@@ -107,6 +108,8 @@ class RecipeDraft:
         default_factory=lambda: {}
     )
 
+    capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
+
     @classmethod
     def from_recipe(cls, recipe: RecipeDefinition) -> RecipeDraft:
         return cls(
@@ -117,6 +120,7 @@ class RecipeDraft:
             draft_checks(recipe.defaults),
             {c.camera_id: draft_checks(c.checks) for c in recipe.camera_overrides},
             {c.channel_id: draft_checks(c.checks) for c in recipe.channel_overrides},
+            recipe.capsule,
         )
 
     def to_recipe(self) -> RecipeDefinition:
@@ -160,6 +164,7 @@ class RecipeDraft:
                 CameraOverride(c, overrides(rows)) for c, rows in self.cameras.items()
             ),
             tuple(channels),
+            capsule=self.capsule,
         )
 
 

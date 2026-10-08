@@ -196,3 +196,8 @@ Wrapper timings differ from historical raw SDK measurements. Long stress runs
 are not daily checks and make no automatic leak verdict. The visualizer uses
 optional existing Pillow/Microsoft YaHei for Chinese labels, otherwise ASCII
 references link to Chinese labels in JSON; it installs nothing automatically.
+
+Capsule Size/Color and isolated Recipe tuning preview are now available as an
+uncalibrated demonstration. Both default off; legacy policies remain preserved.
+See [capsule inspection and manual review](docs/capsule-inspection.md) for controls,
+limits and equipment-free/real-local launch commands.

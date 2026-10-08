@@ -207,7 +207,9 @@ there is no JSON or inheritance resolution in the hot path. It runs on the exist
 serial cycle runner. For each camera it invokes enabled traditional checks using
 `ChannelInspector.inspect(frame, resolved_channel, TraditionalCheck)` for presence,
 blob and color. This passes exact ROI, thresholds, enabled and required policies.
-No calibrated CV implementation is supplied. Missing implementations and ordinary
+The additive [capsule checks](capsule-inspection.md) share one per-channel measurement
+on this same runner when either Size/Color is enabled, then combine with legacy
+evidence. These are demonstration algorithms, not calibrated CV. Missing legacy implementations and ordinary
 exceptions become explicit check ERROR; disabled checks are never called.
 
 ViMo runs once on the full camera image if any channel enables it, otherwise zero

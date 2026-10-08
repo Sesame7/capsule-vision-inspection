@@ -11,6 +11,7 @@ from vimo_demo.inspection.production import (
     CheckPolicy,
     InspectionLayout,
 )
+from vimo_demo.inspection.production.capsule import CapsuleSettings
 
 from .errors import ConfigurationError
 
@@ -102,7 +103,7 @@ class ViMoCheckConfig(CheckConfig):
 
 @dataclass(frozen=True, slots=True)
 class CheckConfiguration:
-    # Presence/color currently need only a policy, not invented algorithm parameters.
+    # Legacy policies remain distinct from product-level capsule Size/Color.
     presence: CheckConfig = field(default_factory=CheckConfig)
     blob: BlobCheckConfig = field(default_factory=BlobCheckConfig)
     color: CheckConfig = field(default_factory=CheckConfig)
@@ -176,6 +177,7 @@ class RecipeDefinition:
     camera_overrides: tuple[CameraOverride, ...] = ()
     channel_overrides: tuple[ChannelOverride, ...] = ()
     schema_version: int = 1
+    capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
 
     def __post_init__(self) -> None:
         version(self.schema_version)
@@ -277,6 +279,7 @@ class ResolvedInspectionConfiguration:
     model: ModelDefinition
     layout: InspectionLayout
     channels: tuple[ResolvedChannelConfiguration, ...]
+    capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
 
     def __post_init__(self) -> None:
         channels = tuple(self.channels)
