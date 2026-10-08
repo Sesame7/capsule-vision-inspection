@@ -20,6 +20,7 @@
 | Implemented | 3B — opt-in local six-image Production UI with real serial ViMo |
 | Implemented | 3C — machine-only six-channel ROI setup and saved layout activation |
 | Implemented | 3D — simplified Recipe UI, hidden policy preservation and Settings ROI entry |
+| Implemented | 3E-1 — demonstration capsule Size/Color and isolated Recipe preview |
 | Future | Remaining Phase 3 — Camera, PLC and field integration |
 
 Phase 2C composes existing layers: candidate activation after model warm-up,
@@ -178,6 +179,14 @@ The source waits for RUNNING, uses `LocalCycleIngress`, and waits for each cycle
 before submitting another. Existing display identity checks remain authoritative.
 See [local real-inference mode](production-ui.md#local-real-inference-mode--phase-3b)
 for configuration, failure and shutdown behavior.
+
+Phase 3E-1 adds [capsule Size/Color screening](capsule-inspection.md): one shared
+measurement per enabled channel on the existing cycle inspector, combined with
+unchanged full-camera ViMo and production aggregation. Product-level Recipe settings
+are additive and separate from legacy traditional policies. The tuning workspace
+uses frozen references, one bounded background measurement job and cached judgments;
+it never submits cycles or changes counters/configuration. Algorithms are uncalibrated;
+legacy configuration removal remains Phase 3E-2.
 
 ## Planned direction — not implemented
 

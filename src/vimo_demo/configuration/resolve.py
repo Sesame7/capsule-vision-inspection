@@ -117,6 +117,7 @@ def resolve_configuration(
         model,
         InspectionLayout(tuple(cameras)),
         tuple(sorted(channels, key=lambda row: row.channel_id)),
+        capsule=recipe.capsule,
     )
 
 

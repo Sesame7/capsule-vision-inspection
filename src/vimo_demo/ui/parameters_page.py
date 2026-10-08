@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -36,12 +37,14 @@ from .production_style import Language, Style, text
 from .recipe_catalog import RecipeEntry
 from .recipe_editor import RecipeDraft, RecipeEditorSession
 from .roi_editor import MachineRoiWorkspace
+from .traditional_preview import PreviewMode, TraditionalPreview
 
 type DirtyDecision = Literal["save", "discard", "cancel"]
 
 
 class ParametersPage(QWidget):
     applied = Signal(object)
+    preview_changed = Signal()
 
     def __init__(
         self,
@@ -55,6 +58,7 @@ class ParametersPage(QWidget):
         self.bridge, self.session = bridge, session
         self.simulation = simulation
         self.roi_workspace: MachineRoiWorkspace | None = None
+        self.preview: TraditionalPreview | None = None
         self._apply_finished: Callable[[str], None] | None = None
         self.language: Language = "zh"
         self._loading = False
@@ -79,7 +83,10 @@ class ParametersPage(QWidget):
         self._monitor.setInterval(20)
         self._monitor.timeout.connect(self._finish_preparation)
 
-        root = QVBoxLayout(self)
+        self._recipe_pages = QStackedLayout(self)
+        self._recipe_form = QWidget()
+        self._recipe_pages.addWidget(self._recipe_form)
+        root = QVBoxLayout(self._recipe_form)
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(18)
         header = QHBoxLayout()
@@ -121,6 +128,31 @@ class ParametersPage(QWidget):
         self.notice = QLabel()
         self.notice.setWordWrap(True)
         root.addWidget(self.notice)
+        self.capsule_enabled: dict[PreviewMode, QCheckBox] = {}
+        self.capsule_summary: dict[PreviewMode, QLabel] = {}
+        self.capsule_open: dict[PreviewMode, QPushButton] = {}
+        modes: tuple[PreviewMode, ...] = ("size", "color")
+        for mode in modes:
+            row = QHBoxLayout()
+            enabled, summary, button = QCheckBox(), QLabel(), QPushButton()
+            button.setMinimumHeight(Style.touch)
+            summary.setWordWrap(True)
+            self.capsule_enabled[mode] = enabled
+            self.capsule_summary[mode] = summary
+            self.capsule_open[mode] = button
+            row.addWidget(enabled)
+            row.addWidget(summary, 1)
+            row.addWidget(button)
+            root.addLayout(row)
+
+            def toggle(checked: bool, m: PreviewMode = mode) -> None:
+                self._capsule_changed(m, checked)
+
+            def open_workspace(_checked: bool = False, m: PreviewMode = mode) -> None:
+                self.open_preview(m)
+
+            enabled.toggled.connect(toggle)
+            button.clicked.connect(open_workspace)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -180,6 +212,8 @@ class ParametersPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        if self.preview is not None:
+            self.preview.set_language(language)
         if self.roi_workspace is not None:
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
@@ -297,6 +331,40 @@ class ParametersPage(QWidget):
         )
         if self.roi_workspace is not None:
             self.roi_workspace.refresh()
+        if self.preview is not None:
+            self.preview.refresh_state()
+        for mode in ("size", "color"):
+            check = self.capsule_enabled[mode]
+            check.setText(
+                ("尺寸检测" if mode == "size" else "颜色检测")
+                if language == "zh"
+                else ("Size inspection" if mode == "size" else "Color inspection")
+            )
+            self.capsule_open[mode].setText(
+                "调整预览" if language == "zh" else "Tune preview"
+            )
+            check.setEnabled(allowed)
+            self.capsule_open[mode].setEnabled(
+                session is not None
+                and not self.busy
+                and not self._closing
+                and not session.machine_editor.dirty
+            )
+            if session is not None:
+                settings = session.draft.capsule
+                check.blockSignals(True)
+                check.setChecked(
+                    settings.size.enabled if mode == "size" else settings.color.enabled
+                )
+                check.blockSignals(False)
+                self.capsule_summary[mode].setText(
+                    f"W {settings.size.target_width} ± {settings.size.width_tolerance} · H {settings.size.target_height} ± {settings.size.height_tolerance} px"
+                    if mode == "size"
+                    else (
+                        ("颜色容差 " if language == "zh" else "Color tolerance ")
+                        + str(settings.color.hue_tolerance)
+                    )
+                )
         for line in self.metadata.values():
             line.setEnabled(allowed)
         self.model.setEnabled(allowed and self.model.count() > 1)
@@ -357,6 +425,59 @@ class ParametersPage(QWidget):
                 else ""
             )
         )
+
+    def _capsule_changed(self, mode: PreviewMode, enabled: bool) -> None:
+        if self.session is None or not self.editable():
+            return
+        settings = self.session.draft.capsule
+        self.session.draft.capsule = (
+            replace(settings, size=replace(settings.size, enabled=enabled))
+            if mode == "size"
+            else replace(settings, color=replace(settings.color, enabled=enabled))
+        )
+        self.changed()
+
+    def open_preview(self, mode: PreviewMode) -> None:
+        if (
+            self.session is None
+            or self.preview is not None
+            or self.busy
+            or self._closing
+            or self.session.machine_editor.dirty
+        ):
+            return
+        self.preview = TraditionalPreview(
+            self.session,
+            self.bridge.frames,
+            self.editable,
+            self.changed,
+            self._preview_closed,
+            mode=mode,
+            language=self.language,
+            parent=self,
+        )
+        self._recipe_pages.addWidget(self.preview)
+        self._recipe_pages.setCurrentWidget(self.preview)
+        self.preview_changed.emit()
+
+    def leave_preview(self, after: Callable[[], None]) -> None:
+        def closed() -> None:
+            self._preview_closed()
+            after()
+
+        if self.preview is None:
+            after()
+        else:
+            self.preview.request_close(closed)
+
+    def _preview_closed(self) -> None:
+        if self.preview is not None:
+            workspace, self.preview = self.preview, None
+            self._recipe_pages.setCurrentWidget(self._recipe_form)
+            self._recipe_pages.removeWidget(workspace)
+            workspace.deleteLater()
+        self.preview_changed.emit()
+        self.show_draft()
 
     def open_roi_editor(self) -> None:
         if (
@@ -644,6 +765,9 @@ class ParametersPage(QWidget):
         self.confirm_dirty(decided)
 
     def request_close(self, final: Callable[[], None]) -> None:
+        if self.preview is not None:
+            self.leave_preview(lambda: self.request_close(final))
+            return
         if self.roi_workspace is not None and not self.busy:
             self.leave_workspace(lambda: self.request_close(final))
             return

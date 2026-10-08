@@ -185,7 +185,7 @@ class ProductionWindow(QMainWindow):
             container.addWidget(label)
             self.placeholders[name] = label
             self.pages.addWidget(placeholder)
-        event = QFrame()
+        event = self.event_frame = QFrame()
         event.setObjectName("event")
         event_layout = QVBoxLayout(event)
         self.event_label = QLabel()
@@ -194,6 +194,7 @@ class ProductionWindow(QMainWindow):
         # Fixed bounded presentation space prevents warning-induced grid jumps.
         event.setFixedHeight(76)
         root.addWidget(event)
+        self.parameters.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
         bridge.frames_changed.connect(self._frames_changed)
         bridge.command_failed.connect(self._command_failed)
@@ -230,6 +231,13 @@ class ProductionWindow(QMainWindow):
 
     def navigate(self, index: int) -> None:
         if (
+            self.pages.currentWidget() is self.parameters
+            and index != 1
+            and self.parameters.preview is not None
+        ):
+            self.parameters.leave_preview(lambda: self.navigate(index))
+            return
+        if (
             self.pages.currentWidget() is self.parameters.settings
             and index != 4
             and self.parameters.roi_workspace is not None
@@ -239,6 +247,7 @@ class ProductionWindow(QMainWindow):
         self.pages.setCurrentIndex(index)
         for i, button in enumerate(self.navigation):
             button.setChecked(i == index)
+        self._render()
 
     @Slot()
     def _switch_language(self) -> None:
@@ -416,6 +425,23 @@ class ProductionWindow(QMainWindow):
             event_key = "fault_note"
         if self._closing:
             event_key = "close_wait" if self._command_issue else "closing"
+        preview = (
+            self.pages.currentWidget() is self.parameters
+            and self.parameters.preview is not None
+        )
+        # Presentation scope only: preserve snapshots/counters and all fault paths.
+        self.event_frame.setVisible(
+            not preview
+            or event_key
+            in {
+                "technical_note",
+                "issue_note",
+                "command_error",
+                "fault_note",
+                "close_wait",
+                "closing",
+            }
+        )
         message = text(event_key, language)
         if counts.channel_unknown or counts.technical_error_cycles:
             message += f"\n{text('unknown_count', language)}: {counts.channel_unknown:,} · {text('error_cycles', language)}: {counts.technical_error_cycles:,}"

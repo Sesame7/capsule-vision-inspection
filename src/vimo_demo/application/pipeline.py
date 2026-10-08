@@ -37,6 +37,7 @@ from vimo_demo.inspection.production import (
     TechnicalStatus,
     aggregate,
 )
+from vimo_demo.inspection.production.capsule import judge_capsule, measure_capsule
 
 
 class TraditionalCheck(Enum):
@@ -116,6 +117,22 @@ class ConfiguredProductionPipeline:
                         result = _unavailable(
                             FindingSource.TRADITIONAL, policy, "execution_error", exc
                         )
+            checks.append(result)
+        capsule = self.configuration.capsule
+        if capsule.enabled:
+            result = _unavailable(FindingSource.TRADITIONAL, CheckConfig(True))
+            if frame is not None:
+                try:
+                    result = judge_capsule(
+                        measure_capsule(frame.image, channel.roi), capsule
+                    )
+                except Exception as exc:
+                    result = _unavailable(
+                        FindingSource.TRADITIONAL,
+                        CheckConfig(True),
+                        "capsule.execution_error",
+                        exc,
+                    )
             checks.append(result)
         return CheckResult(
             FindingSource.TRADITIONAL,

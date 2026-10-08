@@ -167,22 +167,22 @@ def demo_images(directory: Path | None = None) -> tuple[NDArray[np.uint8], ...]:
         raise ValueError("Six usable images are required")
     result: list[NDArray[np.uint8]] = []
     for index in range(6):
-        image = np.full((580, 640, 3), (15, 17, 20), dtype=np.uint8)
+        image = np.zeros((580, 640, 3), dtype=np.uint8)
+        # Two synthetic views per channel, solely for equipment-free tuning review.
         for slot in range(6):
-            x = 30 + slot * 102
-            color = (55 + index * 6, 150 + slot * 6, 208)
-            cv2.rectangle(image, (x, 145), (x + 62, 410), color, -1)
-            cv2.line(image, (x, 280), (x + 62, 280), (40, 75, 95), 2)
-        cv2.putText(
-            image,
-            f"SYNTHETIC / CAM {index + 1}",
-            (24, 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (150, 160, 172),
-            1,
-            cv2.LINE_AA,
-        )
+            left, right = slot * 640 // 6, (slot + 1) * 640 // 6
+            center = (left + right) // 2
+            for y in (145, 435):
+                cv2.ellipse(
+                    image,
+                    (center, y),
+                    (30 + slot, 90),
+                    0,
+                    0,
+                    360,
+                    (15, 180 + index * 5, 200),
+                    -1,
+                )
         result.append(image)
     return tuple(result)
 
