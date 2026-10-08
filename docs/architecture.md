@@ -19,6 +19,7 @@
 | Implemented | 3A — minimal local image-set acquisition ingress |
 | Implemented | 3B — opt-in local six-image Production UI with real serial ViMo |
 | Implemented | 3C — machine-only six-channel ROI setup and saved layout activation |
+| Implemented | 3D — simplified Recipe UI, hidden policy preservation and Settings ROI entry |
 | Future | Remaining Phase 3 — Camera, PLC and field integration |
 
 Phase 2C composes existing layers: candidate activation after model warm-up,
@@ -141,13 +142,14 @@ The launcher uses real application/runtime composition with a fake engine and
 synthetic inputs. See the [Production UI contract](production-ui.md) for ownership,
 nonblocking shutdown, localization, layout and physical-screen limitations.
 
-Phase 2D-2A replaces Parameters with an editor backed by a Qt-free draft/session
-and small file catalog. It calls existing Phase 2B validation/resolution/atomic
-persistence. Save never applies; explicit Apply prepares a saved clean Recipe
-off the GUI thread and installs it through ProductionApplication. Only successful
-Start activates it. Diagnostics, History and Settings remain placeholders. See
-the [Recipe UI contract](recipe-configuration-ui.md); domain/runtime contracts and
-inference behavior are unchanged.
+Phase 3D simplifies the earlier Parameters editor into a Recipe page: display
+name, optional product code, registered model and Save and apply. New/Duplicate
+use generated identities. Hidden checks and camera/channel overrides remain in
+the existing Qt-free draft/configuration backend, unchanged by unrelated edits.
+Save and apply combines atomic persistence with existing off-thread preparation
+and configuration; successful Start alone activates. Settings hosts the existing
+machine ROI workspace. Diagnostics/History remain placeholders. See the
+[Recipe UI contract](recipe-configuration-ui.md); runtime/inference are unchanged.
 
 Phase 3C makes MachineLayout the sole ROI owner. The [machine ROI editor](graphical-roi-editor.md)
 shows six labeled rectangles on one frozen camera reference, reuses source-pixel
@@ -228,6 +230,6 @@ accuracy, annotation quality or production acceptance thresholds.
 | [Production application](production-application.md) | Transactional activation, warm-up, runtime sessions, configured execution, factual counters and Batch lifecycle |
 | [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
 | [Production UI](production-ui.md) | Implemented shell/bridge, display ownership, identity matching, controls and review |
-| [Recipe configuration UI](recipe-configuration-ui.md) | Parameters drafts, inheritance preview, Save/Apply, catalog and dirty-close workflow |
+| [Recipe configuration UI](recipe-configuration-ui.md) | Simplified Recipe workflow, hidden policy preservation, catalog and dirty-close safety |
 | [Graphical ROI editor](graphical-roi-editor.md) | Frozen reference ownership, source-pixel geometry, gestures, camera tabs, Save and apply, and read-only state |
 | [Production UI direction](production-ui-direction.md) | Agreed visual direction and flexible review details; not an exact implementation specification |

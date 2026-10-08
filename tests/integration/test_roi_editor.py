@@ -35,12 +35,11 @@ def publish(
 
 def open_editor(window: ProductionWindow) -> MachineRoiWorkspace:
     page = window.parameters
-    page.scope.setCurrentIndex(2)
-    page.camera.setCurrentIndex(2)
-    page.channel.setCurrentIndex(4)
+    window.navigate(4)
     page.open_roi.click()
     dialog = page.roi_workspace
     assert dialog is not None
+    dialog.camera_tabs.setCurrentIndex(2)
     dialog.select_roi(4)
     QApplication.processEvents()
     return dialog
@@ -255,7 +254,7 @@ def test_dirty_navigation_requires_decision(
     )
     button.click()
     if decision == "cancel":
-        assert window.pages.currentWidget() is window.parameters
+        assert window.pages.currentWidget() is window.parameters.settings
         assert (
             window.parameters.roi_workspace is dialog and session.machine_editor.dirty
         )

@@ -1,9 +1,11 @@
-"""Recipe editing presentation; saved candidate preparation is off the GUI thread."""
+"""Compact Recipe workflow; configuration and activation remain backend-owned."""
 
 from collections.abc import Callable
 from concurrent.futures import Future
+from dataclasses import replace
 from threading import Thread
 from typing import Literal
+from uuid import uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
@@ -11,29 +13,28 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
 
 from vimo_demo.application import ApplicationState, PreparedConfiguration
-from vimo_demo.configuration import CheckOverrides, ConfigurationError
-from vimo_demo.inspection import CameraId
-from vimo_demo.inspection.production import ChannelId
+from vimo_demo.configuration import (
+    CheckConfiguration,
+    ConfigurationError,
+    RecipeDefinition,
+)
 
 from .inference_bridge import FutureDelivery
 from .production_bridge import QtProductionBridge, RecipeChoice
 from .production_style import Language, Style, text
 from .recipe_catalog import RecipeEntry
-from .recipe_editor import GROUPS, CheckDraft, Group, RecipeEditorSession, draft_checks
-from .recipe_fields import CheckFields
+from .recipe_editor import RecipeDraft, RecipeEditorSession
 from .roi_editor import MachineRoiWorkspace
 
 type DirtyDecision = Literal["save", "discard", "cancel"]
@@ -58,10 +59,10 @@ class ParametersPage(QWidget):
         self.language: Language = "zh"
         self._loading = False
         self._entries: tuple[RecipeEntry, ...] = ()
-        self._model_ids: tuple[str | None, ...] = (None,)
+        self._model_ids: tuple[str | None, ...] = ()
         self._catalog_error = ""
-        self._validation = "unchecked"
         self._error = ""
+        self._feedback = ""
         self._thread: Thread | None = None
         self._completion: tuple[object, object] | None = None
         self._closing = False
@@ -77,103 +78,89 @@ class ParametersPage(QWidget):
         self._monitor = QTimer(self)
         self._monitor.setInterval(20)
         self._monitor.timeout.connect(self._finish_preparation)
-        self._pages = QStackedLayout(self)
-        self._pages.setContentsMargins(0, 0, 0, 0)
-        self._form = QWidget()
-        self._pages.addWidget(self._form)
-        root = QVBoxLayout(self._form)
-        root.setContentsMargins(0, 0, 0, 0)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(18)
+        header = QHBoxLayout()
+        self.title, self.identity = QLabel(), QLabel()
+        self.title.setProperty("role", "state")
+        self.identity.setTextFormat(Qt.TextFormat.PlainText)
+        header.addWidget(self.title)
+        header.addStretch()
+        header.addWidget(self.identity)
+        root.addLayout(header)
         selection = QHBoxLayout()
         self.recipes = QComboBox()
         self.recipes.setMinimumHeight(Style.touch)
         selection.addWidget(self.recipes, 1)
         self.buttons: dict[str, QPushButton] = {}
-        for key in ("new_recipe", "reload"):
+        for key in ("new_recipe", "duplicate_recipe", "reload"):
             button = QPushButton()
             button.setMinimumHeight(Style.touch)
             self.buttons[key] = button
             selection.addWidget(button)
         root.addLayout(selection)
-        self.identity = QLabel()
-        self.identity.setWordWrap(True)
-        self.identity.setTextFormat(Qt.TextFormat.PlainText)
-        root.addWidget(self.identity)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        root.addWidget(self.scroll_area, 1)
-        self.editor = QWidget()
-        self.editor.setObjectName("recipeEditor")
-        self.scroll_area.setWidget(self.editor)
-        content = QVBoxLayout(self.editor)
-        metadata = QFormLayout()
-        self.labels: dict[str, QLabel] = {}
         self.metadata: dict[str, QLineEdit] = {}
-        for key in ("recipe_id", "display_name", "product_code"):
+        self.labels: dict[str, QLabel] = {}
+        for key in ("display_name", "product_code"):
             label, line = QLabel(), QLineEdit()
             line.setMinimumHeight(Style.touch)
             self.labels[key], self.metadata[key] = label, line
-            metadata.addRow(label, line)
+            root.addWidget(label)
+            root.addWidget(line)
             line.textEdited.connect(self._metadata_changed)
         self.model = QComboBox()
         self.model.setMinimumHeight(Style.touch)
-        self.labels["model_choice"] = QLabel()
-        metadata.addRow(self.labels["model_choice"], self.model)
-        self.model.activated.connect(self._metadata_changed)
-        content.addLayout(metadata)
-        self.scope = QComboBox()
-        self.camera = QComboBox()
-        self.channel = QComboBox()
-        hierarchy = QHBoxLayout()
-        for combo in (self.scope, self.camera, self.channel):
-            combo.setMinimumHeight(Style.touch)
-            hierarchy.addWidget(combo, 1)
-        content.addLayout(hierarchy)
-        self.help = QLabel()
-        self.help.setWordWrap(True)
-        content.addWidget(self.help)
-        self.groups: dict[Group, CheckFields] = {
-            name: CheckFields(name) for name in GROUPS
-        }
-        for box in self.groups.values():
-            content.addWidget(box)
-            box.changed.connect(self._checks_changed)
-        # Machine geometry has its own draft and persistence; Recipe checks stay here.
-        self.open_roi = QPushButton()
-        self.open_roi.setMinimumHeight(Style.touch)
-        self.open_roi.clicked.connect(self.open_roi_editor)
-        content.addWidget(self.open_roi)
-        self.details: dict[str, tuple[QGroupBox, QLabel]] = {}
-        for key in ("model_details", "layout_details"):
-            group, label = QGroupBox(), QLabel()
-            label.setWordWrap(True)
-            label.setTextFormat(Qt.TextFormat.PlainText)
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            group_layout = QVBoxLayout(group)
-            group_layout.addWidget(label)
-            self.details[key] = (group, label)
-            content.addWidget(group)
-        content.addStretch()
+        self.labels["inspection_model"] = QLabel()
+        root.addWidget(self.labels["inspection_model"])
+        root.addWidget(self.model)
+        self.rule = QLabel()
+        self.rule.setWordWrap(True)
+        root.addWidget(self.rule)
+        self.notice = QLabel()
+        self.notice.setWordWrap(True)
+        root.addWidget(self.notice)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         root.addWidget(self.status)
         actions = QHBoxLayout()
-        for key in ("validate", "save", "save_as", "apply"):
-            button = QPushButton()
-            button.setMinimumHeight(Style.touch)
-            self.buttons[key] = button
-            actions.addWidget(button, 1)
+        actions.addStretch()
+        primary = QPushButton()
+        primary.setObjectName("start")
+        primary.setMinimumHeight(Style.touch)
+        self.buttons["save_apply"] = primary
+        actions.addWidget(primary)
         root.addLayout(actions)
+        root.addStretch(1)
+
+        # Settings hosts the existing ROI workspace; it shares preparation, not Recipe UI.
+        self.settings = QWidget()
+        self._pages = QStackedLayout(self.settings)
+        self._pages.setContentsMargins(0, 0, 0, 0)
+        self._form = QWidget()
+        self._pages.addWidget(self._form)
+        settings_layout = QVBoxLayout(self._form)
+        self.settings_title = QLabel()
+        self.settings_title.setProperty("role", "state")
+        settings_layout.addWidget(self.settings_title)
+        self.open_roi = QPushButton()
+        self.open_roi.setMinimumHeight(Style.touch)
+        settings_layout.addWidget(self.open_roi, 0, Qt.AlignmentFlag.AlignLeft)
+        settings_layout.addStretch()
+        self.open_roi.clicked.connect(self.open_roi_editor)
+
         self.recipes.activated.connect(self._select)
-        self.buttons["new_recipe"].clicked.connect(lambda: self.guard_dirty(self.new))
+        self.model.activated.connect(self._model_changed)
+        self.buttons["new_recipe"].clicked.connect(
+            lambda: self.guard_dirty(lambda: self.create_dialog(False))
+        )
+        self.buttons["duplicate_recipe"].clicked.connect(
+            lambda: self.guard_dirty(lambda: self.create_dialog(True))
+        )
         self.buttons["reload"].clicked.connect(lambda: self.guard_dirty(self.reload))
-        self.buttons["validate"].clicked.connect(self.validate)
-        self.buttons["save"].clicked.connect(lambda: self.save())
-        self.buttons["save_as"].clicked.connect(self.save_as_dialog)
-        self.buttons["apply"].clicked.connect(self.apply)
-        self.scope.currentIndexChanged.connect(self.show_draft)
-        self.camera.currentIndexChanged.connect(self._camera_changed)
-        self.channel.currentIndexChanged.connect(self.show_draft)
+        primary.clicked.connect(lambda: self.save_and_apply())
         bridge.snapshot_changed.connect(self.refresh_state)
         self.set_language("zh")
         self.reload()
@@ -195,30 +182,17 @@ class ParametersPage(QWidget):
         self.language = language
         if self.roi_workspace is not None:
             self.roi_workspace.set_language(language)
+        self.title.setText(text("parameters", language))
+        self.settings_title.setText(text("settings", language))
+        self.open_roi.setText(text("roi_workspace", language))
         self.recipes.setAccessibleName(text("recipe", language))
-        self.camera.setAccessibleName(text("camera_scope", language))
-        self.channel.setAccessibleName(text("channel_scope", language))
-        self._loading = True
+        self.model.setAccessibleName(text("inspection_model", language))
         for key, button in self.buttons.items():
             button.setText(text(key, language))
         for key, label in self.labels.items():
             label.setText(text(key, language))
-        index = max(0, self.scope.currentIndex())
-        self.scope.clear()
-        self.scope.addItems(
-            [
-                text(key, language)
-                for key in ("defaults", "camera_scope", "channel_scope")
-            ]
-        )
-        self.scope.setCurrentIndex(index)
-        self.help.setText(
-            text("policy_help", language) + "\n" + text("inherit_help", language)
-        )
-        self.open_roi.setText(text("roi_editor", language))
-        for key, (group, _) in self.details.items():
-            group.setTitle(text(key, language))
-        self._loading = False
+        for key, line in self.metadata.items():
+            line.setAccessibleName(text(key, language))
         self.show_draft()
 
     def reload(self) -> None:
@@ -251,36 +225,12 @@ class ParametersPage(QWidget):
                 self.session.load(target)
             else:
                 self.session.new()
-            self._error = ""
-            self._validation = "unchecked"
+            self._error = self._feedback = ""
         except ConfigurationError as exc:
             self._error = str(exc)
-        self._loading = True
         self.recipes.clear()
         self.recipes.addItems([e.recipe.display_name for e in self._entries])
-        self.camera.clear()
-        self.camera.addItems(
-            [str(c.camera_id) for c in self.session.machine.layout.cameras]
-        )
-        self._loading = False
-        self._camera_changed()
-
-    def _camera_changed(self) -> None:
-        if self._loading or self.session is None:
-            return
-        self._loading = True
-        camera = self.session.machine.layout.cameras[max(0, self.camera.currentIndex())]
-        self.channel.clear()
-        self.channel.addItems([f"CH{s.channel_id:02d}" for s in camera.slots])
-        self._loading = False
         self.show_draft()
-
-    def selected_ids(self) -> tuple[CameraId, ChannelId]:
-        assert self.session is not None
-        camera = self.session.machine.layout.cameras[max(0, self.camera.currentIndex())]
-        return camera.camera_id, camera.slots[
-            max(0, self.channel.currentIndex())
-        ].channel_id
 
     def show_draft(self) -> None:
         if self._loading or self.session is None:
@@ -288,124 +238,57 @@ class ParametersPage(QWidget):
             return
         self._loading = True
         session, draft = self.session, self.session.draft
-        self.metadata["recipe_id"].setText(draft.recipe_id)
         self.metadata["display_name"].setText(draft.display_name)
         self.metadata["product_code"].setText(draft.product_code or "")
-        self.metadata["recipe_id"].setReadOnly(session.entry is not None)
-        self.metadata["recipe_id"].setToolTip(text("id_save_as", self.language))
         self.model.clear()
-        self.model.addItem(text("default_model", self.language))
-        self.model.addItems([m.display_name for m in session.registry.models])
-        self._model_ids = (None, *(m.model_id for m in session.registry.models))
-        if draft.model_override_id not in self._model_ids:
-            self._model_ids += (draft.model_override_id,)
-            self.model.addItem(
-                f"{text('invalid', self.language)}: {draft.model_override_id}"
-            )
-        model_index = self._model_ids.index(draft.model_override_id)
-        self.model.setCurrentIndex(model_index)
-        camera, channel = self.selected_ids()
-        scope = self.scope.currentIndex()
-        rows = (
-            draft.defaults
-            if scope == 0
-            else draft.cameras.get(camera)
-            if scope == 1
-            else draft.channels.get(channel)
+        self._model_ids = tuple(
+            None if m.model_id == session.default_model_id else m.model_id
+            for m in session.registry.models
         )
-        rows = draft_checks(CheckOverrides()) if rows is None else rows
-        for key, widget in self.groups.items():
-            widget.show_row(rows[key], root=scope == 0, language=self.language)
-        if session.entry is not None:
-            index = next(
+        self.model.addItems([m.display_name for m in session.registry.models])
+        effective = draft.model_override_id
+        if effective == session.default_model_id:
+            effective = None
+        if effective not in self._model_ids:
+            self._model_ids += (effective,)
+            self.model.addItem(text("unavailable_model", self.language))
+        self.model.setCurrentIndex(self._model_ids.index(effective))
+        self.recipes.setCurrentIndex(
+            next(
                 (
                     i
                     for i, e in enumerate(self._entries)
-                    if e.path == session.entry.path
+                    if session.entry and e.path == session.entry.path
                 ),
                 -1,
             )
-            self.recipes.setCurrentIndex(index)
-        else:
-            self.recipes.setCurrentIndex(-1)
+        )
         self._loading = False
-        self.preview()
+        self.refresh_state()
 
     def _metadata_changed(self) -> None:
         if self._loading or not self.editable() or self.session is None:
             return
-        draft = self.session.draft
-        draft.recipe_id = self.metadata["recipe_id"].text()
-        draft.display_name = self.metadata["display_name"].text()
-        draft.product_code = self.metadata["product_code"].text() or None
-        index = self.model.currentIndex()
-        draft.model_override_id = self._model_ids[index]
+        self.session.draft.display_name = self.metadata["display_name"].text()
+        self.session.draft.product_code = self.metadata["product_code"].text() or None
         self.changed()
 
-    def _checks_changed(self) -> None:
-        if not self.editable() or self.session is None:
-            return
-        camera, channel = self.selected_ids()
-        rows: dict[Group, CheckDraft] = {
-            key: widget.read() for key, widget in self.groups.items()
-        }
-        scope = self.scope.currentIndex()
-        if scope == 0:
-            self.session.draft.defaults = rows
-        elif scope == 1:
-            self.session.draft.cameras[camera] = rows
-        else:
-            self.session.draft.channels[channel] = rows
-        self.changed()
+    def _model_changed(self, index: int) -> None:
+        if (
+            not self._loading
+            and self.editable()
+            and self.session is not None
+            and index >= 0
+        ):
+            self.session.draft.model_override_id = self._model_ids[index]
+            self.changed()
 
     def changed(self) -> None:
-        self._validation, self._error = "unchecked", ""
-        self.preview()
-
-    def preview(self) -> None:
-        if self.session is None:
-            return
-        session = self.session
-        _, channel = self.selected_ids()
-        try:
-            resolved = session.resolve()
-            row = next(r for r in resolved.channels if r.channel_id == channel)
-            checks = row.checks
-            for key, value in zip(
-                GROUPS,
-                (checks.presence, checks.blob, checks.color, checks.vimo),
-                strict=True,
-            ):
-                self.groups[key].show_effective(value)
-        except (ConfigurationError, ValueError) as exc:
-            for widget in self.groups.values():
-                widget.show_effective(None)
-            self._error = str(exc)
-        try:
-            model = session.registry.get(
-                session.draft.model_override_id or session.default_model_id
-            )
-            self.details["model_details"][1].setText(
-                f"{model.display_name} [{model.model_id}]\n{model.model_path}\nSHA-256: {model.expected_sha256}\n{text('module_id', self.language)}: {model.module_id}"
-            )
-        except ConfigurationError as exc:
-            self.details["model_details"][1].setText(str(exc))
-        self.details["layout_details"][1].setText(
-            f"{text('camera_count', self.language)}: {len(session.machine.layout.cameras)} · {text('channel_count', self.language)}: {sum(len(c.slots) for c in session.machine.layout.cameras)}\n"
-            + "\n".join(
-                f"{c.camera_id}: "
-                + "; ".join(
-                    f"CH{s.channel_id:02d} [{s.rect.x}, {s.rect.y}, {s.rect.width}, {s.rect.height}]"
-                    for s in c.slots
-                )
-                for c in session.machine.layout.cameras
-            )
-        )
+        self._error = self._feedback = ""
         self.refresh_state()
 
     def refresh_state(self) -> None:
         session, language = self.session, self.language
-        snapshot = self.bridge.application.snapshot()
         allowed = self.editable()
         self.open_roi.setEnabled(
             session is not None
@@ -414,13 +297,9 @@ class ParametersPage(QWidget):
         )
         if self.roi_workspace is not None:
             self.roi_workspace.refresh()
-        # Keep hierarchy navigation and details available while production runs.
-        for widget in (
-            *self.metadata.values(),
-            self.model,
-            *self.groups.values(),
-        ):
-            widget.setEnabled(allowed)
+        for line in self.metadata.values():
+            line.setEnabled(allowed)
+        self.model.setEnabled(allowed and self.model.count() > 1)
         self.recipes.setEnabled(
             session is not None and not self.busy and not self._closing
         )
@@ -428,80 +307,80 @@ class ParametersPage(QWidget):
             enabled = allowed
             if key == "reload":
                 enabled = session is not None and not self.busy and not self._closing
-            if key == "save":
-                enabled = allowed and session is not None and session.dirty
-            if key == "apply":
+            elif key == "duplicate_recipe":
                 enabled = (
-                    allowed
-                    and session is not None
-                    and session.entry is not None
-                    and not session.dirty
-                    and not session.machine_editor.dirty
+                    allowed and session is not None and bool(session.draft.display_name)
                 )
-                if enabled and session is not None:
-                    try:
-                        session.resolve()
-                    except ConfigurationError, ValueError:
-                        enabled = False
+            elif key == "save_apply":
+                enabled = (
+                    allowed and session is not None and not session.machine_editor.dirty
+                )
             button.setEnabled(enabled)
-        draft_status = (
-            text("no_catalog", language)
-            if session is None
-            else text(
-                "unsaved"
-                if session.dirty
-                else "saved"
-                if session.entry
-                else "new_draft",
-                language,
-            )
-        )
-        self.identity.setText(
-            f"{text('editing', language)}: {session.draft.display_name if session else '--'} · {draft_status}\n{text('candidate', language)}: {snapshot.candidate.recipe_id if snapshot.candidate else '--'} · {text('active', language)}: {snapshot.active.recipe_id if snapshot.active else '--'}"
-        )
-        note = (
-            text("preparing", language)
+        state = (
+            "preparing"
             if self.busy
-            else text(self._validation, language)
+            else "no_catalog"
+            if session is None
+            else "unsaved"
+            if session.dirty
+            else "saved"
+            if session.entry
+            else "new_draft"
         )
-        if not allowed:
-            note += " · " + text("read_only", language)
+        self.identity.setText(text(state, language))
+        advanced = session is not None and bool(
+            session.draft.cameras or session.draft.channels
+        )
+        self.notice.setVisible(advanced)
+        self.notice.setText(text("advanced_recipe_notice", language))
+        # Never claim all labels participate when persisted policies say otherwise.
+        if session is not None:
+            simple = (
+                session.draft.defaults["vimo"] == RecipeDraft("", "").defaults["vimo"]
+                and not advanced
+            )
+            self.rule.setText(
+                text(
+                    "all_model_labels" if simple else "configured_detection_rule",
+                    language,
+                )
+            )
+        else:
+            self.rule.clear()
         self.status.setText(
-            note
-            + "\n"
-            + (self._error or text("apply_help", language))
-            + (
-                "\n" + text("catalog_issues", language) + ": " + self._catalog_error
-                if self._catalog_error
+            self._error
+            or self._catalog_error
+            or (text(self._feedback, language) if self._feedback else "")
+            or (
+                text("save_machine_first", language)
+                if session and session.machine_editor.dirty
                 else ""
             )
         )
 
     def open_roi_editor(self) -> None:
-        if self.session is None or self.session.machine_path is None or self._closing:
+        if (
+            self.session is None
+            or self.session.machine_path is None
+            or self._closing
+            or self.roi_workspace is not None
+        ):
             return
-        if self.roi_workspace is not None:
-            return
-        camera, _ = self.selected_ids()
         workspace = MachineRoiWorkspace(
             self.session,
-            camera,
+            self.session.machine.layout.camera_ids[0],
             self.bridge.frames,
             self.editable,
-            self._graphical_roi_changed,
+            self.changed,
             lambda completed: self.apply(completed=completed),
             self._roi_closed,
             language=self.language,
             simulation=self.simulation,
-            parent=self,
+            parent=self.settings,
         )
         self.roi_workspace = workspace
         self._pages.addWidget(workspace)
         self._pages.setCurrentWidget(workspace)
-
-    def _graphical_roi_changed(self) -> None:
-        self.changed()
-        self.show_draft()
 
     def _roi_closed(self) -> None:
         if self.roi_workspace is not None:
@@ -516,38 +395,28 @@ class ParametersPage(QWidget):
         else:
             self.roi_workspace.request_back(after)
 
-    def validate(self) -> bool:
+    def save_and_apply(self, after: Callable[[], None] | None = None) -> None:
         if not self.editable() or self.session is None:
-            return False
+            return
         try:
-            self.session.resolve()
+            if self.session.machine_editor.dirty:
+                raise ConfigurationError(text("save_machine_first", self.language))
+            if self.session.dirty or self.session.entry is None:
+                self.session.save()
+                self.reload()
+            # A clean draft is re-read by apply_recipe; never overwrite external edits.
         except (ConfigurationError, ValueError) as exc:
-            self._validation, self._error = "invalid", str(exc)
+            self._error = str(exc)
             self.refresh_state()
-            return False
-        self._validation, self._error = "valid", ""
-        self.preview()
-        return True
+            return
 
-    def save(self, new_identity: tuple[str, str] | None = None) -> bool:
-        if not self.editable() or self.session is None:
-            return False
-        try:
-            self.session.save(new_identity=new_identity)
-        except (ConfigurationError, ValueError) as exc:
-            self._validation, self._error = "invalid", str(exc)
+        def completed(error: str) -> None:
+            self._feedback = "" if error else "roi_applied"
             self.refresh_state()
-            return False
-        self.reload()
-        self._validation = "valid"
-        self.refresh_state()
-        return True
+            if not error and after is not None:
+                after()
 
-    def new(self) -> None:
-        if self.editable() and self.session is not None:
-            self.session.new()
-            self.changed()
-            self.show_draft()
+        self.apply(completed=completed)
 
     def _select(self, index: int) -> None:
         if index < 0 or self.busy:
@@ -563,7 +432,7 @@ class ParametersPage(QWidget):
                 self._error = str(exc)
             self.show_draft()
 
-        self.show_draft()  # Restore current selection while the decision is pending.
+        self.show_draft()
         self.guard_dirty(select)
 
     def guard_dirty(self, action: Callable[[], None]) -> None:
@@ -573,11 +442,9 @@ class ParametersPage(QWidget):
             return
 
         def decided(decision: DirtyDecision) -> None:
-            if decision == "cancel":
-                return
-            if decision == "save" and not self.save():
-                return
-            if decision == "discard":
+            if decision == "save":
+                self.save_and_apply(action)
+            elif decision == "discard":
                 try:
                     session.discard()
                 except ConfigurationError as exc:
@@ -585,7 +452,7 @@ class ParametersPage(QWidget):
                     self.refresh_state()
                     return
                 self.show_draft()
-            action()
+                action()
 
         self.confirm_dirty(decided)
 
@@ -596,7 +463,7 @@ class ParametersPage(QWidget):
         dialog.setWindowTitle(text("parameters", self.language))
         dialog.setText(text("dirty_question", self.language))
         save = dialog.addButton(
-            text("save", self.language), QMessageBox.ButtonRole.AcceptRole
+            text("save_apply", self.language), QMessageBox.ButtonRole.AcceptRole
         )
         discard = dialog.addButton(
             text("discard", self.language), QMessageBox.ButtonRole.DestructiveRole
@@ -622,38 +489,57 @@ class ParametersPage(QWidget):
         dialog.finished.connect(finished)
         dialog.open()
 
-    def save_as_dialog(self) -> None:
+    def create_dialog(self, duplicate: bool) -> None:
         if not self.editable() or self.session is None or self._dialog is not None:
             return
+        session = self.session
         dialog = QDialog(self)
-        dialog.setWindowTitle(text("save_as", self.language))
-        form = QFormLayout(dialog)
-        identity, name = QLineEdit(), QLineEdit(self.session.draft.display_name)
-        form.addRow(text("recipe_id", self.language), identity)
-        form.addRow(text("display_name", self.language), name)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save
-            | QDialogButtonBox.StandardButton.Cancel
+        dialog.setWindowTitle(
+            text("duplicate_recipe" if duplicate else "new_recipe", self.language)
         )
-        buttons.button(QDialogButtonBox.StandardButton.Save).setText(
-            text("save", self.language)
+        form = QFormLayout(dialog)
+        name = QLineEdit(session.draft.display_name if duplicate else "")
+        name.setMinimumHeight(Style.touch)
+        name.setAccessibleName(text("display_name", self.language))
+        form.addRow(text("display_name", self.language), name)
+        error = QLabel()
+        error.setWordWrap(True)
+        error.setTextFormat(Qt.TextFormat.PlainText)
+        form.addRow(error)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+            text("create_recipe", self.language)
         )
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
             text("cancel", self.language)
         )
         form.addRow(buttons)
-        error = QLabel()
-        error.setWordWrap(True)
-        error.setTextFormat(Qt.TextFormat.PlainText)
-        form.addRow(error)
 
-        def save_as() -> None:
-            if self.save((identity.text(), name.text())):
+        def create() -> None:
+            if not self.editable():
+                return
+            try:
+                identity = uuid4().hex
+                recipe = (
+                    replace(
+                        session.draft.to_recipe(),
+                        recipe_id=identity,
+                        display_name=name.text(),
+                    )
+                    if duplicate
+                    else RecipeDefinition(identity, name.text(), CheckConfiguration())
+                )
+                session.new()  # Guard has resolved previous unsaved changes.
+                session.draft = RecipeDraft.from_recipe(recipe)
+                self.changed()
+                self.show_draft()
                 dialog.accept()
-            else:
-                error.setText(self._error)
+            except (ConfigurationError, ValueError) as exc:
+                error.setText(str(exc))
 
-        buttons.accepted.connect(save_as)
+        buttons.accepted.connect(create)
         buttons.rejected.connect(dialog.reject)
 
         def finished() -> None:
