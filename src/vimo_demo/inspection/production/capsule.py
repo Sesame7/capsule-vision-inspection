@@ -107,6 +107,38 @@ def median_hue(values: NDArray[np.float64]) -> float | None:
     return float((center + np.median(unwrapped)) % 180)
 
 
+# OpenCV Hue is an integer in 0..179. Reuse the exact per-bin vectors from
+# median_hue(), without allocating/trig-reducing one complex value per pixel.
+_HUE_VECTORS = np.exp(1j * (np.arange(180, dtype=np.float64) * (2 * np.pi / 180)))
+_HUE_VECTORS.flags.writeable = False
+
+
+def median_pixel_hue(values: NDArray[np.uint8]) -> float | None:
+    """Same circular-center/median rule for integer OpenCV Hue samples."""
+    if values.size == 0:
+        return None
+    counts = np.bincount(values, minlength=180)
+    vector = complex(np.dot(counts, _HUE_VECTORS)) / values.size
+    magnitude = abs(vector)
+    # Histogram reduction changes floating summation order. At the ambiguity
+    # boundary or a rounding tie, preserve the original pixel-order computation.
+    # These guards select an implementation; they do not relax judgment limits.
+    if abs(magnitude - 0.5) <= 1e-12:
+        return median_hue(values.astype(np.float64))
+    if magnitude < 0.5:
+        return None
+    angle = float(np.angle(vector)) * 180 / (2 * np.pi)
+    if abs(angle - (np.floor(angle) + 0.5)) <= 1e-10:
+        return median_hue(values.astype(np.float64))
+    center = round(angle) % 180
+    # Ordered bins represent -90..89 about the circular center. The two ranks
+    # reproduce np.median(), including half-integer medians for even samples.
+    cumulative = np.cumsum(np.roll(counts, 90 - center))
+    lower = int(np.searchsorted(cumulative, (values.size - 1) // 2 + 1))
+    upper = int(np.searchsorted(cumulative, values.size // 2 + 1))
+    return float((center + (lower + upper) / 2 - 90) % 180)
+
+
 def measure_capsule(image: NDArray[np.uint8], roi: BoundingRect) -> CapsuleMeasurement:
     """Borrow pixels; never mutate, resize or retain source data.
 
@@ -121,7 +153,7 @@ def measure_capsule(image: NDArray[np.uint8], roi: BoundingRect) -> CapsuleMeasu
     if roi.height < 2:
         raise ValueError("Capsule ROI needs two nonempty views")
     crop = image[roi.y : roi.y + roi.height, roi.x : roi.x + roi.width]
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV).astype(np.uint8, copy=False)
     middle = roi.height // 2
 
     def view(name: str, start: int, end: int) -> ViewMeasurement:
@@ -156,9 +188,7 @@ def measure_capsule(image: NDArray[np.uint8], roi: BoundingRect) -> CapsuleMeasu
         enough = np.count_nonzero(suitable) >= max(
             5, int(np.count_nonzero(interior) * 0.1)
         )
-        hue = (
-            median_hue(pixels[:, :, 0][suitable].astype(np.float64)) if enough else None
-        )
+        hue = median_pixel_hue(pixels[:, :, 0][suitable]) if enough else None
         return ViewMeasurement(
             name,
             BodyMeasurement(

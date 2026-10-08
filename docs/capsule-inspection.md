@@ -29,6 +29,14 @@ pixels are required. Hue is unwrapped about a circular center, then median-reduc
 an ambiguous circular mean magnitude < 0.5 is unusable. Hue distance uses the
 OpenCV period 180, including wrap-around. These constants are provisional too.
 
+Integer Hue samples use a 180-bin histogram and reusable unit-vector lookup to
+compute the same circular center and median ranks. Near the magnitude 0.5 branch
+or center-rounding ties, computation falls back to the original pixel-order
+floating reduction. This changes computation cost, not rejection limits, body
+selection, width/height, required two-view behavior or evidence. Production and
+preview still share `measure_capsule()`; see the
+[performance measurements](inspection-performance.md).
+
 `judge_capsule()` uses cached scalar measurements. Both views must satisfy enabled
 inclusive width/height limits or circular color tolerance. Missing/competing/truncated
 bodies are SUCCESS + NG, with no invented measurements for that view. Unusable

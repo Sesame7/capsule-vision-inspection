@@ -1,4 +1,4 @@
-# Inspection performance baseline — Phase 3F-1
+# Inspection performance — Phase 3F-1 baseline and Phase 3F-2A
 
 `scripts/benchmark_production.py` is an opt-in, Qt-free fixed-image experiment.
 It uses `ProductionApplication -> ProductionRuntimeSession -> RuntimeCoordinator`
@@ -199,3 +199,125 @@ checks. The current baseline does not identify which inner operation dominates;
 no algorithm or runtime optimization was made here. CPU scheduling, frequency,
 thermal state and other desktop activity were not controlled, and the observed
 round drift cannot be assigned a cause from these measurements alone.
+
+
+## Capsule hotspot profiling — Phase 3F-2A
+
+Phase 3F-1 was committed as `4446e03` before this work; its fixed six images,
+model, saved MachineLayout and Recipe file hashes were verified unchanged.
+Profiling/reference helpers and detailed intermediate artifacts are ignored under
+`outputs/capsule_profiling/phase3f2a/`. No persistent instrumentation was added to
+the production path. `profile.py` loads the committed `reference_capsule.py` and
+uses explicit CPU-only scopes on the same 36 ROIs. It also times the real,
+uninstrumented measurement function and compares complete scalar measurements.
+
+The component scopes are HSV conversion (including the borrowed ROI slice),
+foreground threshold, connected components, dominant-body selection/validation,
+mask creation/erosion, usable-pixel selection/extraction, and circular Hue.
+The original Hue scope includes its float conversion. Validation/result construction
+is present in the uninstrumented total; the component probe omits these small
+parts. Totals include the fixed 36-call loop. Inputs are decoded before timing.
+
+Three 40-cycle original runs measured 133.83-138.61 ms mean for uninstrumented
+36-ROI measurement. Component means per six-image workload were:
+
+| Component | Original mean range, ms |
+| --- | --- |
+| Circular Hue | 89.77-97.39 |
+| Connected components | 11.03-12.60 |
+| Usable pixels | 9.10-10.34 |
+| Mask/erosion | 4.73-5.29 |
+| Foreground threshold | 4.64-4.93 |
+| HSV | 4.24-4.94 |
+| Body selection | 0.71-0.77 |
+
+Each workload has 36 HSV scopes and 72 of each view scope (468 scopes total).
+An empty scope cost about 0.98-1.13 microseconds including context-manager/recording
+work, or about 0.46-0.53 ms for that scope count. Instrumentation perturbs execution;
+independently collected total differences are not used to subtract or estimate its
+cost. The uninstrumented before/after measurements are the local speed comparison.
+OpenCV retained its existing 20-thread setting in these measurements and production;
+no process-wide threading change was investigated or accepted.
+
+The accepted optimization is confined to circular Hue: count 180 integer bins,
+reduce reusable complex unit vectors once per bin, then select the two weighted
+median ranks in circular order. It avoids per-pixel float/complex arrays,
+exponentials and median partitioning. Numerical guards choose the original
+pixel-order calculation at branch/tie boundaries; they are not new acceptance
+tolerances. Generic floating `median_hue()` remains the original implementation.
+The OpenCV uint8 output uses `astype(uint8, copy=False)` for precise typing, without
+an image copy for this input contract. Body/mask/selection code and judgment rules
+are unchanged.
+
+Two 40-cycle optimized CPU runs measured 45.33-52.44 ms mean for the same 36-ROI
+measurement. `histogram_default_*.json` retain raw component and total samples.
+The intermediate real A/C check (10 warm-up + 50 measured cycles each) produced
+A P95 41.28 ms and C P95 79.99 ms, with C traditional-stage mean 40.29 ms;
+all results/cleanup were successful. This small check motivated stopping further
+local changes and proceeding to the final repeated four-mode measurement.
+
+Correctness includes every two-bin pair, weighted/random distributions, 0/179
+wraparound, ambiguous distributions, magnitude/center numerical boundaries and
+pixel-order permutations. Existing tests retain size/color tolerance boundaries,
+missing/competing/truncated bodies, particles/dark edges, technical failures and
+preview/production behavior. All 36 real ROI measurements and 144 complete
+four-mode check results were exactly equal to the committed reference, including
+measurement and reason evidence. No simplified color-only rejection behavior was
+introduced.
+
+
+### Final real production comparison
+
+The accepted code SHA-256 is
+`37a05a92fa2c8f2ea68c92fe744a13ba55af6c94cf68fe81221db0c20aa98a51`.
+One final 30-warm-up / 300-measured / 3-repetition ABCD/BCDA/CDAB experiment
+created `outputs/inspection_performance/20261008T160444_673911Z/`.
+The unchanged benchmark generated `cycles.csv`, `report.json` and `report.md`;
+the local wrapper added `final_lifecycle.json`, and the post-run audit generated
+`comparison.json` with pooled before/after statistics and per-round details.
+The UTC date is October 8 (October 9 in the local Asia/Shanghai timezone).
+
+All 3,600 measured cycles and 360 separately marked warm-up cycles succeeded,
+with zero technical/check errors or exceptional Futures. All 12 sessions stopped,
+closed and terminated. The final process had no additional Python threads; OpenCV
+remained at 20 threads. Source/configuration/input fingerprints were unchanged
+through the experiment. Original and optimized scalar outcome distributions
+(channel/check outcomes, reasons, measurement counts, judgments) were exactly equal.
+
+Each mode contains 900 measured cycles. Units are ms:
+
+| Mode | Mean | P50 | P95 | P99 | Traditional mean | >100 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | 38.19 | 37.82 | 41.65 | 45.39 | disabled | 0% |
+| B | 85.59 | 84.86 | 95.29 | 99.60 | 46.37 | 0.56% |
+| C | 86.60 | 86.17 | 93.34 | 95.27 | 47.38 | 0.22% |
+| D | 52.19 | 52.56 | 56.78 | 59.43 | 47.38 | 0% |
+
+Primary C comparison with Phase 3F-1:
+
+| Metric | Original | Optimized |
+| --- | --- | --- |
+| Complete-cycle mean | 176.75 | 86.60 |
+| Complete-cycle P50 | 178.27 | 86.17 |
+| Complete-cycle P95 | 184.73 | 93.34 |
+| Complete-cycle P99 | 190.08 | 95.27 |
+| Traditional-stage mean | 136.30 | 47.38 |
+| ViMo-stage mean | 34.76 | 34.01 |
+
+C P95 by independent round was 86.73, 90.68 and 94.49 ms; B's last-round
+P95 was 97.91 ms. The primary P95 <=100 ms comparison target is met, while the
+preferred 70-80 ms margin is not stable. C had two >100 ms observations (maximum
+117.81 ms); this is not a hard-deadline guarantee. Independent sample comparisons
+and uncontrolled desktop/frequency/thermal effects remain limitations.
+
+After the large Hue reduction (89.77-97.39 to 5.57-5.85 ms in CPU component
+measurements), connected components and full-view mask/usable-pixel operations
+are the strongest remaining traditional costs. Profiling did not establish a
+cause for round drift. Further architecture or rejection-rule changes are not
+justified by this result. A simplified color-only algorithm is not needed to
+meet the current P95 target; any future relaxation of the two-body rule would
+require its own agreed semantics. No additional optimization was accumulated.
+
+Final gates: Ruff/format/strict Pyright clean; 495 tests passed, 10 opt-in GPU/full
+reference tests skipped. The actual four-mode GPU experiment passed separately.
+Historical 400-image and 30,000-call experiments were not repeated.
