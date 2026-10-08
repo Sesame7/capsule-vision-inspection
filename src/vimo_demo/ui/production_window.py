@@ -174,6 +174,9 @@ class ProductionWindow(QMainWindow):
             if name == "parameters":
                 self.pages.addWidget(self.parameters)
                 continue
+            if name == "settings":
+                self.pages.addWidget(self.parameters.settings)
+                continue
             placeholder = QWidget()
             container = QVBoxLayout(placeholder)
             label = QLabel()
@@ -227,8 +230,8 @@ class ProductionWindow(QMainWindow):
 
     def navigate(self, index: int) -> None:
         if (
-            self.pages.currentWidget() is self.parameters
-            and index != 1
+            self.pages.currentWidget() is self.parameters.settings
+            and index != 4
             and self.parameters.roi_workspace is not None
         ):
             self.parameters.leave_workspace(lambda: self.navigate(index))

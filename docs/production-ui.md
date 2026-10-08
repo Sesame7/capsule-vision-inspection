@@ -1,12 +1,12 @@
 # Production UI — Phase 2D-1
 
-The Production page is implemented. Phase 2D-2A adds the
-[Parameters Recipe editor](recipe-configuration-ui.md); Diagnostics, History and
-Settings remain localized placeholders. This is a simulated workstation shell,
+The Production page is implemented. Phase 3D simplifies the
+[Recipe editor](recipe-configuration-ui.md); Settings opens Machine ROI, while
+Diagnostics and History remain localized placeholders. This is a simulated workstation shell,
 not commissioned camera/PLC software. The [design direction](production-ui-direction.md)
 remains a visual reference, not an exact implementation specification.
 
-The [graphical ROI editor](graphical-roi-editor.md) now opens as a dedicated canvas workspace inside Parameters. It retains a frozen display reference and shares the image transform;
+The [graphical ROI editor](graphical-roi-editor.md) now opens as a dedicated canvas workspace inside Settings. It retains a frozen display reference and shares the image transform;
 Production cards, result matching and application lifecycle are unchanged.
 
 ## Boundaries and updates
@@ -114,7 +114,7 @@ event history, traceback, internal path or raw vendor error.
 
 ## Closing
 
-Close first resolves any dirty Parameters draft and waits asynchronously for any
+Close first resolves any dirty Recipe draft and waits asynchronously for any
 outstanding Recipe preparation. Once approved, it ignores the initial window
 event, disables operational controls and requests
 application close once. Qt remains responsive. Successful Future completion is
@@ -184,7 +184,7 @@ The repository currently contains synthetic configuration fixtures only; the
 verified local model does not by itself provide a commissioned 36-channel layout.
 Use existing configuration persistence/editor workflows to supply the layout and
 Recipe; see [configuration](inspection-configuration.md).
-The supplied Recipe's directory is the existing Parameters catalog. This launcher
+The supplied Recipe's directory is the existing Recipe catalog. This launcher
 registers only the supplied model; Recipes requiring another model fail validation.
 
 `--frames-dir` selects the first six common image files in deterministic

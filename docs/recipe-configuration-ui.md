@@ -1,157 +1,110 @@
-# Parameters / Recipe configuration UI — Phase 2D-2A
+# Recipe UI — Phase 3D first pass
 
-Parameters edits existing schema-v1 Recipes. It does not edit model registry
-entries, machine mapping, algorithms or live runtime parameters. The
-[Phase 2B contract](inspection-configuration.md) remains authoritative for values,
-inheritance, validation and atomic persistence; the
-[application contract](production-application.md) owns candidate activation.
+The normal page is **Recipe / 配方**. It presents product-level identity and model
+selection, using the existing Qt-free `RecipeEditorSession`, `RecipeDraft` and
+`RecipeCatalog`. Configuration schema, persistence, inspection and application
+lifecycle remain authoritative; this is a presentation/workflow simplification.
 
-## Components and lifecycle
+## Normal operator surface
 
-`ParametersPage` and `CheckFields` present a Qt-free `RecipeEditorSession` and
-`RecipeDraft`. `RecipeCatalog` wraps existing `load_recipe` / `save_recipe`; no
-database, second configuration schema or new lower-layer API is introduced.
-The session receives a catalog directory, immutable machine/model definitions,
-default model ID and explicit artifact base directory. It never owns an engine
-or changes an application. `ProductionWindow` optionally receives this session;
-without it Parameters explains that no catalog is configured. The demo injects
-a complete synthetic session.
+- Recipe selector showing display names; secondary New, Duplicate and Reload.
+- Recipe name and optional product code.
+- Inspection model using registered display names. A single model is read-only.
+- A concise detection-rule summary, saved/unsaved/preparing state and error feedback.
+- One primary **Save and apply** action.
 
-| Action | Effect |
-| --- | --- |
-| Select / Reload | Fresh persisted Recipe becomes a clean draft; never apply |
-| New | Empty ID/name and schema defaults; no silently copied overrides |
-| Validate | Construct immutable Recipe and run Phase 2B resolution; no save or activation |
-| Save | Validate/resolve, call existing atomic writer, then update the saved baseline |
-| Save As | Require new unique ID and nonempty name; create/select a new file |
-| Apply | Reload saved clean Recipe, resolve, verify artifact off-thread, configure candidate |
+There is no long scrolling form, raw Recipe ID, model path/hash/module dump,
+Defaults/Camera/Channel navigation, Inherit/Override UI, enabled/required controls,
+traditional-check forms, raw disabled-label editor, or machine-layout dump.
+The old `CheckFields` presentation was removed, not folded into an advanced panel.
 
-Save/Save As do not apply, start or reset counters. Apply does not mean active.
-Only successful Start/warm-up promotes the candidate; failed startup preserves
-the last-known-good active configuration. Candidate and active IDs appear separately
-on both pages, including READY after Stop. An ID is not a revision/content hash:
-editing a persisted Recipe with the same ID does not change its already-active
-immutable configuration. No Recipe version-control UI is implied.
+Model selection maps to the existing default/override semantics. Unrelated edits
+preserve `model_override_id` exactly, including an explicit ID equal to the default.
+Unknown saved models remain invalid rather than being silently replaced. No model
+loading or label-sidecar parsing occurs on selection. Normal default ViMo policy
+shows “all model defect labels”; nondefault policies use a neutral saved-configuration
+summary instead of falsely claiming all labels participate.
 
-## Catalog and persistence
+Recipes with camera/channel overrides show one exceptional notice that these data
+are not editable here. Name/product/model edits and duplication preserve all hidden
+defaults, camera/channel policies, thresholds and label filters through the existing
+draft round trip. Explicit False, zero, empty lists and inheritance stay distinct.
+Normal Recipes without overrides do not show the override notice.
 
-Discovery is nonrecursive and reads only `*.recipe.json` (case-insensitive suffix).
-Files are visited in deterministic filename order; valid entries display by name
-and exact ID. Unrelated files are ignored. Invalid files and duplicate IDs are
-reported with file context; all copies of an ambiguous ID are excluded. Directory
-errors use `ConfigurationIOError`, invalid data uses `ConfigurationError`.
-Discovery never creates/writes files. Resolve catalog issues before saving.
+## New, Duplicate and persistence
 
-New filenames use SHA-256 of the exact Recipe ID, so valid Unicode IDs or IDs
-containing path characters cannot escape the injected directory. Existing selected
-paths remain stable. Phase 2B owns temporary-file creation, flush/fsync and atomic
-replacement. Validation/write failure preserves the draft and previous persisted
-baseline. Model JSON, machine JSON, source models and images are never modified.
+New and Duplicate open a small name dialog. A UUID supplies a new opaque Recipe ID;
+the operator does not need to enter one. Existing IDs are never renamed. New starts
+with current domain defaults (ViMo enabled, traditional checks disabled). Duplicate
+copies the current clean Recipe, including product/model and all hidden inspection
+settings, changing only identity and the supplied name. Cancelling the dialog leaves
+the previous draft intact. Creation produces a draft; Save and apply persists it.
 
-This is a single-writer local catalog. There is no watcher, deletion, cross-process
-write arbitration or history. External edits require Reload/reselection. Apply
-detects saved data differing from the loaded baseline and requires reload rather
-than applying unseen edits. Normal Save does not implement conflict merging;
-avoid concurrent editors.
+Discovery still reads only nonrecursive `*.recipe.json`, reports malformed/duplicate
+entries and shows registered display names. Reload supports external edits.
+Existing paths remain stable; the catalog derives new filenames from the ID hash.
+The codec remains responsible for validation and atomic writes. No deletion,
+versioning, external watcher, conflict merging or new persistence layer is added.
 
-## Draft, fields and inheritance
+## Save and apply, failures and navigation
 
-Mutable UI drafts are separate from immutable domain definitions. Integer fields
-retain editing text, including invalid input, until domain conversion; invalid
-values are not clamped. Equality against the loaded baseline drives dirty state.
-Navigation, language, camera/channel selection and validation do not dirty it.
-An untouched blank New form is not dirty, but is unsaved and cannot Apply.
-Saved IDs are read-only; use Save As.
+1. Validate/resolve the draft using the existing configuration layer.
+2. Atomically persist changed/new Recipe data.
+3. Capture the saved clean Recipe and prepare/verify the model on the existing
+   `RecipePreparation` thread, with queued Qt completion.
+4. Configure it through `ProductionApplication`; only successful **Start** activates.
 
-Defaults / Camera / Channel select existing inheritance levels. Camera/channel
-choices come from the actual layout, including physical slot order. Optional
-overrides visibly distinguish Inherit/Override; booleans distinguish Inherit/Yes/No.
-Defaults area bounds distinguish Not set / Set bound. Effective values and ROI
-come from `resolve_configuration()` for the selected channel, never UI precedence.
+A clean Recipe is re-read and checked for external changes rather than rewritten.
+Save/write failure retains the draft and previous file. Preparation failure after
+successful persistence leaves the new file saved while preserving previous candidate
+and active configuration. It reports an error, does not claim successful Apply and
+does not continue pending navigation. There is deliberately no rollback transaction
+spanning disk persistence and application configuration.
 
-Only existing fields are exposed: Presence/Color enabled and required; Blob
-enabled/required and optional integer min/max area (px²); ViMo enabled/required
-and disabled labels. ROI geometry is not Recipe data.
-Enabled requests execution; Required controls an enabled check's technical-validity
-contribution. Explicit False, zero and empty disabled-label list remain distinct
-from inherit. Labels are exact text, one per line; empty text with Override selected
-means `[]`. No model-label catalog is invented. Schema v1 cannot clear an inherited
-area bound with null, because null means inherit; the page explains this limitation.
+Success says changes become active on the next successful Start. No counters reset,
+implicit Start or live activation is introduced. Candidate/active remain backend
+concepts and are not required vocabulary on the Recipe page.
 
-Model choice is Default or an existing registered model. Name/ID, path, expected
-SHA-256 and module ID are read-only; changing selection never loads a model.
-Machine details show camera/channel mapping and saved machine ROIs. Parameters
-also opens the separate [machine six-ROI workspace](graphical-roi-editor.md).
-Its draft and geometry operations affect the machine layout, never the Recipe. Its combined
-Save and apply action saves geometry and then uses existing background preparation
-to resolve the selected saved Recipe against it. Recipe edits must first be saved;
-the workspace never silently saves them. Successful Start still activates changes.
-Application close resolves both drafts; switching Recipes retains the independent
-machine draft. The launcher supplies the machine JSON path.
+Recipe switch, New, Duplicate, Reload and close guard dirty data with the same small
+**Save and apply / Discard / Cancel** flow. Save continues only after preparation and
+configuration succeed; Discard reloads/reset the draft; Cancel stays. Ordinary shell
+navigation retains the Recipe draft. Closing during preparation waits for actual
+thread termination, suppresses late configuration, then follows existing asynchronous
+application shutdown. No native inference is performed or waited on by widgets.
 
-## State, validation and shutdown
+UNCONFIGURED/READY permit editing. STARTING/RUNNING/STOPPING/FAULT/CLOSED allow viewing
+but not editing or Save and apply. Readiness is checked again before configuration.
+Preparation disables duplicate commands. Existing engine/warm-up ownership is unchanged.
 
-Editing, Validate, Save, Save As and Apply are allowed only in UNCONFIGURED/READY.
-STARTING/RUNNING/STOPPING/FAULT/CLOSED are view-only. Hierarchy navigation and Recipe
-viewing remain available while running. Apply rechecks authoritative application
-state on completion, so a concurrent Start cannot install live changes.
+## Machine geometry
 
-Validation errors show concise domain field/context messages; no traceback or
-fabricated nested JSON path. Dirty/saved, validation, candidate and active states
-use text, not color alone. Save As retains its dialog on invalid identity/data.
-Preparation failure does not invent FAULT or modify candidate/persisted data.
+**Settings → Machine ROI** opens the unchanged canvas-first workspace, using the
+selected saved Recipe for its existing save/prepare/configure operation. Settings
+contains only this concise entry; there is no broader Settings redesign. Recipe
+pages do not contain machine geometry. MachineLayout remains its sole owner.
+See the [ROI contract](graphical-roi-editor.md) for dirty navigation, frozen frames,
+geometry, initialization and bounds rules. Recipe editing never writes machine JSON.
 
-Recipe JSON operations are small synchronous editor work. Model hashing uses at
-most one `RecipePreparation` thread and the existing Future-to-queued-Qt gate.
-There is no preparation queue/pool. Editing and duplicate Apply are disabled while
-it runs. GUI code never loads a model, warms up, infers or waits on unfinished work.
-
-Recipe switch, New, Reload and close resolve dirty drafts with an asynchronous
-Save / Discard / Cancel dialog. Save continues only after successful persistence;
-Discard reloads the saved baseline (or resets a new draft); Cancel stays. Switching
-shell pages retains Recipe drafts. Leaving the Machine ROI workspace separately
-resolves machine edits with Save and apply / Discard / Cancel. Close waits for
-preparation termination, suppresses late Apply, then uses existing asynchronous
-application close/actual-thread-termination behavior. No native call is cancelled.
-
-## Presentation and synthetic acceptance walkthrough
-
-Existing Chinese/English strings, logical sizes and dark tokens are extended.
-A compact selector works in portrait/landscape; one main scroll area holds forms
-and details. Identity/status and primary actions remain outside it. Controls use
-44-pixel logical touch rows. Tests cover both languages at 1080×1920, 1920×1080 and
-900×1200; physical Windows DPI, touch and font ergonomics still need field review.
+## Review and verification
 
 ```powershell
 uv run --no-sync python scripts/run_production_ui.py --language zh --size 1080x1920
 uv run --no-sync python scripts/run_production_ui.py --language en --size 1920x1080
+uv run --no-sync pytest tests/integration/test_parameters_ui.py tests/integration/test_roi_editor.py tests/unit/test_recipe_editor.py --tb=short
 ```
 
-The existing launcher seeds synthetic Demo A/B files only when absent under ignored
-`outputs/production_ui_demo/recipes/`; subsequent edits are preserved. Both registry
-choices use the known tiny fake artifact, not ViMo. Blob limits exercise resolution
-while Blob stays disabled; these are not calibrated algorithm settings.
+The fake demo uses local synthetic Demo A/B files without GPU. Demo B retains its
+historical camera/channel settings and therefore shows the exceptional notice.
+The real-local launcher and supplied configuration paths are unchanged.
 
-1. Open Parameters and select Demo B. Candidate stays Demo A.
-2. Inspect Defaults / CAM1 / CH01: Blob maximum is 1800.
-3. Inspect Camera override / CAM3 / CH13: maximum is 1850.
-4. Inspect Channel override / CAM3 / CH17: maximum is 1900. Clear Override to see
-   inherited 1850; restore Override for the next edit.
-5. Change maximum to 1901. Observe Unsaved changes; Validate without saving.
-6. Save. Observe Saved and unchanged candidate. Apply explicitly makes B candidate;
-   Active stays absent or the previous successfully started Recipe.
-7. Return to Production and Start. Successful warm-up activates B. While RUNNING,
-   open Parameters: values remain visible, editing/Save/Apply are disabled.
-8. Stop. Save As with a new ID/name, then Apply. Active stays B until another
-   successful Start. Production counters remain unchanged.
-9. Edit a name; attempt Recipe switch, New or close. Exercise Cancel, Discard, Save.
-   Invalid data must prevent the Save continuation.
-10. Switch languages and sizes; inspect model/layout details. Open Machine ROI
-    setup for geometry editing independent of Recipe check inheritance.
+Review the Recipe page for simplicity, unnecessary remaining information, obvious
+switch/New/Duplicate actions and understandable Save and apply. Check that there is
+room for future size/color parameters without introducing them now. Exercise dirty
+navigation, both languages and portrait/landscape. Offscreen screenshots/tests do
+not replace usability, physical DPI or touch acceptance.
 
-Automated application tests also demonstrate active A / candidate B / failed B
-startup with A retained. No GPU or customer assets are needed.
-
-Phase 3C replaces Recipe geometry editing with machine six-ROI setup. Roles/login, model management,
-Recipe deletion/versioning, watching, calibration, archive and camera/PLC integration
-remain separate future work.
+Traditional capsule size/color UI is deferred until algorithms and calibrated
+parameters exist. Technical `required` policy, raw ViMo label filtering and hierarchy
+remain backend capabilities, documented in [configuration](inspection-configuration.md).
+Model-export metadata/label integration is deferred. No accuracy, throughput,
+production calibration, camera/PLC or GPU regression claim follows from this UI pass.

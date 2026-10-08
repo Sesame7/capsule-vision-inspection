@@ -7,9 +7,9 @@ support. Multiple views/ROIs per channel are not implemented.
 
 ## Workspace and ownership
 
-Parameters → **Machine ROI setup** replaces the Parameters form with a dedicated
+Settings → **Machine ROI** replaces the Settings entry with a dedicated
 canvas workspace inside the existing application window. It is not a nested ROI
-dialog. The rest of Parameters and the Production screen are unchanged.
+dialog. The Recipe page contains no machine-geometry controls.
 
 - `machine_editor.py`: Qt-free machine draft, atomic geometry operations and save.
 - `roi_geometry.py`: existing source-pixel transform, rounding and bounded gestures.
@@ -39,7 +39,7 @@ It then calls `ProductionApplication.configure()`. Successful **Start** remains 
 only activation boundary. Success feedback says changes take effect on the next
 successful Start; there is no hot modification of RUNNING configuration.
 
-An unsaved/new Recipe must first be saved on Parameters. The workspace never
+An unsaved/new Recipe must first be saved on Recipe. The workspace never
 silently saves Recipe edits. Machine write failure preserves the previous saved
 baseline and dirty geometry. Preparation/configuration failure after a successful
 save leaves geometry saved, reports the error and does not claim successful Apply.
@@ -110,7 +110,7 @@ Real ViMo uses the unchanged
 `run_local_production_ui.py` and supplied `--machine-config` path. Old local Recipes
 containing ROI fields fail validation rather than being silently rewritten.
 
-1. Open Parameters → Machine ROI setup; select a camera tab.
+1. Open Settings → Machine ROI; select a camera tab.
 2. Set common Width/Height and Apply size to all.
 3. Drag the first and last configured slot ROIs into position.
 4. Distribute evenly, then fine-tune middle rectangles directly.

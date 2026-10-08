@@ -4,14 +4,18 @@ from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QPoint, QTimer
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QGroupBox,
+    QLabel,
     QLineEdit,
     QMessageBox,
+    QScrollArea,
 )
 from tests.qt_support import until
 from tests.unit.test_production_application import FakeSession
@@ -22,8 +26,13 @@ from vimo_demo.application import (
     PreparedConfiguration,
     ProductionApplication,
 )
-from vimo_demo.configuration import RecipeDefinition, load_recipe, save_recipe
-from vimo_demo.inspection.production import ChannelId
+from vimo_demo.configuration import (
+    ConfigurationIOError,
+    ModelRegistry,
+    RecipeDefinition,
+    load_recipe,
+    save_recipe,
+)
 from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 from vimo_demo.ui.parameters_page import DirtyDecision
 from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
@@ -78,39 +87,56 @@ def edit(line: QLineEdit, value: str) -> None:
     line.textEdited.emit(value)
 
 
+type Screen = tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]]
+
+
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
-def test_parameters_layout_language_and_viewing_is_clean(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-    qapp: QApplication,
-    language: Language,
-    size: tuple[int, int],
+def test_compact_recipe_layout(
+    configured_screen: Screen, language: Language, size: tuple[int, int]
 ) -> None:
     window, session, runtimes = configured_screen
     window.set_language(language)
     window.resize(*size)
-    qapp.processEvents()
+    QApplication.processEvents()
     page = window.parameters
-    assert window.pages.currentWidget() is page
-    assert page.recipes.count() == 2 and not session.dirty
-    page.scope.setCurrentIndex(1)
-    page.camera.setCurrentIndex(2)
-    page.scope.setCurrentIndex(2)
-    page.channel.setCurrentIndex(4)
-    window.navigate(0)
-    window.navigate(1)
-    assert not session.dirty and not runtimes
+    assert page.recipes.count() == 2 and not session.dirty and not runtimes
+    assert set(page.metadata) == {"display_name", "product_code"}
+    assert page.findChildren(QComboBox) == [page.recipes, page.model]
+    assert not page.findChildren(QScrollArea) and not page.findChildren(QGroupBox)
+    assert len(page.findChildren(QLineEdit)) == 2
+    assert set(page.buttons) == {
+        "new_recipe",
+        "duplicate_recipe",
+        "reload",
+        "save_apply",
+    }
+    assert window.navigation[1].text() == text("parameters", language)
     for button in page.buttons.values():
-        assert page.rect().contains(button.geometry())
+        assert page.rect().contains(button.mapTo(page, QPoint(0, 0)))
         assert (
             button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 15
         )
-    assert page.scroll_area.viewport().width() > 650
-    assert page.editor.width() <= page.scroll_area.viewport().width()
+    assert session.entry is not None
+    model = session.registry.get(session.default_model_id)
+    visible_text = " ".join(label.text() for label in page.findChildren(QLabel))
+    for technical in (
+        model.model_path,
+        model.expected_sha256,
+        "SHA-256",
+        "module_id",
+        "required",
+        session.entry.recipe.recipe_id,
+    ):
+        assert technical not in visible_text
+    assert not page.open_roi.isVisible()
+    window.navigate(4)
+    assert page.open_roi.isVisible() and window.pages.currentWidget() is page.settings
+    window.navigate(1)
 
 
-def test_hierarchy_effective_values_roi_and_distinct_explicit_values(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
+def test_metadata_model_and_hidden_overrides_preserved(
+    configured_screen: Screen,
 ) -> None:
     window, session, _ = configured_screen
     page = window.parameters
@@ -120,93 +146,120 @@ def test_hierarchy_effective_values_roi_and_distinct_explicit_values(
         if e.recipe.channel_overrides
     )
     page.recipes.activated.emit(index)
-    page.camera.setCurrentIndex(2)
-    page.channel.setCurrentIndex(4)
-    page.scope.setCurrentIndex(2)
-    maximum = page.groups["blob"].bounds["max_area"]
-    assert maximum[0].isChecked() and maximum[1].text() == "1900"
-    assert "1900" in page.groups["blob"].effective.text()
-    maximum[0].setChecked(False)
-    assert "1850" in page.groups["blob"].effective.text()
-    assert session.draft.channels[ChannelId(17)]["blob"].max_area is None
-    page.scope.setCurrentIndex(1)
-    edit(page.groups["blob"].bounds["max_area"][1], "1852")
-    assert "1852" in page.groups["blob"].effective.text()
-    page.scope.setCurrentIndex(2)
-    page.groups["blob"].booleans["enabled"].setCurrentIndex(2)  # explicit False
-    page.groups["blob"].booleans["required"].setCurrentIndex(2)
-    minimum, minimum_line = page.groups["blob"].bounds["min_area"]
-    minimum.setChecked(True)
-    edit(minimum_line, "0")
-    page.groups["vimo"].label_override.setChecked(True)
-    page.groups["vimo"].label_values.setPlainText("")
-    assert page.validate()
-    assert page.save()
     assert session.entry is not None
-    checks = load_recipe(session.entry.path).channel_overrides[0].checks
-    assert checks.blob.enabled is False and checks.blob.required is False
-    assert checks.blob.min_area == 0 and checks.blob.max_area is None
-    assert checks.vimo.disabled_labels == ()
-    page.scope.setCurrentIndex(2)
-    page.camera.setCurrentIndex(2)
-    page.channel.setCurrentIndex(4)
-    assert (
-        session.resolve().channels[16].roi
-        == session.machine.layout.cameras[2].slots[4].rect
+    original = session.entry.recipe
+    assert page.notice.isVisible()
+    edit(page.metadata["display_name"], "新产品")
+    edit(page.metadata["product_code"], "SKU-中文")
+    page.buttons["save_apply"].click()
+    until(lambda: not page.busy)
+    saved = load_recipe(session.entry.path)
+    assert saved == replace(original, display_name="新产品", product_code="SKU-中文")
+    assert window.bridge.application.snapshot().active is None
+    assert window.choices[-1].prepared.configuration.recipe_id == original.recipe_id
+    # Explicit default model IDs survive an unrelated edit; changing the selector
+    # deliberately uses the registry/default mapping, never the display name as ID.
+    default_index = next(
+        i
+        for i, m in enumerate(session.registry.models)
+        if m.model_id == session.default_model_id
     )
+    page.model.setCurrentIndex(default_index)
+    page.model.activated.emit(default_index)
+    page.save_and_apply()
+    until(lambda: not page.busy)
+    assert load_recipe(session.entry.path).model_override_id is None
+    index = next(
+        i
+        for i, e in enumerate(session.catalog.discover().entries)
+        if not e.recipe.channel_overrides
+    )
+    page.recipes.activated.emit(index)
+    assert not page.notice.isVisible()
 
 
-def test_save_apply_and_failed_candidate_preserve_active(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-) -> None:
+def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> None:
     window, session, runtimes = configured_screen
     page, app = window.parameters, window.bridge.application
-    page.apply()
+    assert session.entry is not None
+    original = session.entry.recipe
+    edit(page.metadata["display_name"], "Updated")
+    page.save_and_apply()
     until(lambda: not page.busy)
-    assert app.snapshot().candidate is not None and app.snapshot().active is None
-    a = app.snapshot().candidate
+    assert load_recipe(session.entry.path).display_name == "Updated"
+    assert app.snapshot().active is None
+    assert "next successful Start" in text("roi_applied", "en")
+    assert page.status.text() == text("roi_applied", page.language)
     window.bridge.start()
     until(lambda: len(runtimes) == 1)
-    assert not page.metadata["display_name"].isEnabled()
     runtimes[0].ready.set_result(None)
     until(lambda: app.snapshot().state is ApplicationState.RUNNING)
     window.bridge.refresh()
-    assert (
-        not page.buttons["save"].isEnabled() and not page.buttons["apply"].isEnabled()
-    )
-    assert page.camera.isEnabled()  # Inspection without editing remains available.
+    active = app.snapshot().active
+    assert active is not None and active.recipe_id == original.recipe_id
+    assert not page.buttons["save_apply"].isEnabled()
+    assert page.recipes.isEnabled() and not page.metadata["display_name"].isEnabled()
+    before = session.draft.to_recipe()
+    page.save_and_apply()
+    assert session.draft.to_recipe() == before
     window.bridge.stop()
     until(lambda: app.snapshot().state is ApplicationState.READY)
-    window.bridge.refresh()
-    assert page.metadata["display_name"].isEnabled()
-    edit(page.metadata["display_name"], "新产品")
-    assert session.dirty and not page.buttons["apply"].isEnabled()
-    assert page.save(("candidate-b", "候选乙"))
-    assert app.snapshot().candidate == a == app.snapshot().active
-    before = app.snapshot().counters
-    page.apply()
-    until(lambda: not page.busy)
-    assert app.snapshot().active == a
-    candidate = app.snapshot().candidate
-    assert candidate is not None and candidate.recipe_id == "candidate-b"
-    assert app.snapshot().counters == before
-    assert "candidate-b" in page.identity.text() and "product-a" in page.identity.text()
-    window.bridge.start()
-    until(lambda: len(runtimes) == 2)
-    runtimes[1].ready.set_exception(RuntimeError("fake startup failed"))
-    until(lambda: app.snapshot().state is ApplicationState.READY)
-    window.bridge.refresh()
-    assert app.snapshot().active == a and app.snapshot().candidate == candidate
-    assert (
-        "candidate-b" in window.identity_label.text()
-        and "product-a" in window.identity_label.text()
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_new_duplicate_dialog_and_save(
+    configured_screen: Screen, duplicate: bool
+) -> None:
+    window, session, _ = configured_screen
+    page = window.parameters
+    if duplicate:
+        page.recipes.activated.emit(
+            next(
+                i
+                for i, e in enumerate(session.catalog.discover().entries)
+                if e.recipe.channel_overrides
+            )
+        )
+    assert session.entry is not None
+    original = session.entry
+    page.buttons["duplicate_recipe" if duplicate else "new_recipe"].click()
+    dialog = page.findChildren(QDialog)[-1]
+    lines = dialog.findChildren(QLineEdit)
+    assert len(lines) == 1  # IDs are generated, never an operator form field.
+    name = lines[0]
+    box = dialog.findChild(QDialogButtonBox)
+    assert box is not None
+    name.setText("")
+    box.button(QDialogButtonBox.StandardButton.Ok).click()
+    assert dialog.isVisible() and session.entry == original
+    name.setText("新品种")
+    box.button(QDialogButtonBox.StandardButton.Ok).click()
+    assert not dialog.isVisible() and session.entry is None and session.dirty
+    new = session.draft.to_recipe()
+    assert new.recipe_id != original.recipe.recipe_id
+    expected = (
+        replace(original.recipe, recipe_id=new.recipe_id, display_name="新品种")
+        if duplicate
+        else RecipeDefinition(new.recipe_id, "新品种")
     )
+    assert new == expected
+    assert (
+        len(session.catalog.discover().entries) == 2
+    )  # Draft only until Save and apply.
+    page.save_and_apply()
+    until(lambda: not page.busy)
+    assert session.entry is not None and load_recipe(session.entry.path) == expected
+    assert load_recipe(original.path) == original.recipe
+    assert len(session.catalog.discover().entries) == 3
+    assert window.bridge.application.snapshot().active is None
 
 
-@pytest.mark.parametrize("action", ["select", "new", "close"])
+@pytest.mark.parametrize(
+    "action", ["select", "new_recipe", "duplicate_recipe", "close"]
+)
 @pytest.mark.parametrize("decision", ["save", "discard", "cancel"])
 def test_dirty_decisions(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
+    configured_screen: Screen,
     monkeypatch: pytest.MonkeyPatch,
     action: str,
     decision: DirtyDecision,
@@ -216,11 +269,8 @@ def test_dirty_decisions(
     assert session.entry is not None
     original = session.entry
     edit(page.metadata["display_name"], "有修改")
-    assert text("unsaved", "zh") in page.identity.text()
-    decisions: list[DirtyDecision] = []
 
     def confirm(callback: Callable[[DirtyDecision], None]) -> None:
-        decisions.append(decision)
         callback(decision)
 
     monkeypatch.setattr(page, "confirm_dirty", confirm)
@@ -231,46 +281,46 @@ def test_dirty_decisions(
             if e.path != original.path
         )
         page.recipes.activated.emit(target)
-    elif action == "new":
-        page.buttons["new_recipe"].click()
-    else:
+    elif action == "close":
         window.close()
-        if decision != "cancel":
-            until(lambda: window.bridge.closed)
-    assert decisions == [decision]
+    else:
+        page.buttons[action].click()
+    until(lambda: not page.busy)
     if decision == "cancel":
-        assert session.dirty and window.isVisible()
-        assert session.entry == original
-    elif action == "new":
-        assert session.entry is None and not session.draft.cameras
+        assert session.dirty and session.entry == original and window.isVisible()
     elif action == "select":
         assert session.entry is not None and session.entry.path != original.path
+    elif action == "close":
+        until(lambda: window.bridge.closed)
+    else:
+        dialogs = [d for d in page.findChildren(QDialog) if d.isVisible()]
+        assert len(dialogs) == 1
+        dialogs[0].reject()
     assert load_recipe(original.path).display_name == (
         "有修改" if decision == "save" else original.recipe.display_name
     )
 
 
-def test_invalid_save_does_not_continue_dirty_navigation(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-    monkeypatch: pytest.MonkeyPatch,
+def test_invalid_save_blocks_navigation(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window, session, _ = configured_screen
     page = window.parameters
+    original = session.entry
     edit(page.metadata["display_name"], "")
 
     def confirm(callback: Callable[[DirtyDecision], None]) -> None:
         callback("save")
 
     monkeypatch.setattr(page, "confirm_dirty", confirm)
-    original = session.entry
     page.buttons["new_recipe"].click()
     assert session.entry == original and session.dirty
-    assert text("invalid", "zh") in page.status.text()
+    assert "display_name" in page.status.text()
+    assert not page.findChildren(QDialog)
 
 
 def test_async_preparation_close_wait_and_no_late_apply(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-    monkeypatch: pytest.MonkeyPatch,
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window, session, _ = configured_screen
     page = window.parameters
@@ -287,7 +337,7 @@ def test_async_preparation_close_wait_and_no_late_apply(
 
     monkeypatch.setattr(session, "prepare", held)
     try:
-        page.apply()
+        page.save_and_apply()
         until(entered.is_set)
         QTimer.singleShot(0, heartbeat.set)
         until(heartbeat.is_set)
@@ -301,20 +351,26 @@ def test_async_preparation_close_wait_and_no_late_apply(
         release.set()
 
 
-def test_apply_artifact_failure_does_not_change_candidate(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
+def test_prepare_failure_preserves_saved_edits_but_not_promoted(
+    configured_screen: Screen,
 ) -> None:
     window, session, runtimes = configured_screen
     page = window.parameters
     before = window.bridge.application.snapshot()
+    assert session.entry is not None
     Path(session.registry.get(session.default_model_id).model_path).write_bytes(
         b"wrong SHA"
     )
-    page.apply()
+    edit(page.metadata["display_name"], "Saved before preparation")
+    page.save_and_apply()
     until(lambda: not page.busy)
     assert "SHA-256" in page.status.text()
     assert window.bridge.application.snapshot() == before and not runtimes
-    assert not session.dirty and page.metadata["display_name"].isEnabled()
+    assert (
+        not session.dirty
+        and load_recipe(session.entry.path).display_name == "Saved before preparation"
+    )
+    assert page.metadata["display_name"].isEnabled()
 
 
 @pytest.mark.parametrize(
@@ -328,9 +384,7 @@ def test_apply_artifact_failure_does_not_change_candidate(
     ],
 )
 def test_locked_state_mapping(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-    monkeypatch: pytest.MonkeyPatch,
-    state: ApplicationState,
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, state: ApplicationState
 ) -> None:
     window, _, _ = configured_screen
     app, page = window.bridge.application, window.parameters
@@ -338,18 +392,16 @@ def test_locked_state_mapping(
     with monkeypatch.context() as patch:
         patch.setattr(app, "snapshot", lambda: snapshot)
         page.refresh_state()
-        assert page.recipes.isEnabled() and page.scope.isEnabled()
+        assert page.recipes.isEnabled()
         assert not page.metadata["display_name"].isEnabled()
         assert all(
             not page.buttons[k].isEnabled()
-            for k in ("validate", "save", "save_as", "apply", "new_recipe")
+            for k in ("save_apply", "new_recipe", "duplicate_recipe")
         )
     page.refresh_state()
 
 
-def test_unknown_model_stays_invalid_on_unrelated_edit(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-) -> None:
+def test_unknown_model_preserved_on_unrelated_edit(configured_screen: Screen) -> None:
     window, session, _ = configured_screen
     assert session.entry is not None
     save_recipe(
@@ -358,57 +410,102 @@ def test_unknown_model_stays_invalid_on_unrelated_edit(
     )
     page = window.parameters
     page.reload()
-    assert "unknown-model" in page.model.currentText()
+    assert page.model.currentText() == text("unavailable_model", page.language)
     edit(page.metadata["display_name"], "名称")
     assert session.draft.model_override_id == "unknown-model"
-    assert not page.validate() and not page.save()
-
-
-def test_save_as_actual_dialog_validation_and_persistence(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-) -> None:
-    window, session, _ = configured_screen
-    page = window.parameters
-    before = window.bridge.application.snapshot()
-    page.buttons["save_as"].click()
-    dialog = page.findChildren(QDialog)[-1]
-    identity, name = dialog.findChildren(QLineEdit)
-    buttons = dialog.findChild(QDialogButtonBox)
-    assert buttons is not None
-    assert session.entry is not None
-    identity.setText(session.entry.recipe.recipe_id)
-    buttons.button(QDialogButtonBox.StandardButton.Save).click()
-    assert dialog.isVisible()  # Duplicate identity does not close or overwrite.
-    identity.setText("variant-dialog")
-    name.setText("对话框变体")
-    buttons.button(QDialogButtonBox.StandardButton.Save).click()
-    assert not dialog.isVisible()
-    assert session.entry.recipe.recipe_id == "variant-dialog" and not session.dirty
-    assert page.recipes.currentText() == "对话框变体"
-    assert window.bridge.application.snapshot() == before
+    page.save_and_apply()
+    assert "unknown-model" in page.status.text() and session.dirty
 
 
 @pytest.mark.parametrize("decision", ["save", "discard", "cancel"])
-def test_actual_dirty_dialog_buttons(
-    configured_screen: tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]],
-    decision: DirtyDecision,
+def test_actual_dirty_dialog(
+    configured_screen: Screen, decision: DirtyDecision
 ) -> None:
     window, session, _ = configured_screen
     page = window.parameters
     assert session.entry is not None
     original = session.entry
     edit(page.metadata["display_name"], "未保存")
-    page.buttons["new_recipe"].click()
+    page.buttons["reload"].click()
     dialog = page.findChildren(QMessageBox)[-1]
-    button = next(
-        b for b in dialog.buttons() if b.text() == text(decision, page.language)
-    )
-    button.click()
-    assert not dialog.isVisible()
-    if decision == "cancel":
-        assert session.dirty and session.entry == original
-    else:
-        assert session.entry is None
+    caption = text("save_apply" if decision == "save" else decision, page.language)
+    next(b for b in dialog.buttons() if b.text() == caption).click()
+    until(lambda: not page.busy)
+    assert not any(d.isVisible() for d in page.findChildren(QMessageBox))
+    assert session.dirty == (decision == "cancel")
     assert load_recipe(original.path).display_name == (
         "未保存" if decision == "save" else original.recipe.display_name
     )
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_single_model_and_unrelated_edit_preserve_model_semantics(
+    configured_screen: Screen, explicit: bool
+) -> None:
+    window, session, _ = configured_screen
+    assert session.entry is not None
+    session.registry = ModelRegistry((session.registry.get(session.default_model_id),))
+    baseline = replace(
+        session.entry.recipe,
+        model_override_id=session.default_model_id if explicit else None,
+    )
+    save_recipe(session.entry.path, baseline)
+    page = window.parameters
+    page.reload()
+    assert page.model.count() == 1 and not page.model.isEnabled()
+    assert page.model.currentText() == session.registry.models[0].display_name
+    edit(page.metadata["product_code"], "new-code")
+    page.save_and_apply()
+    until(lambda: not page.busy)
+    assert load_recipe(session.entry.path) == replace(baseline, product_code="new-code")
+
+
+def test_save_failure_keeps_draft_file_and_application(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, session, _ = configured_screen
+    assert session.entry is not None
+    original = session.entry.path.read_bytes()
+    before = window.bridge.application.snapshot()
+
+    def fail(*, new_identity: tuple[str, str] | None = None) -> None:
+        raise ConfigurationIOError("Recipe file is read-only")
+
+    monkeypatch.setattr(session, "save", fail)
+    page = window.parameters
+    edit(page.metadata["display_name"], "Keep draft")
+    page.save_and_apply()
+    assert "read-only" in page.status.text() and session.dirty and not page.busy
+    assert session.entry.path.read_bytes() == original
+    assert window.bridge.application.snapshot() == before
+
+
+def test_failed_preparation_blocks_dirty_switch(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, session, _ = configured_screen
+    assert session.entry is not None
+    original = session.entry
+    page = window.parameters
+    before = window.bridge.application.snapshot()
+
+    def fail(recipe: RecipeDefinition) -> PreparedConfiguration:
+        raise ConfigurationIOError("model temporarily unavailable")
+
+    def save(callback: Callable[[DirtyDecision], None]) -> None:
+        callback("save")
+
+    monkeypatch.setattr(session, "prepare", fail)
+    monkeypatch.setattr(page, "confirm_dirty", save)
+    edit(page.metadata["display_name"], "Persisted")
+    target = next(
+        i
+        for i, e in enumerate(session.catalog.discover().entries)
+        if e.path != original.path
+    )
+    page.recipes.activated.emit(target)
+    until(lambda: not page.busy)
+    assert session.entry.path == original.path
+    assert load_recipe(original.path).display_name == "Persisted"
+    assert "unavailable" in page.status.text()
+    assert window.bridge.application.snapshot() == before
