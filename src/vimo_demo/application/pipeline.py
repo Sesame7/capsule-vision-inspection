@@ -72,7 +72,9 @@ class ConfiguredProductionPipeline:
         if not capsule.enabled or frame is None:
             return _unavailable(FindingSource.TRADITIONAL, policy)
         try:
-            return judge_capsule(measure_capsule(frame.image, channel.roi), capsule)
+            return judge_capsule(
+                measure_capsule(frame.image, channel.roi, capsule), capsule
+            )
         except Exception as exc:
             return _unavailable(
                 FindingSource.TRADITIONAL, policy, "capsule.execution_error", exc

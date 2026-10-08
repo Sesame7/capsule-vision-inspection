@@ -31,6 +31,7 @@ from vimo_demo.inspection.production import (
 )
 from vimo_demo.inspection.production.capsule import (
     CapsuleMeasurement,
+    CapsuleSettings,
     judge_capsule,
     measure_capsule,
     median_hue,
@@ -52,14 +53,16 @@ class PreviewMeasurement:
 
 
 def measure_reference(
-    frame: DisplayFrame, camera: CameraLayout
+    frame: DisplayFrame, camera: CameraLayout, settings: CapsuleSettings
 ) -> tuple[PreviewMeasurement, ...]:
     """Same production algorithm; retain scalars/boxes, never new display pixels."""
     rows: list[PreviewMeasurement] = []
     for slot in camera.slots:
         try:
             rows.append(
-                PreviewMeasurement(slot, measure_capsule(frame.image, slot.rect))
+                PreviewMeasurement(
+                    slot, measure_capsule(frame.image, slot.rect, settings)
+                )
             )
         except Exception as exc:
             rows.append(PreviewMeasurement(slot, None, f"{type(exc).__name__}: {exc}"))
@@ -179,10 +182,6 @@ class PreviewCanvas(RoiCanvas):
                             caption,
                         )
                         painter.restore()
-                elif view.body.hue is None:
-                    painter.drawText(
-                        body.adjusted(3, 2, -2, -2), Qt.AlignmentFlag.AlignTop, "—"
-                    )
 
 
 class TraditionalPreview(QWidget):
@@ -219,6 +218,7 @@ class TraditionalPreview(QWidget):
         self.frame: DisplayFrame | None = None
         self.measurements: tuple[PreviewMeasurement, ...] = ()
         self.results: tuple[CheckResult | None, ...] = ()
+        self._measurement_flags: tuple[bool, bool] | None = None
         self._revision = 0
         self._thread: Thread | None = None
         self._future: Future[tuple[PreviewMeasurement, ...]] | None = None
@@ -361,6 +361,7 @@ class TraditionalPreview(QWidget):
             + f" {settings.color.hue_tolerance}"
         )
         self._loading = False
+        self.ensure_measurement()
         self.refresh_state()
         self.evaluate()
 
@@ -368,7 +369,15 @@ class TraditionalPreview(QWidget):
         allowed = self.allowed() and self._close is None
         self.controls.setEnabled(allowed)
         self.enabled.setEnabled(allowed)
-        self.sample.setEnabled(allowed and not self.busy and bool(self.measurements))
+        self.sample.setEnabled(
+            allowed
+            and not self.busy
+            and self.session.draft.capsule.color.enabled
+            and any(
+                row.measured and row.measured.color_measured
+                for row in self.measurements
+            )
+        )
 
     def update_settings(self) -> None:
         if self._loading or not self.allowed() or self._close is not None:
@@ -396,25 +405,25 @@ class TraditionalPreview(QWidget):
                 ),
             )
         self.session.draft.capsule = settings
-        if not self.measurements and not self.busy:
-            self._start_measurement()
         self.changed()
         self.show_settings()
 
     def sample_color(self) -> None:
         if not self.allowed() or self.busy or self._close is not None:
             return
-        # Only complete, valid two-view channels contribute; no arbitrary pixel picking.
+        # Both view colors must be usable. Body geometry is not a sampling gate.
+        if not self.session.draft.capsule.color.enabled:
+            return
         hues = [
-            v.body.hue
+            v.color.hue
             for row in self.measurements
             if row.measured
             and all(
-                v.body is not None and v.body.hue is not None
+                v.color is not None and v.color.hue is not None
                 for v in row.measured.views
             )
             for v in row.measured.views
-            if v.body is not None and v.body.hue is not None
+            if v.color is not None and v.color.hue is not None
         ]
         target = median_hue(np.array(hues, dtype=np.float64))
         if target is None:
@@ -431,6 +440,19 @@ class TraditionalPreview(QWidget):
         )
         self.changed()
         self.show_settings()
+
+    def ensure_measurement(self) -> None:
+        """Enabled capabilities identify cached evidence; thresholds do not."""
+        settings = self.session.draft.capsule
+        flags = settings.size.enabled, settings.color.enabled
+        if flags == self._measurement_flags or self._close is not None:
+            return
+        self._measurement_flags = flags
+        self._revision += 1
+        self.measurements, self.results = (), ()
+        self.canvas.rows, self.canvas.results = (), ()
+        if not self.busy:
+            self._start_measurement()
 
     def refresh_reference(self) -> None:
         if self._close is not None:
@@ -464,13 +486,16 @@ class TraditionalPreview(QWidget):
         ):
             return
         camera = self.session.machine.layout.cameras[self.camera_tabs.currentIndex()]
+        settings = (
+            self.session.draft.capsule
+        )  # Immutable capability snapshot for this job.
         future: Future[tuple[PreviewMeasurement, ...]] = Future()
         self._future = future
         self._job_revision = self._revision
 
         def run() -> None:
             try:
-                future.set_result(measure_reference(frame, camera))
+                future.set_result(measure_reference(frame, camera, settings))
             except BaseException as exc:
                 future.set_exception(exc)
 

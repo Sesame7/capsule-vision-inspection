@@ -202,3 +202,7 @@ uncalibrated demonstration. Both default off; ViMo policy overrides remain indep
 Recipe fields are rejected; see the configuration contract before using older files.
 See [capsule inspection and manual review](docs/capsule-inspection.md) for controls,
 limits and equipment-free/real-local launch commands.
+
+The opt-in [production performance baseline](docs/inspection-performance.md) compares
+ViMo-only, Size, Size+Color and traditional-only modes through the real application
+and worker path. It is a fixed-image software experiment, not machine throughput.
