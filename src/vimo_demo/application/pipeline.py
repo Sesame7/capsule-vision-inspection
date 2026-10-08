@@ -2,15 +2,12 @@
 
 from collections.abc import Callable
 from dataclasses import replace
-from enum import Enum, auto
 from time import monotonic
-from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 
 from vimo_demo.configuration import (
-    CheckConfig,
     ResolvedChannelConfiguration,
     ResolvedInspectionConfiguration,
 )
@@ -28,6 +25,7 @@ from vimo_demo.inspection.production import (
     Assessment,
     CameraInspectionResult,
     ChannelInspectionResult,
+    CheckPolicy,
     CheckResult,
     FindingSource,
     ProductionInspectionResult,
@@ -35,31 +33,13 @@ from vimo_demo.inspection.production import (
     ProductJudgment,
     Reason,
     TechnicalStatus,
-    aggregate,
 )
 from vimo_demo.inspection.production.capsule import judge_capsule, measure_capsule
 
 
-class TraditionalCheck(Enum):
-    PRESENCE = auto()
-    BLOB = auto()
-    COLOR = auto()
-
-
-class ChannelInspector(Protocol):
-    def inspect(
-        self,
-        frame: Frame,
-        channel: ResolvedChannelConfiguration,
-        check: TraditionalCheck,
-    ) -> CheckResult:
-        """Read owned full-frame pixels and exact resolved ROI/parameters; no retention."""
-        ...
-
-
 def _unavailable(
     source: FindingSource,
-    policy: CheckConfig,
+    policy: CheckPolicy,
     code: str = "result_unavailable",
     error: Exception | None = None,
 ) -> CheckResult:
@@ -80,71 +60,23 @@ class ConfiguredProductionPipeline:
     def __init__(
         self,
         configuration: ResolvedInspectionConfiguration,
-        traditional: ChannelInspector | None = None,
     ) -> None:
         self.configuration = configuration
-        self._traditional = traditional
         self._base = ProductionPipeline(configuration.layout)
 
     def _traditional_check(
         self, frame: Frame | None, channel: ResolvedChannelConfiguration
     ) -> CheckResult:
-        checks: list[CheckResult] = []
-        for kind, policy in (
-            (TraditionalCheck.PRESENCE, channel.checks.presence),
-            (TraditionalCheck.BLOB, channel.checks.blob),
-            (TraditionalCheck.COLOR, channel.checks.color),
-        ):
-            result = _unavailable(FindingSource.TRADITIONAL, policy)
-            if policy.enabled and frame is not None:
-                if self._traditional is None:
-                    result = _unavailable(
-                        FindingSource.TRADITIONAL, policy, "check_unavailable"
-                    )
-                else:
-                    try:
-                        result = self._traditional.inspect(frame, channel, kind)
-                        if (
-                            result.source is not FindingSource.TRADITIONAL
-                            or result.assessment.technical_status
-                            is TechnicalStatus.DISABLED
-                        ):
-                            raise ValueError(
-                                "Enabled traditional check returned invalid/disabled evidence"
-                            )
-                        result = replace(result, required=policy.required)
-                    except Exception as exc:
-                        result = _unavailable(
-                            FindingSource.TRADITIONAL, policy, "execution_error", exc
-                        )
-            checks.append(result)
         capsule = self.configuration.capsule
-        if capsule.enabled:
-            result = _unavailable(FindingSource.TRADITIONAL, CheckConfig(True))
-            if frame is not None:
-                try:
-                    result = judge_capsule(
-                        measure_capsule(frame.image, channel.roi), capsule
-                    )
-                except Exception as exc:
-                    result = _unavailable(
-                        FindingSource.TRADITIONAL,
-                        CheckConfig(True),
-                        "capsule.execution_error",
-                        exc,
-                    )
-            checks.append(result)
-        return CheckResult(
-            FindingSource.TRADITIONAL,
-            aggregate(checks),
-            tuple(reason for check in checks for reason in check.reasons),
-            tuple(value for check in checks for value in check.measurements),
-            required=any(
-                check.required
-                for check in checks
-                if check.assessment.technical_status is not TechnicalStatus.DISABLED
-            ),
-        )
+        policy = CheckPolicy(capsule.enabled, capsule.enabled)
+        if not capsule.enabled or frame is None:
+            return _unavailable(FindingSource.TRADITIONAL, policy)
+        try:
+            return judge_capsule(measure_capsule(frame.image, channel.roi), capsule)
+        except Exception as exc:
+            return _unavailable(
+                FindingSource.TRADITIONAL, policy, "capsule.execution_error", exc
+            )
 
     def inspect(
         self, cycle: CollectedCycle, infer: Callable[[NDArray[np.uint8]], ImageResult]
@@ -226,7 +158,7 @@ class ConfiguredProductionPipeline:
                     check for check in row.checks if check.source is FindingSource.VIMO
                 )
                 if not policy.enabled:
-                    vimo = _unavailable(FindingSource.VIMO, policy)
+                    vimo = _unavailable(FindingSource.VIMO, policy.policy)
                 elif base_check.assessment.technical_status is TechnicalStatus.ERROR:
                     vimo = replace(base_check, required=policy.required)
                 else:

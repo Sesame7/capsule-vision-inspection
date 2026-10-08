@@ -31,7 +31,6 @@ from vimo_demo.configuration import (
 from vimo_demo.inspection import CycleId, Frame
 from vimo_demo.inspection.production import (
     Assessment,
-    CheckPolicy,
     CheckResult,
     FindingSource,
     ProductionInspectionResult,
@@ -68,9 +67,7 @@ def production(
     judgment: ProductJudgment = ProductJudgment.OK,
 ) -> ProductionInspectionResult:
     config = layout()
-    base = ProductionPipeline(config, traditional=CheckPolicy(False)).from_cycle(
-        cycle_result(config)
-    )
+    base = ProductionPipeline(config).from_cycle(cycle_result(config))
     assessment = Assessment(status, judgment)
     reason = (
         ()

@@ -24,13 +24,9 @@ from vimo_demo.inspection.production.capsule import (
 
 from .errors import ConfigurationError, ConfigurationIOError
 from .models import (
-    BlobCheckConfig,
-    BlobOverride,
     CameraOverride,
     ChannelOverride,
-    CheckConfig,
     CheckConfiguration,
-    CheckOverride,
     CheckOverrides,
     MachineLayoutDefinition,
     ModelDefinition,
@@ -94,25 +90,9 @@ def _rect(value: object) -> BoundingRect:
 
 
 def _overrides(value: object) -> CheckOverrides:
-    data = _object(value, "presence blob color vimo")
-
-    def policy(name: str) -> CheckOverride:
-        row = _object(data.get(name, {}), "enabled required")
-        return CheckOverride(
-            _optional(row.get("enabled"), _bool), _optional(row.get("required"), _bool)
-        )
-
-    blob = _object(data.get("blob", {}), "enabled required min_area max_area")
+    data = _object(value, "vimo")
     vimo = _object(data.get("vimo", {}), "enabled required disabled_labels")
     return CheckOverrides(
-        presence=policy("presence"),
-        blob=BlobOverride(
-            _optional(blob.get("enabled"), _bool),
-            _optional(blob.get("required"), _bool),
-            _optional(blob.get("min_area"), _int),
-            _optional(blob.get("max_area"), _int),
-        ),
-        color=policy("color"),
         vimo=ViMoOverride(
             _optional(vimo.get("enabled"), _bool),
             _optional(vimo.get("required"), _bool),
@@ -122,24 +102,13 @@ def _overrides(value: object) -> CheckOverrides:
 
 
 def _defaults(value: object) -> CheckConfiguration:
-    # At the root there is no parent. Omitted/null fields use the documented
-    # constructor defaults; the same strict parser is shared with overrides.
-    row = _overrides(value)
-
-    def policy(item: CheckOverride, enabled: bool = False) -> CheckConfig:
-        return CheckConfig(
-            enabled if item.enabled is None else item.enabled,
-            True if item.required is None else item.required,
-        )
-
-    blob, vimo = policy(row.blob), policy(row.vimo, True)
+    row = _overrides(value).vimo
     return CheckConfiguration(
-        policy(row.presence),
-        BlobCheckConfig(
-            blob.enabled, blob.required, row.blob.min_area, row.blob.max_area
-        ),
-        policy(row.color),
-        ViMoCheckConfig(vimo.enabled, vimo.required, row.vimo.disabled_labels or ()),
+        ViMoCheckConfig(
+            True if row.enabled is None else row.enabled,
+            True if row.required is None else row.required,
+            () if row.disabled_labels is None else row.disabled_labels,
+        )
     )
 
 
@@ -274,37 +243,15 @@ def _rect_data(rect: BoundingRect) -> dict[str, object]:
 
 
 def _checks_data(checks: CheckConfiguration | CheckOverrides) -> dict[str, object]:
-    def policy(row: CheckConfig | CheckOverride) -> dict[str, object]:
-        return {
-            key: value
-            for key, value in (("enabled", row.enabled), ("required", row.required))
-            if value is not None
-        }
-
-    blob = policy(checks.blob)
-    blob.update(
-        {
-            key: value
-            for key, value in (
-                ("min_area", checks.blob.min_area),
-                ("max_area", checks.blob.max_area),
-            )
-            if value is not None
-        }
-    )
-    vimo = policy(checks.vimo)
-    if checks.vimo.disabled_labels is not None:
-        vimo["disabled_labels"] = list(checks.vimo.disabled_labels)
-    return {
+    row = checks.vimo
+    data: dict[str, object] = {
         key: value
-        for key, value in (
-            ("presence", policy(checks.presence)),
-            ("blob", blob),
-            ("color", policy(checks.color)),
-            ("vimo", vimo),
-        )
-        if value
+        for key, value in (("enabled", row.enabled), ("required", row.required))
+        if value is not None
     }
+    if row.disabled_labels is not None:
+        data["disabled_labels"] = list(row.disabled_labels)
+    return {"vimo": data} if data else {}
 
 
 def _save(path: Path, value: dict[str, object]) -> None:

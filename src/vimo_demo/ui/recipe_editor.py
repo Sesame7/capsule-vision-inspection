@@ -2,25 +2,18 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 from vimo_demo.application import PreparedConfiguration, prepare_configuration
 from vimo_demo.configuration import (
-    BlobCheckConfig,
-    BlobOverride,
     CameraOverride,
     ChannelOverride,
-    CheckConfig,
     CheckConfiguration,
-    CheckOverride,
     CheckOverrides,
     ConfigurationError,
     MachineLayoutDefinition,
     ModelRegistry,
     RecipeDefinition,
     ResolvedInspectionConfiguration,
-    ViMoCheckConfig,
-    ViMoOverride,
     load_recipe,
     resolve_configuration,
 )
@@ -31,68 +24,6 @@ from vimo_demo.inspection.production.capsule import CapsuleSettings
 from .machine_editor import MachineLayoutDraft
 from .recipe_catalog import RecipeCatalog, RecipeEntry
 
-type Group = Literal["presence", "blob", "color", "vimo"]
-GROUPS: tuple[Group, ...] = ("presence", "blob", "color", "vimo")
-
-
-def number(value: str | None, field_name: str) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise ConfigurationError(f"{field_name}: expected an integer") from exc
-
-
-@dataclass
-class CheckDraft:
-    enabled: bool | None = None
-    required: bool | None = None
-    min_area: str | None = None
-    max_area: str | None = None
-    disabled_labels: tuple[str, ...] | None = None
-
-    @classmethod
-    def from_check(cls, check: CheckConfig | CheckOverride) -> CheckDraft:
-        result = cls(check.enabled, check.required)
-        if isinstance(check, BlobCheckConfig | BlobOverride):
-            result.min_area = None if check.min_area is None else str(check.min_area)
-            result.max_area = None if check.max_area is None else str(check.max_area)
-        if isinstance(check, ViMoCheckConfig | ViMoOverride):
-            result.disabled_labels = check.disabled_labels
-        return result
-
-
-def draft_checks(
-    checks: CheckConfiguration | CheckOverrides,
-) -> dict[Group, CheckDraft]:
-    values: tuple[tuple[Group, CheckConfig | CheckOverride], ...] = (
-        ("presence", checks.presence),
-        ("blob", checks.blob),
-        ("color", checks.color),
-        ("vimo", checks.vimo),
-    )
-    return {name: CheckDraft.from_check(value) for name, value in values}
-
-
-def overrides(rows: dict[Group, CheckDraft]) -> CheckOverrides:
-    def policy(name: Group) -> CheckOverride:
-        row = rows[name]
-        return CheckOverride(row.enabled, row.required)
-
-    blob, vimo = rows["blob"], rows["vimo"]
-    return CheckOverrides(
-        presence=policy("presence"),
-        blob=BlobOverride(
-            blob.enabled,
-            blob.required,
-            number(blob.min_area, "blob.min_area"),
-            number(blob.max_area, "blob.max_area"),
-        ),
-        color=policy("color"),
-        vimo=ViMoOverride(vimo.enabled, vimo.required, vimo.disabled_labels),
-    )
-
 
 @dataclass
 class RecipeDraft:
@@ -100,13 +31,9 @@ class RecipeDraft:
     display_name: str
     product_code: str | None = None
     model_override_id: str | None = None
-    defaults: dict[Group, CheckDraft] = field(
-        default_factory=lambda: draft_checks(CheckConfiguration())
-    )
-    cameras: dict[CameraId, dict[Group, CheckDraft]] = field(default_factory=lambda: {})
-    channels: dict[ChannelId, dict[Group, CheckDraft]] = field(
-        default_factory=lambda: {}
-    )
+    defaults: CheckConfiguration = field(default_factory=CheckConfiguration)
+    cameras: dict[CameraId, CheckOverrides] = field(default_factory=lambda: {})
+    channels: dict[ChannelId, CheckOverrides] = field(default_factory=lambda: {})
 
     capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
 
@@ -117,53 +44,21 @@ class RecipeDraft:
             recipe.display_name,
             recipe.product_code,
             recipe.model_override_id,
-            draft_checks(recipe.defaults),
-            {c.camera_id: draft_checks(c.checks) for c in recipe.camera_overrides},
-            {c.channel_id: draft_checks(c.checks) for c in recipe.channel_overrides},
+            recipe.defaults,
+            {c.camera_id: c.checks for c in recipe.camera_overrides},
+            {c.channel_id: c.checks for c in recipe.channel_overrides},
             recipe.capsule,
         )
 
     def to_recipe(self) -> RecipeDefinition:
-        rows = self.defaults
-
-        def policy(name: Group) -> CheckConfig:
-            row = rows[name]
-            if row.enabled is None or row.required is None:
-                raise ConfigurationError(
-                    f"defaults.{name}: enabled/required need explicit values"
-                )
-            return CheckConfig(row.enabled, row.required)
-
-        blob, vimo = policy("blob"), policy("vimo")
-        labels = rows["vimo"].disabled_labels
-        if labels is None:
-            raise ConfigurationError(
-                "defaults.vimo.disabled_labels needs an explicit list"
-            )
-        defaults = CheckConfiguration(
-            policy("presence"),
-            BlobCheckConfig(
-                blob.enabled,
-                blob.required,
-                number(rows["blob"].min_area, "blob.min_area"),
-                number(rows["blob"].max_area, "blob.max_area"),
-            ),
-            policy("color"),
-            ViMoCheckConfig(vimo.enabled, vimo.required, labels),
-        )
-        channels: list[ChannelOverride] = []
-        for channel, rows in sorted(self.channels.items()):
-            channels.append(ChannelOverride(channel, overrides(rows)))
         return RecipeDefinition(
             self.recipe_id,
             self.display_name,
-            defaults,
+            self.defaults,
             self.product_code,
             self.model_override_id,
-            tuple(
-                CameraOverride(c, overrides(rows)) for c, rows in self.cameras.items()
-            ),
-            tuple(channels),
+            tuple(CameraOverride(c, rows) for c, rows in self.cameras.items()),
+            tuple(ChannelOverride(c, rows) for c, rows in self.channels.items()),
             capsule=self.capsule,
         )
 

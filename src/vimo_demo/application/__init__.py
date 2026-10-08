@@ -14,7 +14,7 @@ from .models import (
     ProductionCounters,
     prepare_configuration,
 )
-from .pipeline import ChannelInspector, ConfiguredProductionPipeline, TraditionalCheck
+from .pipeline import ConfiguredProductionPipeline
 from .session import ProductionCycle, ProductionRuntimeSession, RuntimeSession
 
 __all__ = [
@@ -23,7 +23,6 @@ __all__ = [
     "ApplicationIssue",
     "ApplicationState",
     "ApplicationStateError",
-    "ChannelInspector",
     "ConfigurationIdentity",
     "ConfiguredProductionPipeline",
     "LocalCycleIngress",
@@ -34,6 +33,5 @@ __all__ = [
     "ProductionCycle",
     "ProductionRuntimeSession",
     "RuntimeSession",
-    "TraditionalCheck",
     "prepare_configuration",
 ]

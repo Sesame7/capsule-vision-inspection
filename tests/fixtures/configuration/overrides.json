@@ -3,8 +3,8 @@
     {
       "camera_id": "CAM3",
       "checks": {
-        "blob": {
-          "max_area": 1850
+        "vimo": {
+          "required": false
         }
       }
     }
@@ -13,10 +13,8 @@
     {
       "channel_id": 17,
       "checks": {
-        "blob": {
-          "max_area": 1900
-        },
         "vimo": {
+          "required": true,
           "disabled_labels": [
             "黑点"
           ]
@@ -25,20 +23,6 @@
     }
   ],
   "defaults": {
-    "blob": {
-      "enabled": true,
-      "max_area": 1800,
-      "min_area": 0,
-      "required": true
-    },
-    "color": {
-      "enabled": false,
-      "required": true
-    },
-    "presence": {
-      "enabled": true,
-      "required": true
-    },
     "vimo": {
       "disabled_labels": [],
       "enabled": true,

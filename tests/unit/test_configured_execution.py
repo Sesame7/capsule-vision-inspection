@@ -12,11 +12,9 @@ from tests.unit.test_production_inspection import inferred
 from vimo_demo.application import (
     ConfiguredProductionPipeline,
     ProductionCounters,
-    TraditionalCheck,
 )
 from vimo_demo.configuration import (
     ModelRegistry,
-    ResolvedChannelConfiguration,
     ResolvedInspectionConfiguration,
     load_machine_layout,
     load_recipe,
@@ -33,9 +31,6 @@ from vimo_demo.inspection import (
 )
 from vimo_demo.inspection.production import (
     Assessment,
-    ChannelId,
-    CheckResult,
-    FindingSource,
     ProductJudgment,
     TechnicalStatus,
 )
@@ -68,79 +63,6 @@ def collected(configuration: ResolvedInspectionConfiguration) -> CollectedCycle:
     return cycle
 
 
-class Traditional:
-    def __init__(self, fail: tuple[int, ...] = ()) -> None:
-        self.seen: list[tuple[ResolvedChannelConfiguration, TraditionalCheck]] = []
-        self.fail = fail
-
-    def inspect(
-        self,
-        frame: Frame,
-        channel: ResolvedChannelConfiguration,
-        check: TraditionalCheck,
-    ) -> CheckResult:
-        self.seen.append((channel, check))
-        if channel.channel_id in self.fail and check is TraditionalCheck.BLOB:
-            raise ValueError("synthetic blob failure")
-        return CheckResult(
-            FindingSource.TRADITIONAL,
-            Assessment(TechnicalStatus.SUCCESS, ProductJudgment.OK),
-        )
-
-
-def test_defaults_camera_channel_parameters_and_disabled_execution(
-    tmp_path: Path,
-) -> None:
-    configuration = config(tmp_path)
-    rows = list(configuration.channels)
-    rows[0] = replace(
-        rows[0],
-        checks=replace(
-            rows[0].checks, presence=replace(rows[0].checks.presence, enabled=False)
-        ),
-    )
-    rows[12] = replace(
-        rows[12],
-        checks=replace(
-            rows[12].checks, blob=replace(rows[12].checks.blob, required=False)
-        ),
-    )
-    configuration = replace(configuration, channels=tuple(rows))
-    fake = Traditional(fail=(13, 17))
-    calls = 0
-
-    def infer(image: NDArray[np.uint8]) -> ImageResult:
-        nonlocal calls
-        calls += 1
-        assert image.shape == (20, 60, 3)
-        return inferred()
-
-    _, result = ConfiguredProductionPipeline(configuration, fake).inspect(
-        collected(configuration), infer
-    )
-    assert calls == 6
-    blobs = {
-        row.channel_id: row for row, kind in fake.seen if kind is TraditionalCheck.BLOB
-    }
-    assert (
-        blobs[ChannelId(1)].checks.blob.max_area,
-        blobs[ChannelId(13)].checks.blob.max_area,
-        blobs[ChannelId(17)].checks.blob.max_area,
-    ) == (1800, 1850, 1900)
-    assert blobs[ChannelId(17)].roi == BoundingRect(40, 0, 8, 10)
-    assert not any(
-        row.channel_id == 1 and kind is TraditionalCheck.PRESENCE
-        for row, kind in fake.seen
-    )
-    assert not any(kind is TraditionalCheck.COLOR for _, kind in fake.seen)
-    assert result.channels[12].assessment == Assessment(
-        TechnicalStatus.SUCCESS, ProductJudgment.OK
-    )
-    assert result.channels[16].assessment == Assessment(
-        TechnicalStatus.ERROR, ProductJudgment.UNKNOWN
-    )
-
-
 def test_vimo_skip_camera_and_same_finding_filtered_per_channel(tmp_path: Path) -> None:
     configuration = config(tmp_path)
     rows = tuple(
@@ -162,7 +84,7 @@ def test_vimo_skip_camera_and_same_finding_filtered_per_channel(tmp_path: Path) 
         calls.append(int(image[0, 0, 0]))
         return raw if image[0, 0, 0] == 2 else inferred()
 
-    _, result = ConfiguredProductionPipeline(configuration, Traditional()).inspect(
+    _, result = ConfiguredProductionPipeline(configuration).inspect(
         collected(configuration), infer
     )
     assert calls == [1, 2, 3, 4, 5]
@@ -198,7 +120,7 @@ def test_unassigned_policy_and_cycle_ng_without_channel_ng(
     configuration = replace(configuration, channels=rows)
     raw = inferred(BoundingRect(58, 15, 2, 2))
     raw = replace(raw, regions=(replace(raw.regions[0], label="黑点"),))
-    _, result = ConfiguredProductionPipeline(configuration, Traditional()).inspect(
+    _, result = ConfiguredProductionPipeline(configuration).inspect(
         collected(configuration), lambda _: raw
     )
     assert len(result.unassigned_findings) == int(accept)
@@ -209,7 +131,7 @@ def test_unassigned_policy_and_cycle_ng_without_channel_ng(
 
 @pytest.mark.parametrize("required", [False, True])
 def test_inference_failure_uses_each_enabled_required_policy(
-    tmp_path: Path, required: bool
+    tmp_path: Path, required: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     configuration = config(tmp_path)
     rows = tuple(
@@ -225,6 +147,17 @@ def test_inference_failure_uses_each_enabled_required_policy(
         for row in configuration.channels
     )
     configuration = replace(configuration, channels=rows)
+    from tests.unit.test_capsule import ROI, SETTINGS, bodies
+
+    from vimo_demo.inspection.production.capsule import measure_capsule
+
+    measured = measure_capsule(bodies(), ROI)
+
+    def measure(image: NDArray[np.uint8], roi: BoundingRect):
+        return measured
+
+    monkeypatch.setattr("vimo_demo.application.pipeline.measure_capsule", measure)
+    configuration = replace(configuration, capsule=SETTINGS)
     calls = 0
 
     def infer(image: NDArray[np.uint8]) -> ImageResult:
@@ -232,7 +165,7 @@ def test_inference_failure_uses_each_enabled_required_policy(
         calls += 1
         raise RuntimeError("ordinary inference failure")
 
-    raw, result = ConfiguredProductionPipeline(configuration, Traditional()).inspect(
+    raw, result = ConfiguredProductionPipeline(configuration).inspect(
         collected(configuration), infer
     )
     assert calls == 6 and raw.status is CycleStatus.FAILED
@@ -252,7 +185,9 @@ def test_inference_failure_uses_each_enabled_required_policy(
     )
 
 
-def test_incomplete_cycle_never_executes_checks(tmp_path: Path) -> None:
+def test_incomplete_cycle_never_executes_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     configuration = config(tmp_path)
     now = [0.0]
     collector = CycleCollector(
@@ -265,12 +200,53 @@ def test_incomplete_cycle_never_executes_checks(tmp_path: Path) -> None:
     def forbidden(image: NDArray[np.uint8]) -> ImageResult:
         pytest.fail("Incomplete cycle must not infer")
 
-    traditional = Traditional()
-    _, result = ConfiguredProductionPipeline(configuration, traditional).inspect(
-        cycle, forbidden
-    )
-    assert not traditional.seen
+    from tests.unit.test_capsule import SETTINGS
+
+    monkeypatch.setattr("vimo_demo.application.pipeline.measure_capsule", forbidden)
+    configuration = replace(configuration, capsule=SETTINGS)
+    _, result = ConfiguredProductionPipeline(configuration).inspect(cycle, forbidden)
     assert result.cycle_status is CycleStatus.TIMED_OUT
     assert result.assessment == Assessment(
         TechnicalStatus.ERROR, ProductJudgment.UNKNOWN
     )
+
+
+def test_resolved_vimo_required_overrides_drive_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.unit.test_capsule import ROI, SETTINGS, bodies
+
+    from vimo_demo.inspection.production.capsule import measure_capsule
+
+    measured = measure_capsule(bodies(), ROI)
+
+    def measure(image: NDArray[np.uint8], roi: BoundingRect):
+        return measured
+
+    monkeypatch.setattr("vimo_demo.application.pipeline.measure_capsule", measure)
+    configuration = replace(config(tmp_path), capsule=SETTINGS)
+    calls = 0
+
+    def infer(image: NDArray[np.uint8]) -> ImageResult:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("synthetic inference failure")
+
+    _, result = ConfiguredProductionPipeline(configuration).inspect(
+        collected(configuration), infer
+    )
+    assert calls == 6
+    assert result.channels[0].assessment == Assessment(
+        TechnicalStatus.ERROR, ProductJudgment.UNKNOWN
+    )
+    assert result.channels[12].assessment == Assessment(
+        TechnicalStatus.SUCCESS, ProductJudgment.OK
+    )
+    assert result.channels[16].assessment == Assessment(
+        TechnicalStatus.ERROR, ProductJudgment.UNKNOWN
+    )
+    assert [result.channels[i].checks[1].required for i in (0, 12, 16)] == [
+        True,
+        False,
+        True,
+    ]

@@ -404,7 +404,7 @@ class ParametersPage(QWidget):
         # Never claim all labels participate when persisted policies say otherwise.
         if session is not None:
             simple = (
-                session.draft.defaults["vimo"] == RecipeDraft("", "").defaults["vimo"]
+                session.draft.defaults.vimo == RecipeDraft("", "").defaults.vimo
                 and not advanced
             )
             self.rule.setText(

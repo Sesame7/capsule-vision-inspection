@@ -22,7 +22,7 @@ from vimo_demo.runtime import (
 )
 
 from .models import ApplicationError, ApplicationStateError, PreparedConfiguration
-from .pipeline import ChannelInspector, ConfiguredProductionPipeline
+from .pipeline import ConfiguredProductionPipeline
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +85,6 @@ class ProductionRuntimeSession:
         warmup: WarmupProvider,
         warmup_iterations: int = 2,
         engine_factory: EngineFactory = _real_engine,
-        traditional: ChannelInspector | None = None,
         cycle_timeout: float = 5.0,
         max_collecting: int = 2,
         max_ready: int = 2,
@@ -98,7 +97,7 @@ class ProductionRuntimeSession:
         self._cleanup_safe = True
         self._stop = Event()
         self._results: dict[CycleId, ProductionInspectionResult] = {}
-        pipeline = ConfiguredProductionPipeline(prepared.configuration, traditional)
+        pipeline = ConfiguredProductionPipeline(prepared.configuration)
 
         def factory() -> InferenceEngine:
             # Preparation is point-in-time: recheck the chosen artifact before

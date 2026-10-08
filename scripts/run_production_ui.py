@@ -25,8 +25,6 @@ from vimo_demo.application import (
     prepare_configuration,
 )
 from vimo_demo.configuration import (
-    BlobCheckConfig,
-    BlobOverride,
     CameraOverride,
     ChannelOverride,
     CheckConfiguration,
@@ -35,6 +33,7 @@ from vimo_demo.configuration import (
     ModelDefinition,
     ModelRegistry,
     RecipeDefinition,
+    ViMoOverride,
     load_machine_layout,
     resolve_configuration,
     save_machine_layout,
@@ -63,7 +62,7 @@ class DemoTerminalFailure(BaseException):
 
 
 def demo_recipes() -> tuple[RecipeDefinition, ...]:
-    defaults = CheckConfiguration(blob=BlobCheckConfig(max_area=1800))
+    defaults = CheckConfiguration()
     return (
         RecipeDefinition("demo-A", "Demo A", defaults),
         RecipeDefinition(
@@ -72,12 +71,12 @@ def demo_recipes() -> tuple[RecipeDefinition, ...]:
             defaults,
             camera_overrides=(
                 CameraOverride(
-                    CameraId("CAM3"), CheckOverrides(blob=BlobOverride(max_area=1850))
+                    CameraId("CAM3"), CheckOverrides(vimo=ViMoOverride(required=False))
                 ),
             ),
             channel_overrides=(
                 ChannelOverride(
-                    ChannelId(17), CheckOverrides(blob=BlobOverride(max_area=1900))
+                    ChannelId(17), CheckOverrides(vimo=ViMoOverride(required=True))
                 ),
             ),
         ),

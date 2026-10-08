@@ -45,14 +45,6 @@ def version(value: int) -> None:
         raise ConfigurationError(f"Unsupported schema_version: {value}")
 
 
-def area_range(minimum: int | None, maximum: int | None) -> None:
-    for name, value in (("min_area", minimum), ("max_area", maximum)):
-        if value is not None:
-            integer(value, f"blob.{name}")
-    if minimum is not None and maximum is not None and minimum > maximum:
-        raise ConfigurationError("blob.min_area must not exceed max_area")
-
-
 def labels(values: tuple[str, ...]) -> tuple[str, ...]:
     # A string is not a sequence of label entries.
     if isinstance(values, str):
@@ -64,37 +56,19 @@ def labels(values: tuple[str, ...]) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True, slots=True)
-class CheckConfig:
-    enabled: bool = False
+class ViMoCheckConfig:
+    enabled: bool = True
     required: bool = True
+    disabled_labels: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         boolean(self.enabled, "enabled")
         boolean(self.required, "required")
+        object.__setattr__(self, "disabled_labels", labels(self.disabled_labels))
 
     @property
     def policy(self) -> CheckPolicy:
         return CheckPolicy(self.enabled, self.required)
-
-
-@dataclass(frozen=True, slots=True)
-class BlobCheckConfig(CheckConfig):
-    min_area: int | None = None
-    max_area: int | None = None
-
-    def __post_init__(self) -> None:
-        CheckConfig.__post_init__(self)
-        area_range(self.min_area, self.max_area)
-
-
-@dataclass(frozen=True, slots=True)
-class ViMoCheckConfig(CheckConfig):
-    enabled: bool = True
-    disabled_labels: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        CheckConfig.__post_init__(self)
-        object.__setattr__(self, "disabled_labels", labels(self.disabled_labels))
 
     def label_enabled(self, label: str) -> bool:
         """Explicit consumption policy; never mutate SDK settings or evidence."""
@@ -103,49 +77,25 @@ class ViMoCheckConfig(CheckConfig):
 
 @dataclass(frozen=True, slots=True)
 class CheckConfiguration:
-    # Legacy policies remain distinct from product-level capsule Size/Color.
-    presence: CheckConfig = field(default_factory=CheckConfig)
-    blob: BlobCheckConfig = field(default_factory=BlobCheckConfig)
-    color: CheckConfig = field(default_factory=CheckConfig)
     vimo: ViMoCheckConfig = field(default_factory=ViMoCheckConfig)
 
 
 @dataclass(frozen=True, slots=True)
-class CheckOverride:
+class ViMoOverride:
     enabled: bool | None = None
     required: bool | None = None
+    disabled_labels: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         for name, value in (("enabled", self.enabled), ("required", self.required)):
             if value is not None:
                 boolean(value, name)
-
-
-@dataclass(frozen=True, slots=True)
-class BlobOverride(CheckOverride):
-    min_area: int | None = None
-    max_area: int | None = None
-
-    def __post_init__(self) -> None:
-        CheckOverride.__post_init__(self)
-        area_range(self.min_area, self.max_area)
-
-
-@dataclass(frozen=True, slots=True)
-class ViMoOverride(CheckOverride):
-    disabled_labels: tuple[str, ...] | None = None
-
-    def __post_init__(self) -> None:
-        CheckOverride.__post_init__(self)
         if self.disabled_labels is not None:
             object.__setattr__(self, "disabled_labels", labels(self.disabled_labels))
 
 
 @dataclass(frozen=True, slots=True)
 class CheckOverrides:
-    presence: CheckOverride = field(default_factory=CheckOverride)
-    blob: BlobOverride = field(default_factory=BlobOverride)
-    color: CheckOverride = field(default_factory=CheckOverride)
     vimo: ViMoOverride = field(default_factory=ViMoOverride)
 
 

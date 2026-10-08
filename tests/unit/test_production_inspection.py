@@ -30,12 +30,11 @@ from vimo_demo.inspection.production import (
     InspectionLayout,
     Measurement,
     OverlapPolicy,
+    ProductionInspectionResult,
     ProductionPipeline,
     ProductJudgment,
     Reason,
     TechnicalStatus,
-    TraditionalCameraResult,
-    TraditionalChannelCheck,
     aggregate,
     assign_vimo_findings,
     extract_vimo_findings,
@@ -160,35 +159,30 @@ def check(
     return CheckResult(source, Assessment(status, judgment), reasons, required=required)
 
 
-class FakeTraditional:
-    def __init__(
-        self, status: TechnicalStatus = SUCCESS, judgment: ProductJudgment = OK
-    ) -> None:
-        self.status, self.judgment = status, judgment
-        self.calls = 0
-
-    def inspect(
-        self, frame: Frame, layout: CameraLayout
-    ) -> tuple[TraditionalChannelCheck, ...]:
-        self.calls += 1
-        assert not frame.image.flags.writeable
-        return tuple(
-            TraditionalChannelCheck(
-                slot.channel_id,
-                check(self.status, self.judgment) if index == 0 else check(),
+def with_traditional(
+    result: ProductionInspectionResult,
+    status: TechnicalStatus = SUCCESS,
+    judgment: ProductJudgment = OK,
+) -> ProductionInspectionResult:
+    """Exercise shared evidence aggregation directly, without an obsolete plugin."""
+    return replace(
+        result,
+        cameras=tuple(
+            replace(
+                camera,
+                channels=tuple(
+                    replace(
+                        row,
+                        checks=(
+                            check(status, judgment) if index == 0 else check(),
+                            *(c for c in row.checks if c.source is VIMO),
+                        ),
+                    )
+                    for index, row in enumerate(camera.channels)
+                ),
             )
-            for index, slot in enumerate(layout.slots)
-        )
-
-
-def traditional_results(
-    pipeline: ProductionPipeline, inspector: FakeTraditional | None = None
-) -> tuple[TraditionalCameraResult, ...]:
-    return tuple(
-        pipeline.inspect_traditional(
-            source_frame(camera.camera_id), inspector or FakeTraditional()
-        )
-        for camera in pipeline.layout.cameras
+            for camera in result.cameras
+        ),
     )
 
 
@@ -197,7 +191,7 @@ def test_36_channels_order_identity_and_success_with_reversed_results() -> None:
     pipeline = ProductionPipeline(config, clock=Clock())
     raw = cycle_result(config)
     raw = replace(raw, frames=tuple(reversed(raw.frames)))
-    result = pipeline.from_cycle(raw, tuple(reversed(traditional_results(pipeline))))
+    result = pipeline.from_cycle(raw)
     assert result.assessment == Assessment(SUCCESS, OK)
     assert tuple(camera.camera_id for camera in result.cameras) == config.camera_ids
     assert [channel.channel_id for channel in result.channels] == list(range(1, 37))
@@ -210,9 +204,7 @@ def test_36_channels_order_identity_and_success_with_reversed_results() -> None:
 
 def test_mirrored_mapping_changes_assignment_without_changing_algorithm() -> None:
     config = layout(1, mirrored=True)
-    pipeline = ProductionPipeline(
-        config, traditional=CheckPolicy(enabled=False), clock=Clock()
-    )
+    pipeline = ProductionPipeline(config, clock=Clock())
     result = pipeline.from_cycle(
         cycle_result(config, inferred(BoundingRect(1, 1, 2, 2)))
     )
@@ -278,9 +270,7 @@ def test_roi_assignment_and_unassigned_ng(
     rect: BoundingRect, ids: tuple[int, ...]
 ) -> None:
     config = layout(1)
-    pipeline = ProductionPipeline(
-        config, traditional=CheckPolicy(enabled=False), clock=Clock()
-    )
+    pipeline = ProductionPipeline(config, clock=Clock())
     result = pipeline.from_cycle(cycle_result(config, inferred(rect)))
     camera = result.cameras[0]
     assert tuple(item.channel_id for item in camera.assigned_findings) == ids
@@ -314,9 +304,10 @@ def test_explicit_overlap_policy_and_region_order_do_not_define_channels() -> No
 def test_unassigned_defect_and_independent_error_preserve_overall_error_ng() -> None:
     config = layout(1)
     pipeline = ProductionPipeline(config, clock=Clock())
-    result = pipeline.from_cycle(
-        cycle_result(config, inferred(BoundingRect(1, 12, 2, 2))),
-        traditional_results(pipeline, FakeTraditional(ERROR, UNKNOWN)),
+    result = with_traditional(
+        pipeline.from_cycle(cycle_result(config, inferred(BoundingRect(1, 12, 2, 2)))),
+        ERROR,
+        UNKNOWN,
     )
     assert result.assessment == Assessment(ERROR, NG)
     assert len(result.unassigned_findings) == 1
@@ -326,7 +317,7 @@ def test_unassigned_defect_and_independent_error_preserve_overall_error_ng() -> 
 def test_disabled_channel_cannot_make_a_camera_completely_ok() -> None:
     config = layout(1)
     pipeline = ProductionPipeline(config, clock=Clock())
-    result = pipeline.from_cycle(cycle_result(config), traditional_results(pipeline))
+    result = pipeline.from_cycle(cycle_result(config))
     first = result.channels[0]
     disabled = replace(
         first, checks=(check(DISABLED, UNKNOWN), check(DISABLED, UNKNOWN, source=VIMO))
@@ -363,10 +354,9 @@ def test_independent_status_and_evidence_first_judgment(
         inferred(BoundingRect(1, 1, 2, 2)) if vimo_defect else None,
         failed=vimo_error,
     )
-    trad = traditional_results(
-        pipeline, FakeTraditional(traditional_status, traditional_judgment)
+    result = with_traditional(
+        pipeline.from_cycle(raw), traditional_status, traditional_judgment
     )
-    result = pipeline.from_cycle(raw, trad)
     assert (
         result.channels[0].assessment
         == result.cameras[0].assessment
@@ -382,21 +372,12 @@ def test_independent_status_and_evidence_first_judgment(
         assert all(row.assessment.judgment is UNKNOWN for row in result.channels[1:])
 
 
-def test_disabled_checks_and_missing_required_traditional_are_explicit() -> None:
+def test_disabled_vimo_is_explicit() -> None:
     config = layout(1)
-    raw = cycle_result(config)
-    both = ProductionPipeline(
-        config, traditional=CheckPolicy(False), vimo=CheckPolicy(False), clock=Clock()
+    pipeline = ProductionPipeline(config, vimo=CheckPolicy(False), clock=Clock())
+    assert pipeline.from_cycle(cycle_result(config)).assessment == Assessment(
+        DISABLED, UNKNOWN
     )
-    assert both.from_cycle(raw).assessment == Assessment(DISABLED, UNKNOWN)
-    optional = ProductionPipeline(
-        config, traditional=CheckPolicy(False, False), clock=Clock()
-    )
-    assert optional.from_cycle(raw).assessment == Assessment(SUCCESS, OK)
-    required = ProductionPipeline(config, clock=Clock())
-    result = required.from_cycle(raw)
-    assert result.assessment == Assessment(ERROR, UNKNOWN)
-    assert result.channels[0].reasons[0].code == "result_unavailable"
 
 
 def test_optional_error_preserves_evidence_without_invalidating_successful_required_check() -> (
@@ -413,32 +394,8 @@ def test_optional_error_preserves_evidence_without_invalidating_successful_requi
     )
 
 
-def test_traditional_protocol_errors_measurements_and_disabled_invocation() -> None:
-    config = layout(1)
-    pipeline = ProductionPipeline(config, clock=Clock())
-
-    class Broken:
-        def inspect(
-            self, frame: Frame, layout: CameraLayout
-        ) -> tuple[TraditionalChannelCheck, ...]:
-            raise RuntimeError("not a product defect")
-
-    traditional = pipeline.inspect_traditional(source_frame(), Broken())
-    assert all(
-        row.result.assessment == Assessment(ERROR, UNKNOWN)
-        for row in traditional.channels
-    )
-    assert (
-        traditional.channels[0].result.reasons[0].exception_type
-        == "builtins.RuntimeError"
-    )
-    unavailable = pipeline.inspect_traditional(source_frame(), None)
-    assert unavailable.channels[0].result.reasons[0].code == "check_unavailable"
-    inspector = FakeTraditional()
-    disabled = ProductionPipeline(config, traditional=CheckPolicy(False), clock=Clock())
-    disabled.inspect_traditional(source_frame(), inspector)
-    assert inspector.calls == 0
-    measured = replace(check(), measurements=(Measurement("blob_area", 7, "px2"),))
+def test_measurement_evidence_is_preserved() -> None:
+    measured = replace(check(), measurements=(Measurement("upper.width", 7, "px"),))
     assert measured.measurements[0].value == 7
 
 
@@ -446,18 +403,9 @@ def test_result_identity_and_channel_mapping_mismatches_are_rejected() -> None:
     config = layout(1)
     pipeline = ProductionPipeline(config, clock=Clock())
     raw = cycle_result(config)
-    trad = traditional_results(pipeline)[0]
-    with pytest.raises(ValueError, match="identity"):
-        pipeline.from_cycle(
-            raw, (replace(trad, frame_id=FrameId(CycleId(2), CameraId("CAM1"), 7)),)
-        )
-    with pytest.raises(ValueError, match="Duplicate"):
-        pipeline.from_cycle(raw, (trad, trad))
-    with pytest.raises(ValueError, match="channels"):
-        pipeline.from_cycle(raw, (replace(trad, channels=trad.channels[:-1]),))
     with pytest.raises(ValueError, match="mixed-cycle"):
         pipeline.from_cycle(replace(raw, frames=(outcome(CameraId("CAM2")),)))
-    result = pipeline.from_cycle(raw, (trad,))
+    result = pipeline.from_cycle(raw)
     with pytest.raises(ValueError, match="layout"):
         replace(result.cameras[0], channels=tuple(reversed(result.channels)))
     with pytest.raises(ValueError, match="another camera"):
@@ -493,12 +441,11 @@ def test_mask_and_source_pixels_are_not_retained_and_collections_are_readonly() 
     pipeline = ProductionPipeline(config, clock=Clock())
     frame = source_frame()
     pixels = ref(frame.image)
-    traditional = pipeline.inspect_traditional(frame, FakeTraditional())
     image = inferred(BoundingRect(1, 1, 2, 2))
     mask = ref(image.mask)
     raw = cycle_result(config, image)
-    result = pipeline.from_cycle(raw, (traditional,))
-    del image, raw, frame, traditional
+    result = pipeline.from_cycle(raw)
+    del image, raw, frame
     assert mask() is None and pixels() is None
     assert result.channels[0].assessment.judgment is NG
     field_name = "slot"
@@ -513,24 +460,21 @@ def test_timing_uses_injected_clock_and_existing_inference_interval() -> None:
     config = layout(1)
     clock = Clock(0.001)
     pipeline = ProductionPipeline(config, clock=clock)
-    trad = traditional_results(pipeline)
-    result = pipeline.from_cycle(cycle_result(config), trad)
+    result = pipeline.from_cycle(cycle_result(config))
     timing = result.cameras[0].timing
-    assert timing.traditional_ms == pytest.approx(1)
+    assert timing.traditional_ms is None
     assert timing.vimo_ms == pytest.approx(10)
     assert timing.mapping_ms == pytest.approx(1)
-    assert timing.total_ms == pytest.approx(12)
+    assert timing.total_ms == pytest.approx(11)
     assert result.aggregation_ms == pytest.approx(3)
     assert result.inspection_started_at == 2
     with pytest.raises(ValueError):
         CameraTiming(None, -1, 0)
-    with pytest.raises(ValueError):
-        replace(trad[0], finished_at=trad[0].started_at - 1)
 
 
 def test_invalid_geometry_and_out_of_image_configuration_are_explicit() -> None:
     config = layout(1)
-    pipeline = ProductionPipeline(config, traditional=CheckPolicy(False), clock=Clock())
+    pipeline = ProductionPipeline(config, clock=Clock())
     raw = cycle_result(config, inferred(BoundingRect(59, 1, 5, 2)))
     result = pipeline.from_cycle(raw)
     assert result.assessment == Assessment(ERROR, UNKNOWN)

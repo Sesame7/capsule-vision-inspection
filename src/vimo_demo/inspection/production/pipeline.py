@@ -1,25 +1,22 @@
-"""Serial traditional boundary and lightweight consumption of Phase 1 outcomes.
+"""Lightweight ViMo evidence assignment and consumption of cycle outcomes.
 
 No engine, worker, collection or scheduling ownership lives here. Consumers must
 release their original cycle Future/result separately to release its masks.
 """
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
 from time import monotonic
-from typing import Protocol
 
 from vimo_demo.inference import ImageResult
 
 from ..models import (
     CycleStatus,
-    Frame,
     FrameId,
     FrameInspectionResult,
     InspectionCycleResult,
     timestamp,
 )
-from .layout import CameraLayout, ChannelId, InspectionLayout, OverlapPolicy
+from .layout import CameraLayout, InspectionLayout, OverlapPolicy
 from .models import (
     Assessment,
     CameraInspectionResult,
@@ -35,39 +32,6 @@ from .models import (
     TechnicalStatus,
     ViMoFinding,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class TraditionalChannelCheck:
-    channel_id: ChannelId
-    result: CheckResult
-
-    def __post_init__(self) -> None:
-        if self.result.source is not FindingSource.TRADITIONAL:
-            raise ValueError("Traditional inspector must return traditional checks")
-
-
-class TraditionalInspector(Protocol):
-    def inspect(
-        self, frame: Frame, layout: CameraLayout
-    ) -> tuple[TraditionalChannelCheck, ...]:
-        """Read immutable full-image pixels; return each configured channel once."""
-        ...
-
-
-@dataclass(frozen=True, slots=True)
-class TraditionalCameraResult:
-    frame_id: FrameId
-    channels: tuple[TraditionalChannelCheck, ...]
-    started_at: float
-    finished_at: float
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "channels", tuple(self.channels))
-        ids = tuple(item.channel_id for item in self.channels)
-        if len(set(ids)) != len(ids):
-            raise ValueError("Duplicate traditional channel result")
-        duration_ms(self.started_at, self.finished_at)
 
 
 def duration_ms(start: float, end: float) -> float:
@@ -157,90 +121,31 @@ def assign_vimo_findings(
 class ProductionPipeline:
     """Stateless per-cycle aggregation; no source images or results are cached.
 
-    Both sources are required/enabled by default. Without a calibrated traditional
-    inspector, supply explicit disabled policy or receive ERROR/UNKNOWN evidence.
-    Policies govern consumption, not the unchanged coordinator's inference calls.
+    Configured capsule execution adds its CheckResult to these mapped results.
+    This layer owns neither algorithm dispatch nor runtime scheduling.
     """
 
     def __init__(
         self,
         layout: InspectionLayout,
         *,
-        traditional: CheckPolicy | None = None,
         vimo: CheckPolicy | None = None,
         overlap: OverlapPolicy | None = None,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self.layout = layout
-        self.traditional = traditional or CheckPolicy()
         self.vimo = vimo or CheckPolicy()
         self.overlap = overlap or OverlapPolicy()
         self.clock = clock
-
-    def inspect_traditional(
-        self, frame: Frame, inspector: TraditionalInspector | None
-    ) -> TraditionalCameraResult:
-        layout = next(
-            (
-                item
-                for item in self.layout.cameras
-                if item.camera_id == frame.id.camera_id
-            ),
-            None,
-        )
-        if layout is None:
-            raise ValueError("Frame camera is not configured")
-        height, width, channels = frame.image.shape
-        layout.validate_shape((height, width, channels))
-        started = timestamp(self.clock())
-        reason: Reason | None = None
-        results: tuple[TraditionalChannelCheck, ...] | None = None
-        if self.traditional.enabled:
-            if inspector is None:
-                reason = Reason(FindingSource.TRADITIONAL, "check_unavailable")
-            else:
-                try:
-                    results = inspector.inspect(frame, layout)
-                except Exception as exc:
-                    reason = Reason(
-                        FindingSource.TRADITIONAL,
-                        "execution_error",
-                        exception_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
-                    )
-        if results is None:
-            results = tuple(
-                TraditionalChannelCheck(
-                    item.channel_id,
-                    _check(FindingSource.TRADITIONAL, self.traditional, reason),
-                )
-                for item in layout.slots
-            )
-        output = TraditionalCameraResult(
-            frame.id, results, started, timestamp(self.clock())
-        )
-        self._validate_traditional(layout, output)
-        return output
-
-    @staticmethod
-    def _validate_traditional(
-        layout: CameraLayout, result: TraditionalCameraResult
-    ) -> None:
-        if result.frame_id.camera_id != layout.camera_id or {
-            row.channel_id for row in result.channels
-        } != {slot.channel_id for slot in layout.slots}:
-            raise ValueError(
-                "Traditional result differs from configured camera/channels"
-            )
 
     def camera_result(
         self,
         layout: CameraLayout,
         outcome: FrameInspectionResult | None,
-        traditional: TraditionalCameraResult | None = None,
         *,
         collection_issue: Reason | None = None,
     ) -> CameraInspectionResult:
-        """Consume one existing frame outcome, with optional independent evidence."""
+        """Consume one existing full-camera ViMo outcome."""
         start = timestamp(self.clock())
         if layout not in self.layout.cameras:
             raise ValueError("Camera layout is not configured in this pipeline")
@@ -250,10 +155,6 @@ class ProductionPipeline:
             layout.validate_shape(outcome.image_shape)
             if outcome.result is not None and outcome.failure is not None:
                 raise ValueError("Frame cannot contain both result and failure")
-        if traditional is not None:
-            self._validate_traditional(layout, traditional)
-            if outcome is None or traditional.frame_id != outcome.frame_id:
-                raise ValueError("Traditional and ViMo frame identity mismatch")
         findings: tuple[ViMoFinding, ...] = ()
         reason = Reason(FindingSource.VIMO, "result_unavailable")
         vimo_check = _check(FindingSource.VIMO, self.vimo, reason)
@@ -285,11 +186,6 @@ class ProductionPipeline:
                         ),
                     )
         assignments, unassigned = assign_vimo_findings(layout, findings, self.overlap)
-        traditional_by_id = (
-            {row.channel_id: row.result for row in traditional.channels}
-            if traditional is not None
-            else {}
-        )
         channels: list[ChannelInspectionResult] = []
         for slot in layout.slots:
             matched = tuple(
@@ -311,32 +207,15 @@ class ProductionPipeline:
                     ),
                     required=self.vimo.required,
                 )
-            traditional_check = _check(
-                FindingSource.TRADITIONAL,
-                self.traditional,
-                Reason(FindingSource.TRADITIONAL, "result_unavailable"),
-            )
-            if self.traditional.enabled and slot.channel_id in traditional_by_id:
-                traditional_check = replace(
-                    traditional_by_id[slot.channel_id],
-                    required=self.traditional.required,
-                )
-                if (
-                    traditional_check.assessment.technical_status
-                    is TechnicalStatus.DISABLED
-                ):
-                    # A plugin cannot silently disable a check enabled by policy.
-                    traditional_check = _check(
-                        FindingSource.TRADITIONAL,
-                        self.traditional,
-                        Reason(FindingSource.TRADITIONAL, "result_unavailable"),
-                    )
             channels.append(
                 ChannelInspectionResult(
                     layout.camera_id,
                     slot.channel_id,
                     slot.slot,
-                    (traditional_check, check),
+                    (
+                        _check(FindingSource.TRADITIONAL, CheckPolicy(False)),
+                        check,
+                    ),
                     matched,
                 )
             )
@@ -354,9 +233,7 @@ class ProductionPipeline:
             tuple(channels),
             unassigned,
             CameraTiming(
-                duration_ms(traditional.started_at, traditional.finished_at)
-                if traditional is not None and self.traditional.enabled
-                else None,
+                None,
                 vimo_ms,
                 elapsed,
             ),
@@ -366,7 +243,6 @@ class ProductionPipeline:
     def from_cycle(
         self,
         cycle: InspectionCycleResult,
-        traditional: Sequence[TraditionalCameraResult] = (),
     ) -> ProductionInspectionResult:
         """Consume coordinator envelope.result or inspect_cycle() output unchanged."""
         start = timestamp(self.clock())
@@ -386,11 +262,6 @@ class ProductionPipeline:
             missing and cycle.status in (CycleStatus.COMPLETE, CycleStatus.FAILED)
         ):
             raise ValueError("Cycle missing-camera metadata is inconsistent")
-        trad_by_camera = {row.frame_id.camera_id: row for row in traditional}
-        if len(trad_by_camera) != len(traditional) or not set(trad_by_camera) <= set(
-            by_camera
-        ):
-            raise ValueError("Duplicate or unknown traditional camera results")
         issue = None
         if cycle.status in (CycleStatus.TIMED_OUT, CycleStatus.SHUTDOWN):
             issue = Reason(
@@ -400,18 +271,14 @@ class ProductionPipeline:
             self.camera_result(
                 layout,
                 by_camera.get(layout.camera_id),
-                trad_by_camera.get(layout.camera_id),
                 collection_issue=issue,
             )
             for layout in self.layout.cameras
         )
         ready = timestamp(self.clock())
-        if ready < max(
-            cycle.finished_at, *(row.finished_at for row in traditional), start
-        ):
+        if ready < max(cycle.finished_at, start):
             raise ValueError("Aggregation clock predates inspection outcome")
         starts = [row.started_at for row in cycle.frames if row.started_at is not None]
-        starts.extend(row.started_at for row in traditional)
         return ProductionInspectionResult(
             cycle.cycle_id,
             cycle.status,

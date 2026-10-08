@@ -9,12 +9,9 @@ from pathlib import Path
 import pytest
 
 from vimo_demo.configuration import (
-    BlobCheckConfig,
-    BlobOverride,
     CameraOverride,
     ChannelOverride,
     CheckConfiguration,
-    CheckOverride,
     CheckOverrides,
     ConfigurationError,
     ConfigurationIOError,
@@ -92,44 +89,43 @@ def test_defaults_share_model_and_resolve_without_override_chains() -> None:
     assert all(row.checks == first.defaults for row in resolved.channels)
     assert all(type(row.checks) is CheckConfiguration for row in resolved.channels)
     assert resolved == resolve_configuration(base, first, registry(), "general")
-    assert not resolved.channels[0].checks.blob.enabled
-    assert resolved.channels[0].checks.blob.max_area is None
+    assert not resolved.capsule.enabled
     assert resolved.channels[0].checks.vimo.policy == CheckPolicy(True, True)
     with pytest.raises(FrozenInstanceError):
         # Deliberately violate static typing to verify runtime immutability.
-        resolved.channels[0].checks.blob.enabled = True  # pyright: ignore[reportAttributeAccessIssue]
+        resolved.channels[0].checks.vimo.enabled = False  # pyright: ignore[reportAttributeAccessIssue]
     with pytest.raises(FrozenInstanceError):
         resolved.channels = ()  # pyright: ignore[reportAttributeAccessIssue]
 
 
-def test_precedence_false_zero_and_empty_filter_override() -> None:
+def test_precedence_false_and_empty_filter_override() -> None:
     recipe = RecipeDefinition(
         "a",
         "A",
         defaults=CheckConfiguration(
-            blob=BlobCheckConfig(True, True, 0, 1800),
             vimo=ViMoCheckConfig(disabled_labels=("黑点",)),
         ),
         camera_overrides=(
             CameraOverride(
-                CameraId("CAM3"), CheckOverrides(blob=BlobOverride(max_area=1850))
+                CameraId("CAM3"),
+                CheckOverrides(
+                    vimo=ViMoOverride(enabled=False, disabled_labels=("黑点", "压痕"))
+                ),
             ),
         ),
         channel_overrides=(
             ChannelOverride(
                 ChannelId(17),
                 CheckOverrides(
-                    blob=BlobOverride(enabled=False, required=False, max_area=0),
-                    vimo=ViMoOverride(required=False, disabled_labels=()),
+                    vimo=ViMoOverride(enabled=True, required=False, disabled_labels=()),
                 ),
             ),
         ),
     )
     resolved = resolve_configuration(machine(), recipe, registry(), "general")
-    assert resolved.channels[0].checks.blob.max_area == 1800
-    assert resolved.channels[12].checks.blob.max_area == 1850
+    assert resolved.channels[0].checks.vimo.enabled
+    assert not resolved.channels[12].checks.vimo.enabled
     special = resolved.channels[16].checks
-    assert special.blob == BlobCheckConfig(False, False, 0, 0)
     assert special.vimo == ViMoCheckConfig(True, False, ())
     assert special.vimo.label_enabled("黑点")
     assert not resolved.channels[12].checks.vimo.label_enabled("黑点")
@@ -157,14 +153,14 @@ def test_optional_enabled_is_independent_and_model_override_selects() -> None:
         model_override_id="special",
         channel_overrides=(
             ChannelOverride(
-                ChannelId(1), CheckOverrides(presence=CheckOverride(True, False))
+                ChannelId(1), CheckOverrides(vimo=ViMoOverride(True, False))
             ),
         ),
     )
     resolved = resolve_configuration(machine(), recipe, registry(), "general")
     assert resolved.model == model("special")
-    assert resolved.channels[0].checks.presence.policy == CheckPolicy(True, False)
-    assert not resolved.channels[1].checks.presence.enabled
+    assert resolved.channels[0].checks.vimo.policy == CheckPolicy(True, False)
+    assert resolved.channels[1].checks.vimo.required
 
 
 @pytest.mark.parametrize(
@@ -195,37 +191,9 @@ def test_optional_enabled_is_independent_and_model_override_selects() -> None:
             "general",
             "unknown channels",
         ),
-        (
-            RecipeDefinition(
-                "a",
-                "A",
-                defaults=CheckConfiguration(blob=BlobCheckConfig(min_area=10)),
-                channel_overrides=(
-                    ChannelOverride(
-                        ChannelId(17), CheckOverrides(blob=BlobOverride(max_area=5))
-                    ),
-                ),
-            ),
-            "general",
-            "CH17",
-        ),
-        (
-            RecipeDefinition(
-                "a",
-                "A",
-                defaults=CheckConfiguration(blob=BlobCheckConfig(min_area=10)),
-                camera_overrides=(
-                    CameraOverride(
-                        CameraId("CAM3"), CheckOverrides(blob=BlobOverride(max_area=5))
-                    ),
-                ),
-            ),
-            "general",
-            "CAM3",
-        ),
     ],
 )
-def test_invalid_references_and_merged_ranges(
+def test_invalid_references(
     recipe: RecipeDefinition, default: str, message: str
 ) -> None:
     with pytest.raises(ConfigurationError, match=message):
@@ -240,8 +208,6 @@ def test_invalid_references_and_merged_ranges(
         lambda: replace(model(), schema_version=2),
         lambda: replace(machine(), schema_version=2),
         lambda: RecipeDefinition("a", "A", schema_version=2),
-        lambda: BlobCheckConfig(min_area=2, max_area=1),
-        lambda: BlobCheckConfig(min_area=-1),
         lambda: ViMoCheckConfig(disabled_labels=("黑点", "黑点")),
         lambda: ViMoOverride(disabled_labels=("",)),
         lambda: ViMoOverride(disabled_labels=("bad\nlabel",)),
@@ -295,7 +261,7 @@ def test_round_trip_all_families_and_deterministic_utf8(tmp_path: Path) -> None:
         "产品甲",
         product_code="产品-01",
         model_override_id="special",
-        defaults=CheckConfiguration(blob=BlobCheckConfig(True, False, 0, 100)),
+        defaults=CheckConfiguration(vimo=ViMoCheckConfig(True, False, ("压痕",))),
         camera_overrides=(
             CameraOverride(
                 CameraId("CAM3"),
@@ -305,7 +271,7 @@ def test_round_trip_all_families_and_deterministic_utf8(tmp_path: Path) -> None:
         channel_overrides=(
             ChannelOverride(
                 ChannelId(17),
-                CheckOverrides(blob=BlobOverride(max_area=200)),
+                CheckOverrides(vimo=ViMoOverride(enabled=False, disabled_labels=())),
             ),
         ),
     )
@@ -350,16 +316,12 @@ def test_malformed_recipe_json(tmp_path: Path, content: str, message: str) -> No
 @pytest.mark.parametrize(
     "defaults",
     [
-        {"blob": {"requird": True}},
-        {"blob": {"enabled": 1}},
-        {"blob": {"required": "true"}},
-        {"blob": {"min_area": True}},
-        {"blob": {"max_area": 1.5}},
-        {"blob": {"min_area": float("nan")}},
+        {"vimo": {"requird": True}},
+        {"vimo": {"enabled": 1}},
+        {"vimo": {"required": "true"}},
         {"vimo": {"disabled_labels": "黑点"}},
         {"vimo": {"disabled_labels": [1]}},
         {"vimo": {"disabled_labels": ["黑点", "黑点"]}},
-        {"color": {"threshold": 123}},
     ],
 )
 def test_strict_nested_types(tmp_path: Path, defaults: dict[str, object]) -> None:
@@ -405,11 +367,11 @@ def test_absent_and_null_override_inherit(tmp_path: Path) -> None:
                 "schema_version": 1,
                 "recipe_id": "a",
                 "display_name": "A",
-                "defaults": {"blob": {"enabled": True, "max_area": 100}},
+                "defaults": {"vimo": {"enabled": False, "disabled_labels": ["黑点"]}},
                 "channel_overrides": [
                     {
                         "channel_id": 1,
-                        "checks": {"blob": {"enabled": None, "max_area": None}},
+                        "checks": {"vimo": {"enabled": None, "disabled_labels": None}},
                     }
                 ],
             }
@@ -419,7 +381,7 @@ def test_absent_and_null_override_inherit(tmp_path: Path) -> None:
     resolved = resolve_configuration(
         machine(), load_recipe(path), registry(), "general"
     )
-    assert resolved.channels[0].checks.blob == BlobCheckConfig(True, True, None, 100)
+    assert resolved.channels[0].checks.vimo == ViMoCheckConfig(False, True, ("黑点",))
 
 
 def test_atomic_replace_failure_preserves_target(
@@ -549,7 +511,9 @@ def test_unreadable_artifact_preserves_os_error(
 def test_json_key_order_does_not_change_resolution(tmp_path: Path) -> None:
     path = tmp_path / "recipe.json"
     recipe = RecipeDefinition(
-        "a", "A", defaults=CheckConfiguration(blob=BlobCheckConfig(True, False, 0, 100))
+        "a",
+        "A",
+        defaults=CheckConfiguration(vimo=ViMoCheckConfig(True, False, ("压痕",))),
     )
     save_recipe(path, recipe)
     data: dict[str, object] = json.loads(path.read_text(encoding="utf-8"))
@@ -573,3 +537,49 @@ def test_recipe_roi_field_is_rejected(tmp_path: Path) -> None:
         RecipeDefinition("a", "A", channel_overrides=(ChannelOverride(ChannelId(1)),)),
     )
     assert '"roi"' not in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("field", ["presence", "blob", "color"])
+@pytest.mark.parametrize("scope", ["defaults", "camera", "channel"])
+def test_removed_traditional_fields_rejected(
+    tmp_path: Path, field: str, scope: str
+) -> None:
+    data: dict[str, object] = {
+        "schema_version": 1,
+        "recipe_id": "a",
+        "display_name": "A",
+        "defaults": {},
+    }
+    checks = {field: {"enabled": False, "required": True}}
+    if scope == "defaults":
+        data["defaults"] = checks
+    elif scope == "camera":
+        data["camera_overrides"] = [{"camera_id": "CAM1", "checks": checks}]
+    else:
+        data["channel_overrides"] = [{"channel_id": 1, "checks": checks}]
+    path = tmp_path / "removed.recipe.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match=field):
+        load_recipe(path)
+
+
+@pytest.mark.parametrize("kind", ["size", "color"])
+def test_capsule_required_and_overrides_are_not_supported(
+    tmp_path: Path, kind: str
+) -> None:
+    data: dict[str, object] = {
+        "schema_version": 1,
+        "recipe_id": "a",
+        "display_name": "A",
+        "defaults": {},
+        "capsule": {kind: {"required": False}},
+    }
+    path = tmp_path / "removed.recipe.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="required"):
+        load_recipe(path)
+    data.pop("capsule")
+    data["camera_overrides"] = [{"camera_id": "CAM1", "checks": {"capsule": {}}}]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ConfigurationError, match="capsule"):
+        load_recipe(path)

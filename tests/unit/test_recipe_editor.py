@@ -5,12 +5,16 @@ import pytest
 from tests.unit.test_production_application import FIXTURES, prepared
 
 from vimo_demo.configuration import (
+    CheckConfiguration,
+    CheckOverrides,
     ConfigurationError,
     ConfigurationIOError,
     MachineLayoutDefinition,
     ModelArtifactError,
     ModelRegistry,
     RecipeDefinition,
+    ViMoCheckConfig,
+    ViMoOverride,
     load_recipe,
     save_machine_layout,
     save_recipe,
@@ -114,30 +118,29 @@ def test_inheritance_and_explicit_values_round_trip(tmp_path: Path) -> None:
     )
     session.load(entry)
     resolved = session.resolve()
-    assert [resolved.channels[i].checks.blob.max_area for i in (0, 12, 16)] == [
-        1800,
-        1850,
-        1900,
+    assert [resolved.channels[i].checks.vimo.required for i in (0, 12, 16)] == [
+        True,
+        False,
+        True,
     ]
-    session.draft.defaults["blob"].max_area = "1801"
-    assert session.resolve().channels[0].checks.blob.max_area == 1801
-    session.draft.cameras[CameraId("CAM3")]["blob"].max_area = "1851"
-    channel = session.draft.channels[ChannelId(17)]
-    channel["blob"].max_area = None
-    assert session.resolve().channels[16].checks.blob.max_area == 1851
-    channel["blob"].enabled = False
-    channel["blob"].required = False
-    channel["blob"].min_area = "0"
-    channel["blob"].max_area = "0"
-    channel["vimo"].disabled_labels = ()
+    session.draft.defaults = CheckConfiguration(
+        ViMoCheckConfig(disabled_labels=("压痕",))
+    )
+    assert session.resolve().channels[0].checks.vimo.disabled_labels == ("压痕",)
+    session.draft.cameras[CameraId("CAM3")] = CheckOverrides(
+        ViMoOverride(disabled_labels=("破损",))
+    )
+    session.draft.channels[ChannelId(17)] = CheckOverrides(ViMoOverride())
+    assert session.resolve().channels[16].checks.vimo.disabled_labels == ("破损",)
+    session.draft.channels[ChannelId(17)] = CheckOverrides(
+        ViMoOverride(False, False, ())
+    )
     session.save()
     assert session.entry is not None
     saved = load_recipe(session.entry.path)
-    check = saved.channel_overrides[0].checks
-    assert check.blob.enabled is False and check.blob.required is False
-    assert check.blob.min_area == check.blob.max_area == 0
-    assert check.vimo.disabled_labels == ()
-    session.draft.channels[ChannelId(17)]["vimo"].disabled_labels = None
+    check = saved.channel_overrides[0].checks.vimo
+    assert not check.enabled and not check.required and check.disabled_labels == ()
+    session.draft.channels[ChannelId(17)] = CheckOverrides(ViMoOverride())
     session.save()
     assert (
         load_recipe(session.entry.path).channel_overrides[0].checks.vimo.disabled_labels
@@ -152,12 +155,11 @@ def test_invalid_and_io_failure_keep_draft(
     session = editor(tmp_path)
     assert session.entry is not None
     before = session.entry.path.read_bytes()
-    session.draft.defaults["blob"].min_area = "99"
-    session.draft.defaults["blob"].max_area = "2"
+    session.draft.model_override_id = "missing"
     with pytest.raises(ConfigurationError):
         session.save()
     assert session.dirty and session.entry.path.read_bytes() == before
-    session.draft.defaults["blob"].max_area = "100"
+    session.draft.model_override_id = "special"
 
     def fail(*_args: object, **_kwargs: object) -> None:
         raise ConfigurationIOError("simulated disk error")

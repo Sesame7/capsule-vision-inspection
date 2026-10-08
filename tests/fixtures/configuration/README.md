@@ -1,16 +1,15 @@
-# Synthetic configuration examples
+# Synthetic configuration fixtures
 
-These schema-v1 files are test data, **not calibrated customer/machine settings**.
-The two model paths and zero SHA-256 values are placeholders: artifact validation
-must fail unless replaced with real, verified metadata. Parsing needs no model.
+These small schema-v1 files exercise persistence and resolution, not calibration.
+Model paths and zero hashes are placeholders, not deployable model metadata.
 
-- `machine.json`: six cameras, six slots each, stable channels 1–36. ROIs use a
-  synthetic 60 × 20 image coordinate system.
-- `general.json`, `special.json`: separate model definitions with portable paths.
-- `defaults.json`: Product A uses caller-selected model and common check settings.
-- `overrides.json`: Product B selects `special`, changes CAM3 blob maximum, then
-  overrides CH17 maximum and filters 黑点 for that channel only.
+- `general.json` / `special.json`: independent model identities.
+- `machine.json`: six cameras and 36 mapped ROIs; intentionally small test geometry.
+- `defaults.json`: Product A uses default enabled/required ViMo, all labels.
+- `overrides.json`: Product B selects `special`, sets CAM3 ViMo optional,
+  then CH17 required with 黑点 filtered. This exercises default/camera/channel
+  precedence without changing MachineLayout geometry.
 
-Presence/blob are explicitly enabled to demonstrate configuration, not because
-an algorithm or production threshold is ready. Color is disabled. ViMo remains
-enabled/required. No inference or SDK parameter changes occur when loading files.
+Capsule Size/Color are omitted and therefore disabled; focused capsule tests provide
+explicit synthetic settings and two-view images. None of these fixtures certify
+accuracy, readiness, industrial tolerances or production geometry.

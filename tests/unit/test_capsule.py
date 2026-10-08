@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 from tests.unit.test_configuration import machine, registry
-from tests.unit.test_configured_execution import Traditional, collected, config
+from tests.unit.test_configured_execution import collected, config
 from tests.unit.test_production_inspection import inferred
 
 from vimo_demo.application import ConfiguredProductionPipeline
@@ -144,13 +144,13 @@ def test_invalid_roi_is_execution_failure() -> None:
         measure_capsule(bodies(), BoundingRect(60, 0, 80, 120))
 
 
-def test_recipe_roundtrip_preserves_legacy(tmp_path: Path) -> None:
-    from vimo_demo.configuration import BlobCheckConfig, CheckConfiguration
+def test_recipe_roundtrip_preserves_vimo(tmp_path: Path) -> None:
+    from vimo_demo.configuration import CheckConfiguration, ViMoCheckConfig
 
     recipe = RecipeDefinition(
         "capsule",
         "Capsule",
-        defaults=CheckConfiguration(blob=BlobCheckConfig(True, False, 5, 100)),
+        defaults=CheckConfiguration(vimo=ViMoCheckConfig(True, False, ("黑点",))),
         capsule=SETTINGS,
     )
     draft = RecipeDraft.from_recipe(recipe)
@@ -162,11 +162,14 @@ def test_recipe_roundtrip_preserves_legacy(tmp_path: Path) -> None:
         machine(), load_recipe(path), registry(), "general"
     )
     assert resolved.capsule == SETTINGS
-    assert all(row.checks.blob == recipe.defaults.blob for row in resolved.channels)
+    assert all(row.checks.vimo == recipe.defaults.vimo for row in resolved.channels)
 
 
+@pytest.mark.parametrize(
+    "size,color", [(False, False), (True, False), (False, True), (True, True)]
+)
 def test_production_shared_measurement_and_disabled_skip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: bool, color: bool
 ) -> None:
     import vimo_demo.application.pipeline as pipeline
 
@@ -179,14 +182,19 @@ def test_production_shared_measurement_and_disabled_skip(
         return measured
 
     monkeypatch.setattr(pipeline, "measure_capsule", measure)
-    for enabled in (False, True):
-        settings = SETTINGS if enabled else CapsuleSettings()
-        selected = replace(configuration, capsule=settings)
-        _, result = ConfiguredProductionPipeline(selected, Traditional()).inspect(
-            collected(selected), lambda _: inferred()
-        )
-        assert result.assessment.judgment is ProductJudgment.OK
-        assert len(calls) == (36 if enabled else 0)
+    settings = CapsuleSettings(
+        replace(SETTINGS.size, enabled=size), replace(SETTINGS.color, enabled=color)
+    )
+    selected = replace(configuration, capsule=settings)
+    _, result = ConfiguredProductionPipeline(selected).inspect(
+        collected(selected), lambda _: inferred()
+    )
+    assert result.assessment.judgment is ProductJudgment.OK
+    assert len(calls) == (36 if size or color else 0)
+    expected = judge_capsule(measured, settings)
+    if not settings.enabled:
+        expected = replace(expected, required=False)
+    assert all(channel.checks[0] == expected for channel in result.channels)
 
 
 def test_production_content_ng_and_execution_error(
@@ -195,7 +203,7 @@ def test_production_content_ng_and_execution_error(
     import vimo_demo.application.pipeline as pipeline
 
     selected = replace(config(tmp_path), capsule=SETTINGS)
-    _, result = ConfiguredProductionPipeline(selected, Traditional()).inspect(
+    _, result = ConfiguredProductionPipeline(selected).inspect(
         collected(selected), lambda _: inferred()
     )
     assert result.assessment.technical_status is TechnicalStatus.SUCCESS
@@ -205,7 +213,7 @@ def test_production_content_ng_and_execution_error(
         raise RuntimeError("algorithm failed")
 
     monkeypatch.setattr(pipeline, "measure_capsule", broken)
-    _, result = ConfiguredProductionPipeline(selected, Traditional()).inspect(
+    _, result = ConfiguredProductionPipeline(selected).inspect(
         collected(selected), lambda _: inferred()
     )
     assert result.assessment.technical_status is TechnicalStatus.ERROR
