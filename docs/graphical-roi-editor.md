@@ -7,9 +7,11 @@ support. Multiple views/ROIs per channel are not implemented.
 
 ## Workspace and ownership
 
-Settings → **Machine ROI** replaces the Settings entry with a dedicated
-canvas workspace inside the existing application window. It is not a nested ROI
-dialog. The Recipe page contains no machine-geometry controls.
+Settings directly displays **Camera setup**: CAM1–CAM6 tabs, Folder path/Browse,
+Loop, frozen reference and the existing canvas-first Machine ROI controls. There
+is no entry button, separate subpage or nested setup dialog. Source controls sit
+above the dominant canvas. The Recipe page contains no machine-geometry controls.
+Folder is the only operational source; hardware capture remains unimplemented.
 
 - `machine_editor.py`: Qt-free machine draft, atomic geometry operations and save.
 - `roi_geometry.py`: existing source-pixel transform, rounding and bounded gestures.
@@ -32,8 +34,10 @@ and tooltips. No zoom buttons or large instructional panel are present.
 
 ## Save, navigation and activation
 
-**Save and apply** validates known bounds, atomically writes the supplied machine
-JSON through `save_machine_layout()`, and prepares the currently selected saved
+In real-local mode, **Save and apply** first validates the six folders' first
+images and all current ROI bounds off Qt. It then atomically writes the supplied machine
+JSON through `save_machine_layout()` and separate source JSON through
+`save_camera_sources()`, and prepares the currently selected saved
 Recipe against that saved layout using the existing background preparation thread.
 It then calls `ProductionApplication.configure()`. Successful **Start** remains the
 only activation boundary. Success feedback says changes take effect on the next
@@ -46,11 +50,11 @@ save leaves geometry saved, reports the error and does not claim successful Appl
 Cached prepared Recipe choices with an older layout are removed on successful
 configuration; select/apply other Recipes again through Parameters.
 
-Back, shell navigation away and normal application close cannot silently lose
-machine edits. A clean workspace leaves immediately. Dirty geometry prompts
+Shell navigation away and normal application close cannot silently lose
+machine or source edits. A clean workspace leaves immediately. Dirty geometry/source settings prompt
 **Save and apply / Discard / Cancel**. Save continues navigation only after successful
-preparation/configuration; Discard restores saved geometry; Cancel stays. Camera
-switches retain edits. Preparation disables repeat submission and Back; application
+preparation/configuration; Discard restores saved geometry and source settings; Cancel stays. Camera
+switches retain edits. Preparation/reference IO disables repeat submission; application
 close still observes thread termination and suppresses late configuration as before.
 
 UNCONFIGURED/READY allow changes. STARTING/RUNNING/STOPPING/FAULT/CLOSED, preparation
@@ -60,8 +64,12 @@ invented image dimensions and no geometry editing. Invalid batch operations repo
 errors without disabling subsequent visual correction of valid rectangles.
 
 This is a single-writer local configuration tool, with no external-edit watcher,
-conflict merging or history. Save modifies the supplied machine JSON only, never
-models, source images or Recipe geometry.
+conflict merging or history. Save writes the supplied machine JSON and, in real-local mode, separate
+`camera_sources.json` (or `--sources-config`). Recipe/model/source images are not
+written. The two saves are individually atomic, not one transaction: source-write
+failure after machine save explicitly reports that machine geometry was saved,
+sources were not, and Apply did not occur. Preparation failure after both saves
+leaves both files saved but reports failure. Fake demo has no Folder source draft.
 
 ## Geometry and reference contract
 
@@ -82,12 +90,20 @@ otherwise the first containing ROI in configured slot order is selected. Overlap
 fixtures may require moving/resizing the selected rectangle to expose another.
 The intended commissioned layout has six nearly non-overlapping rectangles.
 
-Camera switching/Refresh retains one immutable display-store reference and detached
-BGR QImage. New runtime frames do not replace it until requested. The canvas shows
+Camera switching/Refresh freezes the selected camera's latest runtime display
+frame only when its source key matches the configured folder. Otherwise the first
+supported naturally sorted file is read off Qt using the existing single preparation
+slot. New runtime frames do not replace the frozen reference until requested.
+Changing a folder releases the old reference and loads the new folder, never another
+camera's pixels; failures remain visible and disable geometry editing. Reference
+loads are not production cycles and do not enter the display store or counters.
+At most one IO job and one latest refresh intent are retained; stale completion
+cannot install a previous camera/folder image. Close observes IO-thread termination. The canvas shows
 camera/source dimensions and simulation labeling when applicable. Leaving releases
-pixel references. Runtime retains actual-frame bounds validation. An out-of-bounds
-starting layout requires a suitable reference or correction through the existing
-configuration API; no hidden coordinate dialog or automatic repair is added.
+pixel references. Runtime retains actual-frame bounds validation. An out-of-bounds starting layout is shown with explicit incompatibility and
+cannot be saved/applied until corrected. No automatic ROI rescaling, silent clamp,
+layout regeneration or resolution conversion occurs; existing atomic geometry
+operations still require every resulting rectangle to fit.
 
 ## Manual review
 
@@ -106,17 +122,17 @@ integer boundaries `i * width // 6` for i=0..6. Adjacent boundaries determine ea
 width, including remainder pixels. Existing saved layouts are always loaded as-is;
 opening or refreshing the workspace never regenerates geometry.
 
-Real ViMo uses the unchanged
+Real ViMo uses the existing
 `run_local_production_ui.py` and supplied `--machine-config` path. Old local Recipes
 containing ROI fields fail validation rather than being silently rewritten.
 
-1. Open Settings → Machine ROI; select a camera tab.
+1. Open Settings; select a camera tab and, in real-local mode, choose its Folder.
 2. Set common Width/Height and Apply size to all.
 3. Drag the first and last configured slot ROIs into position.
 4. Distribute evenly, then fine-tune middle rectangles directly.
 5. Switch cameras and repeat; edits remain in the machine draft.
 6. Save and apply; next successful Start activates the saved layout.
-7. Exercise dirty Back → Cancel / Discard / Save and apply.
+7. Exercise dirty navigation → Cancel / Discard / Save and apply.
 8. While RUNNING, inspect using Fit/wheel/pan; geometry edits are unavailable.
 
 The ignored local `outputs/manual_phase3c/` configuration, when prepared, provides

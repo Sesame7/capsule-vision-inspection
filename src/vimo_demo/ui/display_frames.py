@@ -16,6 +16,7 @@ class DisplayFrame:
     captured_at: float
     revision: int
     image: NDArray[np.uint8]
+    source_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +41,9 @@ class LatestDisplayFrameStore:
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._revision = 0
 
-    def publish(self, frame: Frame, *, generation: int) -> bool:
+    def publish(
+        self, frame: Frame, *, generation: int, source_key: str | None = None
+    ) -> bool:
         if frame.id.camera_id not in self.cameras:
             raise ValueError("Unknown display camera")
         if type(generation) is not int or generation < 0:
@@ -63,7 +66,12 @@ class LatestDisplayFrameStore:
                 return False
             self._revision += 1
             self._frames[frame.id.camera_id] = DisplayFrame(
-                frame.id, generation, frame.captured_at, self._revision, image
+                frame.id,
+                generation,
+                frame.captured_at,
+                self._revision,
+                image,
+                source_key,
             )
             return True
 

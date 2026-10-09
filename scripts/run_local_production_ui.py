@@ -1,4 +1,4 @@
-"""Opt-in real ViMo Production UI with one fixed, ordered six-image set."""
+"""Real ViMo Production UI: saved per-camera folders or explicit CLI images."""
 
 import argparse
 import sys
@@ -11,7 +11,7 @@ from threading import Event, Thread
 from time import monotonic
 
 import numpy as np
-from _tool_helpers import decode, image_paths
+from _tool_helpers import decode
 from numpy.typing import NDArray
 from PySide6.QtCore import QObject, Qt, Slot
 from PySide6.QtWidgets import QApplication
@@ -25,9 +25,19 @@ from vimo_demo.application import (
     ProductionRuntimeSession,
     prepare_configuration,
 )
+from vimo_demo.application.folder_replay import (
+    FolderReplay,
+    FolderSourceError,
+    folder_images,
+    start_interval_wait,
+)
 from vimo_demo.application.session import EngineFactory
 from vimo_demo.configuration import (
+    CameraFolder,
+    CameraSources,
+    ConfigurationError,
     ModelRegistry,
+    load_camera_sources,
     load_machine_layout,
     load_model_definition,
     load_recipe,
@@ -36,6 +46,7 @@ from vimo_demo.configuration import (
 from vimo_demo.inference import VimoSegmentationEngine
 from vimo_demo.inspection import CycleId, Frame, FrameId
 from vimo_demo.runtime import CoordinatorStoppedError, InferenceEngine
+from vimo_demo.ui.camera_source_editor import CameraSourceDraft
 from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
@@ -65,13 +76,17 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         images: tuple[NDArray[np.uint8], ...],
         store: LatestDisplayFrameStore,
         engine_factory: EngineFactory = real_engine,
+        *,
+        replay: FolderReplay | None = None,
+        sources: CameraSources | None = None,
+        source_base: Path = Path("."),
     ) -> None:
         def warmup(config: PreparedConfiguration) -> Sequence[NDArray[np.generic]]:
             for camera, image in zip(
-                config.configuration.layout.cameras, images, strict=True
+                config.configuration.layout.cameras, self._images, strict=True
             ):
                 camera.validate_shape((image.shape[0], image.shape[1], 3))
-            return images
+            return self._images
 
         super().__init__(
             prepared,
@@ -84,6 +99,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         )
         self._application, self._images, self._store = application, images, store
         self._layout = prepared.configuration.layout
+        self._replay, self._sources, self._source_base = replay, sources, source_base
         self._source_stop = Event()
         self.source_done: Future[None] = Future()
         self.source_done.set_running_or_notify_cancel()
@@ -128,20 +144,40 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             if self._source_stop.is_set():
                 return
             ingress = LocalCycleIngress(self._application, self._layout)
+            started: float | None = None
+            first = True
             while not self._source_stop.is_set():
+                fps = self._sources.target_fps if self._sources else 8.0
+                if started is not None and self._source_stop.wait(
+                    start_interval_wait(started, monotonic(), fps)
+                ):
+                    return
+                started = monotonic()
+                if self._replay is not None and not first:
+                    group = self._replay.next_group()
+                    if group is None:
+                        self._application.stop()  # Normal exhaustion, never FAULT.
+                        return
+                    self._images = group
+                first = False
+                if self._source_stop.is_set():
+                    return
                 captured = monotonic()  # Local submission time, not camera exposure.
                 result = ingress.submit(self._images).result.result()
                 for camera, image in zip(result.cameras, self._images, strict=True):
                     if camera.frame_id is not None:
-                        # Reuse the actual admitted identity; these fixed pixels
+                        # Reuse the actual admitted identity; these source pixels
                         # equal the ingress copy. Store owns a separate display copy.
                         self._store.publish(
                             Frame(camera.frame_id, captured, image),
                             generation=self.generation,
+                            source_key=self._sources.camera(camera.camera_id).key(
+                                self._source_base
+                            )
+                            if self._sources
+                            else None,
                         )
                 del result  # Keep no cycle/result history.
-                if self._source_stop.wait(0.25):
-                    return  # Human-visible cadence, not a throughput guarantee.
         except BaseException as exc:
             if not (
                 (
@@ -171,17 +207,18 @@ def compose(
     model_file: Path,
     machine_file: Path,
     recipe_file: Path,
-    paths: Sequence[Path],
+    paths: Sequence[Path] = (),
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
+    sources_file: Path | None = None,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
     Relative model paths are resolved against the model-description directory.
     Selected files follow configured camera order, not filename camera guesses.
     """
-    if len(paths) != 6:
+    if paths and len(paths) != 6:
         raise ValueError("Exactly six local image paths are required")
     model = load_model_definition(model_file)
     machine = load_machine_layout(machine_file)
@@ -194,15 +231,41 @@ def compose(
     if len(prepared.configuration.layout.cameras) != 6:
         raise ValueError("Local Production UI requires exactly six configured cameras")
     images = tuple(decode(path) for path in paths)
+    sources_file = (
+        sources_file or machine_file.parent / "camera_sources.json"
+    ).resolve()
+    sources = (
+        load_camera_sources(sources_file)
+        if sources_file.exists()
+        else CameraSources(
+            tuple(
+                CameraFolder(
+                    camera, str(paths[index].resolve().parent) if paths else ""
+                )
+                for index, camera in enumerate(prepared.configuration.layout.camera_ids)
+            )
+        )
+    )
+    sources.validate_cameras(prepared.configuration.layout.camera_ids)
     store = LatestDisplayFrameStore(prepared.configuration.layout.camera_ids)
     for camera, image in zip(
-        prepared.configuration.layout.cameras, images, strict=True
+        prepared.configuration.layout.cameras if images else (), images, strict=True
     ):
         camera.validate_shape((image.shape[0], image.shape[1], 3))
         image.setflags(write=False)
         store.publish(
             Frame(FrameId(CycleId(0), camera.camera_id, 0), monotonic(), image),
             generation=0,
+            source_key=CameraFolder(
+                camera.camera_id,
+                str(
+                    paths[
+                        prepared.configuration.layout.camera_ids.index(camera.camera_id)
+                    ]
+                    .resolve()
+                    .parent
+                ),
+            ).key(sources_file.parent),
         )
     editor = RecipeEditorSession(
         RecipeCatalog(recipe_file.resolve().parent),
@@ -211,11 +274,49 @@ def compose(
         model.model_id,
         model_file.resolve().parent,
         machine_path=machine_file.resolve(),
+        camera_sources=CameraSourceDraft(sources, sources_file),
+        cli_sources=bool(paths),
     )
 
     def factory(config: PreparedConfiguration, generation: int) -> LocalRuntimeSession:
+        try:
+            saved_sources = load_camera_sources(sources_file) if not paths else sources
+            saved_sources.validate_cameras(config.configuration.layout.camera_ids)
+        except ConfigurationError as exc:
+            raise FolderSourceError(f"Camera sources {sources_file}: {exc}") from exc
+        snapshot = (
+            saved_sources
+            if not paths
+            else CameraSources(
+                tuple(
+                    CameraFolder(camera, str(path.resolve().parent))
+                    for camera, path in zip(
+                        config.configuration.layout.camera_ids, paths, strict=True
+                    )
+                )
+            )
+        )
+        snapshot.validate_cameras(config.configuration.layout.camera_ids)
+        replay = (
+            None
+            if paths
+            else FolderReplay(
+                config.configuration.layout, snapshot, sources_file.parent
+            )
+        )
+        group = images if replay is None else replay.next_group()
+        if group is None:
+            raise ValueError("No complete image group")
         session = LocalRuntimeSession(
-            config, generation, app, images, store, engine_factory
+            config,
+            generation,
+            app,
+            group,
+            store,
+            engine_factory,
+            replay=replay,
+            sources=snapshot,
+            source_base=sources_file.parent,
         )
         observe_source(session.source_done)
         return session
@@ -250,9 +351,16 @@ def main() -> int:
     parser.add_argument("--model-config", type=Path, required=True)
     parser.add_argument("--machine-config", type=Path, required=True)
     parser.add_argument("--recipe", type=Path, required=True)
-    selection = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument(
+        "--sources-config",
+        type=Path,
+        help="Default: camera_sources.json beside machine config",
+    )
+    selection = parser.add_mutually_exclusive_group()
     selection.add_argument(
-        "--frames-dir", type=Path, help="First six sorted files; no bad-file skipping"
+        "--frames-dir",
+        type=Path,
+        help="First six naturally sorted files; overrides saved folders for this process",
     )
     selection.add_argument(
         "--images", nargs=6, type=Path, help="Six paths in configured camera order"
@@ -264,13 +372,18 @@ def main() -> int:
         width, height = (int(n) for n in args.size.lower().split("x"))
         if width < 880 or height < 720:
             raise ValueError("Minimum size is 880x720 logical pixels")
-        paths = image_paths(args.frames_dir)[:6] if args.frames_dir else args.images
+        paths = (
+            folder_images(args.frames_dir)[:6]
+            if args.frames_dir
+            else (args.images or ())
+        )
         composition = compose(
             args.model_config,
             args.machine_config,
             args.recipe,
             paths,
-            observe_source=lambda future: delivery.watch("local_source", future),
+            observe_source=lambda future: delivery.watch("folder_source", future),
+            sources_file=args.sources_config,
         )
     except Exception:
         traceback.print_exc()

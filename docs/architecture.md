@@ -18,8 +18,9 @@
 | Future | 2E — Archive, events and diagnostics |
 | Implemented | 3A — minimal local image-set acquisition ingress |
 | Implemented | 3B — opt-in local six-image Production UI with real serial ViMo |
+| Implemented | 3G-1 — unified Camera setup and independent Folder replay |
 | Implemented | 3C — machine-only six-channel ROI setup and saved layout activation |
-| Implemented | 3D — simplified Recipe UI, hidden policy preservation and Settings ROI entry |
+| Implemented | 3D — simplified Recipe UI, hidden policy preservation and Settings ROI workspace |
 | Implemented | 3E-1 — demonstration capsule Size/Color and isolated Recipe preview |
 | Implemented | 3E-2 — sole capsule traditional path and strict Recipe consolidation |
 | Future | Remaining Phase 3 — Camera, PLC and field integration |
@@ -172,13 +173,19 @@ for buffer reuse, explicit rejections and source/session coordination requiremen
 Real acquisition/trigger/PLC association remains unimplemented.
 
 Phase 3B adds the opt-in `scripts/run_local_production_ui.py` composition. It loads
-existing Recipe/model/layout JSON and six fixed local files, and uses the same
+existing Recipe/model/layout JSON and saved per-camera Folder sources (or explicit
+CLI fixed images), and uses the same
 Production window, application, runtime session, coordinator and real engine.
 Its launcher-local session subclass stops/joins one source thread alongside the
 existing runtime; it does not change lower-layer scheduling or engine ownership.
 The source waits for RUNNING, uses `LocalCycleIngress`, and waits for each cycle
-before submitting another. Existing display identity checks remain authoritative.
-See [local real-inference mode](production-ui.md#local-real-inference-mode--phase-3b)
+before submitting another. Phase 3G-1 reuses this source thread for on-demand,
+naturally ordered six-folder replay, default 8 Hz start pacing and normal
+end-of-dataset Stop. Source settings persist separately from MachineLayout/Recipe.
+Settings directly hosts source controls and the existing ROI canvas; blocking
+reference IO reuses the single UI preparation slot. Existing display identity checks
+remain authoritative, with source association for frozen reference selection.
+See [local real-inference mode](production-ui.md#local-real-inference-mode--phase-3b--3g-1)
 for configuration, failure and shutdown behavior.
 
 Phase 3E-1 adds [capsule Size/Color screening](capsule-inspection.md): one shared

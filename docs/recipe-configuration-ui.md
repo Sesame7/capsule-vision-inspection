@@ -80,10 +80,11 @@ Preparation disables duplicate commands. Existing engine/warm-up ownership is un
 
 ## Machine geometry
 
-**Settings → Machine ROI** opens the unchanged canvas-first workspace, using the
-selected saved Recipe for its existing save/prepare/configure operation. Settings
-contains only this concise entry; there is no broader Settings redesign. Recipe
-pages do not contain machine geometry. MachineLayout remains its sole owner.
+**Settings** directly contains the unified Camera setup workspace: Folder source
+controls and the existing canvas-first Machine ROI editor. It uses the selected
+saved Recipe for save/prepare/configure; sources have separate persistence.
+Recipe pages do not contain machine geometry or source assignments. MachineLayout
+remains the sole geometry owner; there is no separate Settings entry/subpage.
 See the [ROI contract](graphical-roi-editor.md) for dirty navigation, frozen frames,
 geometry, initialization and bounds rules. Recipe editing never writes machine JSON.
 
@@ -97,7 +98,8 @@ uv run --no-sync pytest tests/integration/test_parameters_ui.py tests/integratio
 
 The fake demo uses local synthetic Demo A/B files without GPU. Demo B retains its
 ViMo camera/channel settings and therefore shows the exceptional notice.
-The real-local launcher and supplied configuration paths are unchanged.
+The real-local launcher retains the supplied model/layout/Recipe paths and adds
+optional `--sources-config`; CLI image overrides remain explicit process-only input.
 
 Review the Recipe page for simplicity, unnecessary remaining information, obvious
 switch/New/Duplicate actions and understandable Save and apply. Check that there is

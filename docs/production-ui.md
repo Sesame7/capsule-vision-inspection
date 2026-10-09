@@ -1,12 +1,12 @@
 # Production UI — Phase 2D-1
 
 The Production page is implemented. Phase 3D simplifies the
-[Recipe editor](recipe-configuration-ui.md); Settings opens Machine ROI, while
+[Recipe editor](recipe-configuration-ui.md); Settings directly hosts Camera setup and Machine ROI, while
 Diagnostics and History remain localized placeholders. This is a simulated workstation shell,
 not commissioned camera/PLC software. The [design direction](production-ui-direction.md)
 remains a visual reference, not an exact implementation specification.
 
-The [graphical ROI editor](graphical-roi-editor.md) now opens as a dedicated canvas workspace inside Settings. It retains a frozen display reference and shares the image transform;
+The [graphical ROI editor](graphical-roi-editor.md) is embedded directly in Settings with per-camera source controls. It retains a frozen display reference and shares the image transform;
 Production cards, result matching and application lifecycle are unchanged.
 
 ## Boundaries and updates
@@ -163,71 +163,81 @@ does not establish those ergonomics or camera throughput. The remaining pages,
 Phase 2E archive/events/diagnostics, and Phase 3 hardware integration
 remain out of scope.
 
-## Local real-inference mode — Phase 3B
+## Local real-inference mode — Phase 3B / 3G-1
 
-`run_local_production_ui.py` is explicitly real ViMo; `run_production_ui.py`
-remains the unchanged fake-engine demo, even with its `--frames-dir` option.
-The real launcher reads the existing schema-v1 model description, machine layout
-and Recipe, validates the model hash, and decodes exactly six files before showing
-the window. It never supplies placeholder images or generates/calibrates ROIs.
-Relative `model_path` values resolve against the **model JSON's directory**.
+`run_local_production_ui.py` uses real serial ViMo; `run_production_ui.py` remains
+fake even with `--frames-dir`. The real launcher reads strict model/layout/Recipe
+JSON and verifies the model hash before opening Qt. Model paths resolve relative
+to the model JSON directory. No placeholder images or calibrated ROIs are invented.
+The supplied Recipe's directory remains the catalog; only the supplied model is registered.
 
-From the repository root, with your actual configuration files:
+Open the existing ignored manual configuration without preselected images:
 
 ```powershell
-uv run --no-sync python scripts/run_local_production_ui.py --model-config models/model.json --machine-config models/machine.json --recipe models/recipes/local.recipe.json --frames-dir images --language zh --size 1080x1920
+uv run --no-sync python scripts/run_local_production_ui.py --model-config outputs/manual_phase3c/model.json --machine-config outputs/manual_phase3c/machine.json --recipe outputs/manual_phase3c/local.recipe.json --language zh --size 1080x1920
 ```
 
-These JSON paths are examples, not bundled calibrated configurations. The model
-description must point to the real `.vimosln`, with its actual SHA-256 and module ID.
-The repository currently contains synthetic configuration fixtures only; the
-verified local model does not by itself provide a commissioned 36-channel layout.
-Use existing configuration persistence/editor workflows to supply the layout and
-Recipe; see [configuration](inspection-configuration.md).
-The supplied Recipe's directory is the existing Recipe catalog. This launcher
-registers only the supplied model; Recipes requiring another model fail validation.
+These local JSONs must already exist; they are not shipped fixtures. In Settings,
+select each CAM1–CAM6 tab, Browse to its image folder, refresh/adjust its six ROIs,
+and Save and apply. MachineLayout alone owns geometry. Sources persist separately
+at `camera_sources.json` beside the machine JSON, or the explicit `--sources-config`
+path. Relative folder paths resolve against that source JSON directory. Restart
+reloads saved settings; a missing source JSON allows setup but Start fails clearly
+until assignments are saved. Source/geometry edits are READY/UNCONFIGURED only;
+RUNNING allows viewing. Dirty setup blocks UI Start until saved/applied or discarded.
+Recipe saving does not save camera sources. Saves are individually atomic, with
+explicit partial failure feedback (no cross-file transaction).
 
-`--frames-dir` selects the first six common image files in deterministic
-case-insensitive filename order; a corrupt selected file fails rather than being
-skipped. Alternatively use `--images path1 path2 path3 path4 path5 path6` in
-**configured camera order**, regardless of filenames. Images/ROIs must fit; no
-resizing, orientation change or filename-based camera association occurs.
-Initial display frames are reference-only. Click Start to load/warm the engine;
-startup and warm-up remain on the existing worker and have no production effects.
+Source schema v1 contains `cameras` (one `{camera_id, source_type: "folder", folder}`
+per configured camera), `loop` (default true), and `target_fps` (default 8.0).
+Camera associations are explicit; directories and image names need not resemble
+camera IDs. The six sources are distinct from the 36 inspection channels. Loop is
+shared; each camera's file list/index is independent. FPS is replay pacing, not
+physical product throughput or synchronization.
 
-After RUNNING, one session-owned source thread submits through `LocalCycleIngress`
-and waits for the production result. It publishes separate display copies with
-the actual admitted frame identity and generation, then allows a short interruptible
-250 ms viewing interval. This is not fixed-FPS or throughput control. Images are
-decoded once; no result history, dataset queue or second renderer is introduced.
-The same full-camera serial inference and resolved channel policies are used.
+Each Start reads a saved source snapshot for that generation. It enumerates common
+PNG/JPG/JPEG/BMP/TIF/TIFF files nonrecursively in natural numeric filename order,
+decodes one group for warm-up, then decodes successive groups on the existing
+session source thread. It holds only the current six-image group, not a preloaded
+dataset. All six must pass BGR/ROI/resolution checks before ingress submission.
+No resizing, skipping corrupt images, filename camera guessing or partial cycles.
+The existing worker owns real engine construction, warm-up, serial inference and
+close; warm-up and reference loading produce zero production counters/results.
 
-Stop/Close signal the source, finalize/finish existing runtime work, and join both
-runtime and source before READY/CLOSED. Qt only observes asynchronous completion.
-An explicit subsequent Start creates a fresh session/ingress (cycle IDs restart
-within a new generation); no automatic restart or retry occurs. Ordinary image
-inference errors retain technical result evidence. Source/admission failures end
-the source, request Stop, and cross the existing queued command-error presentation;
-the original exception is printed in the launching terminal. Runtime terminal
-failure remains application FAULT. No failure is fabricated as product NG.
+The source waits for each formal cycle result. The next start waits only the
+remaining start-to-start budget (default 125 ms); a slower cycle naturally lowers
+the rate, with no catch-up queue or fixed post-result viewing delay. Loop ON wraps
+each camera independently. Loop OFF stops the whole run when any camera exhausts,
+returning normally to READY. Stop/Close interrupt pacing and join the source and
+runtime before READY/CLOSED. Blocking file/native IO must actually return before
+cleanup can finish; no force cancellation, auto retry or hidden restart occurs.
 
-Focused tests and one opt-in real smoke:
+Empty/unreadable/dimension-incompatible sources fail startup or stop replay with
+a source error, camera/filename context and the original terminal traceback.
+Later bad files create no partial cycle or fake product NG. Ordinary inference
+errors remain technical result evidence; infrastructure runtime failures remain
+FAULT. Display copies carry admitted frame identity, generation and source key;
+ROI references prefer matching runtime pixels and otherwise read the first folder
+image off Qt. The frozen reference does not hot-follow production.
+
+Compatibility: `--images path1 ... path6` still supplies a fixed six-file set in
+configured camera order. `--frames-dir images` selects the first six naturally
+sorted files and also replays that fixed set. Both override saved Folder sources
+**for this process**, with a Settings banner; relaunch without these options to use
+saved folders. Saved source assignments are not overwritten by CLI selection.
+Neither mode infers production calibration or acceptance from test geometry.
 
 ```powershell
-uv run --no-sync pytest tests/integration/test_local_production_ui.py tests/integration/test_local_ingress.py tests/integration/test_production_ui.py --tb=short
+uv run --no-sync pytest tests/unit/test_folder_replay.py tests/integration/test_camera_setup.py tests/integration/test_local_production_ui.py --tb=short
 uv run --no-sync pytest tests/integration/test_local_production_vimo.py --run-gpu --require-gpu -s --tb=short
 ```
 
-The real test activates the verified model, observes at least two six-frame cycles
-and existing defect boxes in an offscreen Production window, then verifies Stop,
-Close and actual thread termination. It uses explicit **uncalibrated test ROIs**
-and writes its configuration/screenshot into pytest's ignored temporary directory.
-The current fixture uses explicit CAM1→CAM6 machine order. A full-reference slot-0
-ROI exercises known finding → channel NG assignment through machine Save/Apply.
-It establishes wiring, not production channel acceptance: unassigned defects may
-show camera-level boxes/NG while individual fixture channels show OK. No model
-accuracy, calibration, physical-screen, camera, PLC, FAT/SAT or throughput claim
-is made. Real hardware integration remains future work.
+The single real smoke uses six independent test folders and the verified model,
+checks at least two cycles and matched overlays, Stop/Close and thread cleanup.
+Its slot-0 full-frame ROIs are intentionally uncalibrated wiring fixtures, not
+production geometry. Human acceptance still needs native Browse, Windows DPI/touch
+and actual images. No accuracy, hardware synchronization, throughput or FAT/SAT
+claim follows from replay. Camera SDK/PLC integration remains deferred.
 
 ### Traditional-preview event scope
 

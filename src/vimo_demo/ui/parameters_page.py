@@ -45,6 +45,7 @@ type DirtyDecision = Literal["save", "discard", "cancel"]
 class ParametersPage(QWidget):
     applied = Signal(object)
     preview_changed = Signal()
+    setup_changed = Signal()
 
     def __init__(
         self,
@@ -59,6 +60,9 @@ class ParametersPage(QWidget):
         self.simulation = simulation
         self.roi_workspace: MachineRoiWorkspace | None = None
         self.preview: TraditionalPreview | None = None
+        self._setup_finished: Callable[[object, BaseException | None], None] | None = (
+            None
+        )
         self._apply_finished: Callable[[str], None] | None = None
         self.language: Language = "zh"
         self._loading = False
@@ -169,19 +173,11 @@ class ParametersPage(QWidget):
 
         # Settings hosts the existing ROI workspace; it shares preparation, not Recipe UI.
         self.settings = QWidget()
-        self._pages = QStackedLayout(self.settings)
-        self._pages.setContentsMargins(0, 0, 0, 0)
-        self._form = QWidget()
-        self._pages.addWidget(self._form)
-        settings_layout = QVBoxLayout(self._form)
+        self._settings_layout = QVBoxLayout(self.settings)
+        self._settings_layout.setContentsMargins(0, 0, 0, 0)
         self.settings_title = QLabel()
         self.settings_title.setProperty("role", "state")
-        settings_layout.addWidget(self.settings_title)
-        self.open_roi = QPushButton()
-        self.open_roi.setMinimumHeight(Style.touch)
-        settings_layout.addWidget(self.open_roi, 0, Qt.AlignmentFlag.AlignLeft)
-        settings_layout.addStretch()
-        self.open_roi.clicked.connect(self.open_roi_editor)
+        self._settings_layout.addWidget(self.settings_title)
 
         self.recipes.activated.connect(self._select)
         self.model.activated.connect(self._model_changed)
@@ -218,7 +214,6 @@ class ParametersPage(QWidget):
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
         self.settings_title.setText(text("settings", language))
-        self.open_roi.setText(text("roi_workspace", language))
         self.recipes.setAccessibleName(text("recipe", language))
         self.model.setAccessibleName(text("inspection_model", language))
         for key, button in self.buttons.items():
@@ -318,17 +313,13 @@ class ParametersPage(QWidget):
             self.changed()
 
     def changed(self) -> None:
+        self.setup_changed.emit()
         self._error = self._feedback = ""
         self.refresh_state()
 
     def refresh_state(self) -> None:
         session, language = self.session, self.language
         allowed = self.editable()
-        self.open_roi.setEnabled(
-            session is not None
-            and session.machine_path is not None
-            and not self._closing
-        )
         if self.roi_workspace is not None:
             self.roi_workspace.refresh()
         if self.preview is not None:
@@ -498,19 +489,21 @@ class ParametersPage(QWidget):
             language=self.language,
             simulation=self.simulation,
             parent=self.settings,
+            run_io=self.run_setup_io,
         )
         self.roi_workspace = workspace
-        self._pages.addWidget(workspace)
-        self._pages.setCurrentWidget(workspace)
+        self._settings_layout.addWidget(workspace, 1)
 
     def _roi_closed(self) -> None:
         if self.roi_workspace is not None:
             workspace, self.roi_workspace = self.roi_workspace, None
-            self._pages.setCurrentWidget(self._form)
-            self._pages.removeWidget(workspace)
+            self._settings_layout.removeWidget(workspace)
             workspace.deleteLater()
 
     def leave_workspace(self, after: Callable[[], None]) -> None:
+        if self.busy:
+            self._after_busy = lambda: self.leave_workspace(after)
+            return
         if self.roi_workspace is None:
             after()
         else:
@@ -520,7 +513,10 @@ class ParametersPage(QWidget):
         if not self.editable() or self.session is None:
             return
         try:
-            if self.session.machine_editor.dirty:
+            if self.session.machine_editor.dirty or (
+                self.session.camera_sources is not None
+                and self.session.camera_sources.dirty
+            ):
                 raise ConfigurationError(text("save_machine_first", self.language))
             if self.session.dirty or self.session.entry is None:
                 self.session.save()
@@ -700,6 +696,31 @@ class ParametersPage(QWidget):
         self._monitor.start()
         self.refresh_state()
 
+    def run_setup_io(
+        self,
+        work: Callable[[], object],
+        completed: Callable[[object, BaseException | None], None],
+    ) -> bool:
+        """Reuse the single preparation slot; no IO queue or GUI-thread decoding."""
+        if self.busy or self._closing:
+            return False
+        self._setup_finished = completed
+        future: Future[object] = Future()
+
+        def read() -> None:
+            try:
+                future.set_result(work())
+            except BaseException as exc:
+                future.set_exception(exc)
+
+        self._delivery.watch("camera_setup", future)
+        self._thread = Thread(target=read, name="CameraSetupIO", daemon=False)
+        self._thread.start()
+        self._monitor.start()
+        self.refresh_state()
+        self.setup_changed.emit()
+        return True
+
     @Slot(str, object, object)
     def _prepared(self, name: str, value: object, error: object) -> None:
         self._completion = (value, error)
@@ -713,7 +734,19 @@ class ParametersPage(QWidget):
         self._monitor.stop()
         value, error = self._completion
         self._completion = None
-        if not self._closing:
+        setup, self._setup_finished = self._setup_finished, None
+        completed, self._apply_finished = self._apply_finished, None
+        # A setup callback may start preparation. Only finish THIS job's callback.
+        if setup is not None:
+            setup(
+                value,
+                RuntimeError("Closing")
+                if self._closing
+                else error
+                if isinstance(error, BaseException)
+                else None,
+            )
+        elif not self._closing:
             try:
                 if isinstance(error, BaseException):
                     raise ConfigurationError(str(error)) from error
@@ -728,11 +761,11 @@ class ParametersPage(QWidget):
             except Exception as exc:
                 self._error = str(exc)
         self.refresh_state()
-        if self._apply_finished is not None:
-            completed, self._apply_finished = self._apply_finished, None
+        if completed is not None:
             completed(
                 text("read_only", self.language) if self._closing else self._error
             )
+        self.setup_changed.emit()
         if self._after_busy is not None:
             callback, self._after_busy = self._after_busy, None
             self._closing = False
@@ -777,7 +810,7 @@ class ParametersPage(QWidget):
 
         if self.busy:
             self._closing = True  # Do not apply a late preparation while closing.
-            self._after_busy = lambda: self.guard_dirty(callback)
+            self._after_busy = lambda: self.request_close(final)
             self.refresh_state()
         else:
             self.guard_dirty(callback)
