@@ -10,8 +10,8 @@ from threading import enumerate as threads
 import cv2
 import numpy as np
 import pytest
-from PySide6.QtCore import QPoint
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtCore import QPoint, QSize
+from PySide6.QtGui import QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 from run_local_production_ui import SourceNotifications, compose
 from run_production_ui import demo_images
@@ -32,7 +32,7 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.production_bridge import QtProductionBridge
-from vimo_demo.ui.production_style import Language, text
+from vimo_demo.ui.production_style import Language, Style, text
 from vimo_demo.ui.production_window import ProductionWindow
 from vimo_demo.ui.roi_editor import MachineRoiWorkspace
 
@@ -104,7 +104,7 @@ def test_unified_layout_camera_reference_and_frozen_refresh(
     assert (
         workspace.isVisible() and workspace.parentWidget() is window.parameters.settings
     )
-    assert workspace.reference_modes["folder"].text() == text(
+    assert workspace.reference_modes["folder"].accessibleName() == text(
         "reference_folder", language
     )
     assert workspace.canvas.height() > workspace.height() * 0.65
@@ -120,8 +120,15 @@ def test_unified_layout_camera_reference_and_frozen_refresh(
     ):
         assert workspace.rect().contains(control.mapTo(workspace, QPoint(0, 0)))
     assert [workspace.camera_tabs.tabText(i) for i in range(6)] == [
-        f"CAM{i}" for i in range(1, 7)
+        str(i) for i in range(1, 7)
     ]
+    for index in range(6):
+        name = text("camera_number", language).format(number=index + 1)
+        assert not workspace.camera_tabs.tabIcon(index).isNull()
+        assert workspace.camera_tabs.tabToolTip(index) == name
+        assert workspace.camera_tabs.accessibleTabName(index) == name
+        assert workspace.camera_tabs.tabRect(index).width() >= Style.touch
+        assert workspace.camera_tabs.tabRect(index).height() >= Style.touch
     assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 1
     workspace.camera_tabs.setCurrentIndex(2)
     until(lambda: not window.parameters.busy)
@@ -678,6 +685,8 @@ def test_runtime_reference_eligibility_frozen_refresh_and_folder_restore(
     assert workspace.reference_mode == "folder"  # No unsolicited pixel change.
     assert workspace.reference_modes["runtime"].isEnabled()
     workspace.reference_modes["runtime"].click()
+    assert workspace.reference_modes["runtime"].isChecked()
+    assert not workspace.reference_modes["folder"].isChecked()
     first = workspace.frame
     assert first is not None and int(first.image[0, 0, 0]) == 80
     assert not workspace.buttons["reference_next"].isEnabled()
@@ -802,8 +811,177 @@ def test_settings_representative_screenshot(
         assert workspace.rect().contains(
             control.mapTo(workspace, control.rect().bottomRight())
         )
+    for key in ("roi_set_rect", "roi_common", "roi_distribute"):
+        button = workspace.buttons[key]
+        parent = button.parentWidget()
+        assert parent is not None and parent.rect().contains(button.geometry())
     assert not workspace.message.isVisible()
+    assert workspace.reference_toolbar.height() <= Style.touch + Style.small
+    assert workspace.geometry_toolbar.height() == Style.touch
+    save = workspace.buttons["roi_save_apply"]
+    for toolbar, center_control, right_control in (
+        (
+            workspace.reference_toolbar,
+            workspace.reference,
+            workspace.buttons["roi_actual"],
+        ),
+        (workspace.geometry_toolbar, workspace.buttons["roi_common"], save),
+    ):
+        assert right_control.mapTo(toolbar, right_control.rect().topRight()).x() == (
+            toolbar.width() - 1
+        )
+        if size[0] == 1920:
+            center = center_control.parentWidget()
+            assert center is not None
+            assert (
+                abs(
+                    center.mapTo(toolbar, center.rect().center()).x()
+                    - toolbar.rect().center().x()
+                )
+                <= 1
+            )
+    assert workspace.folder.mapTo(workspace, QPoint()).y() > (
+        workspace.reference_toolbar.geometry().bottom()
+    )
+    assert workspace.canvas.y() > workspace.folder.mapTo(workspace, QPoint()).y()
     assert window.grab().save(
         str(tmp_path / f"settings-{language}-{size[0]}x{size[1]}.png")
     )
     assert not engine.calls and not workspace.draft.dirty
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_compact_icon_states_and_loop_click_preserve_configuration(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    language: Language,
+) -> None:
+    window, workspace, engine = camera_screen
+    window.set_language(language)
+    sources = workspace.sources
+    assert sources is not None
+    saved = sources.path.read_bytes()
+    geometry = workspace.draft.definition
+    assert workspace.loop.isChecked()
+    assert workspace.loop.text() == text("source_loop_on", language)
+    assert text("source_loop", language) in workspace.loop.accessibleName()
+    workspace.loop.click()
+    assert not workspace.loop.isChecked() and not sources.definition.loop
+    assert workspace.loop.text() == text("source_loop_off", language)
+    assert sources.dirty and sources.path.read_bytes() == saved
+    workspace.loop.click()
+    assert sources.definition.loop and not sources.dirty
+    assert not workspace.loop.icon().isNull()
+    for mode, button in workspace.reference_modes.items():
+        assert button.text() == "" and not button.icon().isNull()
+        assert button.accessibleName() == text("reference_" + mode, language)
+        assert button.isChecked() == (workspace.reference_mode == mode)
+        on = (
+            button.icon()
+            .pixmap(QSize(22, 22), QIcon.Mode.Normal, QIcon.State.On)
+            .toImage()
+        )
+        off = (
+            button.icon()
+            .pixmap(QSize(22, 22), QIcon.Mode.Normal, QIcon.State.Off)
+            .toImage()
+        )
+        assert on != off  # Selection is also indicated by a check mark.
+    for key in ("roi_common", "roi_distribute"):
+        button = workspace.buttons[key]
+        assert button.text() == "" and not button.icon().isNull()
+        assert button.accessibleName() == button.toolTip() == text(key, language)
+    numeric_apply = workspace.buttons["roi_set_rect"]
+    assert numeric_apply.text() == text("roi_set_rect", language)
+    assert (
+        numeric_apply.width()
+        >= numeric_apply.fontMetrics().horizontalAdvance(numeric_apply.text())
+        + numeric_apply.iconSize().width()
+        + 24
+    )
+    assert workspace.buttons["roi_save_apply"].text() == text(
+        "roi_save_apply", language
+    )
+    assert workspace.draft.definition == geometry
+    assert (
+        not engine.calls
+        and window.bridge.application.snapshot().counters == ProductionCounters()
+    )
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_roi_toolbar_wraps_without_shrinking_fields(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    language: Language,
+) -> None:
+    window, workspace, engine = camera_screen
+    window.set_language(language)
+    QApplication.processEvents()
+    toolbar = workspace.geometry_toolbar
+    numeric = workspace.buttons["roi_set_rect"]
+    bulk = workspace.buttons["roi_common"]
+    widths = [field.width() for field in workspace.coordinates.values()]
+    before = workspace.draft.definition
+    save = workspace.buttons["roi_save_apply"]
+    upper = workspace.reference_toolbar
+    reference = workspace.reference_modes["folder"]
+    assert numeric.mapTo(toolbar, QPoint()).y() == bulk.mapTo(toolbar, QPoint()).y()
+    assert save.mapTo(toolbar, QPoint()).y() == numeric.mapTo(toolbar, QPoint()).y()
+    assert upper.height() <= Style.touch + Style.small
+    narrow = toolbar.minimumSizeHint().width() + Style.small
+    workspace.setFixedWidth(narrow)
+    QApplication.processEvents()
+    assert bulk.mapTo(toolbar, QPoint()).y() > numeric.mapTo(toolbar, QPoint()).y()
+    assert toolbar.height() >= numeric.height() + bulk.height()
+    assert reference.mapTo(upper, QPoint()).y() > workspace.camera_tabs.y()
+    assert workspace.camera_tabs.width() >= workspace.camera_tabs.sizeHint().width()
+    for control in (
+        *workspace.coordinates.values(),
+        numeric,
+        bulk,
+        workspace.buttons["roi_distribute"],
+        workspace.status,
+        save,
+    ):
+        assert toolbar.rect().contains(control.mapTo(toolbar, QPoint()))
+        assert toolbar.rect().contains(
+            control.mapTo(toolbar, control.rect().bottomRight())
+        )
+    upper_controls = (
+        workspace.camera_tabs,
+        *workspace.reference_modes.values(),
+        workspace.reference,
+        *(
+            workspace.buttons[key]
+            for key in (
+                "reference_previous",
+                "reference_next",
+                "roi_refresh",
+                "roi_fit",
+                "roi_actual",
+            )
+        ),
+    )
+    for control in upper_controls:
+        assert upper.rect().contains(control.mapTo(upper, QPoint()))
+        assert upper.rect().contains(control.mapTo(upper, control.rect().bottomRight()))
+    assert [field.width() for field in workspace.coordinates.values()] == widths
+    assert save.mapTo(toolbar, save.rect().topRight()).x() == toolbar.width() - 1
+    workspace.setFixedWidth(1000)
+    QApplication.processEvents()
+    assert numeric.mapTo(toolbar, QPoint()).y() == bulk.mapTo(toolbar, QPoint()).y()
+    assert save.mapTo(toolbar, QPoint()).y() == numeric.mapTo(toolbar, QPoint()).y()
+    assert upper.height() <= Style.touch + Style.small
+    upper.setFixedWidth(upper.minimumSizeHint().width() + Style.small)
+    QApplication.processEvents()
+    fit, actual = workspace.buttons["roi_fit"], workspace.buttons["roi_actual"]
+    assert actual.mapTo(upper, QPoint()).y() > reference.mapTo(upper, QPoint()).y()
+    assert reference.mapTo(upper, QPoint()).y() > workspace.camera_tabs.y()
+    assert fit.mapTo(upper, QPoint()).y() == actual.mapTo(upper, QPoint()).y()
+    assert actual.mapTo(upper, actual.rect().topRight()).x() == upper.width() - 1
+    for control in upper_controls:
+        assert upper.rect().contains(control.mapTo(upper, QPoint()))
+        assert upper.rect().contains(control.mapTo(upper, control.rect().bottomRight()))
+    upper.setFixedWidth(1000)
+    QApplication.processEvents()
+    assert upper.height() <= Style.touch + Style.small
+    assert workspace.draft.definition == before and not engine.calls

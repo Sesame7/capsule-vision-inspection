@@ -7,11 +7,16 @@ support. Multiple views/ROIs per channel are not implemented.
 
 ## Workspace and ownership
 
-Settings is one stacked workspace: CAM1–CAM6 tabs, compact Folder path/Browse
-and Loop row, reference-source controls, dominant canvas, selected geometry and
-bulk/save actions. There is no repeated page heading, entry button, separate
-subpage, nested setup dialog or landscape side panel. The Recipe page contains no
-machine-geometry controls.
+Settings is one stacked workspace: an upper camera/reference toolbar; a separate
+Folder path, Browse and Loop row; dominant canvas; and a lower ROI/save toolbar.
+The upper toolbar has camera icon + number tabs on the left, compact reference
+operations in the center, and Fit/1:1 on the right. The lower toolbar mirrors this:
+numeric geometry/Apply on the left, bulk operations in the center, and status/Save
+and apply on the right. Equal flexible side space centers the middle groups when
+width permits; narrow widths reduce gaps or wrap whole groups to two/three rows,
+without shrinking fields or touch targets. There is no repeated page heading,
+entry button, separate subpage, nested setup dialog or landscape side panel.
+The Recipe page contains no machine-geometry controls.
 Folder is the only operational source; hardware capture remains unimplemented.
 
 - `machine_editor.py`: Qt-free machine draft, atomic geometry operations and save.
@@ -26,15 +31,25 @@ MachineLayout order, never parsed/sorted names; normal local configuration is
 CAM1→CAM6. All six actual ChannelIds are labeled on the canvas. There is no channel
 selector or permanent per-ROI form. A compact `CHxx X/Y/W/H` row edits only the
 selected channel in source pixels; **Apply** (or Enter) commits through the existing
-atomic geometry operation. W/H also supply **Apply size to all**. Bulk actions sit
-in a separate row from single-channel geometry, with save/status at the right.
+atomic geometry operation. W/H also supply **Apply size to all**. The numeric
+Apply keeps its check icon and text; Apply size to all and Distribute evenly
+icon buttons form the compact center group in the same logical toolbar.
+Saved/dirty status and the primary **Save and apply** button form the right group,
+visually distinct from numeric Apply. On narrow widths, groups wrap together
+without splitting their controls or shrinking fields/touch targets.
 
 The canvas fills available content space. Camera entry/switch and Refresh fit the
 complete frozen image with aspect ratio preserved. Left drag moves/resizes ROIs;
 mouse wheel zooms around the pointer where bounded pan permits; middle drag pans.
-The compact corner tools are Fit and 1:1. Folder Browse, Previous, Next and
-Refresh use icons with accessible names/tooltips; reference modes and state-changing
-actions retain text labels. No zoom buttons or large instructional panel are present.
+Fit and 1:1 sit in the upper toolbar rather than over the canvas. Folder Browse,
+Previous, Next and Refresh use icons with accessible names/tooltips. The upper
+reference group contains mutually exclusive Folder/Runtime icons, Previous/Next,
+index/dimensions and Refresh. Fit/1:1 form a separate right-aligned group.
+The selected source icon carries a check mark as well as a subtle border;
+disabled icons are dimmed. Loop displays localized ON/OFF text beside its icon.
+Secondary ROI operations have distinct icons; numeric Apply, Save and apply and
+errors keep readable text. Controls retain 44-pixel touch targets and existing
+style tokens. No zoom buttons or large instructional panel are present.
 
 ## Save, navigation and activation
 

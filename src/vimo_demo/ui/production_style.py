@@ -37,9 +37,12 @@ STRINGS: dict[str, tuple[str, str]] = {
     "setup_failed": ("保存/应用失败", "Save/apply failed"),
     "source_error": ("回放源错误", "Replay source error"),
     "camera_setup": ("相机设置", "Camera setup"),
+    "camera_number": ("相机 {number}", "Camera {number}"),
     "source_folder": ("图片文件夹", "Image folder"),
     "browse": ("浏览…", "Browse…"),
     "source_loop": ("循环", "Loop"),
+    "source_loop_on": ("开", "ON"),
+    "source_loop_off": ("关", "OFF"),
     "cli_sources": (
         "本次进程使用命令行图片；已保存的文件夹在不带图片参数重新启动后生效。",
         "CLI images override saved folders for this process. Relaunch without image arguments to use folders.",

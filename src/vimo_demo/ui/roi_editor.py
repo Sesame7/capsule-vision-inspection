@@ -8,15 +8,17 @@ from typing import Literal
 
 import numpy as np
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QButtonGroup,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTabBar,
     QVBoxLayout,
     QWidget,
@@ -39,42 +41,91 @@ from .roi_canvas import RoiCanvas
 
 
 def _image_icon(tool: str) -> QIcon:
-    """Draw simple tools without relying on optional Unicode font glyphs."""
-    pixmap = QPixmap(24, 24)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QPen(QColor(Style.primary), 1.6))
-    if tool == "refresh":
-        painter.drawArc(5, 5, 14, 14, 40 * 16, 290 * 16)
-        painter.drawLine(19, 4, 19, 10)
-        painter.drawLine(19, 10, 13, 10)
-    elif tool == "folder":
-        for x, y, dx, dy in (
-            (3, 8, 3, 5),
-            (3, 5, 10, 5),
-            (10, 5, 13, 8),
-            (13, 8, 21, 8),
-            (21, 8, 21, 19),
-            (21, 19, 3, 19),
-            (3, 19, 3, 8),
-        ):
-            painter.drawLine(x, y, dx, dy)
-    elif tool in ("previous", "next"):
-        x, dx = (15, -7) if tool == "previous" else (9, 7)
-        painter.drawLine(x, 5, x + dx, 12)
-        painter.drawLine(x + dx, 12, x, 19)
-    else:
-        for x, y, dx, dy in (
-            (4, 4, 1, 1),
-            (20, 4, -1, 1),
-            (4, 20, 1, -1),
-            (20, 20, -1, -1),
-        ):
-            painter.drawLine(x, y, x + dx * 5, y)
-            painter.drawLine(x, y, x, y + dy * 5)
-    painter.end()
-    return QIcon(pixmap)
+    """Local vector tools; checked modes have a check mark, not just a color."""
+    icon = QIcon()
+    for checked in (False, True):
+        for dpr in (1.0, 1.25, 1.5, 2.0):
+            pixmap = QPixmap(round(24 * dpr), round(24 * dpr))
+            pixmap.setDevicePixelRatio(dpr)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor(Style.primary), 1.6))
+            if tool == "refresh":
+                painter.drawArc(5, 5, 14, 14, 40 * 16, 290 * 16)
+                painter.drawLine(19, 4, 19, 10)
+                painter.drawLine(19, 10, 13, 10)
+            elif tool == "camera":
+                painter.drawRect(3, 8, 18, 12)
+                painter.drawRect(7, 5, 7, 3)
+                painter.drawEllipse(8, 10, 8, 8)
+                painter.drawPoint(18, 11)
+            elif tool == "folder":
+                for x, y, dx, dy in (
+                    (3, 8, 3, 5),
+                    (3, 5, 10, 5),
+                    (10, 5, 13, 8),
+                    (13, 8, 21, 8),
+                    (21, 8, 21, 19),
+                    (21, 19, 3, 19),
+                    (3, 19, 3, 8),
+                ):
+                    painter.drawLine(x, y, dx, dy)
+            elif tool == "runtime":
+                painter.drawRect(3, 4, 18, 13)
+                painter.drawLine(9, 20, 15, 20)
+                painter.drawLine(12, 17, 12, 20)
+                painter.drawLine(9, 7, 16, 11)
+                painter.drawLine(16, 11, 9, 14)
+                painter.drawLine(9, 14, 9, 7)
+            elif tool == "loop":
+                painter.drawLine(4, 7, 20, 7)
+                painter.drawLine(20, 7, 16, 3)
+                painter.drawLine(20, 7, 16, 11)
+                painter.drawLine(20, 17, 4, 17)
+                painter.drawLine(4, 17, 8, 13)
+                painter.drawLine(4, 17, 8, 21)
+            elif tool == "apply":
+                painter.drawLine(4, 12, 9, 17)
+                painter.drawLine(9, 17, 20, 6)
+            elif tool == "common":
+                painter.drawRect(3, 3, 12, 12)
+                painter.drawRect(8, 8, 12, 12)
+            elif tool == "distribute":
+                for x, height in ((3, 12), (10, 8), (17, 12)):
+                    painter.drawRect(x, (24 - height) // 2, 4, height)
+                painter.drawLine(3, 21, 21, 21)
+                painter.drawLine(3, 19, 3, 23)
+                painter.drawLine(21, 19, 21, 23)
+            elif tool in ("previous", "next"):
+                x, dx = (15, -7) if tool == "previous" else (9, 7)
+                painter.drawLine(x, 5, x + dx, 12)
+                painter.drawLine(x + dx, 12, x, 19)
+            else:
+                for x, y, dx, dy in (
+                    (4, 4, 1, 1),
+                    (20, 4, -1, 1),
+                    (4, 20, 1, -1),
+                    (20, 20, -1, -1),
+                ):
+                    painter.drawLine(x, y, x + dx * 5, y)
+                    painter.drawLine(x, y, x, y + dy * 5)
+            if checked and tool in ("folder", "runtime"):
+                painter.fillRect(13, 13, 11, 11, QColor(Style.raised))
+                painter.drawLine(14, 18, 17, 21)
+                painter.drawLine(17, 21, 23, 15)
+            painter.end()
+            state = QIcon.State.On if checked else QIcon.State.Off
+            icon.addPixmap(pixmap, QIcon.Mode.Normal, state)
+            dimmed = QPixmap(pixmap.size())
+            dimmed.setDevicePixelRatio(dpr)
+            dimmed.fill(Qt.GlobalColor.transparent)
+            muted = QPainter(dimmed)
+            muted.setOpacity(0.35)
+            muted.drawPixmap(0, 0, pixmap)
+            muted.end()
+            icon.addPixmap(dimmed, QIcon.Mode.Disabled, state)
+    return icon
 
 
 type ReferenceMode = Literal["folder", "runtime"]
@@ -86,6 +137,106 @@ class _FolderReference:
     paths: tuple[Path, ...]
     index: int
     error: str = ""
+
+
+class _RoiToolbar(QWidget):
+    """Align three compact groups; wrap whole groups without shrinking controls."""
+
+    def __init__(self, leading: QWidget, center: QWidget, trailing: QWidget) -> None:
+        super().__init__()
+        self._groups = leading, center, trailing
+        for group in self._groups:
+            group.setSizePolicy(
+                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred
+            )
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(Style.space)
+        self._grid.setVerticalSpacing(Style.small)
+        # Equal flexible side columns center the middle group when both sides fit.
+        self._grid.setColumnStretch(0, 1)
+        self._grid.setColumnStretch(2, 1)
+        self._rows = 0
+        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+        self._arrange(self.width())
+
+    def _sizes(self) -> tuple[QSize, ...]:
+        return tuple(
+            group.minimumSizeHint().expandedTo(group.minimumSize())
+            for group in self._groups
+        )
+
+    def _row_width(self) -> int:
+        return sum(size.width() for size in self._sizes()) + 2 * Style.space
+
+    def _row_count(self, width: int) -> int:
+        if width >= self._row_width():
+            return 1
+        remaining = sum(size.width() for size in self._sizes()[1:])
+        return 2 if width >= remaining + Style.space else 3
+
+    def minimumSizeHint(self) -> QSize:
+        sizes = self._sizes()
+        return QSize(
+            max(size.width() for size in sizes), max(size.height() for size in sizes)
+        )
+
+    def sizeHint(self) -> QSize:
+        return QSize(self._row_width(), self.heightForWidth(self._row_width()))
+
+    def heightForWidth(self, width: int) -> int:
+        heights = [size.height() for size in self._sizes()]
+        rows = self._row_count(width)
+        if rows == 1:
+            return max(heights)
+        if rows == 2:
+            return heights[0] + max(heights[1:]) + Style.small
+        return sum(heights) + 2 * Style.small
+
+    def sync_metrics(self) -> None:
+        # Recompute after localized labels/status change; retain all camera tabs.
+        for group in self._groups:
+            layout = group.layout()
+            if layout is not None:
+                layout.invalidate()
+                group.setMinimumWidth(layout.minimumSize().width())
+            else:
+                group.setMinimumWidth(group.sizeHint().width())
+        self._arrange(self.width())
+
+    def _arrange(self, width: int) -> None:
+        rows = self._row_count(width)
+        if rows != self._rows:
+            for group in self._groups:
+                self._grid.removeWidget(group)
+            leading, center, trailing = self._groups
+            left = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            middle = Qt.AlignmentFlag.AlignCenter
+            right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            if rows == 1:
+                self._grid.addWidget(leading, 0, 0, left)
+                self._grid.addWidget(center, 0, 1, middle)
+                self._grid.addWidget(trailing, 0, 2, right)
+            elif rows == 2:
+                self._grid.addWidget(leading, 0, 0, 1, 3, left)
+                self._grid.addWidget(center, 1, 1, middle)
+                self._grid.addWidget(trailing, 1, 2, right)
+            else:
+                for row, (group, alignment) in enumerate(
+                    zip(self._groups, (left, middle, right), strict=True)
+                ):
+                    self._grid.addWidget(group, row, 0, 1, 3, alignment)
+            self._rows = rows
+        required_height = self.heightForWidth(width)
+        if self.minimumHeight() != required_height:
+            self.setMinimumHeight(required_height)
+        self.updateGeometry()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        self._arrange(event.size().width())
+        super().resizeEvent(event)
 
 
 class MachineRoiWorkspace(QWidget):
@@ -136,8 +287,7 @@ class MachineRoiWorkspace(QWidget):
         self.buttons: dict[str, QPushButton] = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        header = QHBoxLayout()
-
+        root.setSpacing(Style.small)
         self.camera_tabs = QTabBar()
         self.camera_tabs.setExpanding(False)
         self.camera_tabs.setDrawBase(False)
@@ -146,21 +296,25 @@ class MachineRoiWorkspace(QWidget):
             f"color: {Style.primary}; background: {Style.surface}; border: none; }} "
             f"QTabBar::tab:selected {{ color: {Style.accent}; background: {Style.raised}; }}"
         )
+        self.camera_tabs.setIconSize(QSize(Style.icon, Style.icon))
+        camera_icon = _image_icon("camera")
         for identity in self.draft.definition.layout.camera_ids:
-            self.camera_tabs.addTab(str(identity))
+            self.camera_tabs.addTab(camera_icon, str(identity).removeprefix("CAM"))
         self.camera_tabs.setCurrentIndex(
             self.draft.definition.layout.camera_ids.index(camera)
         )
-        header.addWidget(self.camera_tabs, 1)
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
-        root.addLayout(header)
         self.folder = QLineEdit()
         self.browse = QPushButton()
-        self.loop = QCheckBox()
+        self.loop = QPushButton()
+        self.loop.setCheckable(True)
+        self.loop.setIcon(_image_icon("loop"))
+        self.loop.setIconSize(QSize(Style.icon, Style.icon))
         self.source_notice = QLabel()
         self.source_notice.setWordWrap(True)
         source_row = QHBoxLayout()
+        source_row.setSpacing(Style.small)
         source_row.addWidget(self.folder, 1)
         source_row.addWidget(self.browse)
         source_row.addWidget(self.loop)
@@ -170,7 +324,6 @@ class MachineRoiWorkspace(QWidget):
             self.browse.setIcon(_image_icon("folder"))
             self.browse.setIconSize(QSize(24, 24))
             self.loop.setMinimumHeight(Style.touch)
-            root.addLayout(source_row)
             source_row.addWidget(self.source_notice)
         else:
             for widget in (
@@ -184,13 +337,21 @@ class MachineRoiWorkspace(QWidget):
         self.folder.editingFinished.connect(self.refresh_frame)
         self.browse.clicked.connect(self.browse_folder)
         self.loop.toggled.connect(self.loop_changed)
-        references = QHBoxLayout()
+        reference_controls = QWidget()
+        references = QHBoxLayout(reference_controls)
+        references.setContentsMargins(0, 0, 0, 0)
+        references.setSpacing(Style.small)
+        self._reference_group = QButtonGroup(self)
+        self._reference_group.setExclusive(True)
         self.reference_modes: dict[ReferenceMode, QPushButton] = {}
         modes: tuple[ReferenceMode, ...] = ("folder", "runtime")
         for mode in modes:
             button = QPushButton()
-            button.setMinimumHeight(Style.touch)
+            button.setFixedSize(Style.touch, Style.touch)
+            button.setIcon(_image_icon(mode))
+            button.setIconSize(QSize(Style.icon, Style.icon))
             button.setCheckable(True)
+            self._reference_group.addButton(button)
 
             def choose(_checked: bool = False, m: ReferenceMode = mode) -> None:
                 self.set_reference_mode(m)
@@ -201,7 +362,6 @@ class MachineRoiWorkspace(QWidget):
         for key, tool in (
             ("reference_previous", "previous"),
             ("reference_next", "next"),
-            ("roi_refresh", "refresh"),
         ):
             button = self.button(key)
             button.setText("")
@@ -212,16 +372,12 @@ class MachineRoiWorkspace(QWidget):
         self.reference = QLabel()
         self.reference.setTextFormat(Qt.TextFormat.PlainText)
         self.reference.setProperty("role", "secondary")
-        references.addWidget(self.reference, 1)
-        root.addLayout(references)
-        self.canvas = RoiCanvas(self.editable)
-        root.addWidget(self.canvas, 1)
-        # Child overlay layouts reserve no workspace height outside the image.
-        overlay = QVBoxLayout(self.canvas)
-        overlay.setContentsMargins(12, 12, 12, 12)
-        overlay.addStretch()
-        corner = QHBoxLayout()
-        corner.addStretch()
+        references.addWidget(self.reference)
+        references.addWidget(self.icon_button("roi_refresh", "refresh"))
+        display_controls = QWidget()
+        display = QHBoxLayout(display_controls)
+        display.setContentsMargins(0, 0, 0, 0)
+        display.setSpacing(Style.small)
         for key, symbol in (
             ("roi_fit", "⛶"),
             ("roi_actual", "1:1"),
@@ -232,9 +388,19 @@ class MachineRoiWorkspace(QWidget):
                 button.setIcon(_image_icon("fit"))
                 button.setIconSize(QSize(24, 24))
             button.setFixedSize(Style.touch, Style.touch)
-            corner.addWidget(button, 0, Qt.AlignmentFlag.AlignBottom)
-        overlay.addLayout(corner)
-        geometry = QHBoxLayout()
+            display.addWidget(button)
+        self.reference_toolbar = _RoiToolbar(
+            self.camera_tabs, reference_controls, display_controls
+        )
+        root.addWidget(self.reference_toolbar)
+        if self.sources is not None:
+            root.addLayout(source_row)
+        self.canvas = RoiCanvas(self.editable)
+        root.addWidget(self.canvas, 1)
+        numeric, actions, saving = QWidget(), QWidget(), QWidget()
+        geometry = QHBoxLayout(numeric)
+        geometry.setContentsMargins(0, 0, 0, 0)
+        geometry.setSpacing(Style.small)
         self.channel = QLabel()
         geometry.addWidget(self.channel)
         self.coordinates: dict[str, QLineEdit] = {}
@@ -250,23 +416,29 @@ class MachineRoiWorkspace(QWidget):
             self.coordinates["W"],
             self.coordinates["H"],
         )
-        geometry.addWidget(self.button("roi_set_rect"))
-        geometry.addStretch()
-        root.addLayout(geometry)
-        footer = QHBoxLayout()
+        apply_geometry = self.button("roi_set_rect")
+        apply_geometry.setIcon(_image_icon("apply"))
+        apply_geometry.setIconSize(QSize(Style.icon, Style.icon))
+        geometry.addWidget(apply_geometry)
+        bulk = QHBoxLayout(actions)
+        bulk.setContentsMargins(0, 0, 0, 0)
+        bulk.setSpacing(Style.small)
+        bulk.addWidget(self.icon_button("roi_common", "common"))
+        bulk.addWidget(self.icon_button("roi_distribute", "distribute"))
+        save_row = QHBoxLayout(saving)
+        save_row.setContentsMargins(0, 0, 0, 0)
+        save_row.setSpacing(Style.small)
+        save_row.addWidget(self.status)
+        primary = self.button("roi_save_apply")
+        primary.setObjectName("start")
+        save_row.addWidget(primary)
+        self.geometry_toolbar = _RoiToolbar(numeric, actions, saving)
+        root.addWidget(self.geometry_toolbar)
         self.message = QLabel()
         self.message.setWordWrap(True)
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         # Error text stays explicit; hidden when empty rather than reserving a prose row.
         root.addWidget(self.message)
-        footer.addWidget(self.button("roi_common"))
-        footer.addWidget(self.button("roi_distribute"))
-        footer.addStretch()
-        footer.addWidget(self.status)
-        primary = self.button("roi_save_apply")
-        primary.setObjectName("start")
-        footer.addWidget(primary)
-        root.addLayout(footer)
         self.buttons["roi_fit"].clicked.connect(lambda: self.canvas.zoom(None))
         self.buttons["roi_actual"].clicked.connect(lambda: self.canvas.zoom(1))
         self.buttons["roi_refresh"].clicked.connect(self.refresh_frame)
@@ -296,22 +468,36 @@ class MachineRoiWorkspace(QWidget):
         self.buttons[key] = button
         return button
 
+    def icon_button(self, key: str, tool: str) -> QPushButton:
+        button = self.button(key)
+        button.setText("")
+        button.setFixedSize(Style.touch, Style.touch)
+        button.setIcon(_image_icon(tool))
+        button.setIconSize(QSize(Style.icon, Style.icon))
+        return button
+
     def set_language(self, language: Language) -> None:
         self.language = language
         self.folder.setAccessibleName(text("source_folder", language))
         self.folder.setPlaceholderText(text("source_folder", language))
         self.browse.setAccessibleName(text("browse", language))
         self.browse.setToolTip(text("browse", language))
-        self.loop.setText(text("source_loop", language))
+        self.loop.setToolTip(text("source_loop", language))
         self.source_notice.setText(text("cli_sources_short", language))
         self.source_notice.setToolTip(text("cli_sources", language))
         self.source_notice.setAccessibleName(text("cli_sources", language))
         self.source_notice.setVisible(self.session.cli_sources)
         for mode, button in self.reference_modes.items():
-            button.setText(text("reference_" + mode, language))
+            button.setText("")
             button.setAccessibleName(text("reference_" + mode, language))
             button.setToolTip(text("reference_" + mode + "_tip", language))
-        self.camera_tabs.setAccessibleName(text("camera_scope", language))
+        self.camera_tabs.setAccessibleName(text("camera_setup", language))
+        for index in range(self.camera_tabs.count()):
+            name = text("camera_number", language).format(
+                number=self.camera_tabs.tabText(index)
+            )
+            self.camera_tabs.setTabToolTip(index, name)
+            self.camera_tabs.setAccessibleTabName(index, name)
         for key, button in self.buttons.items():
             button.setAccessibleName(text(key, language))
             button.setToolTip(text(key, language))
@@ -321,8 +507,17 @@ class MachineRoiWorkspace(QWidget):
                 "roi_refresh",
                 "reference_previous",
                 "reference_next",
+                "roi_common",
+                "roi_distribute",
             ):
                 button.setText(text(key, language))
+        numeric_apply = self.buttons["roi_set_rect"]
+        numeric_apply.setMinimumWidth(
+            numeric_apply.fontMetrics().horizontalAdvance(numeric_apply.text())
+            + Style.icon
+            + 2 * Style.space
+            + Style.small
+        )
         for key, line in self.coordinates.items():
             line.setAccessibleName(text("roi_" + key.lower(), language))
             line.setToolTip(text("roi_" + key.lower(), language))
@@ -579,6 +774,14 @@ class MachineRoiWorkspace(QWidget):
         )
         for control in (self.folder, self.browse, self.loop):
             control.setEnabled(self._allowed() and not self._preparing)
+        loop_state = text(
+            "source_loop_on" if self.loop.isChecked() else "source_loop_off",
+            self.language,
+        )
+        self.loop.setText(loop_state)
+        self.loop.setAccessibleName(
+            text("source_loop", self.language) + " · " + loop_state
+        )
         self.status.setText(
             text(
                 "setup_saving"
@@ -634,6 +837,8 @@ class MachineRoiWorkspace(QWidget):
             (text("simulation", self.language) + " · " if self.simulation else "")
             + info
         )
+        self.reference_toolbar.sync_metrics()
+        self.geometry_toolbar.sync_metrics()
         self.canvas.update()
 
     def operation(self, action: Callable[[], None]) -> bool:
