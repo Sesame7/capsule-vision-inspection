@@ -4,7 +4,6 @@ from PySide6.QtCore import QEvent, QObject, QSize, Qt, Slot
 from PySide6.QtGui import QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
-    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -12,12 +11,17 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from vimo_demo.application import ApplicationState, ProductionApplicationSnapshot
+from vimo_demo.application import (
+    ApplicationState,
+    ConfigurationIdentity,
+    ProductionApplicationSnapshot,
+)
 from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
@@ -26,8 +30,15 @@ from .camera_card import CameraCard
 from .display_frames import DisplayFrame, DisplaySnapshot
 from .parameters_page import ParametersPage
 from .production_bridge import QtProductionBridge, RecipeChoice
-from .production_presentation import controls, grid_columns
-from .production_style import Language, Style, navigation_icon, stylesheet, text
+from .production_presentation import controls, grid_columns, primary_action
+from .production_style import (
+    Language,
+    Style,
+    navigation_icon,
+    production_icon,
+    stylesheet,
+    text,
+)
 from .recipe_editor import RecipeEditorSession
 
 PAGES = ("production", "parameters", "diagnostics", "history", "settings")
@@ -64,6 +75,7 @@ class ProductionWindow(QMainWindow):
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._columns = 0
         self._command_issue = False
+        self._active_choice: RecipeChoice | None = None
         self._source_issue = ""
         self._closing = False
         self.setMinimumSize(*Style.minimum)
@@ -105,60 +117,66 @@ class ProductionWindow(QMainWindow):
         page.setContentsMargins(0, 0, 0, 0)
         page.setSpacing(Style.space)
         self.pages.addWidget(production)
-        summary = QFrame()
+        summary = self.summary = QFrame()
         summary.setObjectName("summary")
         summary_layout = QVBoxLayout(summary)
         summary_layout.setContentsMargins(
-            Style.space, Style.space, Style.space, Style.space
+            Style.space, Style.small, Style.space, Style.small
         )
+        summary_layout.setSpacing(Style.small)
         header = QHBoxLayout()
+        header.setSpacing(Style.space)
+        self.state_icon = QLabel()
+        self.state_icon.setFixedSize(Style.icon, Style.icon)
+        header.addWidget(self.state_icon)
         self.state_label = QLabel()
-        self.state_label.setProperty("role", "state")
+        self.state_label.setStyleSheet("font-weight: 600;")
         header.addWidget(self.state_label)
-        header.addStretch()
-        self.mode_label = QLabel()
-        self.mode_label.setProperty("role", "secondary")
-        header.addWidget(self.mode_label)
-        summary_layout.addLayout(header)
         self.identity_label = QLabel()
-        self.identity_label.setWordWrap(True)
-        self.identity_label.setProperty("role", "secondary")
-        summary_layout.addWidget(self.identity_label)
+        self.identity_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.identity_label.setMinimumWidth(2 * Style.touch)
+        self.identity_label.setTextFormat(Qt.TextFormat.PlainText)
+        header.addWidget(self.identity_label, 1)
+        self.pending_label = QLabel()
+        self.pending_label.setFixedWidth(4 * Style.touch)
+        self.pending_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.pending_label.setStyleSheet(f"color: {Style.secondary};")
+        header.addWidget(self.pending_label)
+        self.batch_label = QLabel()
+        self.batch_label.setFixedWidth(3 * Style.touch)
+        self.batch_label.setTextFormat(Qt.TextFormat.PlainText)
+        header.addWidget(self.batch_label)
+        batch = QPushButton()
+        batch.setFixedSize(Style.touch, Style.touch)
+        batch.setIcon(production_icon("batch"))
+        batch.setIconSize(QSize(Style.icon, Style.icon))
+        batch.clicked.connect(self._batch_dialog)
+        header.addWidget(batch)
+        operation = QPushButton()
+        operation.setObjectName("start")
+        operation.setFixedSize(4 * Style.touch, Style.touch)
+        operation.setIconSize(QSize(Style.icon, Style.icon))
+        operation.clicked.connect(self._operate)
+        header.addWidget(operation)
+        self.buttons = {"batch": batch, "operation": operation}
+        summary_layout.addLayout(header)
         metric_row = QHBoxLayout()
         self.metrics: dict[str, tuple[QLabel, QLabel]] = {}
-        for key in ("cycles", "channel_ok", "channel_ng", "processing"):
-            metric = QVBoxLayout()
-            metric.setSpacing(0)
-            value = QLabel("0")
-            value.setProperty("role", "number")
+        for key in ("cycles", "channel_ng", "processing"):
+            metric = QHBoxLayout()
+            metric.setSpacing(Style.small)
             caption = QLabel()
             caption.setProperty("role", "secondary")
-            metric.addWidget(value)
+            value = QLabel("0")
+            value.setStyleSheet("font-size: 18px; font-weight: 600;")
             metric.addWidget(caption)
+            metric.addWidget(value)
+            metric.addStretch()
             metric_row.addLayout(metric, 1)
             self.metrics[key] = (value, caption)
         summary_layout.addLayout(metric_row)
-        actions = QHBoxLayout()
-        actions.setSpacing(Style.small)
-        self.recipe = QComboBox()
-        for choice in choices:
-            self.recipe.addItem(choice.label)
-        self.recipe.setMinimumHeight(Style.touch)
-        self.recipe.setMinimumWidth(130)
-        self.recipe.activated.connect(self._select_recipe)
-        actions.addWidget(self.recipe, 1)
-        self.buttons: dict[str, QPushButton] = {}
-        for key in ("batch", "reset", "stop", "start"):
-            button = QPushButton()
-            button.setObjectName(key)
-            button.setMinimumHeight(Style.touch)
-            actions.addWidget(button)
-            self.buttons[key] = button
-        self.buttons["start"].clicked.connect(bridge.start)
-        self.buttons["stop"].clicked.connect(bridge.stop)
-        self.buttons["reset"].clicked.connect(bridge.reset)
-        self.buttons["batch"].clicked.connect(self._batch_dialog)
-        summary_layout.addLayout(actions)
         page.addWidget(summary)
         workspace = QWidget()
         self.grid = QGridLayout(workspace)
@@ -264,20 +282,37 @@ class ProductionWindow(QMainWindow):
         self.language_button.setText("English" if language == "zh" else "中文")
         for key, button in zip(PAGES, self.navigation, strict=True):
             button.setText(text(key, language))
-        for key, button in self.buttons.items():
-            button.setText(text(key, language))
+        self.buttons["batch"].setToolTip(text("batch", language))
+        self.buttons["batch"].setAccessibleName(text("batch", language))
         for key, (_, caption) in self.metrics.items():
-            caption.setText(text(key, language))
+            caption.setText(
+                text("production_ng" if key == "channel_ng" else key, language)
+            )
+        self.metrics["channel_ng"][0].setToolTip(text("channel_count_help", language))
+        self.metrics["channel_ng"][1].setToolTip(text("channel_count_help", language))
         for key, label in self.placeholders.items():
             label.setText(
                 f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
             )
-        self.recipe.setAccessibleName(text("recipe", language))
         self._render()
 
-    @Slot(int)
-    def _select_recipe(self, index: int) -> None:
-        self.bridge.select_recipe(self.choices[index])
+    @Slot()
+    def _operate(self) -> None:
+        if self._closing or not self.buttons["operation"].isEnabled():
+            return
+        action = primary_action(self.snapshot.state)
+        current = self.bridge.application.snapshot()
+        if action != primary_action(current.state):
+            # A completed replay may reach READY before the next UI poll. Never
+            # reinterpret a still-visible Stop/Reset click as a new Start.
+            self._snapshot_changed(current)
+            return
+        if action == "start":
+            self.bridge.start()
+        elif action == "stop":
+            self.bridge.stop()
+        elif action == "reset":
+            self.bridge.reset()
 
     @Slot(object)
     def _recipe_applied(self, choice: object) -> None:
@@ -292,12 +327,15 @@ class ProductionWindow(QMainWindow):
         ]
         choices.append(choice)
         self.choices = tuple(choices)
-        self.recipe.clear()
-        self.recipe.addItems([c.label for c in self.choices])
         self._render()
 
     @Slot()
     def _batch_dialog(self) -> None:
+        if (
+            self._closing
+            or self.bridge.application.snapshot().state is not ApplicationState.READY
+        ):
+            return
         value, accepted = QInputDialog.getText(
             self,
             text("batch", self.language),
@@ -374,60 +412,52 @@ class ProductionWindow(QMainWindow):
     def _render(self) -> None:
         snapshot, language = self.snapshot, self.language
         availability = controls(snapshot)
-        for key, enabled in (
-            (
-                "start",
-                availability.start
-                and not self.parameters.busy
-                and not (
-                    self.parameters.session
-                    and (
-                        self.parameters.session.machine_editor.dirty
-                        or (
-                            self.parameters.session.camera_sources
-                            and self.parameters.session.camera_sources.dirty
-                        )
+        action = primary_action(snapshot.state)
+        enabled = {
+            "start": availability.start
+            and not self.parameters.busy
+            and not (
+                self.parameters.session
+                and (
+                    self.parameters.session.machine_editor.dirty
+                    or (
+                        self.parameters.session.camera_sources
+                        and self.parameters.session.camera_sources.dirty
                     )
-                ),
+                )
             ),
-            ("stop", availability.stop),
-            ("reset", availability.reset),
-            ("batch", availability.batch),
-        ):
-            self.buttons[key].setEnabled(enabled and not self._closing)
-        self.recipe.setEnabled(availability.recipe and not self._closing)
-        self.state_label.setText(
-            text("closing" if self._closing else snapshot.state.name, language)
+            "stop": availability.stop,
+            "reset": availability.reset,
+        }.get(action, False)
+        operation = self.buttons["operation"]
+        operation.setEnabled(bool(enabled) and not self._closing)
+        operation.setText(text(action, language))
+        operation.setIcon(production_icon(action))
+        operation.setAccessibleName(operation.text())
+        operation.setToolTip(
+            text("configure_first", language)
+            if snapshot.state is ApplicationState.UNCONFIGURED
+            else text("software_stop", language)
+            if action == "stop"
+            else operation.text()
+        )
+        self.buttons["batch"].setEnabled(availability.batch and not self._closing)
+        state = "closing" if self._closing else snapshot.state.name
+        self.state_label.setText(text(state, language))
+        self.state_label.setToolTip(
+            text("simulation", language) if self.simulation else ""
+        )
+        self.state_icon.setPixmap(
+            production_icon(snapshot.state.name).pixmap(Style.icon, Style.icon)
         )
         color = (
-            Style.fault if snapshot.state is ApplicationState.FAULT else Style.accent
+            Style.fault if snapshot.state is ApplicationState.FAULT else Style.secondary
         )
-        self.state_label.setStyleSheet(f"color: {color};")
-        self.mode_label.setText(text("simulation", language) if self.simulation else "")
-        selected = snapshot.candidate
-        active = snapshot.active
-        self.identity_label.setText(
-            f"{text('selected', language)}: {selected.recipe_id if selected else '--'} "
-            f"[{text('model', language)}: {selected.model_id if selected else '--'}]  ·  "
-            f"{text('active', language)}: {active.recipe_id if active else '--'} "
-            f"[{text('model', language)}: {active.model_id if active else '--'}]  ·  "
-            f"{text('batch_id', language)}: {snapshot.batch_id or '--'}"
-        )
-        if selected:
-            index = next(
-                (
-                    i
-                    for i, c in enumerate(self.choices)
-                    if c.prepared.configuration.recipe_id == selected.recipe_id
-                ),
-                -1,
-            )
-            if index >= 0:
-                self.recipe.setCurrentIndex(index)
+        self.state_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self._render_identity()
         counts = snapshot.counters
         for key, count in (
             ("cycles", counts.cycles_completed),
-            ("channel_ok", counts.channel_ok),
             ("channel_ng", counts.channel_ng),
         ):
             self.metrics[key][0].setText(f"{count:,}")
@@ -474,18 +504,132 @@ class ProductionWindow(QMainWindow):
                 "closing",
             }
         )
+        production_page = self.pages.currentIndex() == 0
+        self.event_frame.setFixedHeight(
+            Style.touch + 2 * Style.small if production_page else 76
+        )
         message = text(event_key, language)
+        if production_page and event_key in {
+            "ready_note",
+            "running_note",
+            "ng_note",
+            "STARTING",
+            "STOPPING",
+            "CLOSED",
+        }:
+            message = ""
+        if production_page and snapshot.state is ApplicationState.UNCONFIGURED:
+            message = text("configure_first", language)
         if self._source_issue and event_key == "command_error":
             message = text("source_error", language) + ": " + self._source_issue
-        if counts.channel_unknown or counts.technical_error_cycles:
+        if not production_page and (
+            counts.channel_unknown or counts.technical_error_cycles
+        ):
             message += f"\n{text('unknown_count', language)}: {counts.channel_unknown:,} · {text('error_cycles', language)}: {counts.technical_error_cycles:,}"
         self.event_label.setText(message)
+        self.event_label.setToolTip(message)
+        warning = (
+            event_key in {"technical_note", "issue_note", "command_error", "close_wait"}
+            if production_page
+            else bool(
+                counts.technical_error_cycles
+                or self._command_issue
+                or snapshot.last_issue
+            )
+        )
         self.event_label.setStyleSheet(
-            f"color: {Style.fault if snapshot.state is ApplicationState.FAULT else Style.warning if counts.technical_error_cycles or self._command_issue or snapshot.last_issue else Style.secondary};"
+            f"color: {Style.fault if snapshot.state is ApplicationState.FAULT else Style.warning if warning else Style.secondary};"
         )
         self._render_cards()
 
+    def _render_identity(self) -> None:
+        snapshot, language = self.snapshot, self.language
+        active, candidate = snapshot.active, snapshot.candidate
+        if active and (
+            self._active_choice is None or snapshot.state is ApplicationState.RUNNING
+        ):
+            choice = next(
+                (
+                    c
+                    for c in self.choices
+                    if ConfigurationIdentity.from_prepared(c.prepared) == active
+                ),
+                None,
+            )
+            if choice is not None:
+                self._active_choice = choice
+        active_name = (
+            self._active_choice.label
+            if active
+            and self._active_choice
+            and ConfigurationIdentity.from_prepared(self._active_choice.prepared)
+            == active
+            else active.recipe_id
+            if active
+            else "--"
+        )
+        label = f"{text('production_recipe', language)}: {active_name}"
+        candidate_choice = next(
+            (
+                c
+                for c in self.choices
+                if ConfigurationIdentity.from_prepared(c.prepared) == candidate
+            ),
+            None,
+        )
+        pending = candidate is not None and (
+            candidate != active
+            or (
+                candidate_choice is not None
+                and self._active_choice is not None
+                and (
+                    candidate_choice.label != self._active_choice.label
+                    or candidate_choice.prepared.configuration
+                    != self._active_choice.prepared.configuration
+                )
+            )
+        )
+        if candidate and pending:
+            candidate_name = (
+                candidate_choice.label if candidate_choice else candidate.recipe_id
+            )
+            label += f" · {text('pending_recipe', language)}: {candidate_name}"
+        active_label = f"{text('production_recipe', language)}: {active_name}"
+        self.identity_label.setText(
+            self.identity_label.fontMetrics().elidedText(
+                active_label, Qt.TextElideMode.ElideRight, self.identity_label.width()
+            )
+        )
+        self.pending_label.setVisible(pending)
+        pending_text = (
+            f"{text('pending_badge', language)}: {candidate_choice.label if candidate_choice else candidate.recipe_id}"
+            if candidate
+            else ""
+        )
+        self.pending_label.setText(
+            self.pending_label.fontMetrics().elidedText(
+                pending_text, Qt.TextElideMode.ElideRight, self.pending_label.width()
+            )
+        )
+        self.pending_label.setToolTip(label)
+        self.pending_label.setAccessibleName(label)
+        self.identity_label.setToolTip(label)
+        self.identity_label.setAccessibleName(label)
+        batch = f"{text('batch_id', language)}: {snapshot.batch_id or '--'}"
+        self.batch_label.setText(
+            self.batch_label.fontMetrics().elidedText(
+                batch, Qt.TextElideMode.ElideRight, self.batch_label.width()
+            )
+        )
+        self.batch_label.setToolTip(batch)
+        self.batch_label.setAccessibleName(batch)
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() is QEvent.Type.Resize and watched in (
+            self.identity_label,
+            self.batch_label,
+        ):
+            self._render_identity()
         if event.type() is QEvent.Type.Quit and not self.bridge.closed:
             self.close()
             return True

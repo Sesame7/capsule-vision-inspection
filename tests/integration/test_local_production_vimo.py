@@ -112,7 +112,7 @@ def test_real_local_ui(
             lambda: app.snapshot().counters.cycles_completed >= 2, int(TIMEOUT * 1000)
         )
         until(lambda: any(card.viewport.boxes for card in window.cards))
-        window.buttons["stop"].click()
+        window.buttons["operation"].click()
         until(
             lambda: app.snapshot().state is ApplicationState.READY, int(TIMEOUT * 1000)
         )

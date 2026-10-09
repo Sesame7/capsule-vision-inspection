@@ -25,6 +25,7 @@ from vimo_demo.ui.production_presentation import (
     image_transform,
     indicator,
     matching_camera,
+    primary_action,
 )
 from vimo_demo.ui.production_style import STRINGS, text
 
@@ -126,15 +127,15 @@ def test_concurrent_store_identity_and_bounded_count() -> None:
 
 
 @pytest.mark.parametrize(
-    "state,start,stop,reset,recipe,batch",
+    "state,start,stop,reset,batch",
     [
-        (ApplicationState.UNCONFIGURED, False, False, False, True, False),
-        (ApplicationState.READY, True, False, False, True, True),
-        (ApplicationState.STARTING, False, True, False, False, False),
-        (ApplicationState.RUNNING, False, True, False, False, False),
-        (ApplicationState.STOPPING, False, False, False, False, False),
-        (ApplicationState.FAULT, False, False, True, False, False),
-        (ApplicationState.CLOSED, False, False, False, False, False),
+        (ApplicationState.UNCONFIGURED, False, False, False, False),
+        (ApplicationState.READY, True, False, False, True),
+        (ApplicationState.STARTING, False, True, False, False),
+        (ApplicationState.RUNNING, False, True, False, False),
+        (ApplicationState.STOPPING, False, False, False, False),
+        (ApplicationState.FAULT, False, False, True, False),
+        (ApplicationState.CLOSED, False, False, False, False),
     ],
 )
 def test_controls(
@@ -142,20 +143,34 @@ def test_controls(
     start: bool,
     stop: bool,
     reset: bool,
-    recipe: bool,
     batch: bool,
 ) -> None:
     result = controls(snapshot(state))
-    assert (result.start, result.stop, result.reset, result.recipe, result.batch) == (
+    assert (result.start, result.stop, result.reset, result.batch) == (
         start,
         stop,
         reset,
-        recipe,
         batch,
     )
     assert not controls(
         replace(snapshot(ApplicationState.FAULT), runtime_owned=True)
     ).reset
+
+
+@pytest.mark.parametrize(
+    "state, action",
+    [
+        (ApplicationState.UNCONFIGURED, "start"),
+        (ApplicationState.READY, "start"),
+        (ApplicationState.STARTING, "stop"),
+        (ApplicationState.RUNNING, "stop"),
+        (ApplicationState.STOPPING, "STOPPING"),
+        (ApplicationState.FAULT, "reset"),
+        (ApplicationState.CLOSED, "CLOSED"),
+    ],
+)
+def test_primary_action(state: ApplicationState, action: str) -> None:
+    assert primary_action(state) == action
 
 
 def test_indicator_distinguishes_pending_disabled_error_and_ng() -> None:

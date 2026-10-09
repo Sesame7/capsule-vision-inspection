@@ -174,7 +174,7 @@ def test_source_change_invalidates_reference_no_geometry_repair(
     workspace.folder.setText(str(smaller))
     workspace.source_edited(str(smaller))
     assert workspace.frame is None and workspace.camera not in workspace.draft.bounds
-    assert sources.dirty and not window.buttons["start"].isEnabled()
+    assert sources.dirty and not window.buttons["operation"].isEnabled()
     workspace.refresh_frame()
     until(lambda: not window.parameters.busy)
     assert workspace.frame is not None and workspace.frame.image.shape == (8, 15, 3)
@@ -249,7 +249,7 @@ def test_save_reload_partial_failure_and_running_guards(
     assert not workspace.session.dirty
     # Loop OFF only one replacement image: block its active call to inspect RUNNING.
     engine.release_active.clear()
-    window.buttons["start"].click()
+    window.buttons["operation"].click()
     until(engine.active.is_set)
     before = source.definition
     assert window.bridge.application.snapshot().state is ApplicationState.RUNNING
@@ -559,7 +559,7 @@ def test_startup_source_error_visible_before_engine_creation(
     )
     window.show()
     try:
-        window.buttons["start"].click()
+        window.buttons["operation"].click()
         until(lambda: "CAM5" in window.event_label.text())
         assert app.snapshot().state is ApplicationState.READY
         assert text("source_error", window.language) in window.event_label.text()

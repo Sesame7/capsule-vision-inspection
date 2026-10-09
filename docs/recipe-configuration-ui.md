@@ -15,6 +15,10 @@ and a draft-only tuning workspace. Only ViMo policies retain hidden overrides.
 - Compact Size/Color enablement and summaries, with **Tune preview**.
 - One primary **Save and apply** action.
 
+Recipe selection remains on this page only. Production displays the active Recipe
+read-only and marks a saved candidate pending until successful Start; it provides
+no Recipe selector or editing controls.
+
 There is no long scrolling form, raw Recipe ID, model path/hash/module dump,
 Defaults/Camera/Channel navigation, Inherit/Override UI, traditional enabled/required forms,
 permanent traditional-threshold forms, raw disabled-label editor, or machine-layout dump.

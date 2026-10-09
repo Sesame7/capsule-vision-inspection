@@ -21,7 +21,6 @@ class Controls:
     start: bool
     stop: bool
     reset: bool
-    recipe: bool
     batch: bool
 
 
@@ -31,9 +30,21 @@ def controls(snapshot: ProductionApplicationSnapshot) -> Controls:
         state is ApplicationState.READY,
         state in (ApplicationState.STARTING, ApplicationState.RUNNING),
         state is ApplicationState.FAULT and not snapshot.runtime_owned,
-        state in (ApplicationState.UNCONFIGURED, ApplicationState.READY),
         state is ApplicationState.READY,
     )
+
+
+def primary_action(state: ApplicationState) -> str:
+    """One fixed Production operation area; availability remains in controls()."""
+    if state in (ApplicationState.STARTING, ApplicationState.RUNNING):
+        return "stop"
+    if state is ApplicationState.STOPPING:
+        return "STOPPING"
+    if state is ApplicationState.FAULT:
+        return "reset"
+    if state is ApplicationState.CLOSED:
+        return "CLOSED"
+    return "start"
 
 
 class Indicator(Enum):

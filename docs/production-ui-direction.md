@@ -5,6 +5,12 @@ for a future PySide6 production workstation. It is a design reference, **not a
 pixel-perfect specification or evidence of an implemented Production UI**.
 Production Screen v0.1 is the final local visual reference from the exploration.
 
+The implemented contract is [Production UI](production-ui.md). Phase 3H-1 uses a
+two-row summary with active/pending Recipe presentation, three statistics and one
+state-dependent operation area. Recipe switching is confined to the Recipe page;
+Production has a fixed quiet status strip, with product NG shown locally. The
+broader ideas below record the historical exploration, not current requirements.
+
 ## Product and display context
 
 The target is an industrial PC mounted vertically on the machine, with an

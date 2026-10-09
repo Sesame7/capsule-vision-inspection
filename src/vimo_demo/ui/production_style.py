@@ -152,9 +152,26 @@ STRINGS: dict[str, tuple[str, str]] = {
     "recipe": ("选择配方", "Select recipe"),
     "batch": ("新建 / 更换批次", "New / change batch"),
     "batch_prompt": (
-        "批次号（留空表示未指定）；确认后清零累计计数。",
-        "Batch ID (blank for none). Confirming resets counters.",
+        "批次号（可留空）。确认后清零计数及最近结果。\n上一批统计不会归档。",
+        "Batch ID (optional). Confirm resets counters and the latest result.\nPrevious batch statistics are not archived.",
     ),
+    "production_recipe": ("配方", "Recipe"),
+    "pending_recipe": ("待启动激活", "Pending Start"),
+    "pending_badge": ("待激活", "Pending"),
+    "production_ng": ("CH NG 次数", "CH NG occurrences"),
+    "channel_count_help": (
+        "通道判断次数，不是实际胶囊或产品数量。",
+        "Channel judgment occurrences, not physical capsule or product counts.",
+    ),
+    "configure_first": (
+        "请在配方页保存并应用有效配方，再开始检测。",
+        "Save and apply a valid Recipe on the Recipe page before starting inspection.",
+    ),
+    "software_stop": (
+        "停止软件检测，不是硬件急停。",
+        "Stop software inspection; not a hardware emergency stop.",
+    ),
+    "previous_inspection": ("上次检测帧", "Previous inspection frame"),
     "selected": ("已选", "Selected"),
     "active": ("已激活", "Active"),
     "model": ("模型", "Model"),
@@ -325,6 +342,73 @@ def navigation_icon(index: int) -> QIcon:
             painter.drawEllipse(QRectF(3, 3, 16, 16))
             painter.drawLine(QPointF(11, 6), QPointF(11, 11))
             painter.drawLine(QPointF(11, 11), QPointF(16, 13))
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
+
+
+@cache
+def production_icon(kind: str) -> QIcon:
+    """Compact state/action strokes using the same DPR-aware Qt icon infrastructure."""
+    color = (
+        Style.fault
+        if kind == "FAULT"
+        else Style.ok
+        if kind == "READY"
+        else Style.background
+        if kind in ("start", "stop", "reset")
+        else Style.secondary
+    )
+    icon = QIcon()
+    for dpr in (1.0, 1.25, 1.5, 2.0):
+        pixmap = QPixmap(round(Style.icon * dpr), round(Style.icon * dpr))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(color), 1.7))
+        if kind in ("start", "RUNNING"):
+            for a, b in (
+                (QPointF(6, 4), QPointF(18, 11)),
+                (QPointF(18, 11), QPointF(6, 18)),
+                (QPointF(6, 18), QPointF(6, 4)),
+            ):
+                painter.drawLine(a, b)
+        elif kind == "stop":
+            painter.drawRect(QRectF(5, 5, 12, 12))
+        elif kind == "reset":
+            painter.drawArc(4, 4, 14, 14, 30 * 16, 290 * 16)
+            painter.drawLine(19, 3, 19, 9)
+            painter.drawLine(19, 9, 13, 9)
+        elif kind == "batch":
+            for a, b in (
+                (QPointF(4, 15), QPointF(15, 4)),
+                (QPointF(15, 4), QPointF(19, 8)),
+                (QPointF(19, 8), QPointF(8, 19)),
+                (QPointF(8, 19), QPointF(3, 20)),
+                (QPointF(3, 20), QPointF(4, 15)),
+            ):
+                painter.drawLine(a, b)
+        elif kind == "FAULT":
+            for a, b in (
+                (QPointF(11, 3), QPointF(20, 19)),
+                (QPointF(20, 19), QPointF(2, 19)),
+                (QPointF(2, 19), QPointF(11, 3)),
+            ):
+                painter.drawLine(a, b)
+            painter.drawLine(11, 8, 11, 13)
+            painter.drawPoint(11, 16)
+        elif kind in ("STARTING", "STOPPING"):
+            painter.drawEllipse(QRectF(3, 3, 16, 16))
+            painter.drawLine(11, 6, 11, 11)
+            painter.drawLine(11, 11, 16, 13)
+        else:
+            painter.drawEllipse(QRectF(3, 3, 16, 16))
+            if kind == "READY":
+                painter.drawLine(6, 11, 10, 15)
+                painter.drawLine(10, 15, 16, 7)
+            else:
+                painter.drawLine(7, 11, 15, 11)
         painter.end()
         icon.addPixmap(pixmap)
     return icon

@@ -1,4 +1,4 @@
-# Production UI — Phase 2D-1
+# Production UI
 
 The Production page is implemented. Phase 3D simplifies the
 [Recipe editor](recipe-configuration-ui.md); Settings directly hosts Camera setup and Machine ROI, while
@@ -7,7 +7,7 @@ not commissioned camera/PLC software. The [design direction](production-ui-direc
 remains a visual reference, not an exact implementation specification.
 
 The [graphical ROI editor](graphical-roi-editor.md) is embedded directly in Settings with per-camera source controls. It retains a frozen display reference and shares the image transform;
-Production cards, result matching and application lifecycle are unchanged.
+Production retains its existing card identity, result matching and application lifecycle contracts.
 
 ## Boundaries and updates
 
@@ -27,7 +27,7 @@ The GUI-thread bridge polls snapshots every **100 ms**, configurable via `poll_m
 Only changed snapshots or display revisions emit notifications. Start/Stop/Close
 Futures use the existing destruction-safe `FutureDelivery` gate and explicit queued
 Qt connections. Callbacks read only completed Futures, never mutate widgets.
-Prepared Recipe selection, Batch and Reset call cheap application operations;
+Prepared Recipe application, Batch and Reset call cheap application operations;
 there is no parsing, model IO or inference on the GUI thread. Unchanged display
 revisions do not trigger pixel conversions. Polling may skip intermediate display
 results; authoritative counters and result delivery do not depend on painting.
@@ -52,9 +52,14 @@ extend the old copies' lifetime; consumers must not build an unbounded history.
 Indicators and overlays require a match on application generation, cycle ID,
 complete FrameId (camera and sequence included), and image shape. A newer image
 immediately suppresses the old overlay/indicators until its matching result arrives.
-Previous-generation images are labeled reference images. Matching results use
-their own camera/slot layout, even if a different candidate Recipe is selected.
-Business results remain image-free.
+Generation-zero launcher/folder references remain available in the store for
+Settings but are hidden in Production. Initial camera viewports are empty/dark,
+with pending indicators and no repeated waiting text. Stop retains the latest
+frames, explicitly labeled **Previous inspection frame / 上次检测帧**; matched
+historical indicators/overlays may remain. A subsequent Start suppresses old
+results until matching evidence arrives in the new generation. Matching results
+use their own camera/slot layout, even if a different candidate Recipe is selected.
+Business results remain image-free; no second store or image history is added.
 
 ## Presentation contract
 
@@ -89,28 +94,49 @@ no masks, contours or invented geometry are added to domain results. Camera
 technical errors receive amber treatment; application FAULT has distinct text/color.
 Neither is converted into invented product NG evidence.
 
-The summary shows state, **Selected** and **Active** Recipe/model identities,
-optional Batch ID, **Completed cycles / 完成周期**, **Channel OK occurrences /
-通道 OK 次数**, **Channel NG occurrences / 通道 NG 次数**, and available last-inspection
-elapsed time. These are channel judgment occurrences, **not physical product or
-capsule counts**. Timing in the demo measures fake execution, not GPU performance.
-Unknown/error totals become visible in the status area when nonzero.
+The Production summary has two compact rows:
 
-| Application state | Enabled production controls |
-| --- | --- |
-| UNCONFIGURED | Recipe |
-| READY | Start, Recipe, Batch |
-| STARTING | Stop |
-| RUNNING | Stop |
-| STOPPING | None |
-| FAULT | Reset only after runtime ownership is released |
-| CLOSED | None |
+- State icon/text, read-only active Recipe, a separate pending-activation marker,
+  optional Batch ID/edit icon, and one fixed-position operation button.
+- **Completed cycles / 完成周期**, **CH NG occurrences / CH NG 次数**, and available
+  latest-inspection elapsed time. CH OK remains a backend counter and is not
+  permanently displayed here.
 
-This mapping is centralized in `production_presentation.controls`; application
-validation remains authoritative. Explicit Batch confirmation resets counters;
-blank ID means None. Stop/Start and Recipe selection do not reset counters.
-The bounded status area shows current state/result/issue only, with no persistent
-event history, traceback, internal path or raw vendor error.
+CH NG counts channel judgment occurrences, **not physical product or capsule
+counts**. Demo timing measures fake execution, not GPU performance. Long Recipe
+and Batch names are elided; full identity remains in tooltips/accessibility text.
+Recipe selection/editing belongs exclusively to the Recipe page. The summary
+keeps the last known active display name separate from a saved candidate, including
+same-ID edits, until a successful Start activates it. A candidate before the first
+Start is pending, never shown as active.
+
+| Application state | Primary operation | Batch edit |
+| --- | --- | --- |
+| UNCONFIGURED | Disabled Start with configuration feedback | Disabled |
+| READY | Start | Enabled |
+| STARTING | Stop | Disabled |
+| RUNNING | Stop | Disabled |
+| STOPPING | Disabled Stopping progress | Disabled |
+| FAULT | Reset only after runtime ownership is released | Disabled |
+| CLOSED | Disabled Closed | Disabled |
+
+`production_presentation.controls` and `primary_action` centralize this mapping;
+existing preparation/dirty-setup guards and application validation remain
+authoritative. The operation area stays 176 x 44 logical pixels across states.
+Stop means software inspection stop, never hardware emergency stop.
+
+Only READY permits the compact Batch dialog. ID is optional; explicit confirmation
+resets current counters and latest result, with a warning that previous statistics
+are **not archived**. Cancel does nothing. Stop/Start and Recipe changes do not
+reset counters. No batch persistence/history is introduced.
+
+Production reserves one **56 logical-pixel**, fixed-height bottom status strip.
+Normal READY/RUNNING and product NG are quiet; NG is represented locally through
+channel indicators and actual overlays. Technical inspection/source errors,
+command failures, FAULT and cleanup problems retain messages; full displayed
+messages are also available as tooltips. Message changes do not resize the camera
+grid. Recipe/Settings keep their existing event presentation, including the
+page-scoped tuning-preview behavior below. No event history is added.
 
 ## Closing
 
@@ -153,7 +179,12 @@ uv run --no-sync pytest tests/unit/test_production_presentation.py tests/integra
 
 Offscreen tests cover both languages at all three target sizes, geometry, identity,
 BGR ownership, stale-overlay suppression, configured slot mapping, command delivery,
-responsive startup, deferred shutdown, cleanup failure and all four demo scenarios.
+responsive startup with zero warm-up production effects, deferred shutdown and
+cleanup failure. Production presentation cases also cover all state/action pairs,
+pending Recipes, Batch confirmation, retained Stop frames, quiet NG and stable
+technical-warning geometry. Phase 3H-1 screenshots under ignored
+`outputs/production_phase3h1/` include Chinese/English portrait/landscape and a
+retained-frame example, generated with fake engines.
 Windows offscreen tests may read existing system fonts for realistic metrics;
 they do not copy/install them. See [AGENTS](../AGENTS.md) for full quality gates.
 
@@ -251,4 +282,6 @@ While the Size/Color tuning preview is visible, the normal production-event stri
 is hidden so a previous cycle's NG does not describe the frozen preview. Technical
 errors, application issues, failed commands, FAULT and shutdown messages remain
 visible. This is page-scoped presentation only: results, counters and application
-state are retained, and the Production page's normal event behavior is unchanged.
+state are retained. On Production itself, product NG is now quiet in the bottom
+strip and remains visible through camera/channel evidence; technical messages are
+still visible on both pages.

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vimo_demo.application import ProductionApplicationSnapshot
+from vimo_demo.application import ApplicationState, ProductionApplicationSnapshot
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import (
     CameraInspectionResult,
@@ -140,6 +140,8 @@ class CameraCard(QFrame):
         snapshot: ProductionApplicationSnapshot,
         language: Language,
     ) -> None:
+        # Generation zero is launcher reference/warm-up data, never production evidence.
+        frame = frame if frame is not None and frame.generation > 0 else None
         self._frame, self._snapshot, self.language = frame, snapshot, language
         self.viewport.set_frame(frame)
         self.result = matching_camera(frame, snapshot)
@@ -225,13 +227,19 @@ class CameraCard(QFrame):
                         )
         self.viewport.boxes = tuple(dict.fromkeys(boxes))
         message = ""
-        if self._frame is None:
-            message = text("no_image", self.language)
-        elif self._snapshot and self._frame.generation != self._snapshot.generation:
-            message = text("reference", self.language)
-        elif result is None:
+        retained = (
+            self._frame is not None
+            and self._snapshot is not None
+            and (
+                self._frame.generation != self._snapshot.generation
+                or self._snapshot.state is not ApplicationState.RUNNING
+            )
+        )
+        if retained:
+            message = text("previous_inspection", self.language)
+        elif self._frame is not None and result is None:
             message = text("pending", self.language)
         if technical:
-            message = text("error", self.language)
+            message += (" · " if message else "") + text("error", self.language)
         self.viewport.message = message
         self.viewport.update()
