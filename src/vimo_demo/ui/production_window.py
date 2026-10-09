@@ -24,7 +24,11 @@ from vimo_demo.application import (
 )
 from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.inspection import CameraId
-from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
+from vimo_demo.inspection.production import (
+    FindingSource,
+    ProductJudgment,
+    TechnicalStatus,
+)
 
 from .camera_card import CameraCard
 from .display_frames import DisplayFrame, DisplaySnapshot
@@ -74,7 +78,7 @@ class ProductionWindow(QMainWindow):
         self.snapshot = bridge.application.snapshot()
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._columns = 0
-        self._command_issue = False
+        self._command_issue: tuple[str, str | None] | None = None
         self._active_choice: RecipeChoice | None = None
         self._source_issue = ""
         self._closing = False
@@ -119,47 +123,69 @@ class ProductionWindow(QMainWindow):
         self.pages.addWidget(production)
         summary = self.summary = QFrame()
         summary.setObjectName("summary")
-        summary_layout = QVBoxLayout(summary)
+        summary_layout = self.summary_layout = QVBoxLayout(summary)
         summary_layout.setContentsMargins(
             Style.space, Style.small, Style.space, Style.small
         )
         summary_layout.setSpacing(Style.small)
-        header = QHBoxLayout()
-        header.setSpacing(Style.space)
+        header = self.summary_header = QGridLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setHorizontalSpacing(Style.space)
+        header.setColumnStretch(0, 1)
+        header.setColumnStretch(2, 1)
+        self.identity_group = QWidget()
+        identity_row = QHBoxLayout(self.identity_group)
+        identity_row.setContentsMargins(0, 0, 0, 0)
+        identity_row.setSpacing(Style.small)
+        header.addWidget(self.identity_group, 0, 0)
         self.state_icon = QLabel()
         self.state_icon.setFixedSize(Style.icon, Style.icon)
-        header.addWidget(self.state_icon)
+        identity_row.addWidget(self.state_icon)
         self.state_label = QLabel()
         self.state_label.setStyleSheet("font-weight: 600;")
-        header.addWidget(self.state_label)
+        identity_row.addWidget(self.state_label)
+        self.recipe_icon = QLabel()
+        self.recipe_icon.setFixedSize(Style.icon, Style.icon)
+        self.recipe_icon.setPixmap(navigation_icon(1).pixmap(Style.icon, Style.icon))
+        identity_row.addWidget(self.recipe_icon)
         self.identity_label = QLabel()
         self.identity_label.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         self.identity_label.setMinimumWidth(2 * Style.touch)
         self.identity_label.setTextFormat(Qt.TextFormat.PlainText)
-        header.addWidget(self.identity_label, 1)
+        identity_row.addWidget(self.identity_label, 1)
         self.pending_label = QLabel()
-        self.pending_label.setFixedWidth(4 * Style.touch)
+        self.pending_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         self.pending_label.setTextFormat(Qt.TextFormat.PlainText)
         self.pending_label.setStyleSheet(f"color: {Style.secondary};")
-        header.addWidget(self.pending_label)
+        identity_row.addWidget(self.pending_label, 2)
+        self.batch_group = QWidget()
+        batch_row = QHBoxLayout(self.batch_group)
+        batch_row.setContentsMargins(0, 0, 0, 0)
+        batch_row.setSpacing(Style.small)
+        header.addWidget(self.batch_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
         self.batch_label = QLabel()
-        self.batch_label.setFixedWidth(3 * Style.touch)
         self.batch_label.setTextFormat(Qt.TextFormat.PlainText)
-        header.addWidget(self.batch_label)
+        batch_row.addWidget(self.batch_label)
         batch = QPushButton()
+        batch.setObjectName("productionBatch")
+        batch.setStyleSheet(
+            "QPushButton#productionBatch:disabled { border-color: transparent; }"
+        )
         batch.setFixedSize(Style.touch, Style.touch)
         batch.setIcon(production_icon("batch"))
         batch.setIconSize(QSize(Style.icon, Style.icon))
         batch.clicked.connect(self._batch_dialog)
-        header.addWidget(batch)
+        batch_row.addWidget(batch)
         operation = QPushButton()
         operation.setObjectName("start")
         operation.setFixedSize(4 * Style.touch, Style.touch)
         operation.setIconSize(QSize(Style.icon, Style.icon))
         operation.clicked.connect(self._operate)
-        header.addWidget(operation)
+        header.addWidget(operation, 0, 2, Qt.AlignmentFlag.AlignRight)
         self.buttons = {"batch": batch, "operation": operation}
         summary_layout.addLayout(header)
         metric_row = QHBoxLayout()
@@ -208,7 +234,8 @@ class ProductionWindow(QMainWindow):
             self.pages.addWidget(placeholder)
         event = self.event_frame = QFrame()
         event.setObjectName("event")
-        event_layout = QVBoxLayout(event)
+        self.event_layout = event_layout = QVBoxLayout(event)
+        self._event_margins = event_layout.contentsMargins()
         self.event_label = QLabel()
         self.event_label.setWordWrap(True)
         event_layout.addWidget(self.event_label)
@@ -372,8 +399,10 @@ class ProductionWindow(QMainWindow):
                 cause = cause.__cause__
         if command == "close" and not self.bridge.closing:
             self._closing = False
+        # One bounded command/type summary; never retain the exception or raw SDK text.
         self._command_issue = (
-            True  # One bounded presentation fact, no exception retained.
+            command,
+            type(error).__name__ if isinstance(error, BaseException) else None,
         )
         self._render()
 
@@ -381,7 +410,7 @@ class ProductionWindow(QMainWindow):
     def _command_finished(self, command: str) -> None:
         if command == "start":
             self._source_issue = ""
-        self._command_issue = False
+        self._command_issue = None
         self._render()
 
     def _render_cards(self) -> None:
@@ -506,9 +535,22 @@ class ProductionWindow(QMainWindow):
         )
         production_page = self.pages.currentIndex() == 0
         self.event_frame.setFixedHeight(
-            Style.touch + 2 * Style.small if production_page else 76
+            Style.body + 3 * Style.small if production_page else 76
+        )
+        if production_page:
+            self.event_layout.setContentsMargins(Style.space, 3, Style.space, 3)
+        else:
+            self.event_layout.setContentsMargins(self._event_margins)
+        self.event_label.setWordWrap(not production_page)
+        self.event_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored
+            if production_page
+            else QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
         )
         message = text(event_key, language)
+        if production_page:
+            message = self._production_message(event_key, message)
         if production_page and event_key in {
             "ready_note",
             "running_note",
@@ -526,8 +568,9 @@ class ProductionWindow(QMainWindow):
             counts.channel_unknown or counts.technical_error_cycles
         ):
             message += f"\n{text('unknown_count', language)}: {counts.channel_unknown:,} · {text('error_cycles', language)}: {counts.technical_error_cycles:,}"
-        self.event_label.setText(message)
         self.event_label.setToolTip(message)
+        self.event_label.setAccessibleName(message)
+        self._render_status_text()
         warning = (
             event_key in {"technical_note", "issue_note", "command_error", "close_wait"}
             if production_page
@@ -541,6 +584,84 @@ class ProductionWindow(QMainWindow):
             f"color: {Style.fault if snapshot.state is ApplicationState.FAULT else Style.warning if warning else Style.secondary};"
         )
         self._render_cards()
+
+    def _production_message(self, event_key: str, fallback: str) -> str:
+        """Describe existing technical evidence; never guess a cause or show raw SDK text."""
+        language = self.language
+        issue = self.snapshot.last_issue
+        if event_key in {"fault_note", "issue_note"} and issue is not None:
+            key = {
+                "startup": "startup_error",
+                "shutdown": "shutdown_error",
+                "runtime": "runtime_error",
+            }.get(issue.stage, "operation_error")
+            return f"{text(key, language)} · {issue.exception_type}"
+        if event_key == "fault_note":
+            return text("runtime_error", language)
+        if event_key == "command_error":
+            summary = text("operation_error", language)
+            if self._command_issue is not None:
+                command, exception_type = self._command_issue
+                if command in {"start", "stop", "reset", "recipe", "batch"}:
+                    summary = f"{text(command, language)} · {summary}"
+                if exception_type:
+                    summary += f" · {exception_type}"
+            return summary
+        if event_key != "technical_note":
+            return fallback
+        result = self.snapshot.latest_production_result
+        if result is None:
+            return text("inspection_issue", language)
+        for camera in result.cameras:
+            if camera.assessment.technical_status is not TechnicalStatus.ERROR:
+                continue
+            reason = camera.collection_issue or next(
+                (
+                    reason
+                    for channel in camera.channels
+                    for check in channel.checks
+                    if check.required
+                    and check.assessment.technical_status is TechnicalStatus.ERROR
+                    for reason in check.reasons
+                ),
+                None,
+            )
+            if reason is None:
+                return f"{camera.camera_id} · {text('inspection_issue', language)}"
+            key = {
+                "execution_error": "execution_error",
+                "capsule.execution_error": "execution_error",
+                "invalid_result": "invalid_result",
+                "result_unavailable": "result_unavailable",
+                "cycle_timed_out": "cycle_timeout",
+                "cycle_shutdown": "cycle_shutdown",
+                "cycle_failed": "inspection_issue",
+            }.get(reason.code)
+            summary = (
+                text(key, language)
+                if key is not None
+                else f"{text('inspection_issue', language)} ({reason.code})"
+            )
+            source = (
+                "ViMo"
+                if reason.source is FindingSource.VIMO
+                else text("traditional_short", language)
+                if reason.source is FindingSource.TRADITIONAL
+                else text("collection_short", language)
+            )
+            detail = f" · {reason.exception_type}" if reason.exception_type else ""
+            return f"{camera.camera_id} · {source} {summary}{detail}"
+        return text("inspection_issue", language)
+
+    def _render_status_text(self) -> None:
+        message = self.event_label.toolTip()
+        if self.pages.currentIndex() == 0:
+            message = self.event_label.fontMetrics().elidedText(
+                " ".join(message.split()),
+                Qt.TextElideMode.ElideRight,
+                self.event_label.width(),
+            )
+        self.event_label.setText(message)
 
     def _render_identity(self) -> None:
         snapshot, language = self.snapshot, self.language
@@ -568,7 +689,6 @@ class ProductionWindow(QMainWindow):
             if active
             else "--"
         )
-        label = f"{text('production_recipe', language)}: {active_name}"
         candidate_choice = next(
             (
                 c
@@ -577,34 +697,66 @@ class ProductionWindow(QMainWindow):
             ),
             None,
         )
-        pending = candidate is not None and (
-            candidate != active
-            or (
-                candidate_choice is not None
-                and self._active_choice is not None
-                and (
-                    candidate_choice.label != self._active_choice.label
-                    or candidate_choice.prepared.configuration
-                    != self._active_choice.prepared.configuration
+        candidate_name = (
+            candidate_choice.label
+            if candidate_choice
+            else candidate.recipe_id
+            if candidate
+            else "--"
+        )
+        display_name = active_name if active else candidate_name
+        recipe_label = f"{text('production_recipe', language)}: {display_name}"
+        label = recipe_label
+        pending = (
+            active is not None
+            and candidate is not None
+            and (
+                candidate != active
+                or (
+                    candidate_choice is not None
+                    and self._active_choice is not None
+                    and (
+                        candidate_choice.label != self._active_choice.label
+                        or candidate_choice.prepared.configuration
+                        != self._active_choice.prepared.configuration
+                    )
                 )
             )
         )
-        if candidate and pending:
-            candidate_name = (
-                candidate_choice.label if candidate_choice else candidate.recipe_id
-            )
-            label += f" · {text('pending_recipe', language)}: {candidate_name}"
-        active_label = f"{text('production_recipe', language)}: {active_name}"
-        self.identity_label.setText(
-            self.identity_label.fontMetrics().elidedText(
-                active_label, Qt.TextElideMode.ElideRight, self.identity_label.width()
+        pending_text = f"{text('pending_recipe', language)}: {candidate_name}"
+        if pending:
+            label += f" · {pending_text}"
+        self.pending_label.setVisible(pending)
+        self.pending_label.setMinimumWidth(
+            self.pending_label.fontMetrics().horizontalAdvance(
+                f"{text('pending_recipe', language)}: …"
             )
         )
-        self.pending_label.setVisible(pending)
-        pending_text = (
-            f"{text('pending_badge', language)}: {candidate_choice.label if candidate_choice else candidate.recipe_id}"
-            if candidate
-            else ""
+        batch = f"{text('batch_id', language)} {snapshot.batch_id or '--'}"
+        # Reserve equal side columns so the whole Batch/edit group is centered.
+        # Only shorten its text when the actual row cannot fit the full identity.
+        margins = self.summary_layout.contentsMargins()
+        row_width = (
+            self.summary.contentsRect().width() - margins.left() - margins.right()
+        )
+        side_width = max(
+            self.identity_group.minimumSizeHint().width(),
+            self.buttons["operation"].width(),
+        )
+        batch_width = max(
+            1,
+            row_width
+            - 2 * (side_width + self.summary_header.horizontalSpacing())
+            - self.buttons["batch"].width()
+            - Style.small,
+        )
+        self.batch_label.setFixedWidth(
+            min(batch_width, self.batch_label.fontMetrics().horizontalAdvance(batch))
+        )
+        self.identity_label.setText(
+            self.identity_label.fontMetrics().elidedText(
+                display_name, Qt.TextElideMode.ElideRight, self.identity_label.width()
+            )
         )
         self.pending_label.setText(
             self.pending_label.fontMetrics().elidedText(
@@ -615,7 +767,8 @@ class ProductionWindow(QMainWindow):
         self.pending_label.setAccessibleName(label)
         self.identity_label.setToolTip(label)
         self.identity_label.setAccessibleName(label)
-        batch = f"{text('batch_id', language)}: {snapshot.batch_id or '--'}"
+        self.recipe_icon.setToolTip(label)
+        self.recipe_icon.setAccessibleName(text("production_recipe", language))
         self.batch_label.setText(
             self.batch_label.fontMetrics().elidedText(
                 batch, Qt.TextElideMode.ElideRight, self.batch_label.width()
@@ -626,10 +779,14 @@ class ProductionWindow(QMainWindow):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if event.type() is QEvent.Type.Resize and watched in (
+            self.summary,
             self.identity_label,
+            self.pending_label,
             self.batch_label,
         ):
             self._render_identity()
+        if event.type() is QEvent.Type.Resize and watched is self.event_label:
+            self._render_status_text()
         if event.type() is QEvent.Type.Quit and not self.bridge.closed:
             self.close()
             return True

@@ -55,9 +55,11 @@ immediately suppresses the old overlay/indicators until its matching result arri
 Generation-zero launcher/folder references remain available in the store for
 Settings but are hidden in Production. Initial camera viewports are empty/dark,
 with pending indicators and no repeated waiting text. Stop retains the latest
-frames, explicitly labeled **Previous inspection frame / 上次检测帧**; matched
-historical indicators/overlays may remain. A subsequent Start suppresses old
-results until matching evidence arrives in the new generation. Matching results
+frames without repeated image-area text or a global frozen label; READY identifies
+the stopped state. Matched historical indicators/overlays may remain after Stop.
+During a subsequent STARTING/RUNNING/STOPPING generation, old-generation pixels
+are hidden locally and old results suppressed until matching new evidence arrives.
+The frame store and buffer ownership are unchanged. Matching results
 use their own camera/slot layout, even if a different candidate Recipe is selected.
 Business results remain image-free; no second store or image history is added.
 
@@ -80,8 +82,12 @@ Microsoft YaHei UI / Segoe UI fallbacks; no fonts are bundled or installed.
 
 All core Chinese/English strings and visual tokens live in `production_style.py`.
 The top navigation uses icons plus short text and a language switch. Cards have
-camera identity, six configured-slot indicators, available measured timing and an
-image, without a permanent footer. OK is a quiet green check, NG a red cross,
+the same monochrome Qt camera icon plus configured camera number used in Settings
+at the left (full localized camera name and CameraId in tooltips/accessibility),
+six configured-slot indicators centered as a group,
+and available measured timing at the right, without a permanent footer. Indicator
+slots stay 44 x 44 logical pixels with 2-pixel spacing; abnormal channel numbers do
+not move the group. OK is a quiet green check, NG a red cross,
 technical/UNKNOWN an amber warning, disabled a neutral dash, pending an outline
 circle. ERROR + NG preserves both meanings. Abnormal channels show their IDs;
 clicking an indicator reveals/hides its ID, and accessible names/tooltips describe
@@ -92,23 +98,36 @@ Images preserve aspect ratio and center within letterboxing. The same pure
 rectangle. QPainter draws clipped hollow red boxes separately from the bitmap;
 no masks, contours or invented geometry are added to domain results. Camera
 technical errors receive amber treatment; application FAULT has distinct text/color.
-Neither is converted into invented product NG evidence.
+Neither is converted into invented product NG evidence. Generic technical-error
+text is omitted from images; the header, channel indicators and specific bottom
+status retain the technical evidence.
 
 The Production summary has two compact rows:
 
-- State icon/text, read-only active Recipe, a separate pending-activation marker,
-  optional Batch ID/edit icon, and one fixed-position operation button.
-- **Completed cycles / 完成周期**, **CH NG occurrences / CH NG 次数**, and available
-  latest-inspection elapsed time. CH OK remains a backend counter and is not
-  permanently displayed here.
+- Left: state icon/text, existing Recipe navigation icon and read-only Recipe
+  name. Center: optional `批号` / `Batch` ID and adjacent edit icon, with no extra
+  Batch symbol. Right: one fixed-position operation button. Equal flexible side
+  columns center the whole Batch/edit group across the summary. Its width follows
+  the actual available row space and text metrics; ordinary IDs such as
+  `LOT-20261009-001` remain fully visible in portrait and landscape. Longer identities
+  elide only when space is insufficient, with the edit icon immediately adjacent.
+- Three evenly distributed metrics with prominent values: **Completed cycles /
+  完成周期**, **CH NG**, and available latest-inspection elapsed time in **ms**.
+  CH OK remains a backend counter and is not permanently displayed here.
 
 CH NG counts channel judgment occurrences, **not physical product or capsule
 counts**. Demo timing measures fake execution, not GPU performance. Long Recipe
 and Batch names are elided; full identity remains in tooltips/accessibility text.
 Recipe selection/editing belongs exclusively to the Recipe page. The summary
 keeps the last known active display name separate from a saved candidate, including
-same-ID edits, until a successful Start activates it. A candidate before the first
-Start is pending, never shown as active.
+same-ID edits, until a successful Start activates it. Before the first successful
+Start, a candidate alone is shown as the Recipe icon followed by its name without
+a pending marker: this is a configuration summary, not an active session claim.
+The localized Recipe prefix remains in tooltips/accessibility instead of visible text.
+Identical active/candidate configurations show one name; a differing candidate
+appears beside the active name as `Pending Start` / `待启动激活`. When neither
+identity exists, the summary uses `--`. Full Batch text remains in the enabled
+label's tooltip and accessible name even while its edit button is disabled in RUNNING.
 
 | Application state | Primary operation | Batch edit |
 | --- | --- | --- |
@@ -123,20 +142,27 @@ Start is pending, never shown as active.
 `production_presentation.controls` and `primary_action` centralize this mapping;
 existing preparation/dirty-setup guards and application validation remain
 authoritative. The operation area stays 176 x 44 logical pixels across states.
-Stop means software inspection stop, never hardware emergency stop.
+Stop means software inspection stop, never hardware emergency stop. RUNNING uses
+a muted ring/dot state icon distinct from Start's play icon. Batch editing is
+visibly muted outside READY; its enablement/confirmation policy is unchanged.
 
 Only READY permits the compact Batch dialog. ID is optional; explicit confirmation
 resets current counters and latest result, with a warning that previous statistics
 are **not archived**. Cancel does nothing. Stop/Start and Recipe changes do not
 reset counters. No batch persistence/history is introduced.
 
-Production reserves one **56 logical-pixel**, fixed-height bottom status strip.
-Normal READY/RUNNING and product NG are quiet; NG is represented locally through
-channel indicators and actual overlays. Technical inspection/source errors,
-command failures, FAULT and cleanup problems retain messages; full displayed
-messages are also available as tooltips. Message changes do not resize the camera
-grid. Recipe/Settings keep their existing event presentation, including the
-page-scoped tuning-preview behavior below. No event history is added.
+Production reserves one **33 logical-pixel**, fixed-height, single-row status strip
+with reduced padding. Normal READY/RUNNING and product NG are quiet; NG is shown
+through channel indicators and actual overlays. Technical errors use the first
+available camera/reason code and exception type from typed results; lifecycle
+issues use the available stage/type, and failed commands retain their action/type.
+Unknown reasons keep explicit error feedback
+without guessing a cause. Source/command/FAULT/cleanup errors remain visible, with
+no educational NG comparison text. Long messages are elided on the single line;
+full summaries remain in tooltips/accessibility names. Raw vendor exception
+messages are not newly exposed. Message changes do not resize the camera grid.
+Recipe/Settings keep their existing event presentation, including the page-scoped
+tuning-preview behavior below. No event history is added.
 
 ## Closing
 
@@ -182,9 +208,16 @@ BGR ownership, stale-overlay suppression, configured slot mapping, command deliv
 responsive startup with zero warm-up production effects, deferred shutdown and
 cleanup failure. Production presentation cases also cover all state/action pairs,
 pending Recipes, Batch confirmation, retained Stop frames, quiet NG and stable
-technical-warning geometry. Phase 3H-1 screenshots under ignored
-`outputs/production_phase3h1/` include Chinese/English portrait/landscape and a
-retained-frame example, generated with fake engines.
+technical-warning geometry. Phase 3H-2 also covers balanced summary/header groups,
+fixed mixed-state indicator slots and long single-row error summaries. Screenshots
+under ignored `outputs/production_phase3h2/` include Chinese/English
+portrait/landscape and retained Stop frames, generated with fake engines.
+Summary refinement screenshots under `outputs/production_summary_phase3h2/`
+cover Chinese portrait/landscape READY with a full Batch ID, English initial
+candidate-only READY, and different active/candidate Recipes. Focused tests cover
+short/long IDs in READY/RUNNING and adaptive widths with larger text.
+Final icon-refinement screenshots under `outputs/production_icons_phase3h2/`
+cover Chinese landscape and English portrait, using fake inference only.
 Windows offscreen tests may read existing system fonts for realistic metrics;
 they do not copy/install them. See [AGENTS](../AGENTS.md) for full quality gates.
 

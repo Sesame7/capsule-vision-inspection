@@ -32,7 +32,7 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.production_bridge import QtProductionBridge
-from vimo_demo.ui.production_style import Language, Style, text
+from vimo_demo.ui.production_style import Language, Style, camera_icon, text
 from vimo_demo.ui.production_window import ProductionWindow
 from vimo_demo.ui.roi_editor import MachineRoiWorkspace
 
@@ -124,7 +124,12 @@ def test_unified_layout_camera_reference_and_frozen_refresh(
     ]
     for index in range(6):
         name = text("camera_number", language).format(number=index + 1)
-        assert not workspace.camera_tabs.tabIcon(index).isNull()
+        assert (
+            workspace.camera_tabs.tabIcon(index)
+            .pixmap(Style.icon, Style.icon)
+            .toImage()
+            == camera_icon().pixmap(Style.icon, Style.icon).toImage()
+        )
         assert workspace.camera_tabs.tabToolTip(index) == name
         assert workspace.camera_tabs.accessibleTabName(index) == name
         assert workspace.camera_tabs.tabRect(index).width() >= Style.touch
