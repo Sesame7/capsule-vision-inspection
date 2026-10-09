@@ -217,14 +217,20 @@ a source error, camera/filename context and the original terminal traceback.
 Later bad files create no partial cycle or fake product NG. Ordinary inference
 errors remain technical result evidence; infrastructure runtime failures remain
 FAULT. Display copies carry admitted frame identity, generation and source key;
-ROI references prefer matching runtime pixels and otherwise read the first folder
-image off Qt. The frozen reference does not hot-follow production.
+Settings initially prefers matching runtime reference pixels, otherwise a folder
+image read off Qt. Explicit Folder/Runtime controls choose the frozen source;
+Previous/Next browse without wrapping, and Refresh re-reads the same folder file
+or freezes the latest eligible runtime frame. Per-camera folder positions last
+only for the open Settings session, independently of replay. Compact X/Y/W/H edits
+only the selected channel; bulk actions remain separate, with save status beside
+Save and apply. The frozen reference does not hot-follow production; browsing
+creates no cycles/inference, changes no counters and writes no configuration.
 
 Compatibility: `--images path1 ... path6` still supplies a fixed six-file set in
 configured camera order. `--frames-dir images` selects the first six naturally
 sorted files and also replays that fixed set. Both override saved Folder sources
-**for this process**, with a Settings banner; relaunch without these options to use
-saved folders. Saved source assignments are not overwritten by CLI selection.
+**for this process**, with a compact Settings CLI badge; relaunch without these
+options to use saved folders. Saved source assignments are not overwritten by CLI selection.
 Neither mode infers production calibration or acceptance from test geometry.
 
 ```powershell

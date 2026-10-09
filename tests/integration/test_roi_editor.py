@@ -209,9 +209,11 @@ def test_responsive_bilingual_editor(
     window.resize(*size)
     publish(window)
     dialog = open_editor(window)
-    assert dialog.title.text() == text("camera_setup", language)
+    assert dialog.reference_modes["runtime"].text() == text(
+        "reference_runtime", language
+    )
     assert not dialog.findChildren(QComboBox)
-    assert len(dialog.findChildren(QLineEdit)) == 2
+    assert len(dialog.findChildren(QLineEdit)) == 4
     assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
     for button in dialog.buttons.values():
         assert dialog.rect().contains(button.mapTo(dialog, QPoint(0, 0)))

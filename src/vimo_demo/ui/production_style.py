@@ -11,6 +11,30 @@ from .production_presentation import Indicator
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "reference_folder": ("文件夹", "Folder"),
+    "reference_runtime": ("运行帧", "Runtime"),
+    "reference_folder_tip": (
+        "浏览文件夹参考图；不运行检测",
+        "Browse folder reference images; no inference",
+    ),
+    "reference_runtime_tip": (
+        "冻结当前相机同源的最新运行帧",
+        "Freeze the latest runtime frame from this camera/source",
+    ),
+    "reference_unavailable": (
+        "当前相机没有同源运行帧",
+        "No eligible runtime frame for this camera/source",
+    ),
+    "reference_previous": ("上一张参考图", "Previous reference image"),
+    "reference_next": ("下一张参考图", "Next reference image"),
+    "cli_sources_short": ("CLI 图片", "CLI images"),
+    "roi_x": ("X 坐标（像素）", "X coordinate (pixels)"),
+    "roi_y": ("Y 坐标（像素）", "Y coordinate (pixels)"),
+    "roi_w": ("宽度（像素）", "Width (pixels)"),
+    "roi_h": ("高度（像素）", "Height (pixels)"),
+    "roi_set_rect": ("应用", "Apply"),
+    "setup_saving": ("保存中", "Saving"),
+    "setup_failed": ("保存/应用失败", "Save/apply failed"),
     "source_error": ("回放源错误", "Replay source error"),
     "camera_setup": ("相机设置", "Camera setup"),
     "source_folder": ("图片文件夹", "Image folder"),

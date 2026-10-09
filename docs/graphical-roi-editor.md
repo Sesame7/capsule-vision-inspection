@@ -7,30 +7,34 @@ support. Multiple views/ROIs per channel are not implemented.
 
 ## Workspace and ownership
 
-Settings directly displays **Camera setup**: CAM1–CAM6 tabs, Folder path/Browse,
-Loop, frozen reference and the existing canvas-first Machine ROI controls. There
-is no entry button, separate subpage or nested setup dialog. Source controls sit
-above the dominant canvas. The Recipe page contains no machine-geometry controls.
+Settings is one stacked workspace: CAM1–CAM6 tabs, compact Folder path/Browse
+and Loop row, reference-source controls, dominant canvas, selected geometry and
+bulk/save actions. There is no repeated page heading, entry button, separate
+subpage, nested setup dialog or landscape side panel. The Recipe page contains no
+machine-geometry controls.
 Folder is the only operational source; hardware capture remains unimplemented.
 
 - `machine_editor.py`: Qt-free machine draft, atomic geometry operations and save.
 - `roi_geometry.py`: existing source-pixel transform, rounding and bounded gestures.
 - `roi_canvas.py`: frozen BGR image, six labeled ROIs, selected handles, zoom/pan.
-- `roi_editor.py`: camera tabs, canvas overlays, common size and Save and apply.
+- `roi_editor.py`: camera tabs, reference browsing, selected geometry, bulk actions
+  and Save and apply.
 - `ParametersPage`: existing asynchronous preparation and application-state guards.
 
 The machine draft is independent of Recipe drafts. Camera tabs follow explicit
 MachineLayout order, never parsed/sorted names; normal local configuration is
 CAM1→CAM6. All six actual ChannelIds are labeled on the canvas. There is no channel
-selector or permanent per-ROI coordinate form. Selected geometry is informational
-text (`CH03 · x374 y14 · 182×860`). Only common Width and Height remain editable
-numeric controls. The integer geometry API remains available to code/tests.
+selector or permanent per-ROI form. A compact `CHxx X/Y/W/H` row edits only the
+selected channel in source pixels; **Apply** (or Enter) commits through the existing
+atomic geometry operation. W/H also supply **Apply size to all**. Bulk actions sit
+in a separate row from single-channel geometry, with save/status at the right.
 
 The canvas fills available content space. Camera entry/switch and Refresh fit the
 complete frozen image with aspect ratio preserved. Left drag moves/resizes ROIs;
 mouse wheel zooms around the pointer where bounded pan permits; middle drag pans.
-The compact corner tools are Fit, 1:1 and Refresh reference, with accessible names
-and tooltips. No zoom buttons or large instructional panel are present.
+The compact corner tools are Fit and 1:1. Folder Browse, Previous, Next and
+Refresh use icons with accessible names/tooltips; reference modes and state-changing
+actions retain text labels. No zoom buttons or large instructional panel are present.
 
 ## Save, navigation and activation
 
@@ -40,8 +44,10 @@ JSON through `save_machine_layout()` and separate source JSON through
 `save_camera_sources()`, and prepares the currently selected saved
 Recipe against that saved layout using the existing background preparation thread.
 It then calls `ProductionApplication.configure()`. Successful **Start** remains the
-only activation boundary. Success feedback says changes take effect on the next
-successful Start; there is no hot modification of RUNNING configuration.
+only activation boundary. Saved/Unsaved/Saving/Save/apply failed status sits beside the
+primary **Save and apply** button. Successful-save tooltip explains next-Start
+activation; explicit errors remain visible text. There is no hot modification
+of RUNNING configuration.
 
 An unsaved/new Recipe must first be saved on Recipe. The workspace never
 silently saves Recipe edits. Machine write failure preserves the previous saved
@@ -90,17 +96,30 @@ otherwise the first containing ROI in configured slot order is selected. Overlap
 fixtures may require moving/resizing the selected rectangle to expose another.
 The intended commissioned layout has six nearly non-overlapping rectangles.
 
-Camera switching/Refresh freezes the selected camera's latest runtime display
-frame only when its source key matches the configured folder. Otherwise the first
-supported naturally sorted file is read off Qt using the existing single preparation
-slot. New runtime frames do not replace the frozen reference until requested.
-Changing a folder releases the old reference and loads the new folder, never another
-camera's pixels; failures remain visible and disable geometry editing. Reference
-loads are not production cycles and do not enter the display store or counters.
-At most one IO job and one latest refresh intent are retained; stale completion
-cannot install a previous camera/folder image. Close observes IO-thread termination. The canvas shows
-camera/source dimensions and simulation labeling when applicable. Leaving releases
-pixel references. Runtime retains actual-frame bounds validation. An out-of-bounds starting layout is shown with explicit incompatibility and
+The initial reference for each camera prefers its latest runtime display frame
+only when the source key matches the configured folder, otherwise the first
+supported naturally sorted folder file. Explicit **Folder / Runtime** controls
+then select the frozen reference source. Runtime is disabled without an eligible
+same-camera/source frame; no fallback silently substitutes another source.
+New runtime frames only update eligibility, never the frozen pixels. Runtime
+Refresh fetches the latest eligible frame again.
+
+Folder Previous/Next do not wrap, even when replay Loop is on. Refresh re-enumerates
+filenames and re-reads the currently chosen file; adding earlier files cannot
+advance it. If that file disappears or becomes unreadable, an explicit error is
+shown without substituting the next file. Paths, counts and viewed positions are
+kept per camera only while Settings remains open; no indices are persisted and
+no folder-wide decoding occurs. Metadata shows index/count and current dimensions;
+the filename is available in a tooltip. Changing a folder invalidates its old
+reference/cache/position and selects that folder's initial reference.
+
+Reference loads are off Qt using the existing single preparation slot, with at
+most one IO job and one latest camera intent. Stale completion cannot install a
+previous camera/folder image; close observes IO-thread termination. Browsing does
+not infer, publish display frames, submit cycles, alter replay indices/counters,
+write configuration or change ROI coordinates. Leaving releases pixel references.
+Runtime retains actual-frame bounds validation. An out-of-bounds starting layout
+is shown with explicit incompatibility and
 cannot be saved/applied until corrected. No automatic ROI rescaling, silent clamp,
 layout regeneration or resolution conversion occurs; existing atomic geometry
 operations still require every resulting rectangle to fit.
@@ -127,8 +146,10 @@ Real ViMo uses the existing
 containing ROI fields fail validation rather than being silently rewritten.
 
 1. Open Settings; select a camera tab and, in real-local mode, choose its Folder.
-2. Set common Width/Height and Apply size to all.
-3. Drag the first and last configured slot ROIs into position.
+2. Select Folder, browse Previous/Next, Refresh the current file, and switch to
+   Runtime when eligible; camera switching retains folder positions in this session.
+3. Select a channel and edit X/Y/W/H with Apply, or set W/H and Apply size to all.
+   Drag the first and last configured slot ROIs into position.
 4. Distribute evenly, then fine-tune middle rectangles directly.
 5. Switch cameras and repeat; edits remain in the machine draft.
 6. Save and apply; next successful Start activates the saved layout.
@@ -142,13 +163,16 @@ Neither test rectangles nor screenshot geometry constitute production calibratio
 ## Verification and limits
 
 ```powershell
-uv run --no-sync pytest tests/unit/test_machine_editor.py tests/unit/test_roi_geometry.py tests/integration/test_roi_editor.py tests/unit/test_configuration.py --tb=short
+uv run --no-sync pytest tests/unit/test_machine_editor.py tests/unit/test_roi_geometry.py tests/integration/test_roi_editor.py tests/integration/test_camera_setup.py tests/unit/test_configuration.py --tb=short
 ```
 
 Focused tests cover camera order, direct selection, source-pixel move/resize,
 view-only transforms, frozen BGR references, atomic batch rejection, combined Save
 and apply, activation boundary, save/preparation failures, dirty navigation and
-bilingual portrait/landscape layout. Normal suites retain fake Production and
+bilingual portrait/landscape layout. Settings tests also cover same-file Refresh,
+non-looping browsing, per-camera session positions, source eligibility, frozen
+runtime switching, numeric selected-ROI edits, failed-save status and reference
+browsing with zero production side effects. Normal suites retain fake Production and
 real-local launcher tests with fake engines. No inference/runtime contract changed.
 
 Offscreen screenshots check composition, not final usability. Physical Windows
