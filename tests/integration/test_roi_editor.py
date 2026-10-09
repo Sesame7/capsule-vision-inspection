@@ -209,9 +209,11 @@ def test_responsive_bilingual_editor(
     window.resize(*size)
     publish(window)
     dialog = open_editor(window)
-    assert dialog.title.text() == text("camera_setup", language)
+    assert dialog.reference_modes["runtime"].accessibleName() == text(
+        "reference_runtime", language
+    )
     assert not dialog.findChildren(QComboBox)
-    assert len(dialog.findChildren(QLineEdit)) == 2
+    assert len(dialog.findChildren(QLineEdit)) == 4
     assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
     for button in dialog.buttons.values():
         assert dialog.rect().contains(button.mapTo(dialog, QPoint(0, 0)))
@@ -334,7 +336,7 @@ def test_camera_tabs_use_custom_configured_order(configured_screen: Screen) -> N
     publish(window)
     workspace = open_editor(window)
     assert [workspace.camera_tabs.tabText(i) for i in range(6)] == [
-        str(c.camera_id) for c in layout.cameras
+        str(c.camera_id).removeprefix("CAM") for c in layout.cameras
     ]
     QTest.mouseClick(
         workspace.camera_tabs,
@@ -343,6 +345,11 @@ def test_camera_tabs_use_custom_configured_order(configured_screen: Screen) -> N
     )
     assert workspace.camera == CameraId("CAM3")
     assert workspace.frame is not None and len(workspace.canvas.rois) == 6
+    workspace.camera_tabs.setFocus()
+    QTest.keyClick(workspace.camera_tabs, Qt.Key.Key_Right)
+    assert workspace.camera == CameraId("CAM2")
+    QTest.keyClick(workspace.camera_tabs, Qt.Key.Key_Left)
+    assert workspace.camera == CameraId("CAM3")
     workspace.request_back()
 
 

@@ -175,9 +175,6 @@ class ParametersPage(QWidget):
         self.settings = QWidget()
         self._settings_layout = QVBoxLayout(self.settings)
         self._settings_layout.setContentsMargins(0, 0, 0, 0)
-        self.settings_title = QLabel()
-        self.settings_title.setProperty("role", "state")
-        self._settings_layout.addWidget(self.settings_title)
 
         self.recipes.activated.connect(self._select)
         self.model.activated.connect(self._model_changed)
@@ -190,6 +187,9 @@ class ParametersPage(QWidget):
         self.buttons["reload"].clicked.connect(lambda: self.guard_dirty(self.reload))
         primary.clicked.connect(lambda: self.save_and_apply())
         bridge.snapshot_changed.connect(self.refresh_state)
+        bridge.frames_changed.connect(
+            self.refresh_state
+        )  # Eligibility only; references stay frozen.
         self.set_language("zh")
         self.reload()
 
@@ -213,7 +213,6 @@ class ParametersPage(QWidget):
         if self.roi_workspace is not None:
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
-        self.settings_title.setText(text("settings", language))
         self.recipes.setAccessibleName(text("recipe", language))
         self.model.setAccessibleName(text("inspection_model", language))
         for key, button in self.buttons.items():
