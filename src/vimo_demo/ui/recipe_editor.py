@@ -21,6 +21,7 @@ from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ChannelId
 from vimo_demo.inspection.production.capsule import CapsuleSettings
 
+from .camera_source_editor import CameraSourceDraft
 from .machine_editor import MachineLayoutDraft
 from .recipe_catalog import RecipeCatalog, RecipeEntry
 
@@ -74,7 +75,11 @@ class RecipeEditorSession:
         default_model_id: str,
         base_directory: Path,
         machine_path: Path | None = None,
+        camera_sources: CameraSourceDraft | None = None,
+        cli_sources: bool = False,
     ) -> None:
+        self.camera_sources = camera_sources
+        self.cli_sources = cli_sources
         self.machine_path = machine_path
         self.machine_editor = MachineLayoutDraft(machine, machine_path)
         self.catalog, self.registry = catalog, registry

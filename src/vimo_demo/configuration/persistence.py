@@ -38,6 +38,7 @@ from .models import (
     text,
     version,
 )
+from .sources import CameraFolder, CameraSources
 
 
 def _object(value: object, allowed: str, required: str = "") -> dict[str, object]:
@@ -357,3 +358,36 @@ def save_recipe(path: Path, recipe: RecipeDefinition) -> None:
             channels.append(entry)
         data["channel_overrides"] = channels
     _save(path, data)
+
+
+def _sources(value: object) -> CameraSources:
+    data = _schema(value, "cameras loop target_fps", "cameras loop target_fps")
+    rows: list[CameraFolder] = []
+    for value in _array(data["cameras"]):
+        row = _object(
+            value, "camera_id source_type folder", "camera_id source_type folder"
+        )
+        folder = row["folder"]
+        if not isinstance(folder, str):
+            raise ConfigurationError("Folder path must be text")
+        rows.append(
+            CameraFolder(
+                CameraId(_str(row["camera_id"])), folder, _str(row["source_type"])
+            )
+        )
+    loop, fps = data["loop"], data["target_fps"]
+    if (
+        type(loop) is not bool
+        or not isinstance(fps, (int, float))
+        or isinstance(fps, bool)
+    ):
+        raise ConfigurationError("Invalid replay settings")
+    return CameraSources(tuple(rows), loop, float(fps))
+
+
+def load_camera_sources(path: Path) -> CameraSources:
+    return _load(path, _sources)
+
+
+def save_camera_sources(path: Path, sources: CameraSources) -> None:
+    _save(path, asdict(sources))

@@ -1,10 +1,14 @@
 """Canvas-first machine geometry workspace; no inference or activation ownership."""
 
 from collections.abc import Callable
+from time import monotonic
 
+import numpy as np
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -15,9 +19,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from vimo_demo.application.folder_replay import (
+    FolderReplay,
+    decode_image,
+    folder_images,
+)
 from vimo_demo.configuration import ConfigurationError
 from vimo_demo.inference import BoundingRect
-from vimo_demo.inspection import CameraId
+from vimo_demo.inspection import CameraId, CycleId, FrameId
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
 from .production_style import Language, Style, text
@@ -63,6 +72,10 @@ class MachineRoiWorkspace(QWidget):
         language: Language,
         simulation: bool,
         parent: QWidget,
+        run_io: Callable[
+            [Callable[[], object], Callable[[object, BaseException | None], None]], bool
+        ]
+        | None = None,
     ) -> None:
         super().__init__(parent)
         self.session, self.draft = session, session.machine_editor
@@ -72,7 +85,11 @@ class MachineRoiWorkspace(QWidget):
             changed,
             apply,
         )
-        self._leave = leave
+        self._leave, self._run_io = leave, run_io
+        self.sources = session.camera_sources
+        self._reference_revision = 0
+        self._reading = False
+        self._pending_reference = False
         self.language: Language = language
         self.simulation = simulation
         self.frame: DisplayFrame | None = None
@@ -85,7 +102,7 @@ class MachineRoiWorkspace(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         header = QHBoxLayout()
-        header.addWidget(self.button("roi_back"))
+
         self.title = QLabel()
         header.addWidget(self.title)
         self.camera_tabs = QTabBar()
@@ -106,6 +123,35 @@ class MachineRoiWorkspace(QWidget):
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         header.addWidget(self.status)
         root.addLayout(header)
+        self.folder = QLineEdit()
+        self.browse = QPushButton()
+        self.loop = QCheckBox()
+        self.source_label = QLabel()
+        self.source_notice = QLabel()
+        self.source_notice.setWordWrap(True)
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.source_label)
+        source_row.addWidget(self.folder, 1)
+        source_row.addWidget(self.browse)
+        source_row.addWidget(self.loop)
+        if self.sources is not None:
+            self.folder.setMinimumHeight(Style.touch)
+            self.browse.setMinimumHeight(Style.touch)
+            root.addLayout(source_row)
+            root.addWidget(self.source_notice)
+        else:
+            for widget in (
+                self.folder,
+                self.browse,
+                self.loop,
+                self.source_label,
+                self.source_notice,
+            ):
+                widget.hide()  # Fake demo keeps its synthetic source; no real folder execution.
+        self.folder.textEdited.connect(self.source_edited)
+        self.folder.editingFinished.connect(self.refresh_frame)
+        self.browse.clicked.connect(self.browse_folder)
+        self.loop.toggled.connect(self.loop_changed)
         self.canvas = RoiCanvas(self.editable)
         root.addWidget(self.canvas, 1)
         # Child overlay layouts reserve no workspace height outside the image.
@@ -164,7 +210,6 @@ class MachineRoiWorkspace(QWidget):
         primary.setObjectName("start")
         footer.addWidget(primary)
         root.addLayout(footer)
-        self.buttons["roi_back"].clicked.connect(lambda: self.request_back())
         self.buttons["roi_fit"].clicked.connect(lambda: self.canvas.zoom(None))
         self.buttons["roi_actual"].clicked.connect(lambda: self.canvas.zoom(1))
         self.buttons["roi_refresh"].clicked.connect(self.refresh_frame)
@@ -191,7 +236,15 @@ class MachineRoiWorkspace(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        self.title.setText(text("roi_workspace", language))
+        self.title.setText(text("camera_setup", language))
+        self.source_label.setText("Folder")
+        self.folder.setAccessibleName(text("source_folder", language))
+        self.browse.setText(text("browse", language))
+        self.loop.setText(text("source_loop", language))
+        self.source_notice.setText(
+            text("cli_sources", language) if self.session.cli_sources else ""
+        )
+        self.source_notice.setVisible(self.session.cli_sources)
         self.camera_tabs.setAccessibleName(text("camera_scope", language))
         for key, button in self.buttons.items():
             button.setAccessibleName(text(key, language))
@@ -213,21 +266,112 @@ class MachineRoiWorkspace(QWidget):
 
     def switch_camera(self) -> None:
         self.selected_index = 0
+        if self.sources is not None:
+            self.folder.setText(self.sources.definition.camera(self.camera).folder)
+            self.loop.blockSignals(True)
+            self.loop.setChecked(self.sources.definition.loop)
+            self.loop.blockSignals(False)
         self.refresh_frame()
 
-    def refresh_frame(self) -> None:
-        self.frame = next(
-            (
-                f
-                for f in self._frames.snapshot().frames
-                if f.frame_id.camera_id == self.camera
-            ),
-            None,
+    def source_edited(self, folder: str) -> None:
+        if not self._allowed() or self.sources is None:
+            return
+        self.sources.set_folder(self.camera, folder)
+        self._reference_revision += 1
+        self.draft.bounds.pop(self.camera, None)
+        self._set_reference(None)
+        self._changed()
+
+    def browse_folder(self) -> None:
+        if not self._allowed() or self.sources is None:
+            return
+        folder = QFileDialog.getExistingDirectory(
+            self, text("source_folder", self.language), self.folder.text()
         )
-        self.canvas.set_frame(self.frame)
+        if folder:
+            self.folder.setText(folder)
+            self.source_edited(folder)
+            self.refresh_frame()
+
+    def loop_changed(self, enabled: bool) -> None:
+        if self._allowed() and self.sources is not None:
+            self.sources.set_loop(enabled)
+            self._changed()
+
+    def _set_reference(self, frame: DisplayFrame | None) -> None:
+        self.frame = frame
+        self.canvas.set_frame(frame)
+        self.draft.bounds.pop(self.camera, None)
         if self.canvas.model.size is not None:
             self.draft.bounds[self.camera] = self.canvas.model.size
         self.select_roi(self.selected_index)
+        if frame is not None:
+            try:
+                self.draft.camera(self.camera).validate_shape(
+                    (frame.image.shape[0], frame.image.shape[1], 3)
+                )
+            except ValueError as exc:
+                self._error = str(exc)
+                self.refresh()  # Visible incompatible geometry; never rescale/repair it.
+
+    def refresh_frame(self) -> None:
+        self._reference_revision += 1
+        if self._reading:
+            self._pending_reference = True  # One latest intent, not an IO queue.
+            self._set_reference(None)
+            return
+        camera = self.camera
+        source = (
+            self.sources.definition.camera(camera) if self.sources is not None else None
+        )
+        base = self.sources.path.parent if self.sources is not None else None
+        key = source.key(base) if source is not None and base is not None else None
+        frame = next(
+            (
+                f
+                for f in self._frames.snapshot().frames
+                if f.frame_id.camera_id == camera
+                and (source is None or (key and f.source_key == key))
+            ),
+            None,
+        )
+        self._error = ""
+        self._set_reference(frame)
+        if (
+            frame is not None
+            or source is None
+            or not source.folder
+            or base is None
+            or self._run_io is None
+        ):
+            return
+        revision = self._reference_revision
+        folder = source.path(base)
+
+        def read() -> DisplayFrame:
+            image = decode_image(folder_images(folder)[0])
+            owned = np.frombuffer(image.tobytes(), dtype=np.uint8).reshape(image.shape)
+            return DisplayFrame(
+                FrameId(CycleId(0), camera, 0), 0, monotonic(), 0, owned, key
+            )
+
+        def completed(value: object, error: BaseException | None) -> None:
+            self._reading = False
+            if revision == self._reference_revision:
+                if error is not None:
+                    self._error = str(error)
+                    self.refresh()
+                elif isinstance(value, DisplayFrame):
+                    self._set_reference(value)
+            if self._pending_reference:
+                self._pending_reference = False
+                self.refresh_frame()
+
+        self._reading = True
+        if not self._run_io(read, completed):
+            self._reading = False
+            self._error = text("preparing", self.language)
+            self.refresh()
 
     def select_roi(self, index: int) -> None:
         self.canvas.cancel_gesture()
@@ -262,19 +406,29 @@ class MachineRoiWorkspace(QWidget):
             and not self.session.dirty
             and self.session.entry is not None
         )
-        self.buttons["roi_back"].setEnabled(not self._preparing)
+        for control in (self.folder, self.browse, self.loop):
+            control.setEnabled(self._allowed() and not self._preparing)
         self.status.setText(
             text(
                 "preparing"
                 if self._preparing
                 else "unsaved"
-                if self.draft.dirty
+                if self.draft.dirty or (self.sources is not None and self.sources.dirty)
                 else "saved",
                 self.language,
             )
         )
+        bounds_issue = ""
+        if self.frame is not None:
+            try:
+                self.draft.camera(self.camera).validate_shape(
+                    (self.frame.image.shape[0], self.frame.image.shape[1], 3)
+                )
+            except ValueError as exc:
+                bounds_issue = str(exc)
         self.message.setText(
             self._error
+            or bounds_issue
             or (text(self._feedback, self.language) if self._feedback else "")
             or (text("roi_recipe_save", self.language) if self.session.dirty else "")
             or (
@@ -332,26 +486,58 @@ class MachineRoiWorkspace(QWidget):
             self._error = text("roi_recipe_save", self.language)
             self.refresh()
             return
-        try:
-            self.draft.save()
-        except (ValueError, ConfigurationError) as exc:
-            self._error = str(exc)
-            self.refresh()
-            return
         self._preparing = True
         self._error = self._feedback = ""
-        self._changed()
         self.refresh()
+        sources = self.sources.definition if self.sources is not None else None
+        layout = self.draft.definition.layout
+        base = self.sources.path.parent if self.sources is not None else None
 
-        def prepared(error: str) -> None:
+        def validate() -> None:
+            if sources is not None and base is not None:
+                FolderReplay(layout, sources, base).next_group()
+
+        def validated(_value: object, error: BaseException | None) -> None:
             self._preparing = False
-            self._error = error
-            self._feedback = "" if error else "roi_applied"
+            if error is not None or not self._allowed():
+                self._error = str(error) if error else text("read_only", self.language)
+                self.refresh()
+                return
+            saved_machine = False
+            try:
+                self.draft.save()
+                saved_machine = True
+                if self.sources is not None:
+                    self.sources.save()
+            except (ValueError, ConfigurationError) as exc:
+                self._error = (
+                    text("source_partial_save", self.language) + " "
+                    if saved_machine
+                    else ""
+                ) + str(exc)
+                self._changed()
+                self.refresh()
+                return
+            self._preparing = True
+            self._changed()
             self.refresh()
-            if not error and after is not None:
-                after()
 
-        self._apply(prepared)
+            def prepared(error: str) -> None:
+                self._preparing = False
+                self._error = error
+                self._feedback = "" if error else "roi_applied"
+                self.refresh()
+                if not error and after is not None:
+                    after()
+
+            self._apply(prepared)
+
+        if self.sources is None:
+            validated(None, None)
+        elif self._run_io is None or not self._run_io(validate, validated):
+            self._preparing = False
+            self._error = text("preparing", self.language)
+            self.refresh()
 
     def request_back(self, after: Callable[[], None] | None = None) -> None:
         if self._preparing or self._decision is not None:
@@ -364,7 +550,9 @@ class MachineRoiWorkspace(QWidget):
             if after is not None:
                 after()
 
-        if not self.draft.dirty:
+        if not self.draft.dirty and not (
+            self.sources is not None and self.sources.dirty
+        ):
             leave()
             return
         dialog = QMessageBox(self)
@@ -394,6 +582,8 @@ class MachineRoiWorkspace(QWidget):
                 self.save_and_apply(leave)
             elif chosen is discard:
                 self.draft.discard()
+                if self.sources is not None:
+                    self.sources.discard()
                 self._changed()
                 leave()
 

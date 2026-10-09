@@ -2,9 +2,11 @@
 
 from dataclasses import replace
 from pathlib import Path
+from shutil import copyfile
 from threading import enumerate as threads
 
 import pytest
+from _tool_helpers import decode
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 from run_local_production_ui import compose
@@ -19,8 +21,15 @@ from tests.integration.test_worker_vimo import MODEL, TIMEOUT, reference_image
 from tests.qt_support import until
 
 from vimo_demo.application import ApplicationState
-from vimo_demo.configuration import load_model_definition, save_model_definition
+from vimo_demo.configuration import (
+    CameraFolder,
+    CameraSources,
+    load_model_definition,
+    save_camera_sources,
+    save_model_definition,
+)
 from vimo_demo.inference import BoundingRect, VimoInitializationError
+from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
 from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_presentation import matching_camera
@@ -47,7 +56,16 @@ def test_real_local_ui(
     )
     paths = tuple(ROOT / "images" / row["filename"] for row in rows)
     before = {t.ident for t in threads()}
-    composition = compose(model, machine, recipe, paths)
+    assignments: list[CameraFolder] = []
+    for index, path in enumerate(paths):
+        folder = tmp_path / f"camera-{index + 1}"
+        folder.mkdir()
+        copyfile(path, folder / path.name)
+        assignments.append(CameraFolder(CameraId(f"CAM{index + 1}"), folder.name))
+    save_camera_sources(
+        tmp_path / "camera_sources.json", CameraSources(tuple(assignments))
+    )
+    composition = compose(model, machine, recipe)
     app = composition.application
     bridge = QtProductionBridge(app, composition.store, poll_ms=10)
     if not QFontDatabase.families():
@@ -65,9 +83,8 @@ def test_real_local_ui(
         # Explicit wiring ROI, not calibration: slot 0 covers each reference,
         # guaranteeing that known real findings exercise channel NG assignment.
         draft = composition.editor.machine_editor
-        for frame in composition.store.snapshot().frames:
-            camera = frame.frame_id.camera_id
-            height, width = frame.image.shape[:2]
+        for camera, path in zip(composition.store.cameras, paths, strict=True):
+            height, width = decode(path).shape[:2]
             draft.bounds[camera] = (width, height)
             rects = [s.rect for s in draft.camera(camera).slots]
             rects[0] = BoundingRect(0, 0, width, height)
@@ -124,7 +141,7 @@ def test_real_local_ui(
             "CAM1 -> CAM6; saved machine ROI -> Apply -> Start; known findings -> slot-0 channel NG"
         )
         print(
-            f"Real local UI: {snapshot.counters.cycles_completed} cycles; six real frames/cycle; matched overlays; Stop -> READY"
+            f"Real Folder UI: {snapshot.counters.cycles_completed} cycles; six real frames/cycle; matched overlays; Stop -> READY"
         )
         print(
             f"Wiring-only configuration: {model.parent}; images: {' '.join(str(p) for p in paths)}"

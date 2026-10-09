@@ -117,7 +117,9 @@ Open **Recipe** for the compact Demo A/B product editor: name, optional product
 code and registered model. **Save and apply** persists and prepares configuration;
 only successful Start activates it. Hidden inspection policies remain intact.
 See the [Recipe review guide](docs/recipe-configuration-ui.md#review-and-verification).
-For machine ROI review, open Settings → Machine ROI and choose a camera.
+For camera source/ROI review, open Settings directly and choose a camera.
+The real-local launcher supports saved per-camera Folder replay; see the
+[local source contract](docs/production-ui.md#local-real-inference-mode--phase-3b--3g-1).
 The [ROI walkthrough](docs/graphical-roi-editor.md#manual-review) covers direct
 move/resize, common size, distribution, reference refresh and Save and apply.
 See the [UI contract and review guide](docs/production-ui.md) for ownership,

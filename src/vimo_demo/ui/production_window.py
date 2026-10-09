@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from vimo_demo.application import ApplicationState, ProductionApplicationSnapshot
+from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
 
@@ -63,6 +64,7 @@ class ProductionWindow(QMainWindow):
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._columns = 0
         self._command_issue = False
+        self._source_issue = ""
         self._closing = False
         self.setMinimumSize(*Style.minimum)
         self.setWindowTitle("ViMo · Production")
@@ -170,6 +172,7 @@ class ProductionWindow(QMainWindow):
         self.placeholders: dict[str, QLabel] = {}
         self.parameters = ParametersPage(bridge, recipe_editor, simulation=simulation)
         self.parameters.applied.connect(self._recipe_applied)
+        self.parameters.setup_changed.connect(self._render)
         for name in PAGES[1:]:
             if name == "parameters":
                 self.pages.addWidget(self.parameters)
@@ -244,6 +247,8 @@ class ProductionWindow(QMainWindow):
         ):
             self.parameters.leave_workspace(lambda: self.navigate(index))
             return
+        if index == 4:
+            self.parameters.open_roi_editor()
         self.pages.setCurrentIndex(index)
         for i, button in enumerate(self.navigation):
             button.setChecked(i == index)
@@ -316,6 +321,17 @@ class ProductionWindow(QMainWindow):
 
     @Slot(str, object)
     def _command_failed(self, command: str, error: object) -> None:
+        if command == "folder_source":
+            self._source_issue = str(error)
+        elif command == "start" and isinstance(error, BaseException):
+            cause: BaseException | None = error
+            for _ in range(8):  # Existing lifecycle wrapping preserves source causes.
+                if isinstance(cause, FolderSourceError):
+                    self._source_issue = str(cause)
+                    break
+                if cause is None:
+                    break
+                cause = cause.__cause__
         if command == "close" and not self.bridge.closing:
             self._closing = False
         self._command_issue = (
@@ -325,6 +341,8 @@ class ProductionWindow(QMainWindow):
 
     @Slot(str)
     def _command_finished(self, command: str) -> None:
+        if command == "start":
+            self._source_issue = ""
         self._command_issue = False
         self._render()
 
@@ -357,7 +375,21 @@ class ProductionWindow(QMainWindow):
         snapshot, language = self.snapshot, self.language
         availability = controls(snapshot)
         for key, enabled in (
-            ("start", availability.start),
+            (
+                "start",
+                availability.start
+                and not self.parameters.busy
+                and not (
+                    self.parameters.session
+                    and (
+                        self.parameters.session.machine_editor.dirty
+                        or (
+                            self.parameters.session.camera_sources
+                            and self.parameters.session.camera_sources.dirty
+                        )
+                    )
+                ),
+            ),
             ("stop", availability.stop),
             ("reset", availability.reset),
             ("batch", availability.batch),
@@ -419,7 +451,7 @@ class ProductionWindow(QMainWindow):
             event_key = "technical_note"
         if snapshot.last_issue:
             event_key = "issue_note"
-        if self._command_issue:
+        if self._command_issue or self._source_issue:
             event_key = "command_error"
         if snapshot.state is ApplicationState.FAULT:
             event_key = "fault_note"
@@ -443,6 +475,8 @@ class ProductionWindow(QMainWindow):
             }
         )
         message = text(event_key, language)
+        if self._source_issue and event_key == "command_error":
+            message = text("source_error", language) + ": " + self._source_issue
         if counts.channel_unknown or counts.technical_error_cycles:
             message += f"\n{text('unknown_count', language)}: {counts.channel_unknown:,} · {text('error_cycles', language)}: {counts.technical_error_cycles:,}"
         self.event_label.setText(message)

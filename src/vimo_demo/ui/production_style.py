@@ -11,6 +11,19 @@ from .production_presentation import Indicator
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "source_error": ("回放源错误", "Replay source error"),
+    "camera_setup": ("相机设置", "Camera setup"),
+    "source_folder": ("图片文件夹", "Image folder"),
+    "browse": ("浏览…", "Browse…"),
+    "source_loop": ("循环", "Loop"),
+    "cli_sources": (
+        "本次进程使用命令行图片；已保存的文件夹在不带图片参数重新启动后生效。",
+        "CLI images override saved folders for this process. Relaunch without image arguments to use folders.",
+    ),
+    "source_partial_save": (
+        "机器布局已保存，但相机源未保存；未应用。",
+        "Machine layout saved, camera sources not saved; not applied.",
+    ),
     "roi_editor": ("机器 ROI 设置", "Machine ROI setup"),
     "roi_workspace": ("机器 ROI", "Machine ROI"),
     "roi_back": ("返回", "Back"),

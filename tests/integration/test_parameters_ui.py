@@ -129,9 +129,13 @@ def test_compact_recipe_layout(
         session.entry.recipe.recipe_id,
     ):
         assert technical not in visible_text
-    assert not page.open_roi.isVisible()
+    assert page.roi_workspace is None
     window.navigate(4)
-    assert page.open_roi.isVisible() and window.pages.currentWidget() is page.settings
+    assert (
+        page.roi_workspace is not None
+        and page.roi_workspace.isVisible()
+        and window.pages.currentWidget() is page.settings
+    )
     window.navigate(1)
 
 

@@ -36,7 +36,6 @@ def publish(
 def open_editor(window: ProductionWindow) -> MachineRoiWorkspace:
     page = window.parameters
     window.navigate(4)
-    page.open_roi.click()
     dialog = page.roi_workspace
     assert dialog is not None
     dialog.camera_tabs.setCurrentIndex(2)
@@ -210,7 +209,7 @@ def test_responsive_bilingual_editor(
     window.resize(*size)
     publish(window)
     dialog = open_editor(window)
-    assert dialog.title.text() == text("roi_workspace", language)
+    assert dialog.title.text() == text("camera_setup", language)
     assert not dialog.findChildren(QComboBox)
     assert len(dialog.findChildren(QLineEdit)) == 2
     assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
