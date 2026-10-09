@@ -4,6 +4,7 @@ from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -12,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vimo_demo.application import ProductionApplicationSnapshot
+from vimo_demo.application import ApplicationState, ProductionApplicationSnapshot
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import (
     CameraInspectionResult,
@@ -28,7 +29,7 @@ from .production_presentation import (
     indicator,
     matching_camera,
 )
-from .production_style import Language, Style, indicator_icon, text
+from .production_style import Language, Style, camera_icon, indicator_icon, text
 
 
 class CameraViewport(QWidget):
@@ -107,22 +108,37 @@ class CameraCard(QFrame):
         root = QVBoxLayout(self)
         root.setContentsMargins(Style.small, Style.small, Style.small, Style.small)
         root.setSpacing(Style.small)
-        header = QHBoxLayout()
-        header.setSpacing(2)
-        self.identity = QLabel(str(layout.camera_id))
-        header.addWidget(self.identity)
+        header = QGridLayout()
+        header.setHorizontalSpacing(Style.small)
+        header.setColumnStretch(0, 1)
+        header.setColumnStretch(2, 1)
+        self.identity_group = QWidget()
+        identity_row = QHBoxLayout(self.identity_group)
+        identity_row.setContentsMargins(0, 0, 0, 0)
+        identity_row.setSpacing(Style.small)
+        self.camera_icon = QLabel()
+        self.camera_icon.setFixedSize(Style.icon, Style.icon)
+        self.camera_icon.setPixmap(camera_icon().pixmap(Style.icon, Style.icon))
+        identity_row.addWidget(self.camera_icon)
+        self.identity = QLabel(str(layout.camera_id).removeprefix("CAM"))
+        identity_row.addWidget(self.identity)
+        header.addWidget(self.identity_group, 0, 0, Qt.AlignmentFlag.AlignLeft)
+        self.indicator_group = QWidget()
+        slots = QHBoxLayout(self.indicator_group)
+        slots.setContentsMargins(0, 0, 0, 0)
+        slots.setSpacing(2)
+        header.addWidget(self.indicator_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
         self.indicators: list[QPushButton] = []
         for index, slot in enumerate(layout.slots):
             button = QPushButton()
             button.setFixedSize(Style.touch, Style.touch)
             button.clicked.connect(lambda _checked=False, i=index: self._toggle(i))
             button.setAccessibleName(f"{layout.camera_id} CH{slot.channel_id}")
-            header.addWidget(button)
+            slots.addWidget(button)
             self.indicators.append(button)
-        header.addStretch()
         self.timing = QLabel("--")
         self.timing.setProperty("role", "secondary")
-        header.addWidget(self.timing)
+        header.addWidget(self.timing, 0, 2, Qt.AlignmentFlag.AlignRight)
         root.addLayout(header)
         self.viewport = CameraViewport()
         root.addWidget(self.viewport, 1)
@@ -140,8 +156,21 @@ class CameraCard(QFrame):
         snapshot: ProductionApplicationSnapshot,
         language: Language,
     ) -> None:
+        # Generation zero is launcher reference/warm-up data, never production evidence.
+        frame = frame if frame is not None and frame.generation > 0 else None
         self._frame, self._snapshot, self.language = frame, snapshot, language
-        self.viewport.set_frame(frame)
+        # Retain Stop pixels, but hide a previous generation during new runtime work.
+        stale = (
+            frame is not None
+            and frame.generation != snapshot.generation
+            and snapshot.state
+            in (
+                ApplicationState.STARTING,
+                ApplicationState.RUNNING,
+                ApplicationState.STOPPING,
+            )
+        )
+        self.viewport.set_frame(None if stale else frame)
         self.result = matching_camera(frame, snapshot)
         self._render_card()
 
@@ -191,9 +220,16 @@ class CameraCard(QFrame):
             result is not None
             and result.assessment.technical_status is TechnicalStatus.ERROR
         )
-        self.identity.setText(
-            f"{self.camera_layout.camera_id}{' !' if technical else ''}"
+        number = str(self.camera_layout.camera_id).removeprefix("CAM")
+        self.identity.setText(f"{number}{' !' if technical else ''}")
+        name = (
+            f"{text('camera_number', self.language).format(number=number)} "
+            f"({self.camera_layout.camera_id})"
         )
+        for widget in (self.identity_group, self.identity, self.camera_icon):
+            widget.setToolTip(name)
+        self.identity.setAccessibleName(name)
+        self.identity_group.setAccessibleName(name)
         self.identity.setStyleSheet(
             f"color: {Style.warning if technical else Style.primary}; font-weight: 600;"
         )
@@ -224,14 +260,13 @@ class CameraCard(QFrame):
                             if reason.bounding_rect is not None
                         )
         self.viewport.boxes = tuple(dict.fromkeys(boxes))
-        message = ""
-        if self._frame is None:
-            message = text("no_image", self.language)
-        elif self._snapshot and self._frame.generation != self._snapshot.generation:
-            message = text("reference", self.language)
-        elif result is None:
-            message = text("pending", self.language)
-        if technical:
-            message = text("error", self.language)
-        self.viewport.message = message
+        self.viewport.message = (
+            text("pending", self.language)
+            if self._frame is not None
+            and self._snapshot is not None
+            and self._snapshot.state is ApplicationState.RUNNING
+            and self._frame.generation == self._snapshot.generation
+            and result is None
+            else ""
+        )
         self.viewport.update()

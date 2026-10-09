@@ -426,10 +426,7 @@ def test_preview_scopes_ng_event_but_preserves_errors(
     until(stop.done)
     window.bridge.refresh()
     window.navigate(0)
-    assert (
-        window.event_frame.isVisible()
-        and text("ng_note", language) in window.event_label.text()
-    )
+    assert window.event_frame.isVisible() and not window.event_label.text()
     before = app.snapshot()
     window.navigate(1)
     preview = setup(configured_screen)
@@ -469,10 +466,7 @@ def test_preview_scopes_ng_event_but_preserves_errors(
     assert not window.event_frame.isVisible()
     preview.back.click()
     window.navigate(0)
-    assert (
-        window.event_frame.isVisible()
-        and text("ng_note", language) in window.event_label.text()
-    )
+    assert window.event_frame.isVisible() and not window.event_label.text()
     assert app.snapshot() == before
 
 

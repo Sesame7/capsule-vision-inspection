@@ -152,13 +152,41 @@ STRINGS: dict[str, tuple[str, str]] = {
     "recipe": ("选择配方", "Select recipe"),
     "batch": ("新建 / 更换批次", "New / change batch"),
     "batch_prompt": (
-        "批次号（留空表示未指定）；确认后清零累计计数。",
-        "Batch ID (blank for none). Confirming resets counters.",
+        "批次号（可留空）。确认后清零计数及最近结果。\n上一批统计不会归档。",
+        "Batch ID (optional). Confirm resets counters and the latest result.\nPrevious batch statistics are not archived.",
     ),
+    "production_recipe": ("配方", "Recipe"),
+    "pending_recipe": ("待启动激活", "Pending Start"),
+    "pending_badge": ("待激活", "Pending"),
+    "production_ng": ("CH NG", "CH NG"),
+    "channel_count_help": (
+        "通道判断次数，不是实际胶囊或产品数量。",
+        "Channel judgment occurrences, not physical capsule or product counts.",
+    ),
+    "configure_first": (
+        "请在配方页保存并应用有效配方，再开始检测。",
+        "Save and apply a valid Recipe on the Recipe page before starting inspection.",
+    ),
+    "software_stop": (
+        "停止软件检测，不是硬件急停。",
+        "Stop software inspection; not a hardware emergency stop.",
+    ),
+    "inspection_issue": ("检测异常", "Inspection error"),
+    "execution_error": ("执行失败", "execution failed"),
+    "invalid_result": ("结果无效", "invalid result"),
+    "result_unavailable": ("结果不可用", "result unavailable"),
+    "cycle_timeout": ("周期超时", "cycle timed out"),
+    "cycle_shutdown": ("周期未完成：已停止", "cycle incomplete: stopped"),
+    "runtime_error": ("运行时故障", "Runtime fault"),
+    "startup_error": ("启动失败", "Startup failed"),
+    "shutdown_error": ("清理失败", "Cleanup failed"),
+    "operation_error": ("操作未完成", "Operation incomplete"),
+    "traditional_short": ("尺寸/颜色", "Size/Color"),
+    "collection_short": ("帧收集", "Frame collection"),
     "selected": ("已选", "Selected"),
     "active": ("已激活", "Active"),
     "model": ("模型", "Model"),
-    "batch_id": ("批次", "Batch"),
+    "batch_id": ("批号", "Batch"),
     "cycles": ("完成周期", "Completed cycles"),
     "channel_ok": ("通道 OK 次数", "Channel OK occurrences"),
     "channel_ng": ("通道 NG 次数", "Channel NG occurrences"),
@@ -291,6 +319,36 @@ def stylesheet() -> str:
     """
 
 
+@cache
+def camera_icon() -> QIcon:
+    """Shared Settings/Production camera strokes, including the existing dimmed mode."""
+    icon = QIcon()
+    for checked in (False, True):
+        for dpr in (1.0, 1.25, 1.5, 2.0):
+            pixmap = QPixmap(round(24 * dpr), round(24 * dpr))
+            pixmap.setDevicePixelRatio(dpr)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(QColor(Style.primary), 1.6))
+            painter.drawRect(3, 8, 18, 12)
+            painter.drawRect(7, 5, 7, 3)
+            painter.drawEllipse(8, 10, 8, 8)
+            painter.drawPoint(18, 11)
+            painter.end()
+            state = QIcon.State.On if checked else QIcon.State.Off
+            icon.addPixmap(pixmap, QIcon.Mode.Normal, state)
+            dimmed = QPixmap(pixmap.size())
+            dimmed.setDevicePixelRatio(dpr)
+            dimmed.fill(Qt.GlobalColor.transparent)
+            muted = QPainter(dimmed)
+            muted.setOpacity(0.35)
+            muted.drawPixmap(0, 0, pixmap)
+            muted.end()
+            icon.addPixmap(dimmed, QIcon.Mode.Disabled, state)
+    return icon
+
+
 def navigation_icon(index: int) -> QIcon:
     """Internal vector strokes, rendered at common DPRs; no OS icon theme/font."""
     icon = QIcon()
@@ -327,6 +385,86 @@ def navigation_icon(index: int) -> QIcon:
             painter.drawLine(QPointF(11, 11), QPointF(16, 13))
         painter.end()
         icon.addPixmap(pixmap)
+    return icon
+
+
+@cache
+def production_icon(kind: str) -> QIcon:
+    """Compact state/action strokes using the same DPR-aware Qt icon infrastructure."""
+    color = (
+        Style.fault
+        if kind == "FAULT"
+        else Style.ok
+        if kind in ("READY", "RUNNING")
+        else Style.background
+        if kind in ("start", "stop", "reset")
+        else Style.secondary
+    )
+    icon = QIcon()
+    for dpr in (1.0, 1.25, 1.5, 2.0):
+        pixmap = QPixmap(round(Style.icon * dpr), round(Style.icon * dpr))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(color), 1.7))
+        if kind == "RUNNING":
+            painter.drawEllipse(QRectF(3, 3, 16, 16))
+            painter.setBrush(QColor(color))
+            painter.drawEllipse(QRectF(8, 8, 6, 6))
+        elif kind == "start":
+            for a, b in (
+                (QPointF(6, 4), QPointF(18, 11)),
+                (QPointF(18, 11), QPointF(6, 18)),
+                (QPointF(6, 18), QPointF(6, 4)),
+            ):
+                painter.drawLine(a, b)
+        elif kind == "stop":
+            painter.drawRect(QRectF(5, 5, 12, 12))
+        elif kind == "reset":
+            painter.drawArc(4, 4, 14, 14, 30 * 16, 290 * 16)
+            painter.drawLine(19, 3, 19, 9)
+            painter.drawLine(19, 9, 13, 9)
+        elif kind == "batch":
+            for a, b in (
+                (QPointF(4, 15), QPointF(15, 4)),
+                (QPointF(15, 4), QPointF(19, 8)),
+                (QPointF(19, 8), QPointF(8, 19)),
+                (QPointF(8, 19), QPointF(3, 20)),
+                (QPointF(3, 20), QPointF(4, 15)),
+            ):
+                painter.drawLine(a, b)
+        elif kind == "FAULT":
+            for a, b in (
+                (QPointF(11, 3), QPointF(20, 19)),
+                (QPointF(20, 19), QPointF(2, 19)),
+                (QPointF(2, 19), QPointF(11, 3)),
+            ):
+                painter.drawLine(a, b)
+            painter.drawLine(11, 8, 11, 13)
+            painter.drawPoint(11, 16)
+        elif kind in ("STARTING", "STOPPING"):
+            painter.drawEllipse(QRectF(3, 3, 16, 16))
+            painter.drawLine(11, 6, 11, 11)
+            painter.drawLine(11, 11, 16, 13)
+        else:
+            painter.drawEllipse(QRectF(3, 3, 16, 16))
+            if kind == "READY":
+                painter.drawLine(6, 11, 10, 15)
+                painter.drawLine(10, 15, 16, 7)
+            else:
+                painter.drawLine(7, 11, 15, 11)
+        painter.end()
+        icon.addPixmap(pixmap)
+        if kind == "batch":
+            disabled = QPixmap(pixmap.size())
+            disabled.setDevicePixelRatio(dpr)
+            disabled.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(disabled)
+            painter.setOpacity(0.35)
+            painter.drawPixmap(0, 0, pixmap)
+            painter.end()
+            icon.addPixmap(disabled, QIcon.Mode.Disabled)
     return icon
 
 

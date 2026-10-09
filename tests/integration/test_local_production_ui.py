@@ -108,7 +108,7 @@ def test_repeated_cycles_start_gate_order_display_and_restart(
     try:
         assert app.snapshot().state is ApplicationState.READY
         assert not engine.calls
-        window.buttons["start"].click()
+        window.buttons["operation"].click()
         until(engine.warm.is_set)
         assert app.snapshot().state is ApplicationState.STARTING
         assert app.snapshot().counters == ProductionCounters()
@@ -118,7 +118,7 @@ def test_repeated_cycles_start_gate_order_display_and_restart(
         assert app.snapshot().counters.cycles_started == 1
         engine.release_active.set()
         until(lambda: app.snapshot().counters.cycles_completed >= 2)
-        window.buttons["stop"].click()
+        window.buttons["operation"].click()
         until(lambda: app.snapshot().state is ApplicationState.READY)
         snapshot = app.snapshot()
         result = snapshot.latest_production_result
@@ -138,7 +138,7 @@ def test_repeated_cycles_start_gate_order_display_and_restart(
         bridge.refresh()
         qapp.processEvents()
         assert len(engine.calls) == calls  # No background production after Stop.
-        window.buttons["start"].click()
+        window.buttons["operation"].click()
         until(
             lambda: (
                 app.snapshot().generation == 2
@@ -148,7 +148,7 @@ def test_repeated_cycles_start_gate_order_display_and_restart(
         until(
             lambda: any(f.generation == 2 for f in composition.store.snapshot().frames)
         )
-        window.buttons["stop"].click()
+        window.buttons["operation"].click()
         until(lambda: app.snapshot().state is ApplicationState.READY)
         latest = app.snapshot().latest_production_result
         assert latest is not None and latest.cycle_id == CycleId(1)

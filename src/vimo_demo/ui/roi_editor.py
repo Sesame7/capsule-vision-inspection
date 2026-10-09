@@ -35,13 +35,15 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, FrameId
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
-from .production_style import Language, Style, text
+from .production_style import Language, Style, camera_icon, text
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
 
 
 def _image_icon(tool: str) -> QIcon:
     """Local vector tools; checked modes have a check mark, not just a color."""
+    if tool == "camera":
+        return camera_icon()
     icon = QIcon()
     for checked in (False, True):
         for dpr in (1.0, 1.25, 1.5, 2.0):
@@ -55,11 +57,6 @@ def _image_icon(tool: str) -> QIcon:
                 painter.drawArc(5, 5, 14, 14, 40 * 16, 290 * 16)
                 painter.drawLine(19, 4, 19, 10)
                 painter.drawLine(19, 10, 13, 10)
-            elif tool == "camera":
-                painter.drawRect(3, 8, 18, 12)
-                painter.drawRect(7, 5, 7, 3)
-                painter.drawEllipse(8, 10, 8, 8)
-                painter.drawPoint(18, 11)
             elif tool == "folder":
                 for x, y, dx, dy in (
                     (3, 8, 3, 5),
