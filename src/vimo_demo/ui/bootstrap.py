@@ -15,16 +15,17 @@ from vimo_demo.application import (
     ProductionApplication,
     prepare_configuration,
 )
-from vimo_demo.application.folder_replay import FolderReplay
+from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
 from vimo_demo.application.preferences import (
     ApplicationPreferences,
-    load_preferences,
+    read_preferences,
     save_preferences,
 )
 from vimo_demo.application.session import EngineFactory
 from vimo_demo.configuration import (
     ConfigurationError,
     MachineLayoutDefinition,
+    ModelArtifactError,
     ModelDefinition,
     ModelRegistry,
     load_camera_sources,
@@ -95,6 +96,13 @@ def discover_models(directory: Path) -> ModelRegistry:
     return ModelRegistry(tuple(models))
 
 
+@dataclass(frozen=True, slots=True)
+class StartupIssue:
+    key: str
+    detail: str
+    blocking: bool = True
+
+
 @dataclass
 class Startup:
     data: ApplicationData
@@ -104,7 +112,8 @@ class Startup:
     machine: MachineLayoutDefinition | None
     editor: RecipeEditorSession | None
     choice: RecipeChoice | None
-    issues: tuple[str, ...]
+    issues: tuple[StartupIssue, ...]
+    preferences_writable: bool
 
 
 def load_startup(
@@ -116,92 +125,149 @@ def load_startup(
     """Blocking startup IO only, called before QApplication is constructed.
 
     No engine, runtime session, cycle, warm-up or candidate activation occurs.
-    Partial valid data may support presentation/editing; it is never READY.
+    Production-critical errors prevent READY. Valid candidates with unavailable
+    Folder inputs remain READY and must pass the existing Start preflight.
     """
-    issues: list[str] = []
+    issues: list[StartupIssue] = []
     preferences = None
+    preferences_writable = False
     machine = None
     registry = None
     sources = None
     entries = ()
+    try:
+        loaded = read_preferences(data.preferences)
+        preferences = loaded.preferences
+        preferences_writable = not loaded.invalid_language
+        if loaded.invalid_language:
+            issues.append(
+                StartupIssue(
+                    "startup_language",
+                    f"{data.preferences}: invalid language; using zh in memory; file kept unchanged",
+                    blocking=False,
+                )
+            )
+    except ConfigurationError as exc:
+        # Only a definitely missing manifest can be created by an explicit
+        # language change. Permission/malformed/unsupported files remain intact.
+        preferences_writable = isinstance(exc.__cause__, FileNotFoundError)
+        issues.append(StartupIssue("startup_preferences", f"{data.preferences}: {exc}"))
+
     for kind, path in (
-        ("Preferences", data.preferences),
-        ("Machine", data.machine),
-        ("Models", data.models),
-        ("Sources", data.sources),
-        ("Recipes", data.recipes),
+        ("machine", data.machine),
+        ("models", data.models),
+        ("sources", data.sources),
+        ("recipes", data.recipes),
     ):
         try:
-            if kind == "Preferences":
-                preferences = load_preferences(path)
-            elif kind == "Machine":
+            if kind == "machine":
                 machine = load_machine_layout(path)
                 if len(machine.layout.cameras) != 6:
                     machine = None
                     raise ConfigurationError(
                         "Production requires six configured cameras"
                     )
-            elif kind == "Models":
+            elif kind == "models":
                 registry = discover_models(path)
-            elif kind == "Sources":
+            elif kind == "sources":
                 sources = load_camera_sources(path)
             else:
                 catalog = RecipeCatalog(path).discover()
                 entries = catalog.entries
-                issues.extend(f"Recipe {e.path}: {e.message}" for e in catalog.issues)
+                issues.extend(
+                    StartupIssue("startup_recipes", f"{e.path}: {e.message}")
+                    for e in catalog.issues
+                )
         except (ConfigurationError, OSError) as exc:
-            issues.append(f"{kind} {path}: {exc}")
+            issues.append(StartupIssue(f"startup_{kind}", f"{path}: {exc}"))
+
+    if sources is not None and machine is not None:
+        try:
+            sources.validate_cameras(machine.layout.camera_ids)
+        except ConfigurationError as exc:
+            sources = None
+            issues.append(StartupIssue("startup_sources", f"{data.sources}: {exc}"))
+
+    default_id = preferences.default_model_id if preferences else None
+    if preferences is not None and registry is not None:
+        try:
+            if default_id is None:
+                raise ConfigurationError("No explicit default Model ID in app.json")
+            registry.get(default_id)
+        except ConfigurationError as exc:
+            default_id = None
+            issues.append(
+                StartupIssue("startup_model_identity", f"{data.preferences}: {exc}")
+            )
 
     editor = None
-    prepared: PreparedConfiguration | None = None
-    try:
-        if preferences is not None and registry is not None:
-            if preferences.default_model_id is None:
-                raise ConfigurationError("No explicit default Model ID in app.json")
-            registry.get(preferences.default_model_id)
-            if machine is not None and sources is not None:
-                sources.validate_cameras(machine.layout.camera_ids)
-                editor = RecipeEditorSession(
-                    RecipeCatalog(data.recipes),
-                    machine,
-                    registry,
-                    preferences.default_model_id,
-                    data.models,
-                    machine_path=data.machine,
-                    camera_sources=CameraSourceDraft(sources, data.sources),
-                    auto_select_first=False,
-                    require_saved_sources=True,
+    entry = None
+    if default_id is not None and registry is not None and machine is not None:
+        editor = RecipeEditorSession(
+            RecipeCatalog(data.recipes),
+            machine,
+            registry,
+            default_id,
+            data.models,
+            machine_path=data.machine,
+            camera_sources=CameraSourceDraft(sources, data.sources)
+            if sources
+            else None,
+            auto_select_first=False,
+            require_saved_sources=True,
+        )
+        assert preferences is not None
+        entry = next(
+            (
+                e
+                for e in entries
+                if e.recipe.recipe_id == preferences.last_applied_recipe_id
+            ),
+            None,
+        )
+        if entry is None:
+            issues.append(
+                StartupIssue(
+                    "startup_recipe_identity",
+                    f"{data.preferences}: last applied Recipe ID {preferences.last_applied_recipe_id!r} is absent or unselected; no fallback",
                 )
-                entry = next(
-                    (
-                        e
-                        for e in entries
-                        if e.recipe.recipe_id == preferences.last_applied_recipe_id
-                    ),
-                    None,
-                )
-                if entry is None:
-                    raise ConfigurationError(
-                        "Last applied Recipe is absent or unselected; no fallback"
-                    )
+            )
+        else:
+            try:
                 editor.load(entry)
-                # One source preflight group, discarded before Qt. Start reopens
-                # the replay and worker normally; nothing is inspection data here.
-                FolderReplay(machine.layout, sources, data.sources.parent).next_group()
-                if not issues:
-                    prepared = prepare_configuration(
-                        resolve_configuration(
-                            machine,
-                            entry.recipe,
-                            registry,
-                            preferences.default_model_id,
-                        ),
-                        base_directory=data.models,
-                    )
-    except Exception as exc:
-        issues.append(f"Configuration preparation: {type(exc).__name__}: {exc}")
+            except ConfigurationError as exc:
+                entry = None
+                issues.append(StartupIssue("startup_recipes", str(exc)))
 
-    if editor is None:
+    prepared: PreparedConfiguration | None = None
+    if editor is not None and entry is not None and not any(i.blocking for i in issues):
+        try:
+            prepared = prepare_configuration(
+                resolve_configuration(
+                    editor.machine,
+                    entry.recipe,
+                    editor.registry,
+                    editor.default_model_id,
+                ),
+                base_directory=data.models,
+            )
+        except ModelArtifactError as exc:
+            issues.append(StartupIssue("startup_artifact", str(exc)))
+        except ConfigurationError as exc:
+            issues.append(StartupIssue("startup_configuration", str(exc)))
+
+    if machine is not None and sources is not None:
+        try:
+            # Observation only; Start reopens/preflights replay before constructing
+            # a session/engine. Source unavailability does not invalidate a valid
+            # candidate or invent a new application lifecycle state.
+            FolderReplay(machine.layout, sources, data.sources.parent).next_group()
+        except (FolderSourceError, OSError, ValueError) as exc:
+            issues.append(
+                StartupIssue("startup_source_unavailable", str(exc), blocking=False)
+            )
+
+    if editor is None or editor.camera_sources is None:
 
         def unavailable(_config: PreparedConfiguration, _generation: int):
             raise ConfigurationError("Persistent configuration is unavailable")
@@ -223,7 +289,15 @@ def load_startup(
         application.configure(prepared)
         choice = RecipeChoice(prepared, prepared.configuration.display_name)
     return Startup(
-        data, preferences, application, frames, machine, editor, choice, tuple(issues)
+        data,
+        preferences,
+        application,
+        frames,
+        machine,
+        editor,
+        choice,
+        tuple(issues),
+        preferences_writable,
     )
 
 
@@ -231,15 +305,35 @@ class PreferenceNotifications(QObject):
     """Reuse existing successful Apply/language signals, not a selection manager."""
 
     def __init__(
-        self, window: ProductionWindow, path: Path, preferences: ApplicationPreferences
+        self,
+        window: ProductionWindow,
+        path: Path,
+        preferences: ApplicationPreferences,
+        *,
+        writable: bool = True,
     ) -> None:
         super().__init__(window)
         self.window, self.path, self.preferences = window, path, preferences
+        self.writable = writable
         window.parameters.applied.connect(self.applied)
         window.language_changed.connect(self.language)
 
     def _save(self, value: ApplicationPreferences) -> None:
         try:
+            if not self.writable:
+                raise ConfigurationError(
+                    "Repair app.json externally and restart before saving preferences"
+                )
+            try:
+                current = read_preferences(self.path)
+            except ConfigurationError as exc:
+                if not isinstance(exc.__cause__, FileNotFoundError):
+                    raise
+            else:
+                if current.invalid_language or current.preferences != self.preferences:
+                    raise ConfigurationError(
+                        "Application preferences changed/invalid; repair and restart"
+                    )
             save_preferences(self.path, value)
         except ConfigurationError as exc:
             traceback.print_exception(exc)
@@ -274,16 +368,15 @@ def create_window(startup: Startup, delivery: FutureDelivery) -> ProductionWindo
         language=startup.preferences.language if startup.preferences else "zh",
         recipe_editor=startup.editor,
         layout=startup.machine.layout if startup.machine else None,
-        configuration_issue="; ".join(startup.issues),
+        configuration_issue="\n".join(i.detail for i in startup.issues),
+        configuration_messages=tuple(dict.fromkeys(i.key for i in startup.issues)),
     )
-    if startup.preferences is not None:
-        PreferenceNotifications(window, startup.data.preferences, startup.preferences)
-    elif not startup.data.preferences.exists():
-        # An explicit language change may create preferences with unselected IDs;
-        # never replace a malformed existing manifest or fabricate domain data.
-        PreferenceNotifications(
-            window, startup.data.preferences, ApplicationPreferences()
-        )
+    PreferenceNotifications(
+        window,
+        startup.data.preferences,
+        startup.preferences or ApplicationPreferences(),
+        writable=startup.preferences_writable,
+    )
     return window
 
 
@@ -294,7 +387,7 @@ def main(entry_directory: Path) -> int:
         observe_source=lambda future: delivery.watch("folder_source", future),
     )
     for issue in startup.issues:
-        print(issue, file=sys.stderr)
+        print(issue.detail, file=sys.stderr)
     qt = QApplication(sys.argv[:1])
     delivery = FutureDelivery()
     try:

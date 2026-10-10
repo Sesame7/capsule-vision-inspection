@@ -28,8 +28,9 @@ defaults. Normal Recipe, machine and source saves target these data paths.
 
 ## Identity and discovery
 
-The separate application manifest has these required fields (IDs may be null to
-leave configuration unselected):
+The separate application manifest requires `schema_version`, `default_model_id`
+and `last_applied_recipe_id` (IDs may be null to leave configuration unselected).
+Only `language` is optional:
 
 ```json
 {
@@ -39,6 +40,12 @@ leave configuration unselected):
   "language": "zh"
 }
 ```
+
+An omitted language uses Chinese (`zh`). An explicitly invalid language also
+uses `zh` **in memory**, with a localized warning; valid explicit production IDs
+are preserved. Unsupported versions, duplicate keys, unknown fields, missing
+identity fields or invalid identity values still invalidate the manifest. No
+identities are recovered from an unreliable manifest. Startup never writes it.
 
 Model definitions are all nonrecursive `*.json` files in `data/models/`, parsed
 through the strict model codec and existing duplicate-rejecting `ModelRegistry`.
@@ -58,8 +65,10 @@ existing draft/resolution/persistence path.
 Startup restores the saved machine order/ROIs and camera sources exactly, validates
 the six-camera configuration, and decodes/discards one Folder reference group to
 check availability and image bounds. This and model hashing happen **before Qt is
-created**. Subsequent Recipe preparation, including saved-source preflight, uses
-the existing background preparation slot. Start reopens replay from its beginning.
+created**. Subsequent Recipe preparation verifies the artifact, catalog and saved
+source schema/identities in the existing background slot. Folder availability is
+acquisition preflight, not candidate validity. Start reopens replay from its beginning
+and validates its first group before constructing a session/engine.
 No machine geometry is generated, repaired or calibrated by bootstrap.
 
 A valid startup prepares a candidate and opens the existing five-page shell in
@@ -67,22 +76,54 @@ READY. Active configuration remains absent until successful Start. No session,
 cycle, Batch, counters or previous results are restored. Engine creation, warm-up
 and serial inference still belong to the existing worker after an explicit Start.
 
-Absent/invalid persistent data opens the shell in UNCONFIGURED with a configuration
-message and disabled Start. Valid saved geometry can still be displayed. Without
-machine data the Production workspace shows an unavailable placeholder, not
-synthetic camera images or ROIs. Startup diagnostics also go to stderr; the full
-configuration message is accessible in the status tooltip. Comprehensive recovery
-and model-management UI are not implemented; repair missing files externally and
-restart where necessary.
+The shell remains navigable independently of readiness. Valid saved geometry can
+still be displayed. Without machine data the Production workspace shows an
+unavailable placeholder, not synthetic camera images or ROIs. Concise startup
+messages are localized in the shell and Recipe feedback; full path/error context
+is in tooltips and stderr. Runtime faults and command failures retain precedence.
+
+| Startup condition | State / behavior |
+| --- | --- |
+| Missing data/manifest; malformed or unsupported manifest; absent/unknown explicit ID | UNCONFIGURED; no first-entry fallback |
+| Missing, malformed or duplicate Model/Recipe definitions | UNCONFIGURED; catalog problems cannot be bypassed by Apply |
+| Missing/unreadable artifact or SHA-256 mismatch | UNCONFIGURED; no alternate model or fake engine |
+| Missing/invalid machine or source JSON; source-camera identity mismatch | UNCONFIGURED; no invented geometry/assignments |
+| Valid candidate and source configuration, but Folder is missing, empty, unreadable or incompatible | READY with warning; unchanged Start preflight prevents engine creation until acquisition is usable |
+| Missing/invalid language only | Valid candidate remains READY, using `zh` in memory |
+
+Permission/IO failures follow the same distinction: configuration/artifact IO
+blocks candidate preparation; Folder IO prevents acquisition. Original files,
+camera order, mappings, geometry and inspection settings remain authoritative.
+Legitimately omitted optional Recipe fields use the existing strict codec defaults;
+invalid explicit values remain errors.
 
 The normal entry listens to the existing successful Apply signal. Only after
 saved Recipe preparation and candidate installation succeed does it atomically
 update `last_applied_recipe_id`. Selection, an unsaved draft, Save alone and failed
 preparation do not update it. Language changes use the existing language signal
 and the same atomic preferences writer. Failed preference writes are surfaced as
-operation errors and leave the previous file intact. A missing manifest may be
-created by a language change with null IDs; a malformed manifest is never replaced
-automatically. Preferences do not duplicate active/runtime or Recipe-draft state.
+operation errors and leave the previous file intact. A definitely missing manifest
+may be created by an explicit language change with null IDs. Invalid-language,
+malformed, unsupported or unreadable manifests are read-only for this session,
+including language changes and Apply notifications. If the file changes externally
+after startup, preference saving refuses to overwrite it. Correct it externally
+and restart. Preferences do not duplicate active/runtime or Recipe-draft state.
+
+## Supported recovery
+
+1. Open `app.py`; identify the localized startup message and inspect its tooltip
+   or stderr for the affected file/identity.
+2. Where valid supporting definitions exist, use Recipe selection/Save and apply
+   or Vision's Folder/source and machine tools. Folder-path repair does not replace
+   saved ROI geometry. Missing/invalid machine, model, manifest or source schema
+   requires external maintenance; no recovery wizard or fabricated defaults exist.
+3. Correct only the affected configuration/artifact and restart `app.py` for fresh
+   discovery, resolution and verification. Permissions must permit reading it.
+4. Check READY and the intended candidate. Successful preparation does not
+   activate inference; explicitly Start after acquisition is usable.
+
+There is no in-process rediscovery guarantee or automatic rollback/backup. Recovery
+tests use isolated temporary data, not the migrated local `data/` configuration.
 
 ## Local migration and developer entries
 

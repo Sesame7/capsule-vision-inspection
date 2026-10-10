@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vimo_demo.application import PreparedConfiguration, prepare_configuration
-from vimo_demo.application.folder_replay import FolderReplay
 from vimo_demo.configuration import (
     CameraOverride,
     ChannelOverride,
@@ -173,10 +172,16 @@ class RecipeEditorSession:
             self.resolve(recipe), base_directory=self.base_directory
         )
         if self.require_saved_sources:
+            if self.catalog.discover().issues:
+                raise ConfigurationError(
+                    "Recipe catalog has invalid or duplicate files; repair before Apply"
+                )
             if self.camera_sources is None:
                 raise ConfigurationError("Saved camera sources are unavailable")
             path = self.camera_sources.path
-            FolderReplay(
-                prepared.configuration.layout, load_camera_sources(path), path.parent
-            ).next_group()
+            load_camera_sources(path).validate_cameras(
+                prepared.configuration.layout.camera_ids
+            )
+            # Folder availability is acquisition preflight, not candidate validity.
+            # The unchanged local session factory checks it before engine creation.
         return prepared

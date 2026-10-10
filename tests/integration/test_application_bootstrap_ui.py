@@ -1,13 +1,16 @@
 """Normal shell restoration and successful Apply preferences, with no real SDK."""
 
+import json
 from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
 from tests.qt_support import until
 from tests.unit.test_application_bootstrap import close, saved_data
+from tests.unit.test_production_application import WAIT
 
-from vimo_demo.application import ApplicationState, ProductionCounters
+from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters
+from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.application.preferences import (
     ApplicationPreferences,
     load_preferences,
@@ -161,7 +164,7 @@ def test_no_recipe_fallback_in_widget_and_explicit_selection_can_apply(
         delivery.detach()
 
 
-def test_unavailable_sources_cannot_become_ready_by_apply(
+def test_unavailable_folder_is_ready_but_start_preflight_prevents_inference(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     data = saved_data(tmp_path)
@@ -171,19 +174,159 @@ def test_unavailable_sources_cannot_become_ready_by_apply(
             tuple(CameraFolder(CameraId(f"CAM{i}"), "missing") for i in range(1, 7))
         ),
     )
+    calls: list[object] = []
+
+    def forbidden(config: object):
+        calls.append(config)
+        raise AssertionError("Unavailable acquisition must not create an engine")
+
+    startup = load_startup(data, engine_factory=forbidden)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        assert startup.application.snapshot().state is ApplicationState.READY
+        assert any(
+            issue.key == "startup_source_unavailable" for issue in startup.issues
+        )
+        window.parameters.open_roi_editor()
+        assert window.parameters.roi_workspace is not None
+        until(lambda: not window.parameters.busy)
+        assert window.parameters.editable()
+        window.parameters.save_and_apply()
+        until(lambda: not window.parameters.busy)
+        with pytest.raises(ApplicationError, match="missing") as failure:
+            startup.application.start().result(WAIT)
+        assert isinstance(failure.value.__cause__, FolderSourceError)
+        snapshot = startup.application.snapshot()
+        assert snapshot.state is ApplicationState.READY
+        assert snapshot.active is None and not snapshot.runtime_owned
+        assert snapshot.counters == ProductionCounters()
+        assert not calls
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+@pytest.mark.parametrize(
+    "kind", ["malformed", "unsupported", "invalid_language", "external_change"]
+)
+def test_unreliable_preferences_are_never_overwritten_by_ui(
+    qapp: QApplication, tmp_path: Path, kind: str
+) -> None:
+    data = saved_data(tmp_path)
+    contents = {
+        "malformed": "{",
+        "unsupported": '{"schema_version":2,"default_model_id":"general","last_applied_recipe_id":"local"}',
+        "invalid_language": '{"schema_version":1,"default_model_id":"general","last_applied_recipe_id":"local","language":"invalid"}',
+        "external_change": "{",
+    }[kind]
+    if kind != "external_change":
+        data.preferences.write_text(contents, encoding="utf-8")
+    startup = load_startup(data)
+    if kind == "external_change":
+        data.preferences.write_text(contents, encoding="utf-8")
+    original = data.preferences.read_bytes()
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    try:
+        assert window.pages.count() == 5
+        for index in range(5):
+            window.navigate(index)
+        window.language_button.click()
+        assert data.preferences.read_bytes() == original
+        assert "ConfigurationError" in window.event_label.toolTip()
+        if kind in ("invalid_language", "external_change"):
+            window.parameters.save_and_apply()
+            until(lambda: not window.parameters.busy)
+            assert startup.application.snapshot().state is ApplicationState.READY
+            assert data.preferences.read_bytes() == original
+        else:
+            assert not window.parameters.buttons["save_apply"].isEnabled()
+            assert not window.buttons["operation"].isEnabled()
+            assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_startup_feedback_is_localized_with_details_only_in_tooltip(
+    qapp: QApplication, tmp_path: Path, language: str
+) -> None:
+    data = saved_data(tmp_path)
+    value = json.loads(data.preferences.read_text(encoding="utf-8"))
+    value["language"] = language
+    data.preferences.write_text(json.dumps(value), encoding="utf-8")
+    data.sources.write_text("{}", encoding="utf-8")
+    startup = load_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    try:
+        summary = "相机源配置" if language == "zh" else "Camera-source configuration"
+        assert summary in window.parameters.status.text()
+        assert str(data.sources) in window.parameters.status.toolTip()
+        assert str(data.sources) in window.event_label.toolTip()
+        assert str(data.sources) not in window.parameters.status.text()
+        assert str(data.sources) not in window.event_label.text()
+        window.parameters.open_roi_editor()
+        assert window.parameters.roi_workspace is not None
+        assert startup.editor is not None and startup.editor.camera_sources is None
+        window.parameters.save_and_apply()
+        until(lambda: not window.parameters.busy)
+        assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+        assert "Saved camera sources" in window.parameters.status.text()
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_bad_recipe_catalog_cannot_be_bypassed_by_applying_valid_entry(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    data = saved_data(tmp_path)
+    (data.recipes / "broken.recipe.json").write_text("{}", encoding="utf-8")
     startup = load_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:
-        assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+        assert startup.editor is not None and startup.editor.entry is not None
         window.parameters.save_and_apply()
-        until(
-            lambda: (
-                not window.parameters.busy
-                and "missing" in window.parameters.status.text()
-            )
-        )
+        until(lambda: not window.parameters.busy)
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+        assert "invalid or duplicate" in window.parameters.status.text()
+        assert load_preferences(data.preferences).last_applied_recipe_id == "local"
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_recipe_directory_permission_error_keeps_localized_navigable_shell(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = saved_data(tmp_path)
+    original_iterdir = Path.iterdir
+
+    def denied(path: Path):
+        if path == data.recipes:
+            raise PermissionError("test Recipe directory denied")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", denied)
+    startup = load_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    try:
+        assert window.pages.count() == 5
+        assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+        assert "Recipe definitions unavailable" in window.parameters.status.text()
+        assert "directory denied" in window.parameters.status.toolTip()
+        assert str(data.recipes) not in window.parameters.status.text()
+        assert not window.buttons["operation"].isEnabled()
+        for index in range(5):
+            window.navigate(index)
     finally:
         close_window(window)
         delivery.detach()

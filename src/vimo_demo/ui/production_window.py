@@ -62,6 +62,7 @@ class ProductionWindow(QMainWindow):
         recipe_editor: RecipeEditorSession | None = None,
         layout: InspectionLayout | None = None,
         configuration_issue: str = "",
+        configuration_messages: tuple[str, ...] = (),
     ) -> None:
         super().__init__()
         if (
@@ -81,6 +82,8 @@ class ProductionWindow(QMainWindow):
         self.language: Language = language
         self.simulation = simulation
         self.configuration_issue = configuration_issue
+        self.configuration_messages = configuration_messages
+        self._event_message = ""
         self.snapshot = bridge.application.snapshot()
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._columns = 0
@@ -227,7 +230,13 @@ class ProductionWindow(QMainWindow):
             self.configuration_placeholder.hide()
         page.addWidget(workspace, 1)
         self.placeholders: dict[str, QLabel] = {}
-        self.parameters = ParametersPage(bridge, recipe_editor, simulation=simulation)
+        self.parameters = ParametersPage(
+            bridge,
+            recipe_editor,
+            simulation=simulation,
+            configuration_messages=configuration_messages,
+            configuration_details=configuration_issue,
+        )
         self.parameters.applied.connect(self._recipe_applied)
         self.parameters.setup_changed.connect(self._render)
         for name in PAGES[1:]:
@@ -381,6 +390,7 @@ class ProductionWindow(QMainWindow):
         choices.append(choice)
         self.choices = tuple(choices)
         self.configuration_issue = ""
+        self.configuration_messages = ()
         self._render()
 
     @Slot()
@@ -599,9 +609,21 @@ class ProductionWindow(QMainWindow):
             )
         if self.configuration_issue and not (warning or fault or self._closing):
             message = (
-                f"{text('configure_first', language)} · {self.configuration_issue}"
+                " · ".join(text(key, language) for key in self.configuration_messages)
+                if self.configuration_messages
+                else (
+                    f"{text('configure_first', language)} · {self.configuration_issue}"
+                )
             )
-        self.event_label.setToolTip(message)
+        self._event_message = message
+        detail = (
+            self.configuration_issue
+            if self.configuration_messages and not (warning or fault or self._closing)
+            else ""
+        )
+        self.event_label.setToolTip(
+            "\n".join(part for part in (message, detail) if part)
+        )
         self.event_label.setAccessibleName(message)
         self.event_label.setStyleSheet(
             f"color: {Style.fault if fault else Style.warning if warning else Style.secondary};"
@@ -691,7 +713,7 @@ class ProductionWindow(QMainWindow):
     def _render_status_text(self) -> None:
         self.event_label.setText(
             self.event_label.fontMetrics().elidedText(
-                " ".join(self.event_label.toolTip().split()),
+                " ".join(self._event_message.split()),
                 Qt.TextElideMode.ElideRight,
                 self.event_label.width(),
             )
