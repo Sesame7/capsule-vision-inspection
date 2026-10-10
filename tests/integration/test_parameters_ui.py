@@ -319,7 +319,8 @@ def test_invalid_save_blocks_navigation(
     monkeypatch.setattr(page, "confirm_dirty", confirm)
     page.buttons["new_recipe"].click()
     assert session.entry == original and session.dirty
-    assert "display_name" in page.status.text()
+    assert page.status.text() == text("recipe_validation_error", page.language)
+    assert "display_name" in page.status.toolTip()
     assert not page.findChildren(QDialog)
 
 
@@ -368,7 +369,8 @@ def test_prepare_failure_preserves_saved_edits_but_not_promoted(
     edit(page.metadata["display_name"], "Saved before preparation")
     page.save_and_apply()
     until(lambda: not page.busy)
-    assert "SHA-256" in page.status.text()
+    assert page.status.text() == text("model_prepare_error", page.language)
+    assert "SHA-256" in page.status.toolTip()
     assert window.bridge.application.snapshot() == before and not runtimes
     assert (
         not session.dirty
@@ -418,7 +420,7 @@ def test_unknown_model_preserved_on_unrelated_edit(configured_screen: Screen) ->
     edit(page.metadata["display_name"], "名称")
     assert session.draft.model_override_id == "unknown-model"
     page.save_and_apply()
-    assert "unknown-model" in page.status.text() and session.dirty
+    assert "unknown-model" in page.status.toolTip() and session.dirty
 
 
 @pytest.mark.parametrize("decision", ["save", "discard", "cancel"])
@@ -479,7 +481,8 @@ def test_save_failure_keeps_draft_file_and_application(
     page = window.parameters
     edit(page.metadata["display_name"], "Keep draft")
     page.save_and_apply()
-    assert "read-only" in page.status.text() and session.dirty and not page.busy
+    assert page.status.text() == text("recipe_save_error", page.language)
+    assert "read-only" in page.status.toolTip() and session.dirty and not page.busy
     assert session.entry.path.read_bytes() == original
     assert window.bridge.application.snapshot() == before
 
@@ -511,5 +514,6 @@ def test_failed_preparation_blocks_dirty_switch(
     until(lambda: not page.busy)
     assert session.entry.path == original.path
     assert load_recipe(original.path).display_name == "Persisted"
-    assert "unavailable" in page.status.text()
+    assert page.status.text() == text("recipe_prepare_error", page.language)
+    assert "unavailable" in page.status.toolTip()
     assert window.bridge.application.snapshot() == before

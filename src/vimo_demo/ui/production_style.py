@@ -11,6 +11,54 @@ from .production_presentation import Indicator
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "preferences_error": (
+        "启动偏好未保存；请修复 app.json 后重启。",
+        "Application preferences not saved; repair app.json and restart.",
+    ),
+    "recipe_error": (
+        "配方操作失败；请查看详情。",
+        "Recipe operation failed; see details.",
+    ),
+    "recipe_validation_error": (
+        "配方配置无效；请检查名称和检测设置。",
+        "Recipe configuration invalid; check its name and inspection settings.",
+    ),
+    "recipe_save_error": (
+        "配方保存失败；请检查文件访问权限。",
+        "Recipe save failed; check file access.",
+    ),
+    "recipe_prepare_error": (
+        "配方准备/应用失败；请检查模型和配置。",
+        "Recipe preparation/apply failed; check the model and configuration.",
+    ),
+    "model_prepare_error": (
+        "模型文件不可用或校验失败；请检查模型文件。",
+        "Model artifact unavailable or verification failed; check the model file.",
+    ),
+    "vision_error": (
+        "相机配置操作失败；请查看详情。",
+        "Camera configuration operation failed; see details.",
+    ),
+    "folder_reference_error": (
+        "文件夹参考图不可用；请检查路径和图片。",
+        "Folder reference unavailable; check the path and images.",
+    ),
+    "source_validation_error": (
+        "图片源验证失败；请检查相机文件夹和图片。",
+        "Folder source validation failed; check camera folders and images.",
+    ),
+    "vision_validation_error": (
+        "相机配置验证失败；请检查来源和 ROI。",
+        "Camera configuration validation failed; check sources and ROIs.",
+    ),
+    "vision_save_error": (
+        "相机配置保存失败；请检查文件访问权限。",
+        "Camera configuration save failed; check file access.",
+    ),
+    "roi_geometry_error": (
+        "ROI 几何无效；请检查坐标和图像范围。",
+        "Invalid ROI geometry; check coordinates and image bounds.",
+    ),
     "startup_preferences": (
         "启动设置不可用；请修复 app.json 后重启。",
         "Startup settings unavailable; repair app.json and restart.",

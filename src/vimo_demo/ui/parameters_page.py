@@ -32,6 +32,8 @@ from vimo_demo.application import ApplicationState, PreparedConfiguration
 from vimo_demo.configuration import (
     CheckConfiguration,
     ConfigurationError,
+    ConfigurationIOError,
+    ModelArtifactError,
     RecipeDefinition,
 )
 
@@ -50,6 +52,7 @@ class ParametersPage(QWidget):
     applied = Signal(object)
     preview_changed = Signal()
     setup_changed = Signal()
+    sources_verified = Signal()
 
     def __init__(
         self,
@@ -78,6 +81,7 @@ class ParametersPage(QWidget):
         self._model_ids: tuple[str | None, ...] = ()
         self._catalog_error = ""
         self._error = ""
+        self._error_key = "recipe_error"
         self._feedback = ""
         self._thread: Thread | None = None
         self._completion: tuple[object, object] | None = None
@@ -366,7 +370,7 @@ class ParametersPage(QWidget):
                 self.session.new()
             self._error = self._feedback = ""
         except ConfigurationError as exc:
-            self._error = str(exc)
+            self._report_error(exc)
         self.recipes.clear()
         self.recipes.addItems([e.recipe.display_name for e in self._entries])
         self.show_draft()
@@ -513,10 +517,18 @@ class ParametersPage(QWidget):
             )
         else:
             self.rule.clear()
+        startup_message = " · ".join(
+            text(key, language) for key in self.configuration_messages
+        )
+        feedback = text(self._feedback, language) if self._feedback else ""
         self.status.setText(
-            self._error
-            or " · ".join(text(key, language) for key in self.configuration_messages)
-            or self._catalog_error
+            (text(self._error_key, language) if self._error else "")
+            or (
+                " · ".join(part for part in (feedback, startup_message) if part)
+                if startup_message
+                else ""
+            )
+            or (text("recipe_error", language) if self._catalog_error else "")
             or (text(self._feedback, language) if self._feedback else "")
             or (
                 text("save_machine_first", language)
@@ -527,6 +539,12 @@ class ParametersPage(QWidget):
         self.status.setToolTip(
             self._error or self.configuration_details or self._catalog_error
         )
+
+    def _report_error(
+        self, error: BaseException | str, key: str = "recipe_error"
+    ) -> None:
+        # Keep the original details for diagnostics and existing completion callbacks.
+        self._error, self._error_key = str(error), key
 
     def _capsule_changed(self, mode: PreviewMode, enabled: bool) -> None:
         if self.session is None or not self.editable():
@@ -610,6 +628,7 @@ class ParametersPage(QWidget):
             run_io=self.run_setup_io,
         )
         self.roi_workspace = workspace
+        workspace.sources_verified.connect(self.sources_verified.emit)
         self._settings_layout.addWidget(workspace, 1)
 
     def _roi_closed(self) -> None:
@@ -630,18 +649,27 @@ class ParametersPage(QWidget):
     def save_and_apply(self, after: Callable[[], None] | None = None) -> None:
         if not self.editable() or self.session is None:
             return
+        if self.session.machine_editor.dirty or (
+            self.session.camera_sources is not None
+            and self.session.camera_sources.dirty
+        ):
+            self._report_error(
+                text("save_machine_first", self.language), "save_machine_first"
+            )
+            self.refresh_state()
+            return
         try:
-            if self.session.machine_editor.dirty or (
-                self.session.camera_sources is not None
-                and self.session.camera_sources.dirty
-            ):
-                raise ConfigurationError(text("save_machine_first", self.language))
             if self.session.dirty or self.session.entry is None:
                 self.session.save()
                 self.reload()
             # A clean draft is re-read by apply_recipe; never overwrite external edits.
         except (ConfigurationError, ValueError) as exc:
-            self._error = str(exc)
+            self._report_error(
+                exc,
+                "recipe_save_error"
+                if isinstance(exc, ConfigurationIOError)
+                else "recipe_validation_error",
+            )
             self.refresh_state()
             return
 
@@ -664,7 +692,7 @@ class ParametersPage(QWidget):
                 self.session.load(entry)
                 self.changed()
             except ConfigurationError as exc:
-                self._error = str(exc)
+                self._report_error(exc)
             self.show_draft()
 
         self.show_draft()
@@ -683,7 +711,7 @@ class ParametersPage(QWidget):
                 try:
                     session.discard()
                 except ConfigurationError as exc:
-                    self._error = str(exc)
+                    self._report_error(exc)
                     self.refresh_state()
                     return
                 self.show_draft()
@@ -772,7 +800,8 @@ class ParametersPage(QWidget):
                 self.show_draft()
                 dialog.accept()
             except (ConfigurationError, ValueError) as exc:
-                error.setText(str(exc))
+                error.setText(text("recipe_validation_error", self.language))
+                error.setToolTip(str(exc))
 
         buttons.accepted.connect(create)
         buttons.rejected.connect(dialog.reject)
@@ -793,7 +822,7 @@ class ParametersPage(QWidget):
         try:
             recipe = self.session.apply_recipe()
         except ConfigurationError as exc:
-            self._error = str(exc)
+            self._report_error(exc, "recipe_error")
             self.refresh_state()
             if completed is not None:
                 completed(self._error)
@@ -874,12 +903,15 @@ class ParametersPage(QWidget):
                     value
                 )  # Authoritative state check again.
                 self.applied.emit(RecipeChoice(value, value.configuration.display_name))
-                self.configuration_messages = ()
-                self.configuration_details = ""
                 self._error = ""
                 self.bridge.refresh()
             except Exception as exc:
-                self._error = str(exc)
+                self._report_error(
+                    exc,
+                    "model_prepare_error"
+                    if isinstance(error, ModelArtifactError)
+                    else "recipe_prepare_error",
+                )
         self.refresh_state()
         if completed is not None:
             completed(
@@ -903,14 +935,16 @@ class ParametersPage(QWidget):
             try:
                 if decision == "save":
                     if not self.editable():
-                        self._error = text("read_only", self.language)
+                        self._report_error(
+                            text("read_only", self.language), "read_only"
+                        )
                         self.refresh_state()
                         return
                     draft.save()
                 else:
                     draft.discard()
             except (ConfigurationError, ValueError) as exc:
-                self._error = str(exc)
+                self._report_error(exc, "vision_save_error")
                 self.refresh_state()
                 return
             callback()

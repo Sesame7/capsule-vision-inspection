@@ -7,7 +7,7 @@ from time import monotonic
 from typing import Literal
 
 import numpy as np
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -237,6 +237,8 @@ class _RoiToolbar(QWidget):
 
 
 class MachineRoiWorkspace(QWidget):
+    sources_verified = Signal()
+
     def __init__(
         self,
         session: RecipeEditorSession,
@@ -277,6 +279,7 @@ class MachineRoiWorkspace(QWidget):
         self.frame: DisplayFrame | None = None
         self.selected_index = 0
         self._error = ""
+        self._error_key = "vision_error"
         self._feedback = ""
         self._preparing = False
         self._save_failed = False
@@ -581,7 +584,7 @@ class MachineRoiWorkspace(QWidget):
                     (frame.image.shape[0], frame.image.shape[1], 3)
                 )
             except ValueError as exc:
-                self._error = str(exc)
+                self._report_error(exc, "roi_geometry_error")
                 self.refresh()  # Visible incompatible geometry; never rescale/repair it.
 
     def _runtime_frame(self) -> DisplayFrame | None:
@@ -651,7 +654,10 @@ class MachineRoiWorkspace(QWidget):
             frame = self._runtime_frame()
             self._set_reference(frame)
             if frame is None:
-                self._error = text("reference_unavailable", self.language)
+                self._report_error(
+                    text("reference_unavailable", self.language),
+                    "reference_unavailable",
+                )
                 self.refresh()
             return
         self._set_reference(None)
@@ -688,14 +694,14 @@ class MachineRoiWorkspace(QWidget):
             self._reading = False
             if revision == self._reference_revision:
                 if error is not None:
-                    self._error = str(error)
+                    self._report_error(error, "folder_reference_error")
                     self.refresh()
                 elif isinstance(value, _FolderReference):
                     self._folder_paths[camera] = value.paths
                     self._positions[camera] = value.index
                     self._set_reference(value.frame)
                     if value.error:
-                        self._error = value.error
+                        self._report_error(value.error, "folder_reference_error")
                         self.refresh()
             if self._pending_reference:
                 self._pending_reference = False
@@ -704,7 +710,7 @@ class MachineRoiWorkspace(QWidget):
         self._reading = True
         if not self._run_io(read, completed):
             self._reading = False
-            self._error = text("preparing", self.language)
+            self._report_error(text("preparing", self.language), "preparing")
         self.refresh()
 
     def select_roi(self, index: int) -> None:
@@ -800,8 +806,8 @@ class MachineRoiWorkspace(QWidget):
             except ValueError as exc:
                 bounds_issue = str(exc)
         self.message.setText(
-            self._error
-            or bounds_issue
+            (text(self._error_key, self.language) if self._error else "")
+            or (text("roi_geometry_error", self.language) if bounds_issue else "")
             or (text("roi_recipe_save", self.language) if self.session.dirty else "")
             or (
                 text("read_only", self.language)
@@ -809,6 +815,7 @@ class MachineRoiWorkspace(QWidget):
                 else ""
             )
         )
+        self.message.setToolTip(self._error or bounds_issue)
         self.message.setVisible(bool(self.message.text()))
         self.status.setToolTip(
             text("roi_applied", self.language) if self._feedback else ""
@@ -848,9 +855,14 @@ class MachineRoiWorkspace(QWidget):
             self.sync_size()
             self._changed()
         except (ValueError, ConfigurationError) as exc:
-            self._error = str(exc)
+            self._report_error(exc, "roi_geometry_error")
         self.refresh()
         return not self._error
+
+    def _report_error(
+        self, error: BaseException | str, key: str = "vision_error"
+    ) -> None:
+        self._error, self._error_key = str(error), key
 
     def set_rect(self, rect: BoundingRect) -> None:
         rects = [s.rect for s in self.draft.camera(self.camera).slots]
@@ -883,7 +895,9 @@ class MachineRoiWorkspace(QWidget):
         if not self._allowed() or self._preparing:
             return
         if self.session.dirty or self.session.entry is None:
-            self._error = text("roi_recipe_save", self.language)
+            self._report_error(
+                text("roi_recipe_save", self.language), "roi_recipe_save"
+            )
             self.refresh()
             return
         self._preparing = True
@@ -901,7 +915,15 @@ class MachineRoiWorkspace(QWidget):
         def validated(_value: object, error: BaseException | None) -> None:
             self._preparing = False
             if error is not None or not self._allowed():
-                self._error = str(error) if error else text("read_only", self.language)
+                if error is not None:
+                    self._report_error(
+                        error,
+                        "source_validation_error"
+                        if isinstance(error, FolderSourceError)
+                        else "vision_validation_error",
+                    )
+                else:
+                    self._report_error(text("read_only", self.language), "read_only")
                 self._save_failed = True
                 self.refresh()
                 return
@@ -912,11 +934,9 @@ class MachineRoiWorkspace(QWidget):
                 if self.sources is not None:
                     self.sources.save()
             except (ValueError, ConfigurationError) as exc:
-                self._error = (
-                    text("source_partial_save", self.language) + " "
-                    if saved_machine
-                    else ""
-                ) + str(exc)
+                self._report_error(
+                    exc, "source_partial_save" if saved_machine else "vision_save_error"
+                )
                 self._save_failed = True
                 self._changed()
                 self.refresh()
@@ -927,10 +947,13 @@ class MachineRoiWorkspace(QWidget):
 
             def prepared(error: str) -> None:
                 self._preparing = False
-                self._error = error
+                self._report_error(error, "recipe_prepare_error")
                 self._save_failed = bool(error)
                 self._feedback = "" if error else "roi_applied"
                 self.refresh()
+                if not error and self.sources is not None:
+                    # All folders/bounds were checked and saved, and Apply succeeded.
+                    self.sources_verified.emit()
                 if not error and after is not None:
                     after()
 
@@ -940,7 +963,7 @@ class MachineRoiWorkspace(QWidget):
             validated(None, None)
         elif self._run_io is None or not self._run_io(validate, validated):
             self._preparing = False
-            self._error = text("preparing", self.language)
+            self._report_error(text("preparing", self.language), "preparing")
             self.refresh()
 
     def request_back(self, after: Callable[[], None] | None = None) -> None:
