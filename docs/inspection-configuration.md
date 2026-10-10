@@ -5,6 +5,11 @@
 threads, active configuration, UI or application state. Loading a Recipe never
 imports the SmartMore SDK or loads a model.
 
+Normal application discovery and explicit default/last-applied IDs are documented
+in [application bootstrap](application-bootstrap.md). Its separate `data/app.json`
+manifest does not alter these domain schemas; model paths are anchored to each
+definition's directory before constructing the registry.
+
 ```text
 MachineLayoutDefinition + RecipeDefinition + ModelRegistry + caller default ID
     -> resolve_configuration()

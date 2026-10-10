@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vimo_demo.application import PreparedConfiguration, prepare_configuration
+from vimo_demo.application.folder_replay import FolderReplay
 from vimo_demo.configuration import (
     CameraOverride,
     ChannelOverride,
@@ -14,6 +15,7 @@ from vimo_demo.configuration import (
     ModelRegistry,
     RecipeDefinition,
     ResolvedInspectionConfiguration,
+    load_camera_sources,
     load_recipe,
     resolve_configuration,
 )
@@ -77,9 +79,13 @@ class RecipeEditorSession:
         machine_path: Path | None = None,
         camera_sources: CameraSourceDraft | None = None,
         cli_sources: bool = False,
+        auto_select_first: bool = True,
+        require_saved_sources: bool = False,
     ) -> None:
         self.camera_sources = camera_sources
         self.cli_sources = cli_sources
+        self.auto_select_first = auto_select_first
+        self.require_saved_sources = require_saved_sources
         self.machine_path = machine_path
         self.machine_editor = MachineLayoutDraft(machine, machine_path)
         self.catalog, self.registry = catalog, registry
@@ -163,6 +169,14 @@ class RecipeEditorSession:
 
     def prepare(self, recipe: RecipeDefinition) -> PreparedConfiguration:
         """Background preparation only; immutable inputs, no draft/application access."""
-        return prepare_configuration(
+        prepared = prepare_configuration(
             self.resolve(recipe), base_directory=self.base_directory
         )
+        if self.require_saved_sources:
+            if self.camera_sources is None:
+                raise ConfigurationError("Saved camera sources are unavailable")
+            path = self.camera_sources.path
+            FolderReplay(
+                prepared.configuration.layout, load_camera_sources(path), path.parent
+            ).next_group()
+        return prepared

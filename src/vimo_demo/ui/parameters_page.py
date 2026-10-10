@@ -349,7 +349,7 @@ class ParametersPage(QWidget):
                     ),
                     None,
                 )
-            if target is None and self._entries:
+            if target is None and self._entries and self.session.auto_select_first:
                 target = self._entries[0]
             if target is not None:
                 self.session.load(target)
@@ -911,7 +911,14 @@ class ParametersPage(QWidget):
             return
 
         def callback() -> None:
-            self.guard_machine(final)
+            def finalized() -> None:
+                # All preparation/reference jobs have finished by this point.
+                # Revoke the unparented sender before QApplication destroys Qt
+                # objects in an unspecified order during process exit.
+                self._delivery.detach()
+                final()
+
+            self.guard_machine(finalized)
 
         if self.busy:
             self._closing = True  # Do not apply a late preparation while closing.

@@ -75,19 +75,22 @@ one image per task and executes serially.
 - `scripts/`: maintained engineering tools using the public inference API.
 - `models/`, `images/`: ignored local inputs; `outputs/`: ignored generated data.
   Never require historical generated reports for regression or commit local assets.
+- Root `app.py` restores ignored persistent `data/` beside the entry, using explicit
+  default Model/last-applied Recipe IDs. Startup prepares a stopped candidate,
+  never invents geometry or silently selects a first model/Recipe.
 - `docs/`: contracts, rationale and historical evidence. Git archives old experiments;
   preserve the golden fixture and verified findings rather than restoring spike code.
 
 ## Typing and validation
 
-Keep strict Pyright for `src tests scripts`. Do not use broad `Any`, global ignores
+Keep strict Pyright for `src tests scripts app.py`. Do not use broad `Any`, global ignores
 or exclusions to silence diagnostics. Narrow at runtime; any necessary vendor
 typing workaround must be local, documented and justified.
 
 ```powershell
-uv run --no-sync ruff check src tests scripts
-uv run --no-sync ruff format --check src tests scripts
-uv run --no-sync pyright src tests scripts
+uv run --no-sync ruff check src tests scripts app.py
+uv run --no-sync ruff format --check src tests scripts app.py
+uv run --no-sync pyright src tests scripts app.py
 uv run --no-sync pytest --tb=short
 git diff --check
 ```

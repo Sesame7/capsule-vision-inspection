@@ -72,6 +72,10 @@ the previous draft intact. Creation produces a draft; Save and apply persists it
 Discovery still reads only nonrecursive `*.recipe.json`, reports malformed/duplicate
 entries and shows registered display names. Reload supports external edits.
 Existing paths remain stable; the catalog derives new filenames from the ID hash.
+The [normal bootstrap](application-bootstrap.md) uses `data/recipes/` and restores
+only the manifest's last successfully applied Recipe ID, without the developer
+demo's first-entry convenience selection. Its successful Apply notification updates
+that ID; Save alone, unsaved drafts and failed preparation do not.
 The codec remains responsible for validation and atomic writes. No deletion,
 versioning, external watcher, conflict merging or new persistence layer is added.
 

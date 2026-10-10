@@ -3,6 +3,7 @@
 /models/
 /images/
 /outputs/
+/data/
 
 # Python/build/tool caches
 __pycache__/
