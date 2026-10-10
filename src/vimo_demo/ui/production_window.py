@@ -26,7 +26,6 @@ from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import (
     FindingSource,
-    ProductJudgment,
     TechnicalStatus,
 )
 
@@ -34,10 +33,11 @@ from .camera_card import CameraCard
 from .display_frames import DisplayFrame, DisplaySnapshot
 from .parameters_page import ParametersPage
 from .production_bridge import QtProductionBridge, RecipeChoice
-from .production_presentation import controls, grid_columns, primary_action
+from .production_presentation import Indicator, controls, grid_columns, primary_action
 from .production_style import (
     Language,
     Style,
+    indicator_icon,
     navigation_icon,
     production_icon,
     stylesheet,
@@ -80,7 +80,7 @@ class ProductionWindow(QMainWindow):
         self._columns = 0
         self._command_issue: tuple[str, str | None] | None = None
         self._active_choice: RecipeChoice | None = None
-        self._source_issue = ""
+        self._source_issue: tuple[str | None, str] | None = None
         self._closing = False
         self.setMinimumSize(*Style.minimum)
         self.setWindowTitle("ViMo · Production")
@@ -234,13 +234,21 @@ class ProductionWindow(QMainWindow):
             self.pages.addWidget(placeholder)
         event = self.event_frame = QFrame()
         event.setObjectName("event")
-        self.event_layout = event_layout = QVBoxLayout(event)
-        self._event_margins = event_layout.contentsMargins()
+        self.event_layout = event_layout = QHBoxLayout(event)
+        event_layout.setContentsMargins(Style.space, 3, Style.space, 3)
+        event_layout.setSpacing(Style.small)
+        self.event_icon = QLabel()
+        self.event_icon.setFixedSize(Style.icon, Style.icon)
+        event_layout.addWidget(self.event_icon)
         self.event_label = QLabel()
-        self.event_label.setWordWrap(True)
-        event_layout.addWidget(self.event_label)
-        # Fixed bounded presentation space prevents warning-induced grid jumps.
-        event.setFixedHeight(76)
+        self.event_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.event_label.setWordWrap(False)
+        self.event_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        event_layout.addWidget(self.event_label, 1)
+        # One reserved shell strip; navigation/messages never resize page workspaces.
+        event.setFixedHeight(Style.body + 3 * Style.small)
         root.addWidget(event)
         self.parameters.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
@@ -309,6 +317,8 @@ class ProductionWindow(QMainWindow):
         self.language_button.setText("English" if language == "zh" else "中文")
         for key, button in zip(PAGES, self.navigation, strict=True):
             button.setText(text(key, language))
+            button.setToolTip(text(key, language))
+            button.setAccessibleName(text(key, language))
         self.buttons["batch"].setToolTip(text("batch", language))
         self.buttons["batch"].setAccessibleName(text("batch", language))
         for key, (_, caption) in self.metrics.items():
@@ -319,7 +329,9 @@ class ProductionWindow(QMainWindow):
         self.metrics["channel_ng"][1].setToolTip(text("channel_count_help", language))
         for key, label in self.placeholders.items():
             label.setText(
-                f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
+                f"{text(key, language)}\n\n{text(key + '_note', language)}"
+                if key == "diagnostics"
+                else f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
             )
         self._render()
 
@@ -375,6 +387,20 @@ class ProductionWindow(QMainWindow):
     @Slot(object)
     def _snapshot_changed(self, snapshot: object) -> None:
         if isinstance(snapshot, ProductionApplicationSnapshot):
+            recovered = (
+                self.snapshot.state is ApplicationState.FAULT
+                and snapshot.state
+                in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
+                and snapshot.last_issue is None
+                and not snapshot.runtime_owned
+            )
+            started = (
+                snapshot.state is ApplicationState.RUNNING
+                and self.snapshot.state is not ApplicationState.RUNNING
+            )
+            if recovered or started:
+                # Authoritative recovery/readiness supersedes old UI command summaries.
+                self._command_issue = self._source_issue = None
             self.snapshot = snapshot
             self._render()
 
@@ -386,17 +412,28 @@ class ProductionWindow(QMainWindow):
 
     @Slot(str, object)
     def _command_failed(self, command: str, error: object) -> None:
-        if command == "folder_source":
-            self._source_issue = str(error)
-        elif command == "start" and isinstance(error, BaseException):
+        source_error = error if command == "folder_source" else None
+        if command == "start" and isinstance(error, BaseException):
             cause: BaseException | None = error
             for _ in range(8):  # Existing lifecycle wrapping preserves source causes.
                 if isinstance(cause, FolderSourceError):
-                    self._source_issue = str(cause)
+                    source_error = cause
                     break
                 if cause is None:
                     break
                 cause = cause.__cause__
+        if source_error is not None:
+            description = str(source_error)
+            camera = next(
+                (
+                    str(c)
+                    for c in self.bridge.frames.cameras
+                    if description.startswith((f"{c}:", f"{c} / "))
+                ),
+                None,
+            )
+            # Keep factual camera/type only, not paths, raw errors or exception objects.
+            self._source_issue = (camera, type(source_error).__name__)
         if command == "close" and not self.bridge.closing:
             self._closing = False
         # One bounded command/type summary; never retain the exception or raw SDK text.
@@ -409,7 +446,7 @@ class ProductionWindow(QMainWindow):
     @Slot(str)
     def _command_finished(self, command: str) -> None:
         if command == "start":
-            self._source_issue = ""
+            self._source_issue = None
         self._command_issue = None
         self._render()
 
@@ -497,95 +534,73 @@ class ProductionWindow(QMainWindow):
             else f"{(result.result_ready_at - result.inspection_started_at) * 1000:.0f} ms"
         )
         self.metrics["processing"][0].setText(duration)
-        event_key = (
-            "running_note"
-            if snapshot.state is ApplicationState.RUNNING
-            else snapshot.state.name
-        )
-        if snapshot.state is ApplicationState.READY:
-            event_key = "ready_note"
-        if result and result.assessment.judgment is ProductJudgment.NG:
-            event_key = "ng_note"
+        self._render_status()
+        self._render_cards()
+
+    def _render_status(self) -> None:
+        snapshot, language = self.snapshot, self.language
+        result = snapshot.latest_production_result
+        event_key = snapshot.state.name
         if result and result.assessment.technical_status is TechnicalStatus.ERROR:
             event_key = "technical_note"
         if snapshot.last_issue:
             event_key = "issue_note"
-        if self._command_issue or self._source_issue:
+        command = self._command_issue[0] if self._command_issue else None
+        relevant_command = (
+            self.pages.currentIndex() in (1, 4)
+            if command == "recipe"
+            else self.pages.currentIndex() == 0
+            if command == "batch"
+            else command is not None
+        )
+        if relevant_command or self._source_issue:
             event_key = "command_error"
         if snapshot.state is ApplicationState.FAULT:
             event_key = "fault_note"
         if self._closing:
             event_key = "close_wait" if self._command_issue else "closing"
-        preview = (
-            self.pages.currentWidget() is self.parameters
-            and self.parameters.preview is not None
+        warning = event_key in {
+            "technical_note",
+            "issue_note",
+            "command_error",
+            "close_wait",
+        }
+        fault = snapshot.state is ApplicationState.FAULT
+        message = (
+            self._status_message(event_key, text(event_key, language))
+            if warning or fault or self._closing
+            else text("configure_first", language)
+            if self.pages.currentIndex() == 0
+            and snapshot.state is ApplicationState.UNCONFIGURED
+            else ""
         )
-        # Presentation scope only: preserve snapshots/counters and all fault paths.
-        self.event_frame.setVisible(
-            not preview
-            or event_key
-            in {
-                "technical_note",
-                "issue_note",
-                "command_error",
-                "fault_note",
-                "close_wait",
-                "closing",
-            }
-        )
-        production_page = self.pages.currentIndex() == 0
-        self.event_frame.setFixedHeight(
-            Style.body + 3 * Style.small if production_page else 76
-        )
-        if production_page:
-            self.event_layout.setContentsMargins(Style.space, 3, Style.space, 3)
-        else:
-            self.event_layout.setContentsMargins(self._event_margins)
-        self.event_label.setWordWrap(not production_page)
-        self.event_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored
-            if production_page
-            else QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Preferred,
-        )
-        message = text(event_key, language)
-        if production_page:
-            message = self._production_message(event_key, message)
-        if production_page and event_key in {
-            "ready_note",
-            "running_note",
-            "ng_note",
-            "STARTING",
-            "STOPPING",
-            "CLOSED",
-        }:
-            message = ""
-        if production_page and snapshot.state is ApplicationState.UNCONFIGURED:
-            message = text("configure_first", language)
         if self._source_issue and event_key == "command_error":
-            message = text("source_error", language) + ": " + self._source_issue
-        if not production_page and (
-            counts.channel_unknown or counts.technical_error_cycles
-        ):
-            message += f"\n{text('unknown_count', language)}: {counts.channel_unknown:,} · {text('error_cycles', language)}: {counts.technical_error_cycles:,}"
+            camera, exception_type = self._source_issue
+            message = " · ".join(
+                part
+                for part in (camera, text("source_error", language), exception_type)
+                if part
+            )
         self.event_label.setToolTip(message)
         self.event_label.setAccessibleName(message)
-        self._render_status_text()
-        warning = (
-            event_key in {"technical_note", "issue_note", "command_error", "close_wait"}
-            if production_page
-            else bool(
-                counts.technical_error_cycles
-                or self._command_issue
-                or snapshot.last_issue
-            )
-        )
         self.event_label.setStyleSheet(
-            f"color: {Style.fault if snapshot.state is ApplicationState.FAULT else Style.warning if warning else Style.secondary};"
+            f"color: {Style.fault if fault else Style.warning if warning else Style.secondary};"
         )
-        self._render_cards()
+        self.event_icon.setVisible(bool(message))
+        self.event_icon.setToolTip(message)
+        self.event_icon.setAccessibleName(message)
+        if message:
+            icon = (
+                production_icon("FAULT")
+                if fault
+                else indicator_icon(Indicator.ERROR)
+                if warning
+                else production_icon("STOPPING")
+            )
+            self.event_icon.setPixmap(icon.pixmap(Style.icon, Style.icon))
+        self._render_status_text()
 
-    def _production_message(self, event_key: str, fallback: str) -> str:
+    def _status_message(self, event_key: str, fallback: str) -> str:
         """Describe existing technical evidence; never guess a cause or show raw SDK text."""
         language = self.language
         issue = self.snapshot.last_issue
@@ -654,14 +669,13 @@ class ProductionWindow(QMainWindow):
         return text("inspection_issue", language)
 
     def _render_status_text(self) -> None:
-        message = self.event_label.toolTip()
-        if self.pages.currentIndex() == 0:
-            message = self.event_label.fontMetrics().elidedText(
-                " ".join(message.split()),
+        self.event_label.setText(
+            self.event_label.fontMetrics().elidedText(
+                " ".join(self.event_label.toolTip().split()),
                 Qt.TextElideMode.ElideRight,
                 self.event_label.width(),
             )
-        self.event_label.setText(message)
+        )
 
     def _render_identity(self) -> None:
         snapshot, language = self.snapshot, self.language

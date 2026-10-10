@@ -442,7 +442,8 @@ def test_replay_bad_later_file_stops_without_partial_cycle(
         assert isinstance(errors[0], FolderSourceError)
         assert (
             "CAM4" in window.event_label.text()
-            and "unrelated2.png" in window.event_label.text()
+            and "FolderSourceError" in window.event_label.toolTip()
+            and str(tmp_path) not in window.event_label.toolTip()
         )
         assert (
             app.snapshot().counters.cycles_started

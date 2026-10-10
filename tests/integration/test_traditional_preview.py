@@ -434,7 +434,7 @@ def test_preview_scopes_ng_event_but_preserves_errors(
         result and result.assessment.judgment is ProductJudgment.OK
         for result in preview.results
     )
-    assert not window.event_frame.isVisible()
+    assert window.event_frame.isVisible() and not window.event_label.text()
     assert app.snapshot() == before
     # Snapshot notification only: exercise real rendering branches without changing app state.
     window.bridge.snapshot_changed.emit(
@@ -447,12 +447,12 @@ def test_preview_scopes_ng_event_but_preserves_errors(
     )
     assert (
         window.event_frame.isVisible()
-        and text("technical_note", language) in window.event_label.text()
+        and text("inspection_issue", language) in window.event_label.text()
     )
     window.bridge.snapshot_changed.emit(replace(before, state=ApplicationState.FAULT))
     assert (
         window.event_frame.isVisible()
-        and text("fault_note", language) in window.event_label.text()
+        and text("runtime_error", language) in window.event_label.text()
     )
     window.bridge.snapshot_changed.emit(before)
     window.bridge.command_failed.emit(
@@ -460,10 +460,10 @@ def test_preview_scopes_ng_event_but_preserves_errors(
     )
     assert (
         window.event_frame.isVisible()
-        and text("command_error", language) in window.event_label.text()
+        and text("operation_error", language) in window.event_label.text()
     )
     window.bridge.command_finished.emit("start")
-    assert not window.event_frame.isVisible()
+    assert window.event_frame.isVisible() and not window.event_label.text()
     preview.back.click()
     window.navigate(0)
     assert window.event_frame.isVisible() and not window.event_label.text()

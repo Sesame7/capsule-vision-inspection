@@ -136,7 +136,9 @@ def test_bilingual_geometry_and_navigation(
         )
     window.navigation[2].click()
     assert window.pages.currentIndex() == 2
-    assert text("placeholder", language) in window.placeholders["diagnostics"].text()
+    assert (
+        text("diagnostics_note", language) in window.placeholders["diagnostics"].text()
+    )
     window.navigation[0].click()
     window.resize(size[1], size[0])
     qapp.processEvents()
@@ -1130,7 +1132,8 @@ def test_specific_error_and_long_source_status_are_single_row(
     window.bridge.command_failed.emit("folder_source", ValueError(error))
     QApplication.processEvents()
     assert "CAM6" in window.event_label.text()
-    assert window.event_label.toolTip().endswith("sample.png")
+    assert "ValueError" in window.event_label.toolTip()
+    assert "long-folder" not in window.event_label.toolTip()
     assert window.event_label.accessibleName() == window.event_label.toolTip()
     assert "\n" not in window.event_label.text()
     assert (
@@ -1141,8 +1144,10 @@ def test_specific_error_and_long_source_status_are_single_row(
     assert before == tuple(card.geometry() for card in window.cards)
     window.navigate(1)
     QApplication.processEvents()
-    assert window.event_frame.height() == 76 and window.event_label.wordWrap()
-    assert error in window.event_label.text()  # Other pages retain full event feedback.
+    assert window.event_frame.height() == height and not window.event_label.wordWrap()
+    assert (
+        "CAM6" in window.event_label.text()
+    )  # Same short technical evidence on every page.
     window.navigate(0)
     QApplication.processEvents()
     assert height == window.event_frame.height()
