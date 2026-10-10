@@ -11,6 +11,50 @@ from .production_presentation import Indicator
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "startup_preferences": (
+        "启动设置不可用；请修复 app.json 后重启。",
+        "Startup settings unavailable; repair app.json and restart.",
+    ),
+    "startup_language": (
+        "语言设置无效；本次使用中文，请修复 app.json。",
+        "Invalid language setting; using Chinese for this session. Repair app.json.",
+    ),
+    "startup_models": (
+        "模型定义不可用；请检查 data/models。",
+        "Model definitions unavailable; check data/models.",
+    ),
+    "startup_recipes": (
+        "配方定义不可用；请检查 data/recipes。",
+        "Recipe definitions unavailable; check data/recipes.",
+    ),
+    "startup_model_identity": (
+        "默认模型 ID 未设置或不存在；请检查 app.json。",
+        "Default Model ID missing or unknown; check app.json.",
+    ),
+    "startup_recipe_identity": (
+        "已应用配方 ID 未设置或不存在；请选择有效配方或修复 app.json。",
+        "Last-applied Recipe missing or unknown; select a valid Recipe or repair app.json.",
+    ),
+    "startup_machine": (
+        "机器布局不可用；请修复 machine.json 后重启。",
+        "Machine layout unavailable; repair machine.json and restart.",
+    ),
+    "startup_sources": (
+        "相机源配置不可用；请修复 camera_sources.json 后重启。",
+        "Camera-source configuration unavailable; repair camera_sources.json and restart.",
+    ),
+    "startup_artifact": (
+        "模型文件不可用或校验失败；请检查模型文件。",
+        "Model artifact unavailable or verification failed; check the model file.",
+    ),
+    "startup_configuration": (
+        "检测配置无效；请检查配方和机器配置。",
+        "Inspection configuration invalid; check Recipe and machine configuration.",
+    ),
+    "startup_source_unavailable": (
+        "图片源不可用；请在视觉页检查文件夹。",
+        "Folder source unavailable; check folders on Vision.",
+    ),
     "reference_folder": ("文件夹", "Folder"),
     "reference_runtime": ("运行帧", "Runtime"),
     "reference_folder_tip": (

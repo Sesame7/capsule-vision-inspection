@@ -31,11 +31,31 @@ class ApplicationPreferences:
             raise ConfigurationError("Unsupported application preferences version")
 
 
-def load_preferences(path: Path) -> ApplicationPreferences:
+@dataclass(frozen=True, slots=True)
+class LoadedPreferences:
+    preferences: ApplicationPreferences
+    invalid_language: bool = False
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ConfigurationError(f"Duplicate application preference key: {key!r}")
+        result[key] = value
+    return result
+
+
+def read_preferences(path: Path) -> LoadedPreferences:
+    """Only language is optional/recoverable; never guess production identities."""
     try:
-        value: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        value: object = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object
+        )
+    except OSError as exc:
         raise ConfigurationIOError(f"Application preferences {path}: {exc}") from exc
+    except ValueError as exc:
+        raise ConfigurationError(f"Application preferences {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise ConfigurationError("Application preferences must be an object")
     # JSON boundary only; keys and all field values are checked below.
@@ -46,20 +66,29 @@ def load_preferences(path: Path) -> ApplicationPreferences:
         "last_applied_recipe_id",
         "language",
     }
-    if set(data) != fields:
+    if set(data) - fields or fields - {"language"} - set(data):
         raise ConfigurationError("Application preferences have missing/unknown fields")
     default = data["default_model_id"]
     last = data["last_applied_recipe_id"]
-    language, version = data["language"], data["schema_version"]
+    language, version = data.get("language", "zh"), data["schema_version"]
     if default is not None and not isinstance(default, str):
         raise ConfigurationError("default_model_id must be text or null")
     if last is not None and not isinstance(last, str):
         raise ConfigurationError("last_applied_recipe_id must be text or null")
-    if language not in ("zh", "en"):
-        raise ConfigurationError("UI language must be zh or en")
+    invalid_language = language not in ("zh", "en")
+    language = "zh" if invalid_language else language
     if type(version) is not int:
         raise ConfigurationError("Application preferences version must be an integer")
-    return ApplicationPreferences(default, last, language, version)
+    return LoadedPreferences(
+        ApplicationPreferences(
+            default, last, "en" if language == "en" else "zh", version
+        ),
+        invalid_language,
+    )
+
+
+def load_preferences(path: Path) -> ApplicationPreferences:
+    return read_preferences(path).preferences
 
 
 def save_preferences(path: Path, preferences: ApplicationPreferences) -> None:
@@ -78,9 +107,11 @@ def save_preferences(path: Path, preferences: ApplicationPreferences) -> None:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     except OSError as exc:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                exc.add_note(f"Temporary preferences cleanup: {cleanup_error}")
         raise ConfigurationIOError(
             f"Save application preferences {path}: {exc}"
         ) from exc
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()

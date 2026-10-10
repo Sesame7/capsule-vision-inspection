@@ -13,6 +13,7 @@ from vimo_demo.application import ApplicationState, ProductionCounters
 from vimo_demo.application.preferences import (
     ApplicationPreferences,
     load_preferences,
+    read_preferences,
     save_preferences,
 )
 from vimo_demo.configuration import (
@@ -134,7 +135,11 @@ def test_explicit_identity_override_anchor_and_no_startup_inference(
         "machine_invalid",
         "sources_missing",
         "sources_invalid",
-        "source_folder_missing",
+        "artifact_missing",
+        "manifest_missing",
+        "default_unknown",
+        "recipe_unknown",
+        "sources_wrong_cameras",
         "hash_mismatch",
         "manifest_invalid",
         "default_missing",
@@ -159,13 +164,22 @@ def test_unavailable_never_falls_back(tmp_path: Path, kind: str) -> None:
         (data.recipes / "local.recipe.json").unlink()
     elif kind == "hash_mismatch":
         (data.models / "general.vimosln").write_bytes(b"modified artifact")
-    elif kind == "source_folder_missing":
+    elif kind == "sources_wrong_cameras":
         save_camera_sources(
             data.sources,
             CameraSources(
-                tuple(CameraFolder(CameraId(f"CAM{i}"), "missing") for i in range(1, 7))
+                tuple(
+                    CameraFolder(CameraId(f"OTHER{i}"), "../../frames")
+                    for i in range(1, 7)
+                )
             ),
         )
+    elif kind == "artifact_missing":
+        (data.models / "general.vimosln").unlink()
+    elif kind == "default_unknown":
+        save_preferences(data.preferences, ApplicationPreferences("unknown", "local"))
+    elif kind == "recipe_unknown":
+        save_preferences(data.preferences, ApplicationPreferences("general", "unknown"))
     elif kind == "default_missing":
         save_preferences(data.preferences, ApplicationPreferences(None, "local"))
     elif kind == "recipe_unselected":
@@ -179,6 +193,7 @@ def test_unavailable_never_falls_back(tmp_path: Path, kind: str) -> None:
             "sources_missing": data.sources,
             "sources_invalid": data.sources,
             "manifest_invalid": data.preferences,
+            "manifest_missing": data.preferences,
         }[kind]
         if kind.endswith("missing"):
             path.unlink()
@@ -253,7 +268,6 @@ def test_preferences_failed_atomic_replace_retains_previous(
 @pytest.mark.parametrize(
     "updates",
     [
-        {"language": "bad"},
         {"default_model_id": 1},
         {"last_applied_recipe_id": ""},
         {"extra": True},
@@ -268,3 +282,177 @@ def test_preferences_strict_fields(tmp_path: Path, updates: dict[str, object]) -
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(ConfigurationError):
         load_preferences(path)
+
+
+@pytest.mark.parametrize(
+    "language", ["omitted", "bad", None, 123, True, ["en"], {"en": True}]
+)
+def test_language_fallback_preserves_explicit_identities_and_files(
+    tmp_path: Path, language: object
+) -> None:
+    data = saved_data(tmp_path)
+    value = json.loads(data.preferences.read_text(encoding="utf-8"))
+    if language == "omitted":
+        value.pop("language")
+    else:
+        value["language"] = language
+    data.preferences.write_text(json.dumps(value), encoding="utf-8")
+    before = data.preferences.read_bytes()
+    loaded = read_preferences(data.preferences)
+    assert loaded.preferences == ApplicationPreferences("general", "local", "zh")
+    assert loaded.invalid_language == (language != "omitted")
+    startup = load_startup(data)
+    try:
+        assert startup.application.snapshot().state is ApplicationState.READY
+        assert startup.choice is not None
+        assert startup.choice.prepared.configuration.recipe_id == "local"
+        assert startup.preferences == loaded.preferences
+        assert startup.preferences_writable == (language == "omitted")
+        assert all(not issue.blocking for issue in startup.issues)
+        assert data.preferences.read_bytes() == before
+    finally:
+        close(startup)
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        "{",
+        "[]",
+        "{}",
+        '{"schema_version":2,"default_model_id":"general","last_applied_recipe_id":"local"}',
+        '{"schema_version":1,"default_model_id":"general","default_model_id":"other","last_applied_recipe_id":"local"}',
+        '{"schema_version":1,"last_applied_recipe_id":"local"}',
+    ],
+)
+def test_unreliable_manifest_never_guesses_and_external_repair_recovers(
+    tmp_path: Path, contents: str
+) -> None:
+    data = saved_data(tmp_path)
+    original = data.preferences.read_bytes()
+    data.preferences.write_text(contents, encoding="utf-8")
+    broken = data.preferences.read_bytes()
+    startup = load_startup(data)
+    try:
+        assert startup.preferences is None and not startup.preferences_writable
+        assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+        assert startup.choice is None and startup.editor is None
+        assert any(issue.key == "startup_preferences" for issue in startup.issues)
+        assert data.preferences.read_bytes() == broken
+    finally:
+        close(startup)
+    data.preferences.write_bytes(original)  # Maintenance repair, not application IO.
+    restored = load_startup(data)
+    try:
+        assert not restored.issues
+        assert restored.application.snapshot().state is ApplicationState.READY
+    finally:
+        close(restored)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "manifest",
+        "machine",
+        "sources",
+        "model",
+        "recipe",
+        "artifact",
+        "models_directory",
+        "recipes_directory",
+        "folder",
+    ],
+)
+def test_permission_failures_keep_shell_and_original_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    data = saved_data(tmp_path)
+    target = {
+        "manifest": data.preferences,
+        "machine": data.machine,
+        "sources": data.sources,
+        "model": data.models / "general.json",
+        "recipe": data.recipes / "local.recipe.json",
+        "artifact": data.models / "general.vimosln",
+        "models_directory": data.models,
+        "recipes_directory": data.recipes,
+        "folder": tmp_path / "frames",
+    }[kind]
+    before = {p: p.read_bytes() for p in data.root.rglob("*") if p.is_file()}
+    with monkeypatch.context() as patch:
+        if kind.endswith("directory") or kind == "folder":
+            original_iterdir = Path.iterdir
+
+            def denied_iterdir(path: Path):
+                if path.resolve() == target:
+                    raise PermissionError("test directory denied")
+                return original_iterdir(path)
+
+            patch.setattr(Path, "iterdir", denied_iterdir)
+        else:
+            original_open = Path.open
+
+            def denied_open(
+                path: Path,
+                mode: str = "r",
+                buffering: int = -1,
+                encoding: str | None = None,
+                errors: str | None = None,
+                newline: str | None = None,
+            ):
+                if path == target:
+                    raise PermissionError("test file denied")
+                return original_open(path, mode, buffering, encoding, errors, newline)
+
+            patch.setattr(Path, "open", denied_open)
+        startup = load_startup(data)
+        try:
+            expected = (
+                ApplicationState.READY
+                if kind == "folder"
+                else ApplicationState.UNCONFIGURED
+            )
+            assert startup.application.snapshot().state is expected
+            assert any("denied" in issue.detail for issue in startup.issues)
+            context_path = (
+                data.sources.parent / "../../frames" if kind == "folder" else target
+            )
+            assert any(str(context_path) in issue.detail for issue in startup.issues)
+            if kind == "manifest":
+                assert not startup.preferences_writable
+        finally:
+            close(startup)
+    assert {p: p.read_bytes() for p in before} == before
+    repaired = load_startup(data)
+    try:
+        assert repaired.application.snapshot().state is ApplicationState.READY
+        assert not repaired.issues
+    finally:
+        close(repaired)
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_recipe_defaults_only_for_omitted_optional_fields(
+    tmp_path: Path, invalid: bool
+) -> None:
+    data = saved_data(tmp_path)
+    value: dict[str, object] = {
+        "schema_version": 1,
+        "recipe_id": "local",
+        "display_name": "Local test",
+        "defaults": {},
+    }
+    if invalid:
+        value["capsule"] = {"size": {"enabled": "yes"}}
+    path = data.recipes / "local.recipe.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    before = path.read_bytes()
+    startup = load_startup(data)
+    try:
+        assert startup.application.snapshot().state is (
+            ApplicationState.UNCONFIGURED if invalid else ApplicationState.READY
+        )
+        assert path.read_bytes() == before
+    finally:
+        close(startup)

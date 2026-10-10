@@ -57,11 +57,15 @@ class ParametersPage(QWidget):
         session: RecipeEditorSession | None,
         *,
         simulation: bool = False,
+        configuration_messages: tuple[str, ...] = (),
+        configuration_details: str = "",
     ) -> None:
         super().__init__()
         self.setObjectName("parameters")
         self.bridge, self.session = bridge, session
         self.simulation = simulation
+        self.configuration_messages = configuration_messages
+        self.configuration_details = configuration_details
         self.roi_workspace: MachineRoiWorkspace | None = None
         self.preview: TraditionalPreview | None = None
         self._setup_finished: Callable[[object, BaseException | None], None] | None = (
@@ -257,6 +261,11 @@ class ParametersPage(QWidget):
         )  # Eligibility only; references stay frozen.
         self.set_language("zh")
         self.reload()
+        if self.configuration_messages:
+            # Initial discovery errors already have localized bootstrap summaries
+            # and detailed tooltips. Later user-operation errors keep precedence.
+            self._error = ""
+            self.refresh_state()
 
     @property
     def busy(self) -> bool:
@@ -506,6 +515,7 @@ class ParametersPage(QWidget):
             self.rule.clear()
         self.status.setText(
             self._error
+            or " · ".join(text(key, language) for key in self.configuration_messages)
             or self._catalog_error
             or (text(self._feedback, language) if self._feedback else "")
             or (
@@ -513,6 +523,9 @@ class ParametersPage(QWidget):
                 if session and session.machine_editor.dirty
                 else ""
             )
+        )
+        self.status.setToolTip(
+            self._error or self.configuration_details or self._catalog_error
         )
 
     def _capsule_changed(self, mode: PreviewMode, enabled: bool) -> None:
@@ -861,6 +874,8 @@ class ParametersPage(QWidget):
                     value
                 )  # Authoritative state check again.
                 self.applied.emit(RecipeChoice(value, value.configuration.display_name))
+                self.configuration_messages = ()
+                self.configuration_details = ""
                 self._error = ""
                 self.bridge.refresh()
             except Exception as exc:
