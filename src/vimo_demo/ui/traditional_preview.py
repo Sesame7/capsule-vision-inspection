@@ -7,13 +7,23 @@ from threading import Thread
 from typing import Literal
 
 import numpy as np
-from PySide6.QtCore import QRectF, QSizeF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPaintEvent, QPen
+from PySide6.QtCore import QRectF, QSize, QSizeF, Qt, QTimer
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QCheckBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QStackedWidget,
@@ -38,7 +48,7 @@ from vimo_demo.inspection.production.capsule import (
 )
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
-from .production_style import Language, Style
+from .production_style import Language, Style, camera_icon, text
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
 
@@ -226,20 +236,26 @@ class TraditionalPreview(QWidget):
         self._close: Callable[[], None] | None = None
         self._loading = False
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
+        root.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
+        root.setSpacing(Style.small)
         header = QHBoxLayout()
+        header.setSpacing(Style.small)
         self.back = QPushButton()
         self.camera_tabs = QTabBar()
         self.camera_tabs.setExpanding(False)
         self.camera_tabs.setDrawBase(False)
+        self.camera_tabs.setIconSize(QSize(Style.icon, Style.icon))
         for camera in session.machine.layout.cameras:
-            self.camera_tabs.addTab(str(camera.camera_id))
+            self.camera_tabs.addTab(
+                camera_icon(), str(camera.camera_id).removeprefix("CAM")
+            )
         self.refresh_button = QPushButton()
         self.fit_button = QPushButton("Fit")
         for button in (self.back, self.refresh_button, self.fit_button):
-            button.setMinimumHeight(Style.touch)
+            button.setMinimumSize(Style.touch, Style.touch)
         header.addWidget(self.back)
-        header.addWidget(self.camera_tabs, 1)
+        header.addWidget(self.camera_tabs)
+        header.addStretch()
         header.addWidget(self.fit_button)
         header.addWidget(self.refresh_button)
         root.addLayout(header)
@@ -247,15 +263,25 @@ class TraditionalPreview(QWidget):
         root.addWidget(self.canvas, 1)
         self.mode_tabs = QTabBar()
         self.mode_tabs.setDrawBase(False)
+        self.mode_tabs.setExpanding(False)
+        self.mode_tabs.setUsesScrollButtons(False)
         self.mode_tabs.addTab("")
         self.mode_tabs.addTab("")
         self.mode_tabs.setCurrentIndex(0 if mode == "size" else 1)
-        root.addWidget(self.mode_tabs)
+        self._mode_group = QWidget()
+        mode_column = QVBoxLayout(self._mode_group)
+        mode_column.setContentsMargins(0, 0, 0, 0)
+        mode_column.setSpacing(Style.small)
+        mode_column.addWidget(self.mode_tabs)
         self.enabled = QCheckBox()
-        root.addWidget(self.enabled)
+        self.enabled.setMinimumHeight(Style.touch)
+        mode_column.addWidget(self.enabled)
         self.controls = QStackedWidget()
         size_page, color_page = QWidget(), QWidget()
         size_row, color_row = QHBoxLayout(size_page), QHBoxLayout(color_page)
+        for row in (size_row, color_row):
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(Style.space)
         self.spins: dict[str, QSpinBox] = {}
         self.labels: dict[str, QLabel] = {}
         for key in (
@@ -265,14 +291,21 @@ class TraditionalPreview(QWidget):
             "height_tolerance",
         ):
             column = QVBoxLayout()
+            column.setSpacing(Style.small)
             label, spin = QLabel(), QSpinBox()
             spin.setRange(1 if key.startswith("target") else 0, 1000000)
             spin.setMinimumHeight(Style.touch)
+            spin.setFixedWidth(
+                spin.fontMetrics().horizontalAdvance(str(spin.maximum()))
+                + 2 * Style.space
+                + Style.icon
+            )
             spin.valueChanged.connect(self.update_settings)
             self.spins[key], self.labels[key] = spin, label
             column.addWidget(label)
             column.addWidget(spin)
             size_row.addLayout(column)
+        size_row.addStretch()
         self.swatch = QLabel()
         self.swatch.setFixedSize(Style.touch, Style.touch)
         self.sample = QPushButton()
@@ -280,14 +313,24 @@ class TraditionalPreview(QWidget):
         self.tolerance = QSlider(Qt.Orientation.Horizontal)
         self.tolerance.setRange(0, 90)
         self.tolerance.setMinimumHeight(Style.touch)
+        self.tolerance.setMinimumWidth(5 * Style.touch)
         self.tolerance_label = QLabel()
         color_row.addWidget(self.swatch)
         color_row.addWidget(self.sample)
         color_row.addWidget(self.tolerance_label)
-        color_row.addWidget(self.tolerance, 1)
+        color_row.addWidget(self.tolerance)
+        color_row.addStretch()
         self.controls.addWidget(size_page)
         self.controls.addWidget(color_page)
-        root.addWidget(self.controls)
+        self.controls.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+        )
+        self._controls_row = QHBoxLayout()
+        self._controls_row.setSpacing(Style.space)
+        self._controls_row.addWidget(self._mode_group)
+        self._controls_row.addWidget(self.controls)
+        self._controls_row.addStretch()
+        root.addLayout(self._controls_row)
         self.message = QLabel()
         self.message.setWordWrap(True)
         self.message.setTextFormat(Qt.TextFormat.PlainText)
@@ -320,18 +363,39 @@ class TraditionalPreview(QWidget):
     def set_language(self, language: Language) -> None:
         self.language = self.canvas.language = language
         self.back.setText(self.tr_pair("返回配方", "Back to Recipe"))
-        self.refresh_button.setText(self.tr_pair("刷新参考图", "Refresh reference"))
-        self.mode_tabs.setTabText(0, self.tr_pair("尺寸检测", "Size inspection"))
-        self.mode_tabs.setTabText(1, self.tr_pair("颜色检测", "Color inspection"))
+        self.refresh_button.setText(self.tr_pair("刷新", "Refresh"))
+        self.refresh_button.setToolTip(text("roi_refresh", language))
+        self.refresh_button.setAccessibleName(self.refresh_button.toolTip())
+        self.fit_button.setToolTip(text("roi_fit", language))
+        self.fit_button.setAccessibleName(self.fit_button.toolTip())
+        self.back.setAccessibleName(self.back.text())
+        self.camera_tabs.setAccessibleName(text("camera_setup", language))
+        for index, camera in enumerate(self.session.machine.layout.cameras):
+            name = text("camera_number", language).format(
+                number=str(camera.camera_id).removeprefix("CAM")
+            )
+            self.camera_tabs.setTabToolTip(index, f"{name} ({camera.camera_id})")
+            self.camera_tabs.setAccessibleTabName(index, f"{name} ({camera.camera_id})")
+        self.mode_tabs.setTabText(0, self.tr_pair("尺寸", "Size"))
+        self.mode_tabs.setTabText(1, self.tr_pair("颜色", "Color"))
+        self.mode_tabs.setAccessibleName(self.tr_pair("检测项目", "Inspection mode"))
         for key, zh, en in (
-            ("target_width", "目标宽度 (px)", "Target width (px)"),
-            ("width_tolerance", "宽度容差 (px)", "Width tolerance (px)"),
-            ("target_height", "目标高度 (px)", "Target height (px)"),
-            ("height_tolerance", "高度容差 (px)", "Height tolerance (px)"),
+            ("target_width", "目标宽度 (px)", "Target W (px)"),
+            ("width_tolerance", "宽度容差", "W tolerance"),
+            ("target_height", "目标高度 (px)", "Target H (px)"),
+            ("height_tolerance", "高度容差", "H tolerance"),
         ):
             self.labels[key].setText(self.tr_pair(zh, en))
-            self.spins[key].setAccessibleName(self.labels[key].text())
-        self.sample.setText(self.tr_pair("从当前画面取色", "Use current image color"))
+            caption = self.labels[key].text()
+            if key.endswith("tolerance"):
+                caption += " (px)"
+            self.spins[key].setAccessibleName(caption)
+            self.spins[key].setToolTip(caption)
+        self.sample.setText(self.tr_pair("画面取色", "Sample image color"))
+        self.sample.setToolTip(
+            self.tr_pair("从当前画面取色", "Use current image color")
+        )
+        self.sample.setAccessibleName(self.sample.toolTip())
         self.show_settings()
 
     def show_settings(self) -> None:
@@ -339,7 +403,6 @@ class TraditionalPreview(QWidget):
         settings = self.session.draft.capsule
         self.controls.setCurrentIndex(self.mode_tabs.currentIndex())
         self.canvas.mode = self.mode
-        self.enabled.setText(self.tr_pair("启用此项检测", "Enable this inspection"))
         self.enabled.setChecked(
             settings.size.enabled if self.mode == "size" else settings.color.enabled
         )
@@ -355,15 +418,51 @@ class TraditionalPreview(QWidget):
         self.swatch.setStyleSheet(
             f"background: {QColor.fromHsv(settings.color.target_hue * 2, 220, 220).name()}; border: 1px solid #8090a0;"
         )
-        self.swatch.setToolTip(self.tr_pair("目标颜色", "Target color"))
+        self.swatch.setToolTip(
+            self.tr_pair("目标颜色", "Target color")
+            + f" · H {settings.color.target_hue}"
+        )
         self.tolerance_label.setText(
             self.tr_pair("颜色容差", "Color tolerance")
             + f" {settings.color.hue_tolerance}"
         )
+        self.enabled.setText(
+            self.tr_pair("已启用", "Enabled")
+            if self.enabled.isChecked()
+            else self.tr_pair("未启用", "Disabled")
+        )
+        self.enabled.setAccessibleName(
+            self.mode_tabs.tabText(self.mode_tabs.currentIndex())
+            + " · "
+            + self.enabled.text()
+        )
+        self.enabled.setToolTip(
+            self.tr_pair(
+                "通道 OK/NG 为所有已启用检测的组合结果",
+                "Channel OK/NG combines all enabled checks",
+            )
+        )
+        self._arrange_controls()
         self._loading = False
         self.ensure_measurement()
         self.refresh_state()
         self.evaluate()
+
+    def _arrange_controls(self) -> None:
+        required = (
+            self._mode_group.minimumSizeHint().width()
+            + self.controls.minimumSizeHint().width()
+            + Style.space
+        )
+        self._controls_row.setDirection(
+            QBoxLayout.Direction.LeftToRight
+            if required <= self.width() - 2 * Style.space
+            else QBoxLayout.Direction.TopToBottom
+        )
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        self._arrange_controls()
+        super().resizeEvent(event)
 
     def refresh_state(self) -> None:
         allowed = self.allowed() and self._close is None

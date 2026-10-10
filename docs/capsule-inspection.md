@@ -86,11 +86,19 @@ capsule settings and independent ViMo policies. ROI remains exclusively MachineL
 
 ## Preview isolation and lifecycle
 
-Recipe adds only Size/Color enablement, summaries and **Tune preview**. One workspace
-has configured-order camera tabs, aspect-preserving image, channel/body boxes, and
-Size/Color modes. Channel colors and image labels show the combined enabled-check
-judgment. Precise reason codes remain in the canvas tooltip; no duplicated channel
-summary or explanatory footer is displayed. Meaningful measurement/sample errors
+Recipe retains Size/Color enablement/summaries and one shared **Tune preview**
+entry. The same workspace opens in Size, or Color when only Color is enabled.
+A compact top toolbar has Back, configured-order camera icon/number tabs, Fit
+and reference Refresh. The aspect-preserving image and channel/body overlays stay
+unchanged. The bottom group contains compact Size/Color tabs, explicit selected-mode
+Enabled/Disabled state and the existing numeric or sampling/tolerance controls;
+groups stack at narrow widths rather than stretching numeric fields across the page.
+The Color swatch tooltip exposes the existing target Hue. No new settings are added.
+Channel colors and image labels show the combined enabled-check
+judgment, including when the selected mode is disabled: its unchecked Disabled
+control does not suppress NG from another enabled check. The enablement tooltip
+states the combined meaning. Precise reason codes remain in the canvas tooltip;
+no duplicated channel summary or explanatory footer is displayed. Meaningful measurement/sample errors
 and unavailable-reference feedback remain visible. Size body labels use two compact
 lines (W / H) on a dark backing, placed above the body where possible and bounded
 to its channel/view and the visible viewport. Font size stays fixed in logical

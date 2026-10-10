@@ -146,8 +146,14 @@ def test_camera_refresh_and_layout(
     window.resize(*size)
     QApplication.processEvents()
     assert [preview.camera_tabs.tabText(i) for i in range(6)] == [
-        str(c) for c in session.machine.layout.camera_ids
+        str(c).removeprefix("CAM") for c in session.machine.layout.camera_ids
     ]
+    for index, camera in enumerate(session.machine.layout.camera_ids):
+        assert not preview.camera_tabs.tabIcon(index).isNull()
+        assert str(camera) in preview.camera_tabs.tabToolTip(index)
+        assert preview.camera_tabs.accessibleTabName(
+            index
+        ) == preview.camera_tabs.tabToolTip(index)
     assert preview.canvas.width() > 500 and preview.canvas.height() > 240
     for widget in (
         preview.back,

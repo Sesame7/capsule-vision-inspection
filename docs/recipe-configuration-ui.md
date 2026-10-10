@@ -8,12 +8,34 @@ and a draft-only tuning workspace. Only ViMo policies retain hidden overrides.
 
 ## Normal operator surface
 
-- Recipe selector showing display names; secondary New, Duplicate and Reload.
-- Recipe name and optional product code.
-- Inspection model using registered display names. A single model is read-only.
-- A concise detection-rule summary, saved/unsaved/preparing state and error feedback.
-- Compact Size/Color enablement and summaries, with **Tune preview**.
-- One primary **Save and apply** action.
+- One toolbar: Recipe selector expands into the available space; New, Duplicate
+  and Reload keep their compact button sizes.
+- A full-width workspace with balanced Basic information / Inspection columns.
+  Landscape and practical portrait widths keep both columns; narrower available
+  widths stack them according to actual control minimum sizes.
+- Basic information contains Recipe name, optional product code, model selection
+  and the existing ViMo rule/override summaries. Name/code sit side by side when
+  their column permits, otherwise stack. The two fields share the row equally
+  with a consistent gap and readable minimum widths. The model selector fills
+  the space beside its label. Qt stretch/size policies let these inputs grow
+  and shrink with their section without changing control heights or spacing.
+  Inspection summaries and actions keep their existing presentation.
+- A single available model remains read-only.
+- Inspection contains Size/Color enablement, associated parameter summaries and
+  one shared **Tune preview / 调整预览** entry aligned at its right edge.
+- Saved/dirty/preparing feedback, local errors and primary **Save and apply** share
+  the bottom action row, with state on the left and Save and apply at the usable
+  workspace's right edge. No additional configuration fields are exposed.
+
+The unified entry initially selects Size, or Color when only Color is enabled.
+Both modes remain available inside the same existing preview workspace. Its top
+row has Back, configured-order camera icon/number selectors, Fit and Refresh;
+the aspect-preserving image remains dominant. A compact bottom group contains
+Size/Color selection, explicit Enabled/Disabled state and the existing selected-mode
+controls. Whole groups stack when their minimum widths do not fit. Size targets
+and tolerances, Color sampling/target swatch and Hue tolerance retain their draft
+behavior. Overlay OK/NG always combines all enabled checks, including when the
+selected mode is disabled; the enablement tooltip makes this distinction explicit.
 
 Recipe selection remains on this page only. Production displays the Recipe
 read-only: a candidate alone is the initial configuration summary; a differing
@@ -102,7 +124,7 @@ geometry, initialization and bounds rules. Recipe editing never writes machine J
 ```powershell
 uv run --no-sync python scripts/run_production_ui.py --language zh --size 1080x1920
 uv run --no-sync python scripts/run_production_ui.py --language en --size 1920x1080
-uv run --no-sync pytest tests/integration/test_parameters_ui.py tests/integration/test_roi_editor.py tests/unit/test_recipe_editor.py --tb=short
+uv run --no-sync pytest tests/integration/test_parameters_ui.py tests/integration/test_traditional_preview.py tests/integration/test_recipe_refinement.py tests/unit/test_recipe_editor.py --tb=short
 ```
 
 The fake demo uses local synthetic Demo A/B files without GPU. Demo B retains its
@@ -113,8 +135,20 @@ optional `--sources-config`; CLI image overrides remain explicit process-only in
 Review the Recipe page for simplicity, unnecessary remaining information, obvious
 switch/New/Duplicate actions and understandable Save and apply. Check that there is
 a compact entry for Size/Color with detailed controls only in preview. Exercise dirty
-navigation, both languages and portrait/landscape. Offscreen screenshots/tests do
-not replace usability, physical DPI or touch acceptance.
+navigation, both languages and portrait/landscape. Phase 3J-1 screenshots under
+`outputs/recipe_refinement_phase3j1/` cover Chinese Recipe portrait/landscape,
+English Size landscape and Chinese Color portrait, using the existing two-view
+demo images and fake-engine composition. Tests retain New/Duplicate/Reload,
+Save/apply, runtime restrictions, draft synchronization, combined judgments and
+preview job/identity checks. The subsequent full-width refinement screenshots in
+`outputs/recipe_fullwidth_phase3j1/` cover Chinese Recipe landscape/portrait and
+English landscape. Focused tests verify balanced columns, narrow stacking,
+long-text wrapping and right-edge action alignment without changing preview.
+The field-width refinement screenshots in `outputs/recipe_field_widths_phase3j1/`
+use the same three main-page orientations, including longer fake-model display
+names. Tests verify balanced expanding fields, compact toolbar actions,
+shrink/grow behavior, unchanged heights and single-model read-only presentation.
+Offscreen screenshots/tests do not replace usability, physical DPI or touch acceptance.
 
 The [Size/Color preview](capsule-inspection.md) shares demonstration measurement and
 judgment with production. Calibration remains deferred. Obsolete traditional configuration and draft helpers
