@@ -96,9 +96,10 @@ lines (W / H) on a dark backing, placed above the body where possible and bounde
 to its channel/view and the visible viewport. Font size stays fixed in logical
 pixels through Fit/zoom; Color mode has no Size labels. At extreme zoom-out where
 readable labels cannot fit, zoom in; offscreen bodies do not acquire pinned labels.
-The preview suppresses the shell's ordinary production event strip, without clearing
-its history/counters; technical, command, runtime fault and shutdown feedback remains.
-Returning to Production restores its usual event presentation. Width/height controls or the color tolerance slider judge cached measurements
+The shell reserves the same fixed 33-pixel status strip during preview. Ordinary
+production NG stays in Production evidence; current technical, relevant command,
+runtime fault and shutdown feedback remains visible across pages. Preview never
+clears application results/counters. Width/height controls or the color tolerance slider judge cached measurements
 immediately. Color sampling uses channels with usable Color evidence in both views,
 independent of body boxes; unavailable/ambiguous samples leave the target unchanged and explain why.
 
@@ -128,7 +129,7 @@ uv run --no-sync python scripts/run_production_ui.py --language en --size 1920x1
 ```
 
 Optional `--frames-dir images` uses stored camera images with fake ViMo. Existing
-demo machine geometry stays authoritative; use Settings to calibrate if it does not
+demo machine geometry stays authoritative; use Vision to calibrate if it does not
 fit the selected references. The launcher does not repair it silently.
 
 Real-local mode uses the existing ignored manual configuration, when available:

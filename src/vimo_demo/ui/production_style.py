@@ -143,9 +143,9 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "production": ("生产", "Production"),
     "parameters": ("配方", "Recipe"),
-    "diagnostics": ("诊断", "Diagnostics"),
+    "diagnostics": ("通信", "Communication"),
     "history": ("历史", "History"),
-    "settings": ("设置", "Settings"),
+    "settings": ("视觉", "Vision"),
     "start": ("开始检测", "Start inspection"),
     "stop": ("停止检测", "Stop inspection"),
     "reset": ("复位", "Reset"),
@@ -219,7 +219,10 @@ STRINGS: dict[str, tuple[str, str]] = {
         "后续提供配方与检测参数设置。",
         "Recipe and inspection settings will follow.",
     ),
-    "diagnostics_note": ("后续提供诊断详情。", "Diagnostic details will follow."),
+    "diagnostics_note": (
+        "通信功能尚未实现。",
+        "Communication functionality is not implemented yet.",
+    ),
     "history_note": (
         "尚无归档或历史数据功能。",
         "Archive and history are not available yet.",
@@ -320,8 +323,8 @@ def stylesheet() -> str:
 
 
 @cache
-def camera_icon() -> QIcon:
-    """Shared Settings/Production camera strokes, including the existing dimmed mode."""
+def camera_icon(color: str = Style.primary) -> QIcon:
+    """Shared Vision/Production camera strokes, including the existing dimmed mode."""
     icon = QIcon()
     for checked in (False, True):
         for dpr in (1.0, 1.25, 1.5, 2.0):
@@ -330,7 +333,7 @@ def camera_icon() -> QIcon:
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor(Style.primary), 1.6))
+            painter.setPen(QPen(QColor(color), 1.6))
             painter.drawRect(3, 8, 18, 12)
             painter.drawRect(7, 5, 7, 3)
             painter.drawEllipse(8, 10, 8, 8)
@@ -351,6 +354,8 @@ def camera_icon() -> QIcon:
 
 def navigation_icon(index: int) -> QIcon:
     """Internal vector strokes, rendered at common DPRs; no OS icon theme/font."""
+    if index == 4:
+        return camera_icon(Style.secondary)
     icon = QIcon()
     for dpr in (1.0, 1.25, 1.5, 2.0):
         pixmap = QPixmap(round(Style.icon * dpr), round(Style.icon * dpr))
@@ -363,21 +368,23 @@ def navigation_icon(index: int) -> QIcon:
             for x in (3, 12):
                 for y in (3, 12):
                     painter.drawRoundedRect(QRectF(x, y, 6, 6), 1, 1)
-        elif index in (1, 4):
+        elif index == 1:
             for i in range(3):
                 x = 4 + i * 7
                 painter.drawLine(QPointF(x, 3), QPointF(x, 19))
                 painter.drawEllipse(QPointF(x, 7 if (i + index) % 2 else 14), 2, 2)
         elif index == 2:
-            points = (
-                QPointF(2, 12),
-                QPointF(6, 12),
-                QPointF(9, 4),
-                QPointF(13, 18),
-                QPointF(16, 11),
-                QPointF(20, 11),
-            )
-            for a, b in zip(points, points[1:], strict=False):
+            painter.drawRoundedRect(QRectF(2, 3, 6, 7), 1, 1)
+            painter.drawRoundedRect(QRectF(14, 4, 6, 7), 1, 1)
+            for a, b in (
+                (QPointF(4, 1), QPointF(4, 3)),
+                (QPointF(6, 1), QPointF(6, 3)),
+                (QPointF(16, 2), QPointF(16, 4)),
+                (QPointF(18, 2), QPointF(18, 4)),
+                (QPointF(5, 10), QPointF(5, 16)),
+                (QPointF(5, 16), QPointF(17, 16)),
+                (QPointF(17, 16), QPointF(17, 11)),
+            ):
                 painter.drawLine(a, b)
         else:
             painter.drawEllipse(QRectF(3, 3, 16, 16))

@@ -1,12 +1,12 @@
 # Production UI
 
 The Production page is implemented. Phase 3D simplifies the
-[Recipe editor](recipe-configuration-ui.md); Settings directly hosts Camera setup and Machine ROI, while
-Diagnostics and History remain localized placeholders. This is a simulated workstation shell,
+[Recipe editor](recipe-configuration-ui.md); Vision directly hosts Camera setup and Machine ROI, while
+Communication and History remain localized placeholders. This is a simulated workstation shell,
 not commissioned camera/PLC software. The [design direction](production-ui-direction.md)
 remains a visual reference, not an exact implementation specification.
 
-The [graphical ROI editor](graphical-roi-editor.md) is embedded directly in Settings with per-camera source controls. It retains a frozen display reference and shares the image transform;
+The [graphical ROI editor](graphical-roi-editor.md) is embedded directly in Vision with per-camera source controls. It retains a frozen display reference and shares the image transform;
 Production retains its existing card identity, result matching and application lifecycle contracts.
 
 ## Boundaries and updates
@@ -53,7 +53,7 @@ Indicators and overlays require a match on application generation, cycle ID,
 complete FrameId (camera and sequence included), and image shape. A newer image
 immediately suppresses the old overlay/indicators until its matching result arrives.
 Generation-zero launcher/folder references remain available in the store for
-Settings but are hidden in Production. Initial camera viewports are empty/dark,
+Vision but are hidden in Production. Initial camera viewports are empty/dark,
 with pending indicators and no repeated waiting text. Stop retains the latest
 frames without repeated image-area text or a global frozen label; READY identifies
 the stopped state. Matched historical indicators/overlays may remain after Stop.
@@ -81,8 +81,15 @@ with common DPR variants, independent of font glyphs. Text uses installed
 Microsoft YaHei UI / Segoe UI fallbacks; no fonts are bundled or installed.
 
 All core Chinese/English strings and visual tokens live in `production_style.py`.
-The top navigation uses icons plus short text and a language switch. Cards have
-the same monochrome Qt camera icon plus configured camera number used in Settings
+The shell owns five navigation destinations in configured UI order:
+**生产 / Production**, **配方 / Recipe**, **通信 / Communication**,
+**历史 / History**, and **视觉 / Vision**. Communication has a Qt cable icon;
+Vision uses the shared monochrome camera icon. Localized tooltips/accessibility
+names follow the visible labels. Internal `diagnostics` / `settings` identifiers
+remain unchanged. Communication explicitly says it is not implemented, without
+connection controls or simulated protocol state. Selection, keyboard navigation,
+touch targets and language switching retain the existing behavior. Cards have
+the same monochrome Qt camera icon plus configured camera number used in Vision
 at the left (full localized camera name and CameraId in tooltips/accessibility),
 six configured-slot indicators centered as a group,
 and available measured timing at the right, without a permanent footer. Indicator
@@ -151,18 +158,28 @@ resets current counters and latest result, with a warning that previous statisti
 are **not archived**. Cancel does nothing. Stop/Start and Recipe changes do not
 reset counters. No batch persistence/history is introduced.
 
-Production reserves one **33 logical-pixel**, fixed-height, single-row status strip
-with reduced padding. Normal READY/RUNNING and product NG are quiet; NG is shown
-through channel indicators and actual overlays. Technical errors use the first
-available camera/reason code and exception type from typed results; lifecycle
-issues use the available stage/type, and failed commands retain their action/type.
-Unknown reasons keep explicit error feedback
-without guessing a cause. Source/command/FAULT/cleanup errors remain visible, with
-no educational NG comparison text. Long messages are elided on the single line;
-full summaries remain in tooltips/accessibility names. Raw vendor exception
-messages are not newly exposed. Message changes do not resize the camera grid.
-Recipe/Settings keep their existing event presentation, including the page-scoped
-tuning-preview behavior below. No event history is added.
+The shell reserves one **33 logical-pixel**, fixed-height, single-row status strip
+across Production, Recipe, Communication, History and Vision, including tuning
+preview. Padding, severity icons/colors and text treatment are shared. Normal
+states and product NG leave it empty; NG remains in Production camera/channel
+evidence. UNCONFIGURED may show a configuration hint on Production only.
+
+Latest technical result errors use the available camera/reason code and exception
+type; application issues use their actual stage/type. FAULT is violet, technical
+warnings amber, and shutdown progress neutral. Source errors retain only available
+camera identity and exception type. Raw paths, vendor error messages and tracebacks
+remain outside the operator strip. Long summaries are elided, with the full short
+summary in tooltips/accessibility names. Navigation/message changes never resize
+page workspaces or clear backend results, counters or runtime ownership.
+
+Lifecycle, source and relevant command failures remain visible across pages.
+Recipe/configuration command feedback is scoped to Recipe/Vision, Batch feedback
+to Production; page-owned validation/save feedback remains in its workspace.
+Historical technical counters alone never present a current warning. Successful
+Start or an authoritative completed FAULT reset clears obsolete cached command/source
+summaries; a later healthy cycle supersedes earlier per-cycle technical evidence.
+Existing application issues and unsafe cleanup still remain visible. The strip
+has no event history or parallel message store.
 
 ## Closing
 
@@ -200,7 +217,7 @@ images are modified and no cycle archive is written.
 Focused tests use fake sessions and the real application/runtime with fake engines:
 
 ```powershell
-uv run --no-sync pytest tests/unit/test_production_presentation.py tests/integration/test_production_ui.py tests/unit/test_qt_integration.py --tb=short
+uv run --no-sync pytest tests/unit/test_production_presentation.py tests/integration/test_production_ui.py tests/integration/test_global_shell.py tests/unit/test_qt_integration.py --tb=short
 ```
 
 Offscreen tests cover both languages at all three target sizes, geometry, identity,
@@ -218,14 +235,17 @@ candidate-only READY, and different active/candidate Recipes. Focused tests cove
 short/long IDs in READY/RUNNING and adaptive widths with larger text.
 Final icon-refinement screenshots under `outputs/production_icons_phase3h2/`
 cover Chinese landscape and English portrait, using fake inference only.
+Phase 3I-1 screenshots under `outputs/global_shell_phase3i1/` cover Chinese portrait
+Vision, English landscape Production, Chinese landscape Communication and an English
+portrait technical fault on History. Focused shell tests cover all five destinations,
+shared height, localized labels/accessibility, cross-page technical evidence, quiet
+NG, retained counters, authoritative recovery and page-scoped command feedback.
 Windows offscreen tests may read existing system fonts for realistic metrics;
 they do not copy/install them. See [AGENTS](../AGENTS.md) for full quality gates.
 
 Physical portrait-monitor validation remains necessary for Windows 100/125/150%
 scaling, viewing distance, touch targets and brightness/contrast. Offscreen review
-does not establish those ergonomics or camera throughput. The remaining pages,
-Phase 2E archive/events/diagnostics, and Phase 3 hardware integration
-remain out of scope.
+does not establish those ergonomics or camera throughput. Communication, History/archive and real hardware integration remain out of scope.
 
 ## Local real-inference mode — Phase 3B / 3G-1
 
@@ -241,7 +261,7 @@ Open the existing ignored manual configuration without preselected images:
 uv run --no-sync python scripts/run_local_production_ui.py --model-config outputs/manual_phase3c/model.json --machine-config outputs/manual_phase3c/machine.json --recipe outputs/manual_phase3c/local.recipe.json --language zh --size 1080x1920
 ```
 
-These local JSONs must already exist; they are not shipped fixtures. In Settings,
+These local JSONs must already exist; they are not shipped fixtures. In Vision,
 select each CAM1–CAM6 tab, Browse to its image folder, refresh/adjust its six ROIs,
 and Save and apply. MachineLayout alone owns geometry. Sources persist separately
 at `camera_sources.json` beside the machine JSON, or the explicit `--sources-config`
@@ -277,15 +297,16 @@ runtime before READY/CLOSED. Blocking file/native IO must actually return before
 cleanup can finish; no force cancellation, auto retry or hidden restart occurs.
 
 Empty/unreadable/dimension-incompatible sources fail startup or stop replay with
-a source error, camera/filename context and the original terminal traceback.
+a source error. The terminal retains filename context and the original traceback;
+the shared operator strip uses only available camera identity/type.
 Later bad files create no partial cycle or fake product NG. Ordinary inference
 errors remain technical result evidence; infrastructure runtime failures remain
 FAULT. Display copies carry admitted frame identity, generation and source key;
-Settings initially prefers matching runtime reference pixels, otherwise a folder
+Vision initially prefers matching runtime reference pixels, otherwise a folder
 image read off Qt. Explicit Folder/Runtime controls choose the frozen source;
 Previous/Next browse without wrapping, and Refresh re-reads the same folder file
 or freezes the latest eligible runtime frame. Per-camera folder positions last
-only for the open Settings session, independently of replay. Compact X/Y/W/H edits
+only for the open Vision session, independently of replay. Compact X/Y/W/H edits
 only the selected channel; bulk actions remain separate, with save status beside
 Save and apply. The frozen reference does not hot-follow production; browsing
 creates no cycles/inference, changes no counters and writes no configuration.
@@ -293,7 +314,7 @@ creates no cycles/inference, changes no counters and writes no configuration.
 Compatibility: `--images path1 ... path6` still supplies a fixed six-file set in
 configured camera order. `--frames-dir images` selects the first six naturally
 sorted files and also replays that fixed set. Both override saved Folder sources
-**for this process**, with a compact Settings CLI badge; relaunch without these
+**for this process**, with a compact Vision CLI badge; relaunch without these
 options to use saved folders. Saved source assignments are not overwritten by CLI selection.
 Neither mode infers production calibration or acceptance from test geometry.
 
@@ -311,10 +332,9 @@ claim follows from replay. Camera SDK/PLC integration remains deferred.
 
 ### Traditional-preview event scope
 
-While the Size/Color tuning preview is visible, the normal production-event strip
-is hidden so a previous cycle's NG does not describe the frozen preview. Technical
-errors, application issues, failed commands, FAULT and shutdown messages remain
-visible. This is page-scoped presentation only: results, counters and application
-state are retained. On Production itself, product NG is now quiet in the bottom
-strip and remains visible through camera/channel evidence; technical messages are
-still visible on both pages.
+While Size/Color tuning preview is visible, the same fixed-height shell strip
+remains reserved. Ordinary production NG does not describe the frozen preview;
+only current technical errors, application issues, relevant failed commands, FAULT
+and shutdown feedback appear there. Preview measurements and local validation
+feedback remain in the preview workspace. This is presentation only: results,
+counters, application state and preview isolation are unchanged.

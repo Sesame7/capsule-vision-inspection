@@ -8,8 +8,12 @@ Production Screen v0.1 is the final local visual reference from the exploration.
 The implemented contract is [Production UI](production-ui.md). Phase 3H-1 uses a
 two-row summary with active/pending Recipe presentation, three statistics and one
 state-dependent operation area. Recipe switching is confined to the Recipe page;
-Production has a fixed quiet status strip, with product NG shown locally. The
-broader ideas below record the historical exploration, not current requirements.
+Phase 3I-1 establishes Production / Recipe / Communication / History / Vision
+navigation and a shared fixed 33-logical-pixel status strip on every page. These
+supersede the earlier Diagnostics/Settings destinations and expandable event-bar
+ideas. Product NG stays local to Production evidence; global technical failures
+remain visible everywhere. The broader ideas below record historical exploration,
+not current requirements.
 
 ## Product and display context
 
@@ -60,16 +64,17 @@ not frozen. A permanent large sidebar is not preferred on the portrait screen.
 
 Use icons with short text and a subtle but clear selected-page state.
 
-| Conceptual destination | Chinese | Likely development priority |
+| Current destination | Chinese | Status |
 | --- | --- | --- |
-| Production | 生产 | High |
-| Parameters | 参数 | High |
-| Diagnostics | 诊断 | High |
-| History | 历史 | Lower |
-| Settings | 设置 | Medium |
+| Production | 生产 | Implemented |
+| Recipe | 配方 | Implemented |
+| Communication | 通信 | Unavailable placeholder, cable icon |
+| History | 历史 | Unavailable placeholder |
+| Vision | 视觉 | Existing camera sources / Machine ROI, camera icon |
 
-These are conceptual destinations and priorities, not a requirement to implement
-every page together. Detailed non-Production page layouts remain open.
+This order is the accepted Phase 3I-1 shell contract. The visible renames do not
+change internal routes or domain ownership. Communication introduces no protocol
+controls. Detailed future communication/history functionality remains out of scope.
 
 ### Production summary
 
@@ -177,14 +182,17 @@ not lab fixtures.
 
 ## Operator Event Bar
 
-Provide a lightweight operational event area: approximately one compact line in
-normal operation, 2–3 recent relevant events for warnings, and further expansion
-when a fault warrants it. Avoid large disruptive camera-grid resizing when
-possible. Exact expansion/collapse behavior and area allocation remain adjustable.
+Phase 3I-1 uses one shared, fixed 33-logical-pixel strip, including Recipe preview
+and Vision. It never expands on warnings or navigation. Normal operation and product
+NG are quiet; current technical errors, FAULT and lifecycle/cleanup failures retain
+short factual summaries, consistent icons and severity colors across pages. Local
+validation/save feedback stays with its workspace. Historical counters do not
+independently indicate a current fault; authoritative recovery supersedes retained
+presentation messages without deleting backend state.
 
-Examples: “CAM4 frame timeout”, “Channel 17 NG · deformation”, “Recipe loaded”.
 This is not a developer console. Python tracebacks, paths, SDK internals and
-protocol dumps belong in Diagnostics. Keep operator events short and actionable.
+protocol dumps belong in developer terminal/tooling, not the unavailable
+Communication page. The historical expanding event-bar proposal is superseded.
 
 ## Tokens, typography and input
 
@@ -224,7 +232,7 @@ with mouse/keyboard equivalents and without gesture-only or hover-only actions.
 
 ## Intentionally not frozen
 
-- Exact typography sizes and summary/navigation/event-bar heights.
+- Exact typography sizes and summary/navigation heights; the shared status strip is fixed.
 - Border thickness, radii and spacing values.
 - Status-indicator diameter and exact number-label visibility behavior.
 - Overlay line width/color, label placement and marker size.

@@ -15,9 +15,10 @@ and a draft-only tuning workspace. Only ViMo policies retain hidden overrides.
 - Compact Size/Color enablement and summaries, with **Tune preview**.
 - One primary **Save and apply** action.
 
-Recipe selection remains on this page only. Production displays the active Recipe
-read-only and marks a saved candidate pending until successful Start; it provides
-no Recipe selector or editing controls.
+Recipe selection remains on this page only. Production displays the Recipe
+read-only: a candidate alone is the initial configuration summary; a differing
+candidate appears beside the active Recipe as pending next successful Start.
+It provides no Recipe selector or editing controls.
 
 There is no long scrolling form, raw Recipe ID, model path/hash/module dump,
 Defaults/Camera/Channel navigation, Inherit/Override UI, traditional enabled/required forms,
@@ -81,14 +82,18 @@ application shutdown. No native inference is performed or waited on by widgets.
 UNCONFIGURED/READY permit editing. STARTING/RUNNING/STOPPING/FAULT/CLOSED allow viewing
 but not editing or Save and apply. Readiness is checked again before configuration.
 Preparation disables duplicate commands. Existing engine/warm-up ownership is unchanged.
+The shell's fixed 33-pixel strip remains present during Recipe editing and preview;
+ordinary product NG stays on Production. Global technical faults remain visible.
+Recipe validation/save feedback stays in this workspace; Recipe/configuration
+command feedback appears only on Recipe/Vision. Navigation does not clear backend state.
 
 ## Machine geometry
 
-**Settings** directly contains the unified Camera setup workspace: Folder source
+**Vision** directly contains the unified Camera setup workspace: Folder source
 controls and the existing canvas-first Machine ROI editor. It uses the selected
 saved Recipe for save/prepare/configure; sources have separate persistence.
 Recipe pages do not contain machine geometry or source assignments. MachineLayout
-remains the sole geometry owner; there is no separate Settings entry/subpage.
+remains the sole geometry owner; there is no separate Vision entry/subpage.
 See the [ROI contract](graphical-roi-editor.md) for dirty navigation, frozen frames,
 geometry, initialization and bounds rules. Recipe editing never writes machine JSON.
 

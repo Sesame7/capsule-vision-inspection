@@ -7,7 +7,7 @@ support. Multiple views/ROIs per channel are not implemented.
 
 ## Workspace and ownership
 
-Settings is one stacked workspace: an upper camera/reference toolbar; a separate
+Vision is one stacked workspace: an upper camera/reference toolbar; a separate
 Folder path, Browse and Loop row; dominant canvas; and a lower ROI/save toolbar.
 The upper toolbar has camera icon + number tabs on the left, compact reference
 operations in the center, and Fit/1:1 on the right. The lower toolbar mirrors this:
@@ -16,7 +16,10 @@ and apply on the right. Equal flexible side space centers the middle groups when
 width permits; narrow widths reduce gaps or wrap whole groups to two/three rows,
 without shrinking fields or touch targets. There is no repeated page heading,
 entry button, separate subpage, nested setup dialog or landscape side panel.
-The Recipe page contains no machine-geometry controls.
+The Recipe page contains no machine-geometry controls. Vision is the Phase 3I-1
+visible name of this existing workspace, with unchanged internal routing. The
+shell's fixed 33-pixel status strip remains below it; local ROI/source validation
+and Save feedback still belong to the workspace, while technical faults are global.
 Folder is the only operational source; hardware capture remains unimplemented.
 
 - `machine_editor.py`: Qt-free machine draft, atomic geometry operations and save.
@@ -123,7 +126,7 @@ Folder Previous/Next do not wrap, even when replay Loop is on. Refresh re-enumer
 filenames and re-reads the currently chosen file; adding earlier files cannot
 advance it. If that file disappears or becomes unreadable, an explicit error is
 shown without substituting the next file. Paths, counts and viewed positions are
-kept per camera only while Settings remains open; no indices are persisted and
+kept per camera only while Vision remains open; no indices are persisted and
 no folder-wide decoding occurs. Metadata shows index/count and current dimensions;
 the filename is available in a tooltip. Changing a folder invalidates its old
 reference/cache/position and selects that folder's initial reference.
@@ -160,7 +163,7 @@ Real ViMo uses the existing
 `run_local_production_ui.py` and supplied `--machine-config` path. Old local Recipes
 containing ROI fields fail validation rather than being silently rewritten.
 
-1. Open Settings; select a camera tab and, in real-local mode, choose its Folder.
+1. Open Vision; select a camera tab and, in real-local mode, choose its Folder.
 2. Select Folder, browse Previous/Next, Refresh the current file, and switch to
    Runtime when eligible; camera switching retains folder positions in this session.
 3. Select a channel and edit X/Y/W/H with Apply, or set W/H and Apply size to all.
@@ -184,7 +187,7 @@ uv run --no-sync pytest tests/unit/test_machine_editor.py tests/unit/test_roi_ge
 Focused tests cover camera order, direct selection, source-pixel move/resize,
 view-only transforms, frozen BGR references, atomic batch rejection, combined Save
 and apply, activation boundary, save/preparation failures, dirty navigation and
-bilingual portrait/landscape layout. Settings tests also cover same-file Refresh,
+bilingual portrait/landscape layout. Vision tests also cover same-file Refresh,
 non-looping browsing, per-camera session positions, source eligibility, frozen
 runtime switching, numeric selected-ROI edits, failed-save status and reference
 browsing with zero production side effects. Normal suites retain fake Production and
