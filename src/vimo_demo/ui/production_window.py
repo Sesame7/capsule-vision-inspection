@@ -1,6 +1,6 @@
 """Layout-managed bilingual production shell; application snapshots are authoritative."""
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, Slot
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,6 +26,7 @@ from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import (
     FindingSource,
+    InspectionLayout,
     TechnicalStatus,
 )
 
@@ -49,6 +50,8 @@ PAGES = ("production", "parameters", "diagnostics", "history", "settings")
 
 
 class ProductionWindow(QMainWindow):
+    language_changed = Signal(str)
+
     def __init__(
         self,
         bridge: QtProductionBridge,
@@ -57,15 +60,17 @@ class ProductionWindow(QMainWindow):
         language: Language = "zh",
         simulation: bool = False,
         recipe_editor: RecipeEditorSession | None = None,
+        layout: InspectionLayout | None = None,
+        configuration_issue: str = "",
     ) -> None:
         super().__init__()
         if (
-            not choices
-            or len(bridge.frames.cameras) != 6
+            len(bridge.frames.cameras) != 6
             or any(
                 c.prepared.configuration.layout.camera_ids != bridge.frames.cameras
                 for c in choices
             )
+            or (layout is not None and layout.camera_ids != bridge.frames.cameras)
         ):
             raise ValueError(
                 "Production screen requires six consistent camera identities"
@@ -75,6 +80,7 @@ class ProductionWindow(QMainWindow):
         self.choices = choices
         self.language: Language = language
         self.simulation = simulation
+        self.configuration_issue = configuration_issue
         self.snapshot = bridge.application.snapshot()
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._columns = 0
@@ -208,10 +214,17 @@ class ProductionWindow(QMainWindow):
         self.grid = QGridLayout(workspace)
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(Style.space)
-        self.cards = tuple(
-            CameraCard(camera)
-            for camera in choices[0].prepared.configuration.layout.cameras
+        layout = choices[0].prepared.configuration.layout if choices else layout
+        self.cards: tuple[CameraCard, ...] = (
+            tuple(CameraCard(camera) for camera in layout.cameras) if layout else ()
         )
+        self.configuration_placeholder = QLabel()
+        self.configuration_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.configuration_placeholder.setWordWrap(True)
+        if not self.cards:
+            self.grid.addWidget(self.configuration_placeholder, 0, 0)
+        else:
+            self.configuration_placeholder.hide()
         page.addWidget(workspace, 1)
         self.placeholders: dict[str, QLabel] = {}
         self.parameters = ParametersPage(bridge, recipe_editor, simulation=simulation)
@@ -334,6 +347,7 @@ class ProductionWindow(QMainWindow):
                 else f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
             )
         self._render()
+        self.language_changed.emit(language)
 
     @Slot()
     def _operate(self) -> None:
@@ -366,6 +380,7 @@ class ProductionWindow(QMainWindow):
         ]
         choices.append(choice)
         self.choices = tuple(choices)
+        self.configuration_issue = ""
         self._render()
 
     @Slot()
@@ -477,6 +492,7 @@ class ProductionWindow(QMainWindow):
 
     def _render(self) -> None:
         snapshot, language = self.snapshot, self.language
+        self.configuration_placeholder.setText(text("configure_first", language))
         availability = controls(snapshot)
         action = primary_action(snapshot.state)
         enabled = {
@@ -580,6 +596,10 @@ class ProductionWindow(QMainWindow):
                 part
                 for part in (camera, text("source_error", language), exception_type)
                 if part
+            )
+        if self.configuration_issue and not (warning or fault or self._closing):
+            message = (
+                f"{text('configure_first', language)} · {self.configuration_issue}"
             )
         self.event_label.setToolTip(message)
         self.event_label.setAccessibleName(message)

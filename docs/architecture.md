@@ -23,11 +23,19 @@
 | Implemented | 3D — simplified Recipe UI, hidden policy preservation and Settings ROI workspace |
 | Implemented | 3E-1 — demonstration capsule Size/Color and isolated Recipe preview |
 | Implemented | 3E-2 — sole capsule traditional path and strict Recipe consolidation |
+| Implemented | 3K-1 — persistent application bootstrap and explicit configuration discovery |
 | Future | Remaining Phase 3 — Camera, PLC and field integration |
 
 Phase 2C composes existing layers: candidate activation after model warm-up,
 fresh runtime sessions, factual cycle/channel counters and heterogeneous checks.
 Recipe/model changes require stopped inspection; no running-engine hot replacement.
+
+The normal entry is root `app.py`, with ignored persistent `data/` anchored to the
+entry location. It discovers strict model/Recipe definitions, restores explicit
+IDs and saved machine/sources, and prepares a stopped candidate before Qt creation.
+It reuses the real local runtime/source composition with the explicit developer
+launcher. Missing configuration keeps the shell UNCONFIGURED. See
+[application bootstrap](application-bootstrap.md) for paths, persistence and failures.
 
 ## Currently implemented
 

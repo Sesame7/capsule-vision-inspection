@@ -25,14 +25,14 @@ cache-dir = "outputs/uv-cache"
 [tool.ruff]
 target-version = "py314"
 src = ["src"]
-extend-exclude = ["models", "images", "outputs"]
+extend-exclude = ["models", "images", "outputs", "data"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
 
 [tool.pyright]
-include = ["src", "tests", "scripts"]
-exclude = ["models", "images", "outputs", ".venv"]
+include = ["src", "tests", "scripts", "app.py"]
+exclude = ["models", "images", "outputs", "data", ".venv"]
 extraPaths = ["scripts"]
 pythonVersion = "3.14"
 pythonPlatform = "Windows"

@@ -66,6 +66,22 @@ Local inputs belong in root-level `models/` and `images/`, generated data in
 `outputs/`; all three are ignored. The reference model is
 `models/model_trt_fp16.vimosln`. Engine callers may supply any model path.
 
+## Normal application startup
+
+```powershell
+uv run python app.py
+```
+
+The existing five-page shell restores explicit saved configuration from ignored
+`data/` beside `app.py`: `app.json`, `machine/machine.json`,
+`sources/camera_sources.json`, `models/` and `recipes/`. It opens stopped in READY
+with a prepared candidate, or UNCONFIGURED when required files/IDs are unavailable.
+It never automatically starts inspection or restores Batch/counters. See
+[startup/discovery](docs/application-bootstrap.md) for the manifest, model path
+anchoring, successful Apply/language persistence and missing-data behavior.
+The existing explicit-path real launcher and fake demo remain supported.
+Use `uv run --no-sync python app.py` for daily startup without synchronization.
+
 ## Minimal API
 
 This synchronous CLI example uses one engine in one owning context. Run from the
@@ -141,9 +157,9 @@ for thread/lifetime contracts, timeout behavior and a short manual check.
 ## Quality gates and optional GPU regression
 
 ```powershell
-uv run --no-sync ruff check src tests scripts
-uv run --no-sync ruff format --check src tests scripts
-uv run --no-sync pyright src tests scripts
+uv run --no-sync ruff check src tests scripts app.py
+uv run --no-sync ruff format --check src tests scripts app.py
+uv run --no-sync pyright src tests scripts app.py
 uv run --no-sync pytest --tb=short
 git diff --check
 ```
