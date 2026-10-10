@@ -8,17 +8,21 @@ from typing import Literal
 from uuid import uuid4
 
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStackedLayout,
     QVBoxLayout,
     QWidget,
@@ -91,19 +95,22 @@ class ParametersPage(QWidget):
         self._recipe_form = QWidget()
         self._recipe_pages.addWidget(self._recipe_form)
         root = QVBoxLayout(self._recipe_form)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(18)
-        header = QHBoxLayout()
-        self.title, self.identity = QLabel(), QLabel()
-        self.title.setProperty("role", "state")
-        self.identity.setTextFormat(Qt.TextFormat.PlainText)
-        header.addWidget(self.title)
-        header.addStretch()
-        header.addWidget(self.identity)
-        root.addLayout(header)
+        root.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
+        root.setSpacing(Style.space)
         selection = QHBoxLayout()
+        selection.setSpacing(Style.small)
+        self.title, self.identity = QLabel(), QLabel()
+        self.identity.setTextFormat(Qt.TextFormat.PlainText)
+        selection.addWidget(self.title)
         self.recipes = QComboBox()
         self.recipes.setMinimumHeight(Style.touch)
+        self.recipes.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.recipes.setMinimumContentsLength(24)
+        self.recipes.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         selection.addWidget(self.recipes, 1)
         self.buttons: dict[str, QPushButton] = {}
         for key in ("new_recipe", "duplicate_recipe", "reload"):
@@ -112,66 +119,124 @@ class ParametersPage(QWidget):
             self.buttons[key] = button
             selection.addWidget(button)
         root.addLayout(selection)
+
+        self._sections_row = QHBoxLayout()
+        self._sections_row.setSpacing(2 * Style.space)
+        self._basic_section, self._inspection_section = QWidget(), QWidget()
+        for section in (self._basic_section, self._inspection_section):
+            section.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            self._sections_row.addWidget(section, 1)
+        form = QVBoxLayout(self._basic_section)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setSpacing(Style.space)
+        self.basic_title = QLabel()
+        self.basic_title.setMinimumHeight(Style.touch)
+        form.addWidget(self.basic_title)
+        self._metadata_row = QHBoxLayout()
+        self._metadata_row.setSpacing(Style.space)
+        self._metadata_fields: list[QWidget] = []
         self.metadata: dict[str, QLineEdit] = {}
         self.labels: dict[str, QLabel] = {}
         for key in ("display_name", "product_code"):
+            field = QWidget()
+            field.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            column = QVBoxLayout(field)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(Style.small)
             label, line = QLabel(), QLineEdit()
             line.setMinimumHeight(Style.touch)
+            line.setMinimumWidth(
+                line.fontMetrics().averageCharWidth() * 36 + 2 * Style.space
+            )
+            line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.labels[key], self.metadata[key] = label, line
-            root.addWidget(label)
-            root.addWidget(line)
+            column.addWidget(label)
+            column.addWidget(line)
+            self._metadata_fields.append(field)
+            self._metadata_row.addWidget(field, 1)
             line.textEdited.connect(self._metadata_changed)
+        form.addLayout(self._metadata_row)
+        model_row = QHBoxLayout()
+        model_row.setSpacing(Style.space)
         self.model = QComboBox()
         self.model.setMinimumHeight(Style.touch)
+        self.model.setMinimumContentsLength(18)
+        self.model.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.model.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         self.labels["inspection_model"] = QLabel()
-        root.addWidget(self.labels["inspection_model"])
-        root.addWidget(self.model)
+        model_row.addWidget(self.labels["inspection_model"])
+        model_row.addWidget(self.model, 1)
+        form.addLayout(model_row)
         self.rule = QLabel()
         self.rule.setWordWrap(True)
-        root.addWidget(self.rule)
+        self.rule.setProperty("role", "secondary")
+        form.addWidget(self.rule)
         self.notice = QLabel()
         self.notice.setWordWrap(True)
-        root.addWidget(self.notice)
+        form.addWidget(self.notice)
+        form.addStretch()
+        inspection = QVBoxLayout(self._inspection_section)
+        inspection.setContentsMargins(0, 0, 0, 0)
+        inspection.setSpacing(Style.space)
+        inspection_header = QHBoxLayout()
+        self.inspection_title = QLabel()
+        for title in (self.basic_title, self.inspection_title):
+            font = title.font()
+            font.setBold(True)
+            title.setFont(font)
+        inspection_header.addWidget(self.inspection_title)
+        inspection_header.addStretch()
+        self.tune_preview = QPushButton()
+        self.tune_preview.setMinimumHeight(Style.touch)
+        self.tune_preview.clicked.connect(lambda: self.open_preview())
+        inspection_header.addWidget(self.tune_preview)
+        inspection.addLayout(inspection_header)
+        inspections = QGridLayout()
+        inspections.setColumnStretch(1, 1)
+        inspections.setHorizontalSpacing(Style.space)
+        inspections.setVerticalSpacing(Style.small)
         self.capsule_enabled: dict[PreviewMode, QCheckBox] = {}
         self.capsule_summary: dict[PreviewMode, QLabel] = {}
-        self.capsule_open: dict[PreviewMode, QPushButton] = {}
         modes: tuple[PreviewMode, ...] = ("size", "color")
-        for mode in modes:
-            row = QHBoxLayout()
-            enabled, summary, button = QCheckBox(), QLabel(), QPushButton()
-            button.setMinimumHeight(Style.touch)
+        for index, mode in enumerate(modes):
+            enabled, summary = QCheckBox(), QLabel()
+            enabled.setMinimumHeight(Style.touch)
             summary.setWordWrap(True)
+            summary.setProperty("role", "secondary")
             self.capsule_enabled[mode] = enabled
             self.capsule_summary[mode] = summary
-            self.capsule_open[mode] = button
-            row.addWidget(enabled)
-            row.addWidget(summary, 1)
-            row.addWidget(button)
-            root.addLayout(row)
+            inspections.addWidget(enabled, index, 0)
+            inspections.addWidget(summary, index, 1)
 
             def toggle(checked: bool, m: PreviewMode = mode) -> None:
                 self._capsule_changed(m, checked)
 
-            def open_workspace(_checked: bool = False, m: PreviewMode = mode) -> None:
-                self.open_preview(m)
-
             enabled.toggled.connect(toggle)
-            button.clicked.connect(open_workspace)
+        inspection.addLayout(inspections)
+        inspection.addStretch()
+        root.addLayout(self._sections_row)
+        root.addStretch(1)
+        actions = QHBoxLayout()
+        actions.setSpacing(Style.space)
+        actions.addWidget(self.identity)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
-        root.addWidget(self.status)
-        actions = QHBoxLayout()
-        actions.addStretch()
+        actions.addWidget(self.status, 1)
         primary = QPushButton()
         primary.setObjectName("start")
         primary.setMinimumHeight(Style.touch)
         self.buttons["save_apply"] = primary
         actions.addWidget(primary)
         root.addLayout(actions)
-        root.addStretch(1)
 
-        # Settings hosts the existing ROI workspace; it shares preparation, not Recipe UI.
+        # Vision hosts the existing ROI workspace; it shares preparation, not Recipe UI.
         self.settings = QWidget()
         self._settings_layout = QVBoxLayout(self.settings)
         self._settings_layout.setContentsMargins(0, 0, 0, 0)
@@ -213,6 +278,12 @@ class ParametersPage(QWidget):
         if self.roi_workspace is not None:
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
+        self.basic_title.setText(
+            "基本信息" if language == "zh" else "Basic information"
+        )
+        self.inspection_title.setText("检测" if language == "zh" else "Inspection")
+        self.tune_preview.setText("调整预览" if language == "zh" else "Tune preview")
+        self.tune_preview.setAccessibleName(self.tune_preview.text())
         self.recipes.setAccessibleName(text("recipe", language))
         self.model.setAccessibleName(text("inspection_model", language))
         for key, button in self.buttons.items():
@@ -221,7 +292,38 @@ class ParametersPage(QWidget):
             label.setText(text(key, language))
         for key, line in self.metadata.items():
             line.setAccessibleName(text(key, language))
+        self._arrange_fields()
         self.show_draft()
+
+    def _arrange_fields(self) -> None:
+        available = self._recipe_form.width() - 2 * Style.space
+        # Measure the basic section with stacked fields so the two columns do not
+        # force metadata into a horizontal row when its readable widths cannot fit.
+        self._metadata_row.setDirection(QBoxLayout.Direction.TopToBottom)
+        column_minimum = max(
+            self._basic_section.minimumSizeHint().width(),
+            self._inspection_section.minimumSizeHint().width(),
+        )
+        gap = self._sections_row.spacing()
+        side_by_side = 2 * column_minimum + gap <= available
+        self._sections_row.setDirection(
+            QBoxLayout.Direction.LeftToRight
+            if side_by_side
+            else QBoxLayout.Direction.TopToBottom
+        )
+        field_space = (available - gap) // 2 if side_by_side else available
+        required = sum(
+            field.minimumSizeHint().width() for field in self._metadata_fields
+        )
+        self._metadata_row.setDirection(
+            QBoxLayout.Direction.LeftToRight
+            if required + Style.space <= field_space
+            else QBoxLayout.Direction.TopToBottom
+        )
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        self._arrange_fields()
+        super().resizeEvent(event)
 
     def reload(self) -> None:
         if self.session is None:
@@ -330,16 +432,7 @@ class ParametersPage(QWidget):
                 if language == "zh"
                 else ("Size inspection" if mode == "size" else "Color inspection")
             )
-            self.capsule_open[mode].setText(
-                "调整预览" if language == "zh" else "Tune preview"
-            )
             check.setEnabled(allowed)
-            self.capsule_open[mode].setEnabled(
-                session is not None
-                and not self.busy
-                and not self._closing
-                and not session.machine_editor.dirty
-            )
             if session is not None:
                 settings = session.draft.capsule
                 check.blockSignals(True)
@@ -355,6 +448,12 @@ class ParametersPage(QWidget):
                         + str(settings.color.hue_tolerance)
                     )
                 )
+        self.tune_preview.setEnabled(
+            session is not None
+            and not self.busy
+            and not self._closing
+            and not session.machine_editor.dirty
+        )
         for line in self.metadata.values():
             line.setEnabled(allowed)
         self.model.setEnabled(allowed and self.model.count() > 1)
@@ -427,7 +526,7 @@ class ParametersPage(QWidget):
         )
         self.changed()
 
-    def open_preview(self, mode: PreviewMode) -> None:
+    def open_preview(self, mode: PreviewMode | None = None) -> None:
         if (
             self.session is None
             or self.preview is not None
@@ -436,6 +535,13 @@ class ParametersPage(QWidget):
             or self.session.machine_editor.dirty
         ):
             return
+        if mode is None:
+            settings = self.session.draft.capsule
+            mode = (
+                "color"
+                if settings.color.enabled and not settings.size.enabled
+                else "size"
+            )
         self.preview = TraditionalPreview(
             self.session,
             self.bridge.frames,
