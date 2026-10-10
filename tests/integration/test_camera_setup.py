@@ -195,7 +195,7 @@ def test_source_change_invalidates_reference_no_geometry_repair(
         if workspace.draft.path is not None
         else False
     )
-    assert "CAM1" in workspace.message.text()
+    assert "CAM1" in workspace.message.toolTip()
 
 
 @pytest.mark.parametrize("bad", ["empty", "corrupt"])
@@ -604,7 +604,7 @@ def test_setup_save_waits_for_actual_prepare_and_reports_failure(
         release.set()
     until(lambda: not window.parameters.busy)
     assert not source.dirty and load_camera_sources(source.path) == source.definition
-    assert "post-save preparation failed" in workspace.message.text()
+    assert "post-save preparation failed" in workspace.message.toolTip()
     assert workspace.status.text() == text("setup_failed", window.language)
     assert window.bridge.application.snapshot().candidate == candidate
 
@@ -734,7 +734,7 @@ def test_removed_reference_refresh_and_explicit_corrupt_navigation(
     workspace.refresh_frame()
     until(lambda: not window.parameters.busy)
     assert workspace.frame is None
-    assert "no longer exists" in workspace.message.text()
+    assert "no longer exists" in workspace.message.toolTip()
     assert not workspace.editable()
 
 

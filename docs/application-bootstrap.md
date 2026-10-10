@@ -82,6 +82,12 @@ unavailable placeholder, not synthetic camera images or ROIs. Concise startup
 messages are localized in the shell and Recipe feedback; full path/error context
 is in tooltips and stderr. Runtime faults and command failures retain precedence.
 
+Recipe Apply does not establish Folder recovery: unresolved source warnings and
+their full diagnostic tooltips survive it. They clear after successful Start
+(the existing acquisition preflight) or successful Vision source verification,
+save and Apply. Reading one reference or editing a path is not that evidence.
+There is no Folder monitoring or configuration rediscovery.
+
 | Startup condition | State / behavior |
 | --- | --- |
 | Missing data/manifest; malformed or unsupported manifest; absent/unknown explicit ID | UNCONFIGURED; no first-entry fallback |
@@ -108,6 +114,12 @@ malformed, unsupported or unreadable manifests are read-only for this session,
 including language changes and Apply notifications. If the file changes externally
 after startup, preference saving refuses to overwrite it. Correct it externally
 and restart. Preferences do not duplicate active/runtime or Recipe-draft state.
+
+Preference-persistence failure is shown separately from successful Recipe Apply,
+with localized app.json repair/restart guidance and full details in the existing
+tooltip/stderr. Unresolved manifest guidance survives unrelated Apply, Start or
+Stop. A successful preference write clears its own error, without clearing another
+command's feedback. The read-only protection and candidate installation are unchanged.
 
 ## Supported recovery
 

@@ -340,6 +340,7 @@ class PreferenceNotifications(QObject):
             self.window.bridge.command_failed.emit("preferences", exc)
         else:
             self.preferences = value
+            self.window.bridge.command_finished.emit("preferences")
 
     @Slot(object)
     def applied(self, choice: object) -> None:
@@ -370,6 +371,7 @@ def create_window(startup: Startup, delivery: FutureDelivery) -> ProductionWindo
         layout=startup.machine.layout if startup.machine else None,
         configuration_issue="\n".join(i.detail for i in startup.issues),
         configuration_messages=tuple(dict.fromkeys(i.key for i in startup.issues)),
+        configuration_notices=tuple((i.key, i.detail) for i in startup.issues),
     )
     PreferenceNotifications(
         window,

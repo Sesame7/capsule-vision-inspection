@@ -181,6 +181,14 @@ summaries; a later healthy cycle supersedes earlier per-cycle technical evidence
 Existing application issues and unsafe cleanup still remain visible. The strip
 has no event history or parallel message store.
 
+Unresolved startup Folder and manifest guidance survives Recipe Apply. Folder
+recovery is established by successful Start or verified Vision source Save and
+apply. Preferences have a separate localized app.json repair/restart summary;
+their full configuration diagnostics remain in the tooltip/stderr, never the
+single-row operator text. Unrelated command success does not clear that preference
+failure; a successful preference write clears only its own feedback. Existing
+FAULT/technical priority and page scopes remain unchanged.
+
 ## Closing
 
 Close first resolves any dirty Recipe draft and waits asynchronously for any

@@ -135,7 +135,7 @@ def test_invalid_batch_is_atomic(
     dialog.common_height.setText("10")
     dialog.common_size()
     assert session.machine_editor.definition == before
-    assert "rejected" in dialog.message.text()
+    assert "rejected" in dialog.message.toolTip()
     assert (
         dialog.canvas.model.can_drag
     )  # Invalid batch does not disable visual recovery.
@@ -319,7 +319,7 @@ def test_prepare_failure_keeps_saved_machine_and_workspace(
     dialog.commit_geometry(BoundingRect(42, 0, 8, 10))
     dialog.save_and_apply()
     until(lambda: not window.parameters.busy)
-    assert "artifact unavailable" in dialog.message.text()
+    assert "artifact unavailable" in dialog.message.toolTip()
     assert not session.machine_editor.dirty
     assert window.bridge.application.snapshot().candidate == candidate
     assert window.parameters.roi_workspace is dialog
@@ -398,7 +398,7 @@ def test_machine_save_failure_does_not_prepare(
     workspace.commit_geometry(BoundingRect(42, 0, 8, 10))
     workspace.save_and_apply()
     assert session.machine_editor.saved == saved and session.machine_editor.dirty
-    assert "read-only" in workspace.message.text()
+    assert "read-only" in workspace.message.toolTip()
     assert not window.parameters.busy
     assert window.bridge.application.snapshot().candidate == candidate
 

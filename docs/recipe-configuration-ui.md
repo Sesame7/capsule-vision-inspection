@@ -94,6 +94,12 @@ and active configuration. It reports an error, does not claim successful Apply a
 does not continue pending navigation. There is deliberately no rollback transaction
 spanning disk persistence and application configuration.
 
+Validation, persistence and model/preparation failures use short localized
+operation/resource summaries; the status tooltip retains the complete original
+diagnostic, including paths and hashes. Unknown failures do not guess a cause.
+Successful Apply feedback can coexist with unresolved startup Folder/manifest
+guidance; Apply neither verifies acquisition nor repairs app.json.
+
 Success says changes become active on the next successful Start. No counters reset,
 implicit Start or live activation is introduced. Candidate/active remain backend
 concepts and are not required vocabulary on the Recipe page.

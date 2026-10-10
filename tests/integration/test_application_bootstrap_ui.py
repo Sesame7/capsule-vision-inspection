@@ -276,7 +276,7 @@ def test_startup_feedback_is_localized_with_details_only_in_tooltip(
         window.parameters.save_and_apply()
         until(lambda: not window.parameters.busy)
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
-        assert "Saved camera sources" in window.parameters.status.text()
+        assert "Saved camera sources" in window.parameters.status.toolTip()
     finally:
         close_window(window)
         delivery.detach()
@@ -295,7 +295,7 @@ def test_bad_recipe_catalog_cannot_be_bypassed_by_applying_valid_entry(
         window.parameters.save_and_apply()
         until(lambda: not window.parameters.busy)
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
-        assert "invalid or duplicate" in window.parameters.status.text()
+        assert "invalid or duplicate" in window.parameters.status.toolTip()
         assert load_preferences(data.preferences).last_applied_recipe_id == "local"
     finally:
         close_window(window)

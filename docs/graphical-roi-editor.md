@@ -67,6 +67,13 @@ primary **Save and apply** button. Successful-save tooltip explains next-Start
 activation; explicit errors remain visible text. There is no hot modification
 of RUNNING configuration.
 
+Folder/reference, ROI and save/preparation failures use concise localized
+operation/resource summaries. The existing message label's tooltip retains the
+complete diagnostic, including paths; partial saves still explicitly identify
+what was saved and what failed. Successful retry clears obsolete local details.
+Successful verification of all saved sources followed by Apply clears the
+startup Folder warning; browsing a reference or changing a path does not.
+
 An unsaved/new Recipe must first be saved on Recipe. The workspace never
 silently saves Recipe edits. Machine write failure preserves the previous saved
 baseline and dirty geometry. Preparation/configuration failure after a successful

@@ -63,6 +63,7 @@ class ProductionWindow(QMainWindow):
         layout: InspectionLayout | None = None,
         configuration_issue: str = "",
         configuration_messages: tuple[str, ...] = (),
+        configuration_notices: tuple[tuple[str, str], ...] = (),
     ) -> None:
         super().__init__()
         if (
@@ -83,11 +84,13 @@ class ProductionWindow(QMainWindow):
         self.simulation = simulation
         self.configuration_issue = configuration_issue
         self.configuration_messages = configuration_messages
+        self._configuration_notices = configuration_notices
         self._event_message = ""
         self.snapshot = bridge.application.snapshot()
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._columns = 0
         self._command_issue: tuple[str, str | None] | None = None
+        self._command_detail = ""
         self._active_choice: RecipeChoice | None = None
         self._source_issue: tuple[str | None, str] | None = None
         self._closing = False
@@ -238,6 +241,7 @@ class ProductionWindow(QMainWindow):
             configuration_details=configuration_issue,
         )
         self.parameters.applied.connect(self._recipe_applied)
+        self.parameters.sources_verified.connect(self._sources_verified)
         self.parameters.setup_changed.connect(self._render)
         for name in PAGES[1:]:
             if name == "parameters":
@@ -389,8 +393,37 @@ class ProductionWindow(QMainWindow):
         ]
         choices.append(choice)
         self.choices = tuple(choices)
-        self.configuration_issue = ""
-        self.configuration_messages = ()
+        # Candidate preparation does not verify acquisition or repair app.json.
+        self._retain_configuration_feedback(
+            ("startup_source_unavailable", "startup_language", "startup_preferences")
+        )
+        self._render()
+
+    def _retain_configuration_feedback(self, keys: tuple[str, ...]) -> None:
+        self.configuration_messages = tuple(
+            key for key in self.configuration_messages if key in keys
+        )
+        if self._configuration_notices:
+            self.configuration_issue = "\n".join(
+                detail
+                for key, detail in self._configuration_notices
+                if key in self.configuration_messages
+            )
+        elif not self.configuration_messages:
+            self.configuration_issue = ""
+        self.parameters.configuration_messages = self.configuration_messages
+        self.parameters.configuration_details = self.configuration_issue
+        self.parameters.refresh_state()
+
+    @Slot()
+    def _sources_verified(self) -> None:
+        self._retain_configuration_feedback(
+            tuple(
+                k
+                for k in self.configuration_messages
+                if k != "startup_source_unavailable"
+            )
+        )
         self._render()
 
     @Slot()
@@ -425,7 +458,18 @@ class ProductionWindow(QMainWindow):
             )
             if recovered or started:
                 # Authoritative recovery/readiness supersedes old UI command summaries.
-                self._command_issue = self._source_issue = None
+                if not self._command_issue or self._command_issue[0] != "preferences":
+                    self._command_issue = None
+                    self._command_detail = ""
+                self._source_issue = None
+            if started:
+                self._retain_configuration_feedback(
+                    tuple(
+                        k
+                        for k in self.configuration_messages
+                        if k != "startup_source_unavailable"
+                    )
+                )
             self.snapshot = snapshot
             self._render()
 
@@ -466,13 +510,28 @@ class ProductionWindow(QMainWindow):
             command,
             type(error).__name__ if isinstance(error, BaseException) else None,
         )
+        # Preferences are configuration diagnostics, never raw native/SDK errors.
+        self._command_detail = str(error) if command == "preferences" else ""
         self._render()
 
     @Slot(str)
     def _command_finished(self, command: str) -> None:
         if command == "start":
             self._source_issue = None
-        self._command_issue = None
+        previous = self._command_issue[0] if self._command_issue else None
+        if previous == command or (
+            previous != "preferences" and command != "preferences"
+        ):
+            self._command_issue = None
+            self._command_detail = ""
+        if command == "preferences":
+            self._retain_configuration_feedback(
+                tuple(
+                    k
+                    for k in self.configuration_messages
+                    if k not in {"startup_language", "startup_preferences"}
+                )
+            )
         self._render()
 
     def _render_cards(self) -> None:
@@ -621,6 +680,12 @@ class ProductionWindow(QMainWindow):
             if self.configuration_messages and not (warning or fault or self._closing)
             else ""
         )
+        if event_key == "command_error" and command == "preferences":
+            detail = "\n".join(
+                part
+                for part in (self._command_detail, self.configuration_issue)
+                if part
+            )
         self.event_label.setToolTip(
             "\n".join(part for part in (message, detail) if part)
         )
@@ -659,6 +724,10 @@ class ProductionWindow(QMainWindow):
             summary = text("operation_error", language)
             if self._command_issue is not None:
                 command, exception_type = self._command_issue
+                if command == "preferences":
+                    return text("preferences_error", language) + (
+                        f" · {exception_type}" if exception_type else ""
+                    )
                 if command in {"start", "stop", "reset", "recipe", "batch"}:
                     summary = f"{text(command, language)} · {summary}"
                 if exception_type:
