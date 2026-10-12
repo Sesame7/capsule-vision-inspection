@@ -1,261 +1,210 @@
-# Architecture and direction
+# Architecture
 
-## Checkpoint status
+## Purpose and scope
 
-| Status | Phase / responsibility |
+This overview connects the maintained contracts of the local ViMo capsule-inspection
+application. Detailed behavior and verification remain in the owning domain pages.
+
+**Current** means implemented behavior supported by the code and existing tests.
+**Target / Not implemented** means deferred direction with unresolved decisions.
+**Historical** means dated integration or measurement evidence, not a continuing
+performance, accuracy or machine-safety guarantee.
+
+Current Production uses six ordered cameras with six channels each (36 channels).
+Their identities/geometry are configuration, not an immutable hardware architecture.
+Inputs are local; real camera acquisition and PLC communication are unimplemented.
+
+## Current capabilities
+
+| Capability | Implemented scope |
 | --- | --- |
-| Implemented | 1A — typed inference core and SDK boundary |
-| Implemented | 1B — serial worker and Qt integration demo |
-| Implemented | 1C — inspection-cycle collection and technical results |
-| Implemented | 1D — bounded runtime coordinator |
-| Implemented | 2A — production inspection domain and result model |
-| Implemented | 2B — Recipe/model/layout persistence and pure configuration resolution |
-| Implemented | 2C — production application state and configured runtime composition |
-| Implemented | 2D-1 — PySide Production shell, bounded display frames and simulated source |
-| Design reference | Production UI direction; physical workstation tuning remains |
-| Implemented | 2D-2A — Parameters / Recipe drafts, validation, persistence and candidate Apply |
-| Superseded by 3C | 2D-2B — initial graphical ROI editor |
-| Future | 2E — Archive, events and diagnostics |
-| Implemented | 3A — minimal local image-set acquisition ingress |
-| Implemented | 3B — opt-in local six-image Production UI with real serial ViMo |
-| Implemented | 3G-1 — unified Camera setup and independent Folder replay |
-| Implemented | 3C — machine-only six-channel ROI setup and saved layout activation |
-| Implemented | 3D — simplified Recipe UI, hidden policy preservation and Settings ROI workspace |
-| Implemented | 3E-1 — demonstration capsule Size/Color and isolated Recipe preview |
-| Implemented | 3E-2 — sole capsule traditional path and strict Recipe consolidation |
-| Implemented | 3K-1 — persistent application bootstrap and explicit configuration discovery |
-| Future | Remaining Phase 3 — Camera, PLC and field integration |
+| Configuration | Strict Model, Recipe, MachineLayout and camera-source definitions; atomic file persistence, pure resolution and separate artifact verification. Saved MachineLayout owns ROI geometry. |
+| Inference | Typed synchronous ViMo on validated uint8 BGR arrays, serial ownership, preserved geometry/raw mask IDs and owned outputs without vendor objects. |
+| Collection and runtime | Explicit frame/cycle identity, ordered collection, bounded admission and READY inspection backlog, terminal results/errors and observable shutdown. |
+| Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, selective Size/Color checks, and independent technical status and product judgment. |
+| Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and factual cycle/channel accounting. |
+| Local sources | Owned local image-set ingress, independent per-camera Folder replay and explicit fixed-image developer inputs. |
+| Qt shell and editing | Chinese/English Production, Recipe and Vision pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. Communication and History are placeholders. |
+| Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
 
-Phase 2C composes existing layers: candidate activation after model warm-up,
-fresh runtime sessions, factual cycle/channel counters and heterogeneous checks.
-Recipe/model changes require stopped inspection; no running-engine hot replacement.
+Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
+from configured channel judgment. SDK/golden regression verifies integration,
+not model accuracy or physical product acceptance.
 
-The normal entry is root `app.py`, with ignored persistent `data/` anchored to the
-entry location. It discovers strict model/Recipe definitions, restores explicit
-IDs and saved machine/sources, and prepares a stopped candidate before Qt creation.
-It reuses the real local runtime/source composition with the explicit developer
-launcher. Missing configuration keeps the shell UNCONFIGURED. See
-[application bootstrap](application-bootstrap.md) for paths, persistence and failures.
+### Entry points
 
-## Currently implemented
+These workflows coexist; they are not interchangeable startup recovery paths.
 
-The Qt demo runs in one process. Its application entry supplies an engine factory;
-the existing Python worker owns engine construction, synchronous calls and cleanup.
+| Entry | Current purpose |
+| --- | --- |
+| [`app.py`](../app.py) | Normal real-inference Production shell; discovers strict persistent configuration under entry-relative `data/` and prepares a stopped candidate. |
+| [`scripts/run_local_production_ui.py`](../scripts/run_local_production_ui.py) | Explicit-path real Production composition, using saved Folder sources or process-local fixed images; does not restore/write manifest preferences. |
+| [`scripts/run_production_ui.py`](../scripts/run_production_ui.py) | Equipment-free Production review with a fake engine, including when real local image pixels are supplied. |
+| [`python -m vimo_demo.ui.app`](../src/vimo_demo/ui/app.py) | Separate one-image engine/worker/Qt diagnostic; does not own Production cycles, configuration activation or accounting. |
 
-```text
-GUI thread:     DemoWindow -> QtInferenceBridge
-                                   |
-                              InferenceWorker
-                                   |
-Worker thread:            VimoSegmentationEngine -> SmartMore SDK
-                                   |
-Result path:        ImageResult -> Future -> queued Qt signal -> GUI slot
-```
+[Application entry points](application.md#developer-entry-points) own commands, path
+bases and prerequisites. Invalid normal-startup configuration leaves the shell
+UNCONFIGURED, without first-file selection, fake fallback or invented geometry.
+A stopped candidate is not an active inference session.
 
-Dependencies flow **ui -> runtime -> inference**. Higher layers may also import
-lower-layer result types or supply the engine factory; no reverse dependency is
-allowed. Runtime and inference are independent of Qt. Direct SDK objects stay
-inside the inference adapter; callers receive our typed `ImageResult`.
+## Responsibilities and dependencies
 
-One worker means serial, single-image inference with a bounded pending queue.
-It has one lifecycle and is not restarted. The CLI tools can own an engine
-directly in a single serial context without running Qt or a worker.
+| Domain | Responsibility and boundary |
+| --- | --- |
+| [Configuration](configuration.md) | Definitions, persistence and immutable inspection resolution; no engine, activation or runtime state. |
+| [Inspection](inspection.md) | Identity, owned frames, synchronous collection, evidence and technical/product judgment; no source or scheduling ownership. |
+| [Inference and runtime](inference-runtime.md) | SDK boundary, typed results, worker engine ownership, serialized collection, bounded dispatch and terminal delivery. |
+| [Application](application.md) | Candidate/active configuration, readiness, sessions/source composition, admission, factual accounting and coordinated shutdown. |
+| [UI shell](ui-shell.md) | Application commands, nonblocking notifications, localized presentation and independently owned display pixels. |
+| [UI configuration](ui-configuration.md) | Recipe/Vision drafts, reference/tuning previews and persistence/preparation workflows, under configuration/application authority. |
+| [Performance tooling](inspection-performance.md) | Workloads, timing scopes, reports and interpretation; no runtime admission policy or machine-capacity specification. |
 
-The independent `inspection/` layer now collects explicitly identified frames
-into bounded cycles and converts snapshots to `InspectionCycleResult` through an
-injected serial inspection callable. It depends on inference result models, not
-Qt, SDK objects or camera/PLC libraries. Its [cycle contract](inspection-cycle.md)
-covers duplicate/late frames, missing cameras, deadlines and technical failures.
-The default scenario is six cameras; camera count/order are configured data.
-The pure-Python `RuntimeCoordinator` now owns collection on one serialized thread
-and dispatches READY snapshots through a bounded queue to a serial cycle inspector.
-That inspector calls `inspect_cycle()` using the existing worker's Futures; the
-worker remains the sole engine owner. Collection stays responsive while inference
-runs. A cycle Future returns a technical result with runtime timing, or an explicit
-runtime error. See the [coordinator contract](runtime-coordinator.md) for admission,
-explicit deadline ticks, overload and shutdown.
+Presentation/composition depends on the Qt-independent application, configuration,
+inspection, runtime and inference domains, never the reverse. Configuration resolves
+inspection types; inspection uses typed inference results; runtime dispatches through
+its worker. This is not one exhaustive linear import chain. Only the inference
+adapter imports SmartMore and exposes no vendor objects to callers.
 
-```text
-simulated sources -> bounded commands -> CycleCoordinator / CycleCollector
-                                              |
-                                       bounded READY queue
-                                              |
-                                       CycleInspector / inspect_cycle
-                                              |
-                                       InferenceWorker -> engine
-                                              |
-                         InspectionCycleResult + timing -> cycle Future consumer
-```
+The following distinctions remain architectural constraints for Current changes:
 
-Fake/local frames validate overlapping cycles; one opt-in six-frame GPU test checks
-real wiring. The Qt demo remains single-image and does not orchestrate cycles or
-share a worker with a coordinator. No real camera/PLC composition is implemented.
+- **Resolution, preparation, activation:** pure resolution creates no session.
+  Saving/preparing/installing a stopped candidate is not activation; successful
+  Start/readiness promotes it. Failure preserves last-known-good active configuration.
+- **Engine ownership:** the worker factory constructs, infers and cleans up in one
+  serial context. The coordinator owns that worker; the one-image diagnostic owns
+  another. Workers are not restarted; CLI tools may own an engine directly.
+  No SDK thread-safety claim is made.
+- **Identity/pixels:** explicit cycle membership and configured camera order do not
+  depend on arrival proximity. Owned Frames/borrowed aliases stay stable while used;
+  admission acknowledgement is neither terminal completion nor pixel-buffer return.
+- **Admission/delivery:** admission acknowledgements, task Futures and terminal cycle
+  results are distinct. Queues/observations are bounded; admitted cycles have one
+  terminal result or explicit error, without silent loss or completed-result history.
+  A permanently blocked native call or completion callback can delay delivery.
+- **Failures:** frame/check technical errors, product NG/UNKNOWN and application FAULT
+  are independent; ERROR + NG is valid. Ordinary failed checks can complete normally
+  in RUNNING, unlike infrastructure/invariant failures.
+- **Display:** rendering does not complete inspection/accounting. Raw results may own
+  masks; compact production results retain no images/masks/contour arrays. Separate
+  bounded latest-per-camera copies require generation, cycle, full FrameId and
+  dimension matching for overlays; they do not shorten original frame lifetimes.
+- **Shutdown:** stop admission, finalize incomplete cycles, reject unclaimed work
+  explicitly and let active native work finish. Stop notification/timeout does not
+  prove termination. Owners remain until threads actually exit; Qt never waits on
+  unfinished work.
 
-Phase 2A adds `inspection.production`: explicit camera/slot/channel layouts,
-lightweight ViMo findings, capsule check evidence and
-`ProductionInspectionResult`. It consumes existing cycle results plus independent
-capsule evidence; no worker, coordinator or lifecycle contract changes.
-ROI overlap maps full-image findings to every affected channel and preserves
-unassigned camera-level defects. Technical execution and product judgment remain
-independent, including ERROR + NG. See the
-[production inspection contract](production-inspection.md) for the initial rules,
-ownership and timing. Phase 2C schedules configured traditional checks; calibrated
-production algorithms and thresholds remain hardware/commissioning work.
+Precise borrowing, failure, cancellation, timeout and cleanup guarantees belong to
+[inference/runtime](inference-runtime.md), [inspection](inspection.md),
+[application](application.md) and [UI shell](ui-shell.md).
 
-Phase 2B adds the pure `configuration/` layer above `inspection.production`:
-separate model metadata, machine layout and product Recipes resolve once into
-immutable per-channel configuration. It reuses existing layout/identity/policy
-types and provides strict JSON persistence and optional artifact verification.
-It owns no engine, active configuration or runtime lifecycle. See the
-[configuration contract](inspection-configuration.md) for check inheritance, machine-owned
-ROI geometry, explicit label filtering and the pipeline-composition boundary.
+## Current execution and data flow
 
-`application/` is the Qt-independent owner above configuration and runtime.
-`ProductionApplication` has one lifecycle thread, immutable snapshots and bounded
-outstanding cycle receipts. Each Start creates a fresh `ProductionRuntimeSession`;
-it uses the existing coordinator and worker, with engine warm-up on the worker.
-`ConfiguredProductionPipeline` runs resolved checks on the existing cycle runner,
-reuses Phase 2A assignment/aggregation and publishes lightweight production results.
-No engine ownership moves to application/Qt. See the
-[application contract](production-application.md) for transactional activation,
-state transitions, exact counter semantics, explicit Batch resets and shutdown.
+The diagram shows the implemented local Production path, not a real camera/PLC path.
+Its branches describe responsibilities, not parallel GPU execution.
 
 ```text
-Production UI/source -> ProductionApplication -> ProductionRuntimeSession
-                             |                       |
-                    snapshots/counters        RuntimeCoordinator
-                                                     |
-                                      ConfiguredProductionPipeline
-                                        |                     |
-                                capsule Size/Color     InferenceWorker -> engine
-                                        +----------+----------+
-                                         ProductionInspectionResult
+Persisted Model / Recipe / MachineLayout / camera sources
+    -> strict validation / pure resolution / artifact verification
+    -> prepared stopped candidate
+    -> Start: fresh runtime session + worker readiness warm-up
+    -> active configuration / RUNNING
+
+Local Folder replay or explicit fixed image inputs
+    -> LocalCycleIngress: owned Frames with CycleId / CameraId / FrameId
+    -> ProductionApplication admission
+    -> RuntimeCoordinator / CycleCollector
+    -> READY CollectedCycle -> configured serial inspection
+         -> enabled per-channel Size/Color processing
+         -> enabled full-camera ViMo: InferenceWorker -> engine -> ImageResult
+         -> configured channel evidence / technical and product judgments
+    -> InspectionCycleResult + ProductionInspectionResult + timing
+    -> application terminal result / factual accounting / bounded observations
+    -> Qt snapshot and completed-Future notifications -> Production presentation
+
+Identified source Frames
+    -> separate latest-per-camera display copies
+    -> Qt image presentation / identity-matched result overlays
 ```
 
-The GUI observes readiness, results, exceptions and shutdown. It does not own
-inspection decisions, and result availability does not wait for rendering.
-Native calls cannot be forcibly cancelled: a blocked call can delay shutdown,
-and a timeout retains ownership rather than claiming termination.
+The collector remains responsive during serial inspection in configured camera
+order. Size/Color runs only where enabled; ViMo runs at most once per full camera
+frame when needed, then channel policy/ROI assignment consumes its evidence.
+Incomplete collection finalizes technically without running algorithms.
 
-Phase 2D-1 adds a separate six-camera Production shell:
+Explicit runtime expiration observes host-monotonic deadlines, without autonomous
+coordinator scheduling or captured-timestamp/GUI deadlines. Overload is an explicit
+admission/terminal error, not model OK/NG. Collection completion order may differ
+from cycle-ID order; identity and per-cycle camera ordering remain deterministic.
 
-```text
-ProductionApplication -> snapshot / command Future -> QtProductionBridge -> widgets
-accepted source Frame -> bounded LatestDisplayFrameStore -> CameraCard
-```
+Readiness warm-up produces no production data or counters. Accounting measures
+admitted cycles/channel judgments, not capsules; only explicit Batch resets it,
+not Stop/Start or Recipe changes. The local source waits for RUNNING and each cycle
+before advancing. Overlapping-collection support is not physical-throughput evidence.
 
-The bridge polls changed snapshots/display revisions; lifecycle Futures cross
-queued Qt signals. The independent latest-frame store owns immutable display
-copies. Generation/cycle/frame/shape matching prevents stale overlays. Widgets
-do not control runtime internals or duplicate judgments/counters. The same six
-cards rearrange between portrait and landscape.
-The launcher uses real application/runtime composition with a fake engine and
-synthetic inputs. See the [Production UI contract](production-ui.md) for ownership,
-nonblocking shutdown, localization, layout and physical-screen limitations.
+## Implementation navigation
 
-Phase 3D simplifies the earlier Parameters editor into a Recipe page: display
-name, optional product code, registered model and Save and apply. New/Duplicate
-use generated identities. Hidden ViMo policies and camera/channel overrides remain in
-the existing Qt-free draft/configuration backend, unchanged by unrelated edits.
-Save and apply combines atomic persistence with existing off-thread preparation
-and configuration; successful Start alone activates. Settings hosts the existing
-machine ROI workspace. Diagnostics/History remain placeholders. See the
-[Recipe UI contract](recipe-configuration-ui.md); runtime/inference are unchanged.
+These locations explain the Current code. They do not mandate that Target
+packages, classes, composition hooks or thread topology retain this arrangement.
 
-Phase 3C makes MachineLayout the sole ROI owner. The [machine ROI editor](graphical-roi-editor.md)
-shows six labeled rectangles on one frozen camera reference, reuses source-pixel
-geometry/gestures, and supports common size and two-axis center interpolation.
-Recipe geometry overrides are removed from the current schema, drafts and UI.
-The canvas workspace combines Save and apply: the machine draft saves atomically
-and existing preparation resolves the selected saved
-Recipe against it, with artifact verification off Qt and successful Start still
-required for activation. One rectangular ROI per physical channel is sufficient
-for the current workflow; multiple views/ROIs and calibration are not implemented.
+| Location | Navigation |
+| --- | --- |
+| [`configuration/`](../src/vimo_demo/configuration/) | Definition models, pure resolution, strict persistence and camera sources. |
+| [`inspection/`](../src/vimo_demo/inspection/) | `Frame`, `CycleCollector`, `CollectedCycle`, `inspect_cycle()` and technical results; [`production/`](../src/vimo_demo/inspection/production/) holds layout, evidence/judgment and capsule screening. |
+| [`inference/`](../src/vimo_demo/inference/) | Public `VimoSegmentationEngine` and result types; [adapter](../src/vimo_demo/inference/vimo_adapter.py) and model staging stay behind that API. |
+| [`runtime/`](../src/vimo_demo/runtime/) | `InferenceWorker` and `RuntimeCoordinator`; sole collector owner, serial cycle runner and worker engine owner. |
+| [`application/`](../src/vimo_demo/application/) | `ProductionApplication`, `ProductionRuntimeSession`, `ConfiguredProductionPipeline`, `LocalCycleIngress` and `FolderReplay`. |
+| [`ui/`](../src/vimo_demo/ui/) | Shell, bridges, display copies and configuration/preview widgets; [bootstrap](../src/vimo_demo/ui/bootstrap.py) and [local composition](../src/vimo_demo/ui/local_production.py) host Current desktop startup/source wiring. |
+| [`tests/`](../tests/) and [`scripts/`](../scripts/) | Maintained verification, optional real regression, CLI tools and fake UI review. |
 
-Phase 3A adds `application.LocalCycleIngress`: one ordered local image set is
-copied into existing owned Frames with a session-local cycle ID, admitted through
-`ProductionApplication`, and exposed through its existing `ProductionCycle` result
-Future. It uses configured camera order and adds no queue, thread, lifecycle or
-UI changes. See [local ingress](production-application.md#local-image-set-ingress--phase-3a)
-for buffer reuse, explicit rejections and source/session coordination requirements.
-Real acquisition/trigger/PLC association remains unimplemented.
+## Target / Not implemented
 
-Phase 3B adds the opt-in `scripts/run_local_production_ui.py` composition. It loads
-existing Recipe/model/layout JSON and saved per-camera Folder sources (or explicit
-CLI fixed images), and uses the same
-Production window, application, runtime session, coordinator and real engine.
-Its launcher-local session subclass stops/joins one source thread alongside the
-existing runtime; it does not change lower-layer scheduling or engine ownership.
-The source waits for RUNNING, uses `LocalCycleIngress`, and waits for each cycle
-before submitting another. Phase 3G-1 reuses this source thread for on-demand,
-naturally ordered six-folder replay, default 8 Hz start pacing and normal
-end-of-dataset Stop. Source settings persist separately from MachineLayout/Recipe.
-Settings directly hosts source controls and the existing ROI canvas; blocking
-reference IO reuses the single UI preparation slot. Existing display identity checks
-remain authoritative, with source association for frozen reference selection.
-See [local real-inference mode](production-ui.md#local-real-inference-mode--phase-3b--3g-1)
-for configuration, failure and shutdown behavior.
+These directions need separate design/validation. No frameworks, protocols,
+adapter designs or scheduling structures are selected here.
 
-Phase 3E-1 adds [capsule Size/Color screening](capsule-inspection.md): one shared
-measurement per enabled channel on the existing cycle inspector, combined with
-unchanged full-camera ViMo and production aggregation. Product-level Recipe settings
-now provide the sole traditional path after Phase 3E-2 consolidation. ViMo policies
-and overrides remain separate. The tuning workspace
-uses frozen references, one bounded background measurement job and cached judgments;
-it never submits cycles or changes counters/configuration. Algorithms remain uncalibrated;
-removed Recipe fields are rejected, with no runtime migration.
+| Direction | Unresolved design or validation boundary |
+| --- | --- |
+| Real cameras/adapters | Hardware/SDK choice, acquisition mode and failure behavior; local inputs do not implement cameras. |
+| Trigger/cycle association | Explicit hardware/frame association, buffer leases, captured/arrival clocks and synchronization. |
+| Hardware capacity/deadlines/overload | Measured limits, deadline events and machine responses; software bounds/pacing do not establish field capacity. |
+| PLC/communication and counting | Output association, delivery acknowledgement and physical-product accounting; no transport or capsule counter is implemented. |
+| Machine stopping/commissioning | Safety, emergency-stop responsibilities and hardware recovery; graceful software Stop/close is not machine safety. |
+| Calibrated inspection/acceptance | Lighting/geometry, calibration, thresholds, annotations and field acceptance criteria remain unverified. |
+| History/archive/read-only consumers | Retention, result/image association and delivery requirements; no archive or web service is implemented. |
+| Performance/concurrency | Measure target workloads and ownership/hardware behavior before choosing concurrency; Current serial execution is not a permanent mandate. |
 
-## Planned direction — not implemented
+Future architecture may differ substantially from today's internal topology.
+An intentional change to an existing external behavior contract still requires
+separate design approval and suitable validation.
 
-```text
-camera adapters / simulation or folder sources
-    -> owned frames with stable identity
-    -> cycle collection
-    -> inspection pipeline (calibrated traditional CV + ViMo)
-    -> ProductionInspectionResult
-    -> communication/output adapter
+**Historical evidence** remains in [validation evidence](archive/validation-evidence.md), the tracked
+[golden fixture](../tests/reference/phase0.json) and
+[performance records](archive/inspection-performance-records.md). Integration,
+stability and software P95 do not establish accuracy or machine throughput.
+Ignored `outputs/` may contain protected evidence; it and persistent `data/`, local
+models/images are outside this migration.
 
-local UI / future read-only web display <- application/runtime state and results
-```
-
-Frame/cycle types, collection, runtime coordination and serial inspection are
-implemented. `InspectionCycleResult` retains per-frame `ImageResult` outcomes and
-technical status; the additive production layer derives channel judgments and
-lightweight evidence without retaining images/masks. Real camera acquisition,
-trigger association, hardware deadline-event integration, calibrated algorithms,
-PLC and web modules are future work. Recipe activation and simulated configured
-runtime execution are implemented; the diagram describes future hardware wiring.
-
-- Isolate camera SDKs behind adapters; support simulation/folder sources for
-  equipment-free tests. Frames need owned pixels and stable identity.
-- Keep inspection/channel rules independent of UI and communication. Represent
-  channel count through configuration/data rather than duplicated implementations.
-- Compose traditional CV and ViMo inside inspection logic. PLC/communication
-  consumes an inspection result through an adapter and never waits for UI rendering.
-- Keep desktop display local without unnecessary HTTP/base64 transport. A future
-  read-only web display consumes state; it does not own inspection execution.
-- Choose GPU concurrency only after measurement on the target workload. Real
-  camera timing, dropped-frame behavior and field throughput require hardware tests.
-
-Historical SDK/regression checks establish integration behavior, not model
-accuracy, annotation quality or production acceptance thresholds.
+The archives preserve dated evidence separately from Current contracts. The
+original documents remain recoverable at Git checkpoint
+`8fad326aaaf5e0e981224963607a7e000eb95604`; local evidence and assets stay in place.
 
 ## Documentation map
 
-| Document | Responsibility |
+| Maintained document | Authority |
 | --- | --- |
-| [README](../README.md) | Setup, usage, maintained tools and validation commands |
-| [AGENTS](../AGENTS.md) | Durable engineering rules and change-validation policy |
-| [Phase 0 findings](phase0-findings.md) | Frozen experimental evidence and golden provenance |
-| [Inference core](inference-core.md) | Engine/input/result contract and SDK boundary |
-| [Runtime worker](runtime-worker.md) | Ownership, queue, Futures, lifecycle and failure |
-| [Runtime coordinator](runtime-coordinator.md) | Serialized collection, bounded cycle dispatch, result Futures and coordinated shutdown |
-| [Inspection cycle](inspection-cycle.md) | Identity, owned frames, bounded collection and technical cycle results |
-| [Production inspection](production-inspection.md) | Channel layout, ROI evidence assignment, traditional boundary and independent technical/product judgments |
-| [Inspection configuration](inspection-configuration.md) | Separate Recipes/models/layout, strict JSON, deterministic inheritance and immutable per-channel policies |
-| [Production application](production-application.md) | Transactional activation, warm-up, runtime sessions, configured execution, factual counters and Batch lifecycle |
-| [Qt integration](qt-integration.md) | GUI-thread delivery, object lifetime and deferred close |
-| [Production UI](production-ui.md) | Implemented shell/bridge, display ownership, identity matching, controls and review |
-| [Recipe configuration UI](recipe-configuration-ui.md) | Simplified Recipe workflow, hidden policy preservation, catalog and dirty-close safety |
-| [Graphical ROI editor](graphical-roi-editor.md) | Frozen reference ownership, source-pixel geometry, gestures, camera tabs, Save and apply, and read-only state |
-| [Production UI direction](production-ui-direction.md) | Agreed visual direction and flexible review details; not an exact implementation specification |
+| [Architecture](architecture.md) | Current capability/boundary overview, implementation navigation and deferred Target direction. |
+| [Configuration](configuration.md) | Definition schemas, machine/source ownership, resolution, persistence and artifact paths. |
+| [Inspection](inspection.md) | Frame/cycle identity, collection, channel evidence, technical/product judgment and Size/Color semantics. |
+| [Inference and runtime](inference-runtime.md) | Typed input/results, SDK boundary, engine/worker/coordinator ownership, admission, Futures and shutdown. |
+| [Application](application.md) | Startup recovery, candidate activation, sessions, readiness, counters, local sources and lifecycle. |
+| [UI shell](ui-shell.md) | Presentation, display identity, feedback, Qt delivery, closing and review workflows. |
+| [UI configuration](ui-configuration.md) | Recipe/Vision drafts, references, ROI/tuning workflows and distinct Save/Apply/activation stages. |
+| [Inspection performance](inspection-performance.md) | Measurement workloads/boundaries, reports, interpretation, historical results and verification. |
+
+[README](../README.md) owns setup, usage and verification commands; [AGENTS](../AGENTS.md)
+owns durable engineering safeguards and proportional checks. Temporary migration
+reviews are evidence, not maintained specifications.
+
+Frozen Historical records: [validation evidence](archive/validation-evidence.md),
+[performance records](archive/inspection-performance-records.md) and
+[UI exploration](archive/production-ui-exploration.md). They preserve observations
+and provenance, not additional Current requirements.
