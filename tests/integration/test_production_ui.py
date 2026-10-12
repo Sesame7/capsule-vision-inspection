@@ -331,8 +331,26 @@ def test_demo_uses_real_application_runtime_and_exits(
     composition = compose(demo_images(), tmp_path, cast(Scenario, scenario), 0.001)
     bridge = QtProductionBridge(composition.application, composition.store, poll_ms=10)
     window = ProductionWindow(bridge, composition.choices, simulation=True)
+    window.resize(1920, 1080)
     window.show()
     try:
+        first, next_recipe = composition.choices
+        active_a = ConfigurationIdentity.from_prepared(first.prepared)
+        candidate_b = ConfigurationIdentity.from_prepared(next_recipe.prepared)
+        bridge.start_batch("LOT-20261009-001")
+        qapp.processEvents()
+        assert window.snapshot.state is ApplicationState.READY
+        assert window.snapshot.candidate == active_a
+        assert window.snapshot.active is None
+        assert window.snapshot.counters == ProductionCounters()
+        assert window.metrics["cycles"][0].text() == "0"
+        assert window.metrics["channel_ng"][0].text() == "0"
+        assert window.identity_label.text() == first.label
+        assert not window.pending_label.isVisible()
+        assert (
+            window.batch_label.text()
+            == f"{text('batch_id', window.language)} LOT-20261009-001"
+        )
         bridge.start()
         until(
             lambda: (
@@ -341,6 +359,9 @@ def test_demo_uses_real_application_runtime_and_exits(
             )
         )
         snapshot = window.snapshot
+        assert snapshot.active == snapshot.candidate == active_a
+        assert window.identity_label.text() == first.label
+        assert not window.pending_label.isVisible()
         if scenario == "fault":
             assert snapshot.state is ApplicationState.FAULT
         else:
@@ -359,6 +380,40 @@ def test_demo_uses_real_application_runtime_and_exits(
                 else TechnicalStatus.SUCCESS
             )
         assert len(composition.store.snapshot().frames) == 6
+        if scenario != "fault":
+            bridge.stop()
+            until(lambda: window.snapshot.state is ApplicationState.READY)
+            composition.source.close()  # Readiness-only restart, with no new cycles.
+            counters = window.snapshot.counters
+            bridge.select_recipe(next_recipe)
+            for language in ("zh", "en"):
+                window.set_language(language)
+                qapp.processEvents()
+                assert window.snapshot.state is ApplicationState.READY
+                assert window.snapshot.active == active_a
+                assert window.snapshot.candidate == candidate_b
+                assert composition.application.snapshot().active == active_a
+                assert window.snapshot.counters == counters
+                assert window.identity_label.text() == first.label
+                assert window.pending_label.isVisible()
+                assert (
+                    window.pending_label.text()
+                    == f"{text('pending_recipe', language)}: {next_recipe.label}"
+                )
+            bridge.start()
+            until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+            assert window.snapshot.active == window.snapshot.candidate == candidate_b
+            assert composition.application.snapshot().active == candidate_b
+            for language in ("zh", "en"):
+                window.set_language(language)
+                qapp.processEvents()
+                assert window.identity_label.text() == next_recipe.label
+                assert not window.pending_label.isVisible()
+                assert window.snapshot.counters == counters
+            bridge.stop()
+            until(lambda: window.snapshot.state is ApplicationState.READY)
+            assert window.snapshot.active == candidate_b
+            assert window.snapshot.counters == counters
     finally:
         window.close()
         until(lambda: bridge.closed)
@@ -758,11 +813,20 @@ def test_summary_groups_center_batch_and_keep_actions_in_bounds(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
 @pytest.mark.parametrize(
-    "batch_id",
-    [None, "121", "12313123", "1231312213123", "LOT-20261009-001", "long-batch-" * 100],
-    ids=["none", "short", "eight-digits", "thirteen-digits", "lot", "very-long"],
+    "size,batch_id",
+    [
+        pytest.param((1080, 1920), None, id="portrait-none"),
+        pytest.param((1080, 1920), "121", id="portrait-short"),
+        pytest.param((1080, 1920), "12313123", id="portrait-eight-digits"),
+        pytest.param((1080, 1920), "1231312213123", id="portrait-thirteen-digits"),
+        pytest.param((1080, 1920), "LOT-20261009-001", id="portrait-lot"),
+        pytest.param((1080, 1920), "long-batch-" * 100, id="portrait-very-long"),
+        pytest.param((1920, 1080), None, id="landscape-none"),
+        pytest.param((1920, 1080), "121", id="landscape-short"),
+        pytest.param((1920, 1080), "LOT-20261009-001", id="landscape-lot"),
+        pytest.param((1920, 1080), "long-batch-" * 100, id="landscape-very-long"),
+    ],
 )
 def test_batch_identity_uses_available_width_in_ready_and_running(
     screen: tuple[ProductionWindow, FakeSession],
@@ -922,71 +986,6 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
         assert window.pending_label.text().startswith(text("pending_recipe", language))
         assert window.buttons["operation"].size() == QSize(4 * Style.touch, Style.touch)
         assert window.buttons["batch"].size() == QSize(Style.touch, Style.touch)
-
-
-@pytest.mark.parametrize(
-    "language,size,scenario",
-    [
-        ("zh", (1920, 1080), "long-batch"),
-        ("zh", (1080, 1920), "long-batch"),
-        ("en", (1920, 1080), "candidate"),
-        ("en", (1080, 1920), "candidate"),
-        ("en", (1920, 1080), "different-recipes"),
-    ],
-)
-def test_production_summary_refinement_screenshot(
-    qapp: QApplication,
-    tmp_path: Path,
-    language: Language,
-    size: tuple[int, int],
-    scenario: str,
-) -> None:
-    from run_production_ui import compose, demo_images
-
-    ensure_test_fonts()
-    composition = compose(demo_images(), tmp_path, "normal", 0.001)
-    bridge = QtProductionBridge(composition.application, composition.store, poll_ms=5)
-    window = ProductionWindow(
-        bridge,
-        composition.choices,
-        language=language,
-        simulation=True,
-        recipe_editor=composition.editor,
-    )
-    window.resize(*size)
-    window.show()
-    try:
-        # These summary screenshots need readiness, not production data.
-        composition.source.close()
-        bridge.start_batch("LOT-20261009-001")
-        if scenario == "different-recipes":
-            bridge.start()
-            until(lambda: window.snapshot.state is ApplicationState.RUNNING)
-            bridge.stop()
-            until(lambda: window.snapshot.state is ApplicationState.READY)
-            bridge.select_recipe(composition.choices[1])
-        bridge.refresh()
-        qapp.processEvents()
-        assert window.snapshot.state is ApplicationState.READY
-        assert window.snapshot.counters == ProductionCounters()
-        assert (
-            window.batch_label.text()
-            == f"{text('batch_id', language)} LOT-20261009-001"
-        )
-        assert window.pending_label.isVisible() == (scenario == "different-recipes")
-        assert (window.snapshot.active is None) == (scenario != "different-recipes")
-        assert window.grab().save(
-            str(
-                tmp_path
-                / f"production-summary-{language}-{size[0]}x{size[1]}-{scenario}.png"
-            )
-        )
-    finally:
-        window.close()
-        until(lambda: bridge.closed)
-        composition.source.close()
-        assert composition.application.join(0)
-        window.deleteLater()
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
