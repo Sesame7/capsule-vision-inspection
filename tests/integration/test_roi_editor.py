@@ -8,8 +8,8 @@ from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QMessageBox
 from tests.application_support import FakeSession
-from tests.integration.test_parameters_ui import configured_screen as configured_screen
 from tests.qt_support import until
+from tests.recipe_ui_support import configured_screen as configured_screen
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.configuration import load_machine_layout

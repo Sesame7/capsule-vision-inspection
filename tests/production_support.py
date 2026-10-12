@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import numpy as np
 
-from tests.unit.test_inspection_cycle import image_result
+from tests.cycle_support import image_result
 from vimo_demo.inference import BoundingRect, DefectRegion, ImageResult, RotatedRect
 from vimo_demo.inspection import (
     CameraId,

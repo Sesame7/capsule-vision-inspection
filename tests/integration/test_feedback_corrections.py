@@ -9,9 +9,9 @@ from tests.application_support import WAIT
 from tests.integration.test_application_bootstrap_ui import close_window
 from tests.integration.test_camera_setup import camera_screen as camera_screen
 from tests.integration.test_local_production_ui import ControlledEngine
-from tests.integration.test_parameters_ui import Screen, edit
-from tests.integration.test_parameters_ui import configured_screen as configured_screen
 from tests.qt_support import ensure_test_fonts, until
+from tests.recipe_ui_support import Screen, edit
+from tests.recipe_ui_support import configured_screen as configured_screen
 from tests.unit.test_application_bootstrap import saved_data
 
 from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters

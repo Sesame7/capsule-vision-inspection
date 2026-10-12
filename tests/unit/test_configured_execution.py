@@ -148,7 +148,7 @@ def test_inference_failure_uses_each_enabled_required_policy(
         for row in configuration.channels
     )
     configuration = replace(configuration, channels=rows)
-    from tests.unit.test_capsule import ROI, SETTINGS, bodies
+    from tests.capsule_support import ROI, SETTINGS, bodies
 
     from vimo_demo.inspection.production.capsule import measure_capsule
 
@@ -201,7 +201,7 @@ def test_incomplete_cycle_never_executes_checks(
     def forbidden(image: NDArray[np.uint8]) -> ImageResult:
         pytest.fail("Incomplete cycle must not infer")
 
-    from tests.unit.test_capsule import SETTINGS
+    from tests.capsule_support import SETTINGS
 
     monkeypatch.setattr("vimo_demo.application.pipeline.measure_capsule", forbidden)
     configuration = replace(configuration, capsule=SETTINGS)
@@ -215,7 +215,7 @@ def test_incomplete_cycle_never_executes_checks(
 def test_resolved_vimo_required_overrides_drive_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tests.unit.test_capsule import ROI, SETTINGS, bodies
+    from tests.capsule_support import ROI, SETTINGS, bodies
 
     from vimo_demo.inspection.production.capsule import measure_capsule
 
