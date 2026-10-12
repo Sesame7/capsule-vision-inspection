@@ -6,6 +6,7 @@ from threading import enumerate as threads
 from threading import get_ident
 
 import pytest
+from tests.application_support import prepared
 from tests.integration.test_reference import unavailable
 from tests.integration.test_worker_vimo import (
     MODEL,
@@ -13,7 +14,6 @@ from tests.integration.test_worker_vimo import (
     RecordedEngine,
     reference_image,
 )
-from tests.unit.test_production_application import prepared
 
 from vimo_demo.application import (
     ApplicationError,

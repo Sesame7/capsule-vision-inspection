@@ -12,9 +12,9 @@ import pytest
 from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication
 from run_local_production_ui import SourceNotifications, compose
+from tests.application_support import WAIT, prepared
 from tests.qt_support import until
 from tests.unit.test_inspection_cycle import image_result
-from tests.unit.test_production_application import WAIT, prepared
 
 from vimo_demo.application import (
     ApplicationState,

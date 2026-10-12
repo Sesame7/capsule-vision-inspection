@@ -7,7 +7,6 @@ from threading import enumerate as threads
 
 import pytest
 from _tool_helpers import decode
-from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 from run_local_production_ui import compose
 from tests.integration.test_local_production_ui import input_files
@@ -18,7 +17,7 @@ from tests.integration.test_reference import (
     verify_files,
 )
 from tests.integration.test_worker_vimo import MODEL, TIMEOUT, reference_image
-from tests.qt_support import until
+from tests.qt_support import ensure_test_fonts, until
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.configuration import (
@@ -68,11 +67,7 @@ def test_real_local_ui(
     composition = compose(model, machine, recipe)
     app = composition.application
     bridge = QtProductionBridge(app, composition.store, poll_ms=10)
-    if not QFontDatabase.families():
-        for font in ("segoeui.ttf", "msyh.ttc"):
-            path = Path("C:/Windows/Fonts") / font
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
+    ensure_test_fonts()
     window = ProductionWindow(
         bridge, (composition.choice,), recipe_editor=composition.editor
     )

@@ -2,7 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from tests.unit.test_production_application import FIXTURES, prepared
+from tests.application_support import FIXTURES, prepared
 
 from vimo_demo.configuration import (
     CheckConfiguration,

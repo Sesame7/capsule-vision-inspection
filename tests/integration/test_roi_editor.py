@@ -7,9 +7,9 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QMouseEvent, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QMessageBox
+from tests.application_support import FakeSession
 from tests.integration.test_parameters_ui import configured_screen as configured_screen
 from tests.qt_support import until
-from tests.unit.test_production_application import FakeSession
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.configuration import load_machine_layout

@@ -11,14 +11,14 @@ import cv2
 import numpy as np
 import pytest
 from PySide6.QtCore import QPoint, QSize
-from PySide6.QtGui import QFontDatabase, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 from run_local_production_ui import SourceNotifications, compose
 from run_production_ui import demo_images
+from tests.application_support import WAIT
 from tests.integration.test_local_production_ui import ControlledEngine, input_files
-from tests.qt_support import until
+from tests.qt_support import ensure_test_fonts, until
 from tests.unit.test_folder_replay import folders, write_image
-from tests.unit.test_production_application import WAIT
 
 from vimo_demo.application import ApplicationState, ProductionCounters
 from vimo_demo.application.folder_replay import FolderSourceError, decode_image
@@ -60,11 +60,7 @@ def folder_composition(
 def camera_screen(
     qapp: QApplication, tmp_path: Path
 ) -> Iterator[tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine]]:
-    if not QFontDatabase.families():
-        for font in ("segoeui.ttf", "msyh.ttc"):
-            path = Path("C:/Windows/Fonts") / font
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
+    ensure_test_fonts()
     engine = ControlledEngine()
     engine.release_warm.set()
     engine.release_active.set()

@@ -10,8 +10,8 @@ from threading import enumerate as threads
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from tests.application_support import WAIT, close, prepared
 from tests.unit.test_inspection_cycle import image_result
-from tests.unit.test_production_application import WAIT, close, prepared
 
 from vimo_demo.application import (
     ApplicationCapacityError,

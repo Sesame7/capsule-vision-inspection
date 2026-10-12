@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
-from tests.unit.test_production_application import prepared
+from tests.application_support import prepared
 
 from vimo_demo.application.folder_replay import (
     FolderReplay,

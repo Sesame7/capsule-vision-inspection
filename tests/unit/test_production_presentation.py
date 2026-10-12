@@ -6,8 +6,8 @@ from weakref import ref
 
 import numpy as np
 import pytest
-from tests.unit.test_production_application import production
-from tests.unit.test_production_inspection import source_frame
+from tests.application_support import production
+from tests.production_support import source_frame
 
 from vimo_demo.application import (
     ApplicationState,

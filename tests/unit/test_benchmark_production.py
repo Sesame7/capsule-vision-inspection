@@ -13,8 +13,8 @@ import benchmark_production as bench
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from tests.unit.test_production_application import prepared
-from tests.unit.test_production_inspection import cycle_result, inferred, layout
+from tests.application_support import prepared
+from tests.production_support import cycle_result, inferred, layout
 from visualize_inference import save_png
 
 from vimo_demo.application import ProductionCycle

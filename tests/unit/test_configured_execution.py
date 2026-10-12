@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from tests.unit.test_production_application import FIXTURES, prepared
-from tests.unit.test_production_inspection import inferred
+from tests.application_support import FIXTURES, prepared
+from tests.production_support import inferred
 
 from vimo_demo.application import (
     ConfiguredProductionPipeline,

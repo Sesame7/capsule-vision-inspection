@@ -8,11 +8,11 @@ from threading import Event, get_ident
 import numpy as np
 import pytest
 from PySide6.QtCore import QObject, QPoint, QSize, QTimer, Slot
-from PySide6.QtGui import QFontDatabase, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QWidget
-from tests.qt_support import until
-from tests.unit.test_production_application import FakeSession, prepared, production
-from tests.unit.test_production_inspection import source_frame
+from tests.application_support import FakeSession, prepared, production
+from tests.production_support import source_frame
+from tests.qt_support import ensure_test_fonts, until
 
 from vimo_demo.application import (
     ApplicationState,
@@ -47,11 +47,7 @@ def screen(
 ) -> Iterator[tuple[ProductionWindow, FakeSession]]:
     # Windows' offscreen plugin exposes no system fonts in this environment.
     # Read existing OS fonts for realistic metrics/Chinese glyphs; install nothing.
-    if not QFontDatabase.families():
-        for name in ("segoeui.ttf", "msyh.ttc"):
-            path = Path("C:/Windows/Fonts") / name
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
+    ensure_test_fonts()
     candidate = prepared(tmp_path)
     session = FakeSession(automatic_start=False)
     app = ProductionApplication(lambda _p, _g: session)
@@ -218,7 +214,7 @@ def test_frames_match_identity_bgr_and_clear_stale_overlay(
     receipt = window.bridge.application.begin_cycle(CycleId(1))
     session.cycles[0].accepted.set_result(None)
     # Golden synthetic production has a real lightweight defect bbox in CAM1.
-    from tests.unit.test_production_inspection import cycle_result, inferred, layout
+    from tests.production_support import cycle_result, inferred, layout
 
     from vimo_demo.inference import BoundingRect
     from vimo_demo.inspection.production import ProductionPipeline
@@ -639,11 +635,7 @@ def test_production_visual_polish_screenshot(
 ) -> None:
     from run_production_ui import compose, demo_images
 
-    if not QFontDatabase.families():
-        for name in ("segoeui.ttf", "msyh.ttc"):
-            path = Path("C:/Windows/Fonts") / name
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
+    ensure_test_fonts()
     composition = compose(
         demo_images(), tmp_path, "warning" if scenario == "warning" else "ng", 0.001
     )
@@ -951,11 +943,7 @@ def test_production_summary_refinement_screenshot(
 ) -> None:
     from run_production_ui import compose, demo_images
 
-    if not QFontDatabase.families():
-        for name in ("segoeui.ttf", "msyh.ttc"):
-            path = Path("C:/Windows/Fonts") / name
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
+    ensure_test_fonts()
     composition = compose(demo_images(), tmp_path, "normal", 0.001)
     bridge = QtProductionBridge(composition.application, composition.store, poll_ms=5)
     window = ProductionWindow(

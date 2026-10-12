@@ -6,7 +6,7 @@ from threading import get_ident
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from tests.unit.test_production_inspection import (
+from tests.production_support import (
     ERROR,
     NG,
     SUCCESS,
