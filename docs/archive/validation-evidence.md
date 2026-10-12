@@ -213,3 +213,47 @@ The fixture remains the self-contained regression authority. Optional local
 reports, models and photographs were not made Markdown dependencies or copied
 into Git. These records do not certify accuracy, annotation quality, safety,
 machine throughput, a guaranteed deadline or indefinite runtime stability.
+
+## Phase 3M final acceptance — 2026-10-12
+
+**Historical — functional smoke acceptance**, recorded in Asia/Shanghai at Git
+checkpoint `736d9b95c989eacc88ce0923042a904054278b12` on `main`.
+Phase 3M-3D passed normal Ruff, formatting (114 files), strict Pyright
+(0 errors/warnings) and pytest: **751 passed / 10 skipped**.
+The skips were opt-in GPU/reference tests, not executed real-inference successes.
+
+The saved startup graph resolved Model `general`, Recipe `local` (**Local test**),
+the real `data/models/model_trt_fp16.vimosln` artifact and module `2`. Its verified
+SHA-256 was:
+
+`b2380a2c8714b36f0c045e2d79600ff3bed84f9a745822abe473830dd40d982b`
+
+Machine/source order agreed as CAM1 → CAM6, with all 36 configured channel slots.
+Each camera's first actual Folder image decoded as uint8 BGR `(960,1056,3)`;
+saved ROIs passed bounds checks without replacement or calibration. Normal
+[`app.py`](../../app.py) startup was directly observed in READY with Local test
+and zero completed cycles, without automatic inspection. Preparation was distinct
+from active-session activation; the [normal application workflow](../application.md#developer-entry-points)
+remained authoritative.
+
+Real Start/readiness, a completed six-camera/36-channel Production cycle without
+technical ERROR/FAULT, Stop to READY and normal Close were **operator-confirmed**:
+the response to the bundled observation request was “成功”. Automated GUI control
+did not independently capture that sequence. Exact manual cycle counts, per-cycle
+traces/identities and the manual run's exit code were not supplied. Subsequent
+window/process checks found no Production window or matching `app.py` process;
+the separately monitored launcher exited 0. These observations are not an
+independently measured GPU regression or per-thread trace.
+
+Tracked-file/Git integrity and protected identities passed verification: all
+1,348 image files, seven persistent `data/` files, the 25 retained evidence files
+and the [golden fixture](../../tests/reference/phase0.json) were preserved.
+The licensed environment and existing native caches were not altered by cleanup.
+Root `models/` remained absent, affecting optional defaults but not the verified
+normal `data/models/` startup; restoration/path consolidation stayed deferred.
+
+The owner approved retiring the four completed Phase 3M temporary audit
+directories after this summary was preserved and checked; those ignored detailed
+reports are not promised recoverable from Git. Earlier frozen evidence above
+remains unchanged. This acceptance did **not** establish model accuracy,
+calibrated geometry, throughput, long-term reliability or industrial acceptance.
