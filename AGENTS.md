@@ -18,11 +18,14 @@ Do not commit or tag automatically.
   packages/runtime, change global environment/PATH or modify vendor binaries/model
   settings without explicit authorization. Keep dependency changes within approved
   scope; additions need a demonstrated reason.
-- Protect persistent `data/`, local models/images, `tests/reference/phase0.json`,
-  manual configurations, accepted reports/profiling evidence and local prototypes.
-  Ignored/generated status does not authorize deletion, movement, regeneration or
-  overwriting. Do not commit local assets, caches or generated evidence. Historical
-  raw reports are not required regression inputs; never regenerate the golden
+- Protect persistent `data/`, local models/images, `tests/reference/phase0.json`
+  and deliberately retained evidence under `outputs/retained-evidence/`.
+  Historical outputs, manual snapshots and prototypes may be retired only through
+  explicit approval of their exact scope and retention requirements. Ignored or
+  generated status alone never authorizes deletion, movement, regeneration or
+  overwriting. Verify retained copies before removing originals; preserve active
+  assets and unapproved groups. Do not commit local assets, caches or evidence.
+  Historical raw reports are not regression inputs; never regenerate the golden
   fixture merely to make a changed implementation pass.
 
 ## Protected Current behavior

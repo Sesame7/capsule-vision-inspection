@@ -38,12 +38,16 @@ and neither is complete production-cycle latency.
 The maintained [production benchmark](../scripts/benchmark_production.py) is
 opt-in and Qt independent. It composes
 `ProductionApplication -> ProductionRuntimeSession -> RuntimeCoordinator` with
-the existing configured pipeline and worker. Run from the repository root:
+the existing configured pipeline and worker. Supply existing, validated benchmark
+configuration files and run from the repository root. This is a template; replace
+the three configuration placeholders before running:
 
 ```powershell
 cd C:\Users\Sesame\Projects\vimo-demo
-$config = "outputs/manual_phase3c"
-uv run --no-sync python scripts/benchmark_production.py --model-config "$config/model.json" --machine-config "$config/machine.json" --recipe "$config/local.recipe.json" --frames-dir images --warmup 30 --cycles 300 --repetitions 3
+$modelConfig = "<existing benchmark Model JSON>"
+$machineConfig = "<existing MachineLayout JSON>"
+$recipe = "<existing Recipe JSON>"
+uv run --no-sync python scripts/benchmark_production.py --model-config "$modelConfig" --machine-config "$machineConfig" --recipe "$recipe" --frames-dir images --warmup 30 --cycles 300 --repetitions 3
 ```
 
 For a short wiring check replace the counts with
@@ -52,8 +56,8 @@ a subset in supplied order; duplicates are rejected. Warm-up accepts zero;
 cycles/repetitions must be positive. These are opt-in commands, not documentation
 validation steps.
 
-The local configuration filenames above are examples, not startup defaults or
-calibrated production geometry. They must exist and satisfy the current codecs;
+The former `outputs/manual_phase3c/` example was deliberately retired. The supplied
+files must exist and satisfy the current codecs;
 obsolete Recipe fields fail rather than being migrated. The script reads inputs
 and makes mode changes only in memory; it never saves configurations.
 
@@ -64,6 +68,14 @@ artifact paths are supported. This benchmark-specific convention differs from
 normal `app.py` and the real-local UI launcher, which anchor artifacts to the
 Model JSON directory. Relative Folder-source paths use their source JSON
 directory; this fixed-image benchmark does not load saved Folder sources.
+The current `data/models/model.json` uses `model_trt_fp16.vimosln` relative to its
+own directory for normal startup; it cannot be used unchanged with this benchmark's
+repository-root artifact base. Benchmark metadata must instead already contain an
+absolute artifact path or a repository-root-relative path such as
+`data/models/model_trt_fp16.vimosln`, with the verified identity/module fields.
+No replacement benchmark configuration was created and no active JSON was changed
+by the cleanup. The saved MachineLayout and Recipe can be supplied explicitly;
+their geometry/policies are not automatically calibrated by this tool.
 See [artifact paths](configuration.md#artifact-paths) and
 [developer entry points](application.md#developer-entry-points).
 
@@ -158,11 +170,12 @@ the result is released after the timestamp and before the next call. The script
 reports per-call statistics, not six-call round distributions. Do not divide or
 multiply percentiles to claim an equivalent production distribution.
 
-CPU profiling helpers under `outputs/capsule_profiling/` are frozen local
-experiment artifacts, not maintained general-purpose CLI tools. Their scopes,
-sample sizes and reference identities are retained below. Their old imports and
-oracles describe those checkpoints; running them against Current code is not
-automatically a valid reproduction.
+Selected CPU records and two oracle snapshots are preserved under
+`outputs/retained-evidence/capsule_profiling/`. The old profiling runners and
+intermediate experiments were retired; the retained snapshots are historical
+evidence, not maintained executable tools. Their scopes, sample sizes and reference
+identities are documented in the archive. Running old imports/oracles against
+Current code is not automatically a valid reproduction.
 
 ## Timing boundaries
 
@@ -262,8 +275,10 @@ for a reproducible wrapper comparison; do not infer absent provenance.
 
 Historical `pooled_summary.json`, `comparison.json`, `final_lifecycle.json`
 and profiling/guard outputs were post-run audit/helper artifacts, not additional
-outputs promised by the Current benchmark CLI. Ignored status does not authorize
-deleting evidence or manual input configurations.
+outputs promised by the Current benchmark CLI. The selected originals now live
+under `outputs/retained-evidence/`; unselected experiments/derived summaries were
+removed through scoped approval. Ignored status alone does not authorize deleting
+retained evidence or active input configurations.
 
 ## Interpretation
 

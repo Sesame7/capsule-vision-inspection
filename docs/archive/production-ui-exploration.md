@@ -121,9 +121,12 @@ those simulated states were not equipment integration or fault-recovery evidence
 `prototypes/production_ui/` was an ignored local Style/Layout Lab, not production
 code, a runtime dependency, business logic or a required fresh-checkout/deployment
 asset. Its absence would not invalidate this rationale or Current tests.
-Ignored status does not authorize deleting its retained evidence in this migration.
+The owner-approved Phase 3M-3B-1 cleanup deliberately retired that entire browser
+prototype, its unique source/helpers and screenshots. These ignored files are no
+longer locally available and are not promised recoverable from Git. This archive
+preserves their rationale/provenance, not their executable implementation.
 
-The retained lab had static `index.html`, `styles.css`, `app.js`,
+At consolidation, the lab had static `index.html`, `styles.css`, `app.js`,
 `layout-data.js`, example `tokens.css`, an asset manifest and six image copies.
 It also retained an optional preparation/capture helper and a small
 `review/v0.1/` set: Chinese scenario contact sheet, English NG view and an overlay
@@ -148,11 +151,14 @@ regenerated versions byte-for-byte. It reported prior removal of **89 obsolete
 files (58.6 MiB)**, leaving **24 files (about 6.2 MiB)**. That was historical
 prototype closeout, not deletion performed by this documentation batch.
 
-The retained `outputs/production-ui-review/validation.json` independently
+The original `outputs/production-ui-review/validation.json`, now retained unchanged
+at `outputs/retained-evidence/production-ui-review/validation.json`, independently
 recorded 200 combinations, 10 pending cases, 27 generated screenshots and no
 browser errors, with representative layout reports. It did not by itself prove
 every closeout cleanup or byte-equivalence statement; those remained documented
-outcomes. Stored reports were read only and captures were not regenerated.
+outcomes. Copy size/SHA-256 verification was recorded during cleanup; the other
+gallery HTML/PNG files were retired and captures were not regenerated. This JSON
+is the single retained UI evidence file within the approved 25-file set.
 
 ## Physical review questions left open
 

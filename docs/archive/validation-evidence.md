@@ -128,8 +128,10 @@ matched the recorded semantics/totals. Checks also covered normalized mask
 properties, geometry presence and result lifetime after subsequent calls/cleanup.
 The representative subset contained two no-region images and all four labels.
 
-The retained local reports were later records under
-`outputs/phase1a_regression/`, not asserted to be the original September 28 files:
+The later local reports were under `outputs/phase1a_regression/`, not asserted to
+be the original September 28 files. These generated reports were deliberately
+retired in the owner-approved Phase 3M-3B-1 cleanup; the following records preserve
+their previously checked identities and observations, not current file availability:
 
 - `short.json`: timestamp `2026-09-29T09:49:19.919176+00:00`,
   **8** per-image semantics matched, **2** without regions and **6** with regions.
@@ -181,19 +183,24 @@ machine/source set and explicit selection of **Local test** for restoration.
 At that migration, saved machine/source JSON and both Recipes were copied without
 content changes; the verified model was copied into `data/models/`. Only the
 copied model metadata's artifact path changed to a relative filename. Originals
-remained backups, not disposable generated files.
+remained backups at that time. The owner-approved Phase 3M-3B-1 cleanup later
+retired `outputs/manual_phase3c/` after checking its four configuration copies
+against current `data/` and the Model/module/artifact identity. Active persistent
+configuration and both current model locations were left intact.
 
 This records migration provenance, not a claim that later operator-edited files
 still match those originals. It established neither production calibration nor
 model accuracy. Current startup/discovery and recovery belong to
 [application](../application.md#startup-recovery); this history creates no fallback
-or permission to overwrite saved geometry or backups.
+or permission to overwrite saved geometry or unapproved backups.
 
 ## Evidence availability and limits
 
 During the 2026-10-12 documentation consolidation, the fixture aggregates, observed
 label IDs, its hash, local reference file identities and both retained regression
 reports were checked directly. Relevant Git checkpoint identities were also read.
+Those Phase 1A reports are no longer locally retained after the scoped cleanup;
+the golden fixture, full reference images and model assets were preserved.
 
 The original Phase 0 scan, serial/batch comparison and stability JSON artifacts
 were not found in the retained `outputs/` tree. Their observations, reboot

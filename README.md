@@ -34,12 +34,17 @@ development group; the inference core accepts already decoded arrays.
 | --- | --- |
 | `data/` beside `app.py` | Persistent `app.json`, `machine/machine.json`, `sources/camera_sources.json`, Model definitions/artifacts under `models/` and Recipes under `recipes/` |
 | Root `models/`, `images/` | Local CLI/reference inputs; the reference model is `models/model_trt_fp16.vimosln` |
-| `outputs/` | Generated caches/reports plus retained manual configurations and accepted evidence |
+| `outputs/` | Generated caches/reports; the selected historical evidence is under `retained-evidence/` |
 | [tests/reference/phase0.json](tests/reference/phase0.json) | Tracked, self-contained golden fixture; historical raw reports are not regression dependencies |
 
-The first three locations are ignored by Git. Ignored/generated does **not** mean
-disposable: preserve persistent calibration/configuration, models, images, manual
-setups, accepted reports and local prototype evidence. Engine callers can supply
+The first three locations are ignored by Git. Preserve persistent calibration/
+configuration, models, images and deliberately retained evidence. Historical
+outputs, manual snapshots and prototypes can be retired after explicit scoped
+approval; ignored/generated status alone does **not** authorize cleanup.
+The approved cleanup retired the old browser prototype, pre-bootstrap manual
+snapshots and Phase 1A generated reports, retaining 25 original evidence files
+under `outputs/retained-evidence/`. The golden fixture remains independent of
+those reports. Engine callers can supply
 arbitrary model paths. Root `models/` and normal startup's `data/models/` serve
 different workflows; do not substitute one for the other.
 
