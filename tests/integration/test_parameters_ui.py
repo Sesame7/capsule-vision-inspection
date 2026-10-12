@@ -5,7 +5,6 @@ from threading import Event, get_ident
 
 import pytest
 from PySide6.QtCore import QPoint, QTimer
-from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -17,8 +16,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
 )
-from tests.qt_support import until
-from tests.unit.test_production_application import FakeSession
+from tests.application_support import FakeSession
+from tests.qt_support import ensure_test_fonts, until
 from tests.unit.test_recipe_editor import editor
 
 from vimo_demo.application import (
@@ -45,11 +44,7 @@ from vimo_demo.ui.recipe_editor import RecipeEditorSession
 def configured_screen(
     qapp: QApplication, tmp_path: Path
 ) -> Iterator[tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]]]:
-    if not QFontDatabase.families():
-        for filename in ("segoeui.ttf", "msyh.ttc"):
-            path = Path("C:/Windows/Fonts") / filename
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
+    ensure_test_fonts()
     session = editor(tmp_path)
     assert session.entry is not None
     ready = session.prepare(session.entry.recipe)

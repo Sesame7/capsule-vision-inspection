@@ -6,8 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from tests.application_support import WAIT
 from tests.integration.test_local_production_ui import input_files
-from tests.unit.test_production_application import WAIT
 
 from vimo_demo.application import ApplicationState, ProductionCounters
 from vimo_demo.application.preferences import (

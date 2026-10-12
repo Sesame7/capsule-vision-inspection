@@ -411,7 +411,7 @@ def test_narrow_real_frame_labels_and_extreme_zoom(qapp: QApplication) -> None:
 def test_preview_scopes_ng_event_but_preserves_errors(
     configured_screen: Screen, language: Language
 ) -> None:
-    from tests.unit.test_production_application import production
+    from tests.application_support import production
 
     from vimo_demo.application import ApplicationState
     from vimo_demo.inspection.production import TechnicalStatus

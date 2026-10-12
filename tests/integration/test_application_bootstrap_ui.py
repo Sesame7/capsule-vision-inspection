@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
+from tests.application_support import WAIT
 from tests.qt_support import until
 from tests.unit.test_application_bootstrap import close, saved_data
-from tests.unit.test_production_application import WAIT
 
 from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters
 from vimo_demo.application.folder_replay import FolderSourceError

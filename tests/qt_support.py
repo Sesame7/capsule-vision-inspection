@@ -1,11 +1,22 @@
 """Small Qt test facilities, without pytest-qt or sleeps."""
 
 from collections.abc import Callable
+from pathlib import Path
 from threading import get_ident
 
 from PySide6.QtCore import QEventLoop, QObject, QTimer, Slot
+from PySide6.QtGui import QFontDatabase
 
 from vimo_demo.inference import ImageResult
+
+
+def ensure_test_fonts() -> None:
+    """Load existing Windows fonts when offscreen Qt exposes no font families."""
+    if not QFontDatabase.families():
+        for filename in ("segoeui.ttf", "msyh.ttc"):
+            path = Path("C:/Windows/Fonts") / filename
+            if path.exists():
+                QFontDatabase.addApplicationFont(str(path))
 
 
 def until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:

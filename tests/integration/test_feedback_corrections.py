@@ -4,16 +4,15 @@ import json
 from pathlib import Path
 
 import pytest
-from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
+from tests.application_support import WAIT
 from tests.integration.test_application_bootstrap_ui import close_window
 from tests.integration.test_camera_setup import camera_screen as camera_screen
 from tests.integration.test_local_production_ui import ControlledEngine
 from tests.integration.test_parameters_ui import Screen, edit
 from tests.integration.test_parameters_ui import configured_screen as configured_screen
-from tests.qt_support import until
+from tests.qt_support import ensure_test_fonts, until
 from tests.unit.test_application_bootstrap import saved_data
-from tests.unit.test_production_application import WAIT
 
 from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters
 from vimo_demo.application.folder_replay import FolderSourceError
@@ -38,11 +37,7 @@ from vimo_demo.ui.roi_editor import MachineRoiWorkspace
 @pytest.fixture(autouse=True)
 def screen_fonts(qapp: QApplication) -> None:
     # Match existing screenshot fixtures; offscreen Qt has no native font discovery.
-    if not QFontDatabase.families():
-        for filename in ("segoeui.ttf", "msyh.ttc"):
-            path = Path("C:/Windows/Fonts") / filename
-            if path.exists():
-                QFontDatabase.addApplicationFont(str(path))
+    ensure_test_fonts()
 
 
 def capture(window: ProductionWindow, directory: Path, scenario: str) -> None:

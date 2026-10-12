@@ -8,9 +8,9 @@ from threading import enumerate as threads
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from tests.application_support import WAIT, close, prepared
+from tests.production_support import inferred
 from tests.unit.test_configured_execution import config
-from tests.unit.test_production_application import WAIT, close, prepared
-from tests.unit.test_production_inspection import inferred
 
 from vimo_demo.application import (
     ApplicationError,

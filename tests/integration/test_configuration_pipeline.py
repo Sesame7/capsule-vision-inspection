@@ -3,7 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 
-from tests.unit.test_production_inspection import inferred, outcome
+from tests.production_support import inferred, outcome
 
 from vimo_demo.configuration import (
     ModelRegistry,

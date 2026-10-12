@@ -7,9 +7,9 @@ import cv2
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from tests.production_support import inferred
 from tests.unit.test_configuration import machine, registry
 from tests.unit.test_configured_execution import collected, config
-from tests.unit.test_production_inspection import inferred
 
 from vimo_demo.application import ConfiguredProductionPipeline
 from vimo_demo.configuration import (

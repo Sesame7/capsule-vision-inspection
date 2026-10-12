@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
+from tests.application_support import FakeSession, production
 from tests.integration.test_production_ui import screen as screen
 from tests.qt_support import until
-from tests.unit.test_production_application import FakeSession, production
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.application.folder_replay import FolderSourceError
