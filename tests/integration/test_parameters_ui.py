@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, get_ident
@@ -16,14 +16,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
 )
-from tests.application_support import FakeSession
-from tests.qt_support import ensure_test_fonts, until
-from tests.unit.test_recipe_editor import editor
+from tests.capsule_support import SETTINGS
+from tests.qt_support import until
+from tests.recipe_ui_support import Screen, assert_inside, demo_recipe_window, edit
+from tests.recipe_ui_support import configured_screen as configured_screen
 
 from vimo_demo.application import (
     ApplicationState,
     PreparedConfiguration,
-    ProductionApplication,
 )
 from vimo_demo.configuration import (
     ConfigurationIOError,
@@ -32,57 +32,8 @@ from vimo_demo.configuration import (
     load_recipe,
     save_recipe,
 )
-from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 from vimo_demo.ui.parameters_page import DirtyDecision
-from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
-from vimo_demo.ui.production_style import Language, text
-from vimo_demo.ui.production_window import ProductionWindow
-from vimo_demo.ui.recipe_editor import RecipeEditorSession
-
-
-@pytest.fixture
-def configured_screen(
-    qapp: QApplication, tmp_path: Path
-) -> Iterator[tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]]]:
-    ensure_test_fonts()
-    session = editor(tmp_path)
-    assert session.entry is not None
-    ready = session.prepare(session.entry.recipe)
-    runtimes: list[FakeSession] = []
-
-    def factory(_p: PreparedConfiguration, _g: int) -> FakeSession:
-        runtime = FakeSession(automatic_start=False)
-        runtimes.append(runtime)
-        return runtime
-
-    app = ProductionApplication(factory)
-    app.configure(ready)
-    bridge = QtProductionBridge(
-        app, LatestDisplayFrameStore(ready.configuration.layout.camera_ids), poll_ms=10
-    )
-    window = ProductionWindow(
-        bridge, (RecipeChoice(ready, "A"),), recipe_editor=session
-    )
-    window.resize(1080, 1920)
-    window.show()
-    window.navigate(1)
-    yield window, session, runtimes
-    for runtime in runtimes:
-        if not runtime.ready.done():
-            runtime.ready.set_result(None)
-    session.discard()
-    window.close()
-    until(lambda: bridge.closed)
-    assert app.join(0)
-    window.deleteLater()
-
-
-def edit(line: QLineEdit, value: str) -> None:
-    line.setText(value)
-    line.textEdited.emit(value)
-
-
-type Screen = tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]]
+from vimo_demo.ui.production_style import Language, Style, text
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -512,3 +463,239 @@ def test_failed_preparation_blocks_dirty_switch(
     assert page.status.text() == text("recipe_prepare_error", page.language)
     assert "unavailable" in page.status.toolTip()
     assert window.bridge.application.snapshot() == before
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("size", [(1920, 1080), (1080, 1920), (900, 1200)])
+def test_full_width_recipe_columns_and_long_text(
+    configured_screen: Screen, language: Language, size: tuple[int, int]
+) -> None:
+    window, session, runtimes = configured_screen
+    page = window.parameters
+    window.set_language(language)
+    window.resize(*size)
+    QApplication.processEvents()
+    basic, inspection = (
+        page.basic_title.parentWidget(),
+        page.inspection_title.parentWidget(),
+    )
+    assert basic is not None and inspection is not None
+    assert abs(basic.width() - inspection.width()) <= 1
+    if (
+        size[0] >= 1080
+        or inspection.mapTo(page, QPoint(0, 0)).y()
+        == basic.mapTo(page, QPoint(0, 0)).y()
+    ):
+        assert (
+            inspection.mapTo(page, QPoint(0, 0)).x()
+            > basic.mapTo(page, QPoint(0, 0)).x()
+        )
+        assert (
+            basic.mapTo(page, QPoint(0, 0)).y()
+            == inspection.mapTo(page, QPoint(0, 0)).y()
+        )
+    else:
+        assert (
+            inspection.mapTo(page, QPoint(0, 0)).y()
+            >= basic.mapTo(page, QPoint(0, basic.height())).y()
+        )
+    save = page.buttons["save_apply"]
+    assert (
+        inspection.mapTo(page, QPoint(inspection.width(), 0)).x()
+        == save.mapTo(page, QPoint(save.width(), 0)).x()
+    )
+    assert_inside(basic, page)
+    assert_inside(inspection, page)
+    before = window.bridge.application.snapshot()
+    # Long translated summaries wrap within their section; identifiers stay intact
+    # in the existing line edits without enlarging the window or other controls.
+    identity = "长配方名称-Long-Recipe-Identity-" * 8
+    page.metadata["display_name"].setText(identity)
+    page.rule.setText(page.rule.text() * 12)
+    page.capsule_summary["size"].setText("W 1000000 ± 1000000 · H 1000000 ± 1000000 px")
+    QApplication.processEvents()
+    assert window.size().width() == size[0]
+    assert page.metadata["display_name"].text() == identity
+    for control in (
+        *page.metadata.values(),
+        page.model,
+        page.rule,
+        page.tune_preview,
+        *page.capsule_summary.values(),
+        save,
+    ):
+        assert_inside(control, page)
+    assert page.model.mapTo(basic, QPoint(page.model.width(), 0)).x() == basic.width()
+    assert window.event_frame.height() == 33
+    assert (
+        window.bridge.application.snapshot() == before
+        and not session.dirty
+        and not runtimes
+    )
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_fields_follow_available_width_without_stretching_actions(
+    configured_screen: Screen, language: Language
+) -> None:
+    window, session, runtimes = configured_screen
+    page = window.parameters
+    display_name = (
+        "胶囊分割检测 — 本地验证模型"
+        if language == "zh"
+        else "Capsule segmentation — local reference"
+    )
+    session.registry = ModelRegistry(
+        (
+            replace(
+                session.registry.get(session.default_model_id),
+                display_name=display_name,
+            ),
+        )
+    )
+    window.set_language(language)
+    page.show_draft()
+    QApplication.processEvents()
+    basic = page.basic_title.parentWidget()
+    assert basic is not None
+    name, product = page.metadata.values()
+    actions = [page.buttons[k] for k in ("new_recipe", "duplicate_recipe", "reload")]
+    action_sizes = [b.size() for b in actions + [page.tune_preview]]
+    heights = [c.height() for c in (page.recipes, name, product, page.model)]
+    before = window.bridge.application.snapshot()
+    widths: list[tuple[int, ...]] = []
+    for size in ((1920, 1080), (1080, 1920), (900, 1200), (1920, 1080)):
+        window.resize(*size)
+        QApplication.processEvents()
+        assert abs(name.width() - product.width()) <= 1
+        assert name.mapTo(basic, QPoint(0, 0)).x() == 0
+        assert product.mapTo(basic, QPoint(product.width(), 0)).x() == basic.width()
+        assert (
+            product.mapTo(basic, QPoint(0, 0)).x()
+            - name.mapTo(basic, QPoint(name.width(), 0)).x()
+            == Style.space
+        )
+        assert (
+            page.model.mapTo(basic, QPoint(page.model.width(), 0)).x() == basic.width()
+        )
+        assert page.model.currentText() == display_name and not page.model.isEnabled()
+        assert (
+            page.model.fontMetrics().horizontalAdvance(display_name)
+            + 2 * Style.space
+            + Style.icon
+            <= page.model.width()
+        )
+        assert (
+            actions[0].mapTo(page, QPoint(0, 0)).x()
+            - page.recipes.mapTo(page, QPoint(page.recipes.width(), 0)).x()
+            == Style.small
+        )
+        assert actions[-1].mapTo(page, QPoint(actions[-1].width(), 0)).x() == (
+            page.buttons["save_apply"]
+            .mapTo(page, QPoint(page.buttons["save_apply"].width(), 0))
+            .x()
+        )
+        assert [b.size() for b in actions + [page.tune_preview]] == action_sizes
+        assert [
+            c.height() for c in (page.recipes, name, product, page.model)
+        ] == heights
+        for control in (page.recipes, name, product, page.model, *actions):
+            assert_inside(control, page)
+        widths.append(
+            tuple(c.width() for c in (page.recipes, name, product, page.model))
+        )
+    assert all(wide > narrow for wide, narrow in zip(widths[0], widths[1], strict=True))
+    assert widths[-1] == widths[0]
+    assert (
+        window.bridge.application.snapshot() == before
+        and not session.dirty
+        and not runtimes
+    )
+
+
+def test_recipe_metadata_groups_wrap(configured_screen: Screen) -> None:
+    window, _, _ = configured_screen
+    page = window.parameters
+    for line in page.metadata.values():
+        line.setMinimumWidth(450)
+    window.resize(900, 1200)
+    QApplication.processEvents()
+    name, product = page.metadata.values()
+    assert product.mapTo(page, QPoint(0, 0)).y() > name.mapTo(page, QPoint(0, 0)).y()
+    assert_inside(name, page)
+    assert_inside(product, page)
+    window.resize(1920, 1080)
+    QApplication.processEvents()
+    assert product.mapTo(page, QPoint(0, 0)).y() == name.mapTo(page, QPoint(0, 0)).y()
+
+
+@pytest.mark.parametrize(
+    "language,size,workspace",
+    [
+        ("zh", (1920, 1080), "recipe"),
+        ("zh", (1080, 1920), "recipe"),
+        ("en", (1920, 1080), "recipe"),
+    ],
+)
+def test_recipe_page_screenshots(
+    configured_screen: Screen,
+    qapp: QApplication,
+    tmp_path: Path,
+    language: Language,
+    size: tuple[int, int],
+    workspace: str,
+) -> None:
+    from run_production_ui import compose, demo_images
+
+    composition = compose(demo_images(), tmp_path / "demo", "normal", 0.001)
+    composition.editor.registry = ModelRegistry(
+        tuple(
+            replace(
+                m,
+                display_name=(
+                    "胶囊分割检测 — 本地验证模型"
+                    if language == "zh"
+                    else "Capsule segmentation — local reference"
+                ),
+            )
+            for m in composition.editor.registry.models
+        )
+    )
+    with demo_recipe_window(composition, language=language, size=size) as window:
+        window.navigate(1)
+        page = window.parameters
+        composition.editor.draft.capsule = replace(
+            SETTINGS,
+            size=replace(
+                SETTINGS.size,
+                target_width=65,
+                width_tolerance=10,
+                target_height=181,
+                height_tolerance=3,
+            ),
+            color=replace(SETTINGS.color, target_hue=27, hue_tolerance=8),
+        )
+        page.show_draft()
+        before = composition.application.snapshot()
+        qapp.processEvents()
+        for control in (
+            page.recipes,
+            *page.buttons.values(),
+            *page.metadata.values(),
+            page.model,
+            page.tune_preview,
+            page.identity,
+        ):
+            assert_inside(control, page)
+        name, product = page.metadata.values()
+        assert (
+            name.mapTo(page, QPoint(0, 0)).y() == product.mapTo(page, QPoint(0, 0)).y()
+        )
+        assert name.width() < page.width() // 2
+        assert page.model.width() < page.width() // 2
+        assert page.identity.mapTo(page, QPoint(0, 0)).y() > page.height() * 0.8
+        assert composition.application.snapshot() == before
+        assert window.event_frame.height() == 33 and not window.event_label.text()
+        assert window.grab().save(
+            str(tmp_path / f"recipe-{language}-{size[0]}x{size[1]}-{workspace}.png")
+        )

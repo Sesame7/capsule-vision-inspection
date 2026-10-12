@@ -1,6 +1,7 @@
 """Preview shares production math but has no application/runtime side effects."""
 
 from dataclasses import replace
+from pathlib import Path
 from threading import Event
 from threading import enumerate as threads
 
@@ -8,11 +9,11 @@ import numpy as np
 import pytest
 from PySide6.QtCore import QPoint, QRectF, QSizeF
 from PySide6.QtGui import QFont, QFontMetricsF
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 from tests.capsule_support import SETTINGS, bodies
-from tests.integration.test_parameters_ui import Screen
-from tests.integration.test_parameters_ui import configured_screen as configured_screen
 from tests.qt_support import until
+from tests.recipe_ui_support import Screen, assert_inside, demo_recipe_window
+from tests.recipe_ui_support import configured_screen as configured_screen
 
 from vimo_demo.configuration import MachineLayoutDefinition, load_recipe
 from vimo_demo.inference import BoundingRect
@@ -26,8 +27,12 @@ from vimo_demo.inspection.production import (
 from vimo_demo.inspection.production.capsule import CapsuleSettings, judge_capsule
 from vimo_demo.ui.display_frames import DisplayFrame
 from vimo_demo.ui.machine_editor import MachineLayoutDraft
-from vimo_demo.ui.production_style import Language
-from vimo_demo.ui.traditional_preview import TraditionalPreview, measurement_label_rect
+from vimo_demo.ui.production_style import Language, Style
+from vimo_demo.ui.traditional_preview import (
+    PreviewMode,
+    TraditionalPreview,
+    measurement_label_rect,
+)
 
 
 def setup(screen: Screen, *, pixel_scale: int = 1) -> TraditionalPreview:
@@ -603,3 +608,174 @@ def test_capability_change_discards_inflight_job_and_uses_latest_snapshot(
     )
     assert not any(t.name == "CapsulePreview" for t in threads())
     preview.back.click()
+
+
+@pytest.mark.parametrize(
+    "size_enabled,color_enabled",
+    [(True, True), (True, False), (False, True), (False, False)],
+)
+def test_one_entry_mode_selection_and_draft_synchronization(
+    configured_screen: Screen, size_enabled: bool, color_enabled: bool
+) -> None:
+    window, session, runtimes = configured_screen
+    setup(configured_screen).back.click()
+    page = window.parameters
+    session.draft.capsule = replace(
+        SETTINGS,
+        size=replace(SETTINGS.size, enabled=size_enabled),
+        color=replace(SETTINGS.color, enabled=color_enabled),
+    )
+    page.show_draft()
+    before = window.bridge.application.snapshot()
+    assert [
+        b
+        for b in page.findChildren(QPushButton)
+        if b.text() == page.tune_preview.text()
+    ] == [page.tune_preview]
+    assert page.capsule_enabled["size"].isChecked() is size_enabled
+    assert page.capsule_enabled["color"].isChecked() is color_enabled
+    page.tune_preview.click()
+    preview = page.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    assert preview.mode == ("color" if color_enabled and not size_enabled else "size")
+    assert preview.enabled.isChecked() is (
+        color_enabled if preview.mode == "color" else size_enabled
+    )
+    preview.enabled.setChecked(not preview.enabled.isChecked())
+    until(lambda: not preview.busy)
+    preview.mode_tabs.setCurrentIndex(0)
+    preview.spins["target_width"].setValue(21)
+    preview.mode_tabs.setCurrentIndex(1)
+    preview.tolerance.setValue(7)
+    expected = session.draft.capsule
+    preview.back.click()
+    assert page.preview is None and session.draft.capsule == expected
+    assert page.capsule_enabled["size"].isChecked() is expected.size.enabled
+    assert page.capsule_enabled["color"].isChecked() is expected.color.enabled
+    assert "21" in page.capsule_summary["size"].text()
+    assert "7" in page.capsule_summary["color"].text()
+    assert window.bridge.application.snapshot() == before and not runtimes
+
+
+@pytest.mark.parametrize("mode", ["size", "color"])
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_disabled_selected_mode_keeps_other_checks_ng(
+    configured_screen: Screen, mode: PreviewMode, language: Language
+) -> None:
+    window, session, runtimes = configured_screen
+    preview = setup(configured_screen)
+    window.set_language(language)
+    before = window.bridge.application.snapshot()
+    session.draft.capsule = replace(
+        SETTINGS,
+        size=replace(SETTINGS.size, enabled=mode != "size", target_width=25),
+        color=replace(SETTINGS.color, enabled=mode != "color", target_hue=50),
+    )
+    preview.mode_tabs.setCurrentIndex(0 if mode == "size" else 1)
+    preview.show_settings()
+    until(lambda: not preview.busy)
+    assert not preview.enabled.isChecked()
+    assert preview.enabled.text() == ("未启用" if language == "zh" else "Disabled")
+    assert all(
+        r and r.assessment.judgment is ProductJudgment.NG for r in preview.results
+    )
+    assert preview.canvas.results == preview.results
+    measurements, results = preview.measurements, preview.results
+    preview.mode_tabs.setCurrentIndex(1 if mode == "size" else 0)
+    assert preview.enabled.isChecked()
+    assert preview.measurements is measurements and preview.results == results
+    assert window.bridge.application.snapshot() == before and not runtimes
+    preview.back.click()
+
+
+def test_preview_control_groups_wrap(configured_screen: Screen) -> None:
+    # Retain the wide-metadata precondition before opening the preview.
+    window, _, _ = configured_screen
+    page = window.parameters
+    for line in page.metadata.values():
+        line.setMinimumWidth(450)
+    window.resize(900, 1200)
+    QApplication.processEvents()
+    window.resize(1920, 1080)
+    QApplication.processEvents()
+    preview = setup(configured_screen)
+    preview.mode_tabs.setMinimumWidth(400)
+    window.resize(900, 1200)
+    QApplication.processEvents()
+    assert (
+        preview.controls.mapTo(preview, QPoint(0, 0)).y()
+        >= preview.enabled.mapTo(preview, QPoint(0, preview.enabled.height())).y()
+    )
+    assert_inside(preview.controls, preview)
+    for spin in preview.spins.values():
+        assert_inside(spin, preview)
+        assert spin.height() >= Style.touch
+    window.resize(1920, 1080)
+    QApplication.processEvents()
+    assert (
+        preview.controls.mapTo(preview, QPoint(0, 0)).x()
+        > preview.mode_tabs.mapTo(preview, QPoint(preview.mode_tabs.width(), 0)).x()
+    )
+    preview.back.click()
+
+
+@pytest.mark.parametrize(
+    "language,size,workspace",
+    [("en", (1920, 1080), "size"), ("zh", (1080, 1920), "color")],
+)
+def test_tuning_preview_screenshots(
+    configured_screen: Screen,
+    qapp: QApplication,
+    tmp_path: Path,
+    language: Language,
+    size: tuple[int, int],
+    workspace: str,
+) -> None:
+    from run_production_ui import compose, demo_images
+
+    composition = compose(demo_images(), tmp_path / "demo", "normal", 0.001)
+    with demo_recipe_window(composition, language=language, size=size) as window:
+        window.navigate(1)
+        page = window.parameters
+        composition.editor.draft.capsule = replace(
+            SETTINGS,
+            size=replace(
+                SETTINGS.size,
+                target_width=65,
+                width_tolerance=10,
+                target_height=181,
+                height_tolerance=3,
+            ),
+            color=replace(SETTINGS.color, target_hue=27, hue_tolerance=8),
+        )
+        page.show_draft()
+        before = composition.application.snapshot()
+        page.tune_preview.click()
+        preview = page.preview
+        assert preview is not None
+        preview.mode_tabs.setCurrentIndex(0 if workspace == "size" else 1)
+        until(lambda: not preview.busy)
+        qapp.processEvents()
+        assert preview.frame is not None and len(preview.results) == 6
+        assert preview.mode_tabs.width() < preview.width() // 2
+        assert preview.canvas.height() > window.height() * 0.6
+        for control in (
+            preview.back,
+            preview.camera_tabs,
+            preview.fit_button,
+            preview.refresh_button,
+            preview.mode_tabs,
+            preview.enabled,
+            preview.controls,
+        ):
+            assert_inside(control, preview)
+        for spin in preview.spins.values():
+            assert spin.width() < 200
+            if workspace == "size":
+                assert_inside(spin, preview)
+        assert composition.application.snapshot() == before
+        assert window.event_frame.height() == 33 and not window.event_label.text()
+        assert window.grab().save(
+            str(tmp_path / f"recipe-{language}-{size[0]}x{size[1]}-{workspace}.png")
+        )

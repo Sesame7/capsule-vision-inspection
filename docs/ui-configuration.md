@@ -470,7 +470,7 @@ job coordination. Focused commands for future workflow verification are:
 
 ```powershell
 uv run --no-sync pytest tests/unit/test_recipe_editor.py tests/unit/test_machine_editor.py tests/unit/test_roi_geometry.py --tb=short
-uv run --no-sync pytest tests/integration/test_parameters_ui.py tests/integration/test_recipe_refinement.py tests/integration/test_traditional_preview.py --tb=short
+uv run --no-sync pytest tests/integration/test_parameters_ui.py tests/integration/test_traditional_preview.py --tb=short
 uv run --no-sync pytest tests/integration/test_roi_editor.py tests/integration/test_camera_setup.py tests/integration/test_feedback_corrections.py --tb=short
 ```
 
