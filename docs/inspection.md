@@ -383,7 +383,7 @@ unassigned NG, configured filtering, selective capabilities and numerical bounda
 uv run --no-sync pytest tests/unit/test_inspection_cycle.py tests/unit/test_production_inspection.py tests/unit/test_configured_execution.py tests/unit/test_capsule.py tests/unit/test_capsule_selective.py tests/unit/test_capsule_optimization.py tests/integration/test_production_pipeline.py --tb=short
 ```
 
-[Cycle-worker integration](../tests/integration/test_cycle_worker.py) and
+[Cycle-to-Production integration](../tests/integration/test_production_pipeline.py) and
 [configuration integration](../tests/integration/test_configuration_pipeline.py)
 check composition without making every domain test load ViMo. Historical model
 regression/visual parity in [validation findings](archive/validation-evidence.md) validates SDK

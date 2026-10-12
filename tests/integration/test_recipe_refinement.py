@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication, QPushButton, QWidget
+from tests.capsule_support import SETTINGS
 from tests.integration.test_parameters_ui import Screen
 from tests.integration.test_parameters_ui import configured_screen as configured_screen
 from tests.integration.test_traditional_preview import setup
 from tests.qt_support import until
-from tests.unit.test_capsule import SETTINGS
 
 from vimo_demo.configuration import ModelRegistry
 from vimo_demo.inspection.production import ProductJudgment

@@ -9,10 +9,10 @@ import pytest
 from PySide6.QtCore import QPoint, QRectF, QSizeF
 from PySide6.QtGui import QFont, QFontMetricsF
 from PySide6.QtWidgets import QApplication, QLabel
+from tests.capsule_support import SETTINGS, bodies
 from tests.integration.test_parameters_ui import Screen
 from tests.integration.test_parameters_ui import configured_screen as configured_screen
 from tests.qt_support import until
-from tests.unit.test_capsule import SETTINGS, bodies
 
 from vimo_demo.configuration import MachineLayoutDefinition, load_recipe
 from vimo_demo.inference import BoundingRect

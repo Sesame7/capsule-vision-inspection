@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from tests.unit.test_capsule import ROI, SETTINGS, bodies
+from tests.capsule_support import ROI, SETTINGS, bodies
 
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus

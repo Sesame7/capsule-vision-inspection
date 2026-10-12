@@ -7,8 +7,9 @@ from weakref import ref
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from tests.cycle_support import CAMERAS, frame, image_result, ready_cycle
 
-from vimo_demo.inference import BoundingRect, DefectRegion, ImageResult, RotatedRect
+from vimo_demo.inference import ImageResult
 from vimo_demo.inspection import (
     CameraId,
     CollectedCycle,
@@ -26,51 +27,12 @@ from vimo_demo.inspection import (
     inspect_cycle,
 )
 
-CAMERAS = tuple(CameraId(f"camera-{i}") for i in (3, 1, 6, 2, 5, 4))
-
 
 class Clock:
     value: float = 10.0
 
     def __call__(self) -> float:
         return self.value
-
-
-def frame(cycle: int, camera: CameraId, sequence: int = 0) -> Frame:
-    return Frame(
-        FrameId(CycleId(cycle), camera, sequence),
-        2000.0,  # Camera clock deliberately differs from host monotonic time.
-        np.full((2, 3, 3), sequence % 256, dtype=np.uint8),
-    )
-
-
-def image_result(image: NDArray[np.uint8], defect: bool = False) -> ImageResult:
-    height, width, channels = image.shape
-    rect = BoundingRect(0, 0, width, height)
-    rotated = RotatedRect(width / 2, height / 2, width, height, 0)
-    regions = (
-        (DefectRegion("fake-defect", 6, rect, 3, 2, (), (), rotated),) if defect else ()
-    )
-    return ImageResult(
-        (height, width, channels),
-        {"fake-defect": 1},
-        regions,
-        np.zeros((height, width), dtype=np.uint8),
-        rect,
-        rotated,
-        "fake",
-    )
-
-
-def ready_cycle(clock: Clock, cycle_id: int = 1) -> CollectedCycle:
-    collector = CycleCollector(CAMERAS, timeout=2, clock=clock)
-    collector.begin(CycleId(cycle_id))
-    snapshot: CollectedCycle | None = None
-    for i, camera in enumerate(reversed(CAMERAS)):
-        snapshot = collector.accept(frame(cycle_id, camera, i))
-    assert snapshot is not None
-    assert collector.active_cycle_ids == ()
-    return snapshot
 
 
 def test_six_frames_out_of_order_inspect_in_configured_order() -> None:

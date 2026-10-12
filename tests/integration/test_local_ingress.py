@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 from tests.application_support import WAIT, close, prepared
-from tests.unit.test_inspection_cycle import image_result
+from tests.cycle_support import image_result
 
 from vimo_demo.application import (
     ApplicationCapacityError,

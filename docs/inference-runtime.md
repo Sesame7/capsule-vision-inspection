@@ -423,7 +423,7 @@ threads. This describes existing tests, not a new test-run result from a docs ed
 From the repository root:
 
 ```powershell
-uv run --no-sync pytest tests/unit/test_contracts.py tests/unit/test_adapter.py tests/unit/test_model_store.py tests/unit/test_inference_worker.py tests/unit/test_runtime_coordinator.py tests/integration/test_cycle_worker.py --tb=short
+uv run --no-sync pytest tests/unit/test_contracts.py tests/unit/test_adapter.py tests/unit/test_model_store.py tests/unit/test_inference_worker.py tests/unit/test_runtime_coordinator.py tests/integration/test_production_pipeline.py --tb=short
 ```
 
 Repository Ruff/format/strict Pyright and normal pytest commands remain in

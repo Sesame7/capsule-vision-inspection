@@ -10,7 +10,7 @@ from typing import cast
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from tests.unit.test_inspection_cycle import CAMERAS, frame, image_result
+from tests.cycle_support import CAMERAS, frame, image_result
 
 from vimo_demo.inference import ImageResult
 from vimo_demo.inspection import (
