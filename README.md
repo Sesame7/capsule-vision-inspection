@@ -1,91 +1,113 @@
-# ViMo Inference Demo
+# ViMo Local Inspection
 
-Local industrial-vision integration with a typed `VimoSegmentationEngine`, a
-bounded `InferenceWorker` and a PySide production shell. The engine runs
-synchronously on its owning Python worker thread; Qt receives queued notifications
-on the GUI thread in the same process. The original single-image integration demo
-remains available alongside the simulated six-camera Production page.
-
-SDK validation, the formal core, worker lifecycle and Qt integration are verified.
-The [inspection-cycle contracts](docs/inspection-cycle.md) define bounded collection
-and deterministic technical results. Phase 1D adds a
-[runtime coordinator](docs/runtime-coordinator.md) for overlapping cycles, bounded
-inspection dispatch and coordinated shutdown, verified with 200 fake cycles and
-one six-frame GPU wiring test. The Qt demo remains single-image. Real camera/PLC
-integration, hardware deadline events and web display are not implemented. See
-[architecture and future direction](docs/architecture.md).
-
-Phase 2A provides the [production inspection domain](docs/production-inspection.md):
-channel layouts, defect assignment and separate technical/product judgments.
-Phase 2B provides [Recipe/model/layout configuration](docs/inspection-configuration.md)
-with strict JSON persistence and immutable per-channel resolution. Phase 2C adds
-[ProductionApplication](docs/production-application.md): transactional activation,
-worker-owned warm-up, disposable runtime sessions, configured checks and factual
-cycle/channel counters. Phase 2D-1 adds the [Production screen](docs/production-ui.md),
-driven by application snapshots with separate bounded display frames. Phase 2D-2A
-adds [Recipe editing](docs/recipe-configuration-ui.md), with distinct
-Validate, Save and Apply actions. Diagnostics, History and Settings remain
-placeholders; there is no commissioned camera/PLC integration.
-Phase 3C provides [machine ROI setup](docs/graphical-roi-editor.md): six labeled
-source-pixel rectangles on a frozen camera reference. MachineLayout is the sole
-geometry owner; Recipes configure checks/products/models only.
-The architecture document also maps all contracts and the production UI design reference.
-
-Phase 3B adds an opt-in [local real-inference Production mode](docs/production-ui.md#local-real-inference-mode--phase-3b):
-`scripts/run_local_production_ui.py` loads supplied Recipe/model/layout JSON and
-repeatedly inspects one fixed six-image set using the real ViMo worker. The existing
-fake Production launcher is unchanged. Configuration/launch commands and the short
-GPU UI smoke are documented there; calibrated channel layouts are not bundled.
+Local industrial-vision application with typed serial ViMo inference, bounded
+multi-frame inspection and a bilingual PySide6 Production shell. The current
+layout has six configured cameras with six channels each. Inputs come from local
+images or per-camera Folder replay; real camera acquisition and PLC integration
+are not implemented. Size/Color screening is an uncalibrated demonstration.
+SDK regression does not certify model accuracy or industrial acceptance.
 
 ## Environment and setup
 
-Verified: Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB, ViMo SDK/custom
-**3.20.0.2**, NumPy **2.5.3**, OpenCV **5.0.0.93**, PySide6 **6.11.2**.
-An active ViMo license and the provisioned CUDA 12/TensorRT runtime are
-external prerequisites.
+Target the verified **Windows 10**, **Python 3.14.7 x64**, **RTX 4060 Ti 16 GB** and
+SmartMore ViMo inference/custom **3.20.0.2** environment. An active ViMo license
+and the externally provisioned CUDA 12/TensorRT runtime are prerequisites.
+Obtain proprietary SDK packages, runtime and authorization through SmartMore;
+uv does not provision them. Vendor packages are not public project dependencies.
 
-Obtain SDK wheels/runtime/license through SmartMore when provisioning a machine.
-Vendor packages and manuals are not retained in this checkout. The working
-installation is preserved in `.venv`. These proprietary packages
-are excluded from `pyproject.toml`/`uv.lock`; the lock covers public dependencies.
-
-Preserve the existing `.venv`. Install locked public dependencies and the editable
-core while retaining external vendor packages:
+Public dependency versions are authoritative in [pyproject.toml](pyproject.toml)
+and [uv.lock](uv.lock). Preserve the vendor-provisioned `.venv`; daily commands
+use `uv run --no-sync`. When intentionally synchronizing public dependencies and
+the editable package, retain external vendor packages:
 
 ```powershell
 uv sync --locked --inexact --no-python-downloads
 ```
 
-`--inexact` matters: an exact sync may remove externally provisioned packages.
-Everyday commands use `--no-sync` to leave the working environment unchanged.
-Nothing here installs or changes GPU/runtime components.
-OpenCV is currently in the default development dependency group, included by
-this sync; the inference core itself accepts arrays.
+An exact sync can remove externally installed packages. This command does not
+install or change GPU/runtime components. OpenCV is included in the default
+development group; the inference core accepts already decoded arrays.
 
-Local inputs belong in root-level `models/` and `images/`, generated data in
-`outputs/`; all three are ignored. The reference model is
-`models/model_trt_fp16.vimosln`. Engine callers may supply any model path.
+## Local assets and persistent configuration
 
-## Normal application startup
+| Location | Role |
+| --- | --- |
+| `data/` beside `app.py` | Persistent `app.json`, `machine/machine.json`, `sources/camera_sources.json`, Model definitions/artifacts under `models/` and Recipes under `recipes/` |
+| Root `models/`, `images/` | Local CLI/reference inputs; the reference model is `models/model_trt_fp16.vimosln` |
+| `outputs/` | Generated caches/reports plus retained manual configurations and accepted evidence |
+| [tests/reference/phase0.json](tests/reference/phase0.json) | Tracked, self-contained golden fixture; historical raw reports are not regression dependencies |
+
+The first three locations are ignored by Git. Ignored/generated does **not** mean
+disposable: preserve persistent calibration/configuration, models, images, manual
+setups, accepted reports and local prototype evidence. Engine callers can supply
+arbitrary model paths. Root `models/` and normal startup's `data/models/` serve
+different workflows; do not substitute one for the other.
+
+Normal startup uses explicit default-Model and last-applied-Recipe IDs in
+`data/app.json`. Relative model artifacts are anchored to their Model JSON;
+relative Folder paths to their source JSON. See
+[configuration paths](docs/configuration.md#artifact-paths) and
+[startup/recovery](docs/application.md#startup-recovery) before preparing local files.
+Saved MachineLayout geometry is authoritative; startup/editing does not repair or
+calibrate it automatically.
+
+## Application entry points
+
+Run from the repository root in the existing environment:
+
+| Entry | Purpose |
+| --- | --- |
+| [app.py](app.py) | Normal persistent **real-inference** Production application |
+| [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit-path **real** Production developer launcher |
+| [run_production_ui.py](scripts/run_production_ui.py) | Equipment-free Production review with a **fake engine** |
+| [python -m vimo_demo.ui.app](src/vimo_demo/ui/app.py) | Separate **real one-image** inference/worker/Qt diagnostic |
 
 ```powershell
-uv run python app.py
+uv run --no-sync python app.py
+uv run --no-sync python scripts/run_production_ui.py --language zh --size 1080x1920
+uv run --no-sync python -m vimo_demo.ui.app models/model_trt_fp16.vimosln
 ```
 
-The existing five-page shell restores explicit saved configuration from ignored
-`data/` beside `app.py`: `app.json`, `machine/machine.json`,
-`sources/camera_sources.json`, `models/` and `recipes/`. It opens stopped in READY
-with a prepared candidate, or UNCONFIGURED when required files/IDs are unavailable.
-It never automatically starts inspection or restores Batch/counters. See
-[startup/discovery](docs/application-bootstrap.md) for the manifest, model path
-anchoring, successful Apply/language persistence and missing-data behavior.
-The existing explicit-path real launcher and fake demo remain supported.
-Use `uv run --no-sync python app.py` for daily startup without synchronization.
+Normal `app.py` has no language/size CLI. It restores persistent configuration and
+opens stopped with a prepared candidate, without creating an engine or restoring
+Batch/counters/results. Invalid required data leaves it UNCONFIGURED; a valid
+candidate with unavailable Folder inputs can remain READY with a warning and a
+failing Start preflight. It never chooses a first configuration, creates missing
+geometry or substitutes fake inference.
 
-## Minimal API
+The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
+**History / 历史** and **Vision / 视觉**. Communication and History are placeholders.
+Recipe and Vision use **Save and apply**: persistence, candidate preparation/
+installation and successful-Start activation are distinct outcomes. Only successful
+Start activates. Counters measure admitted cycles/channel judgments, not physical
+capsules/products; only explicit Batch resets them. Workflow details belong to
+[UI configuration](docs/ui-configuration.md) and [application](docs/application.md).
 
-This synchronous CLI example uses one engine in one owning context. Run from the
-repository root after setup:
+For explicit-path real review, these illustrative local files must exist and
+validate; their names are not universal startup defaults:
+
+```powershell
+uv run --no-sync python scripts/run_local_production_ui.py --model-config data/models/model.json --machine-config data/machine/machine.json --recipe data/recipes/local.recipe.json --sources-config data/sources/camera_sources.json --language zh --size 1080x1920
+```
+
+This launcher uses saved Folder sources by default. Mutually exclusive
+`--frames-dir images` or `--images <six paths>` select fixed images in configured
+camera order for that process; they do not persist source changes or restore/write
+manifest preferences. These developer options are not normal startup recovery.
+See [entry-point details](docs/application.md#developer-entry-points) and
+[Folder replay](docs/application.md#folder-replay).
+
+The fake launcher remains fake with `--frames-dir images`; its default synthetic
+inputs need no GPU/model/dataset. Use `--scenario ng`, `warning` or `fault` for
+abnormal-state review. Launching may create ignored demo configuration. The
+one-image diagnostic optionally accepts `--image <path>`; Start Worker, wait for
+READY, then Run Inference. It does not produce Production cycles/counters. See
+[UI review](docs/ui-shell.md#review) for both workflows and close behavior.
+
+## Synchronous inference
+
+Supply an existing local image filename. This CLI example owns one engine in one
+serial context; GUI execution instead uses a worker engine factory.
 
 ```python
 from pathlib import Path
@@ -95,66 +117,57 @@ import numpy as np
 
 from vimo_demo.inference import VimoSegmentationEngine
 
-path = next(iter(sorted(Path("images").glob("*.png"))))
+path = Path("images/example.png")  # Replace with an existing image.
 image_bgr = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
 if image_bgr is None:
     raise ValueError(f"Cannot decode {path}")
 
 with VimoSegmentationEngine("models/model_trt_fp16.vimosln") as engine:
     result = engine.infer(image_bgr)
-    print(result.has_defects, result.regions_per_label)
-    # result.mask: owned uint8 (H, W), preserving SDK label IDs.
+    print(result.has_defects, result.label_map, result.regions_per_label)
+    print(result.mask.shape)  # Owned, read-only uint8 (H, W); raw SDK mask IDs.
 ```
 
-Input is a uint8 H x W x 3 BGR ndarray. `ImageResult` owns its normalized mask and
-separates label IDs from region counts. `has_defects` is not a production OK/NG
-decision. See the [engine contract](docs/inference-core.md).
-Runtime staging/cache defaults to `outputs/vimo_cache/<model-sha256>/`, relative
-to the working directory; the source model remains untouched.
+Input is nonempty uint8 H × W × 3 **BGR**, without resizing or orientation changes.
+`label_map` maps labels to mask IDs; it is not region counts. `has_defects` means
+returned regions exist, not production acceptance. The
+[inference/runtime contract](docs/inference-runtime.md) owns input/result details,
+model staging, borrowing, errors and cleanup. Default runtime cache is
+`outputs/vimo_cache/<model-sha256>/`, relative to the working directory and separate
+from the source model.
 
-GUI callers use `InferenceWorker` with an engine factory so construction,
-inference and cleanup stay on its thread. Its bounded queue defaults to one
-pending task plus the active call; submitted arrays remain immutable until Future
-completion. The [worker guide](docs/runtime-worker.md) contains the CLI Future
-example and full lifecycle contract.
+## Maintained engineering tools
 
-## Production screen and integration demo
+Use each tool's `--help` for options. These are explicit engineering workflows,
+not mandatory daily validation:
 
-The six-camera shell needs no GPU or local assets for its simulated input:
+| Tool | Scope / output |
+| --- | --- |
+| [example_inference.py](scripts/example_inference.py) | One image through the typed API; semantic/region output in the terminal |
+| [benchmark_inference.py](scripts/benchmark_inference.py) | Per-call serial wrapper latency, including normalization/copies; `outputs/benchmark/` |
+| [benchmark_production.py](scripts/benchmark_production.py) | Fixed six-image configured Production cycles, including ingress copies/admission/result delivery; `outputs/inspection_performance/` |
+| [stress_inference.py](scripts/stress_inference.py) | One engine, six calls per round, semantic/latency/resource observations; `outputs/stress/` |
+| [visualize_inference.py](scripts/visualize_inference.py) | Raw-mask/contour/bbox overlays and label legend; `outputs/visualization/` |
+
+Replace `images/example.png` with an existing image. Benchmark and stress commands
+below intentionally execute GPU work; run them only for a scoped investigation.
 
 ```powershell
-uv run --no-sync python scripts/run_production_ui.py --language zh --size 1080x1920
+uv run --no-sync python scripts/example_inference.py models/model_trt_fp16.vimosln images/example.png
+uv run --no-sync python scripts/benchmark_inference.py models/model_trt_fp16.vimosln images --pool-size 6 --warmup 20 --rounds 100
+uv run --no-sync python scripts/stress_inference.py models/model_trt_fp16.vimosln images --rounds 5000 --pool-size 24 --sample-interval 100 --gpu-memory
+uv run --no-sync python scripts/visualize_inference.py models/model_trt_fp16.vimosln images --limit 10
 ```
 
-Click **Start inspection**. Use `--scenario ng`, `warning` or `fault` to review
-abnormal states; `--language en --size 1920x1080` shows the landscape layout.
-Counters represent channel judgment occurrences, not physical capsule counts.
-Open **Recipe** for the compact Demo A/B product editor: name, optional product
-code and registered model. **Save and apply** persists and prepares configuration;
-only successful Start activates it. Hidden inspection policies remain intact.
-See the [Recipe review guide](docs/recipe-configuration-ui.md#review-and-verification).
-For camera source/ROI review, open Settings directly and choose a camera.
-The real-local launcher supports saved per-camera Folder replay; see the
-[local source contract](docs/production-ui.md#local-real-inference-mode--phase-3b--3g-1).
-The [ROI walkthrough](docs/graphical-roi-editor.md#manual-review) covers direct
-move/resize, common size, distribution, reference refresh and Save and apply.
-See the [UI contract and review guide](docs/production-ui.md) for ownership,
-shutdown, alternate sizes and remaining physical-screen validation.
+[Production benchmark invocation](docs/inspection-performance.md#workload-and-invocation)
+documents its configuration arguments, distinct model-path base, A–F workloads
+and timing limits. Wrapper, historical raw SDK and Production timings are different
+measurement scopes. Neither benchmark proves hardware throughput; stress reports
+make no automatic leak verdict. The visualizer uses existing Pillow/fonts for
+Chinese where available, otherwise ASCII references with Chinese labels in JSON;
+it installs nothing.
 
-The older one-image SDK integration demo is separate:
-
-```powershell
-uv run --no-sync python -m vimo_demo.ui.app models/model_trt_fp16.vimosln
-```
-
-Click **Start Worker**, wait for READY, select a local image and run inference.
-Optional `--image images/<filename>.png` pre-fills the path. The window remains
-responsive during backend work and defers closing until the worker exits.
-Native calls cannot be forcibly cancelled.
-This is an integration demo, not final UI. See [Qt integration](docs/qt-integration.md)
-for thread/lifetime contracts, timeout behavior and a short manual check.
-
-## Quality gates and optional GPU regression
+## Verification
 
 ```powershell
 uv run --no-sync ruff check src tests scripts app.py
@@ -164,63 +177,50 @@ uv run --no-sync pytest --tb=short
 git diff --check
 ```
 
-Normal pytest runs unit/headless Qt tests and skips GPU tests. Maintained source,
-tests and scripts are checked in strict mode. Pytest scratch files live
-in `outputs/pytest-tmp/` and are disposable. Pyright uses installed vendor inline
-annotations; unit tests do not import the real SDK.
+Strict typing covers maintained source, tests, scripts and `app.py`. Normal pytest
+uses GPU-independent tests/headless Qt and skips real-GPU checks. Proportional
+validation rules are in [AGENTS](AGENTS.md#typing-and-validation).
 
-Optional GPU regressions using the local model and `images/`:
-
-```powershell
-uv run --no-sync pytest tests/integration/test_qt_vimo.py tests/integration/test_worker_vimo.py::test_worker_one_image --run-gpu --require-gpu -s --tb=short
-uv run --no-sync pytest tests/integration/test_coordinator_vimo.py --run-gpu --require-gpu -s --tb=short
-uv run --no-sync pytest tests/integration/test_application_vimo.py --run-gpu --require-gpu -s --tb=short
-uv run --no-sync pytest tests/integration/test_reference.py -m "gpu and not full_reference" --run-gpu --require-gpu -s
-uv run --no-sync pytest -m full_reference --run-full-reference --require-gpu -s
-```
-
-The commands cover one-image Qt/worker checks, a six-frame coordinator cycle,
-application startup/warm-up/cleanup,
-a short engine reference subset, and the full reference dataset respectively.
-Remove `--require-gpu` to skip
-unavailable prerequisites. The tracked `tests/reference/phase0.json` is the
-self-contained golden fixture; old reports and exploration scripts are not
-required. Full regression is specific to its recorded model and 400 image hashes.
-See [regression details](docs/inference-core.md#development-and-regression) and
-[historical findings](docs/phase0-findings.md); SDK regression does not establish
-model accuracy or production acceptance.
-
-## Maintained tools
-
-All tools use the formal inference API. Run from the repository root and replace
-`images/example.png` with a local filename. Use each tool's `--help` for options:
+A short opt-in engine regression, requiring local reference assets and SDK/runtime:
 
 ```powershell
-uv run --no-sync python scripts/example_inference.py models/model_trt_fp16.vimosln images/example.png
-uv run --no-sync python scripts/benchmark_inference.py models/model_trt_fp16.vimosln images --rounds 100 --warmup 20
-uv run --no-sync python scripts/stress_inference.py models/model_trt_fp16.vimosln images --rounds 5000 --pool-size 24 --sample-interval 100 --gpu-memory
-uv run --no-sync python scripts/visualize_inference.py models/model_trt_fp16.vimosln images --limit 10
+uv run --no-sync pytest tests/integration/test_reference.py::test_short_reference --run-gpu --require-gpu -s --tb=short
 ```
 
-| Tool | Purpose / output |
+Without `--require-gpu`, missing prerequisites skip. Other programming/regression
+errors still fail. [Inference verification](docs/inference-runtime.md#verification)
+owns additional worker/coordinator and full-reference commands;
+[application verification](docs/application.md#verification) covers local real
+composition, and [UI verification](docs/ui-shell.md#verification-and-limits) covers
+Qt wiring. Full reference assertions require the fixture's exact model SHA-256,
+400-image filename set and image hashes. Full-dataset, stress and benchmark runs
+are opt-in, not routine requirements for documentation or unrelated changes.
+
+## Documentation
+
+Current contracts and procedures:
+
+| Document | Authority |
 | --- | --- |
-| Example | One image; semantic and region output in the terminal |
-| Benchmark | Serial wrapper latency, including normalization/copies; `outputs/benchmark/` |
-| Stress | Six calls per round, semantic checks, latency/resource samples; `outputs/stress/` |
-| Visualizer | Mask, contours, boxes and label legend; `outputs/visualization/` |
+| [Architecture](docs/architecture.md) | Implemented scope, responsibility boundaries and unimplemented Target direction |
+| [Configuration](docs/configuration.md) | Persisted definitions, pure resolution, artifact identity and path bases |
+| [Inspection](docs/inspection.md) | Frame/cycle identity, collection, evidence, technical/product judgment and Size/Color |
+| [Inference and runtime](docs/inference-runtime.md) | Typed API, serial ownership, bounded handoffs, Futures and shutdown |
+| [Application](docs/application.md) | Persistent startup/recovery, activation, readiness, counters and local sources |
+| [UI shell](docs/ui-shell.md) | Bilingual presentation, display identity, feedback, Qt delivery and closing |
+| [UI configuration](docs/ui-configuration.md) | Recipe/Vision drafts, ROI/reference/tuning and Save and apply |
+| [Inspection performance](docs/inspection-performance.md) | Measurement workloads, boundaries, reports and interpretation |
 
-Selection is deterministic and non-recursive; source models/images are unchanged.
-Wrapper timings differ from historical raw SDK measurements. Long stress runs
-are not daily checks and make no automatic leak verdict. The visualizer uses
-optional existing Pillow/Microsoft YaHei for Chinese labels, otherwise ASCII
-references link to Chinese labels in JSON; it installs nothing automatically.
+Frozen **Historical** archives, separate from Current contracts:
 
-Capsule Size/Color and isolated Recipe tuning preview are now available as an
-uncalibrated demonstration. Both default off; ViMo policy overrides remain independent. Removed traditional
-Recipe fields are rejected; see the configuration contract before using older files.
-See [capsule inspection and manual review](docs/capsule-inspection.md) for controls,
-limits and equipment-free/real-local launch commands.
+- [Validation evidence](docs/archive/validation-evidence.md): SDK/model/dataset,
+  finite stability, reboot/visual observations and golden provenance.
+- [Inspection performance records](docs/archive/inspection-performance-records.md):
+  dated measurements, source/workload identities and qualifications.
+- [Production UI exploration](docs/archive/production-ui-exploration.md): selected
+  early rationale/prototype provenance, including superseded/unimplemented ideas.
 
-The opt-in [production performance baseline](docs/inspection-performance.md) compares
-ViMo-only, Size, Size+Color and traditional-only modes through the real application
-and worker path. It is a fixed-image software experiment, not machine throughput.
+Historical regressions/measurements do not establish current hardware acceptance.
+The domain documents own Current contracts; the archives own dated evidence.
+Git checkpoint `8fad326aaaf5e0e981224963607a7e000eb95604` preserves the original
+documents and exploration narrative.
