@@ -1,5 +1,6 @@
 """Provisional black-background, two-view capsule screening; not calibration."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
@@ -130,25 +131,69 @@ def median_pixel_hue(values: NDArray[np.uint8]) -> float | None:
     if values.size == 0:
         return None
     counts = np.bincount(values, minlength=180)
-    vector = complex(np.dot(counts, _HUE_VECTORS)) / values.size
+    return _histogram_hue(counts, values.size, lambda: values)
+
+
+def _histogram_hue(
+    counts: NDArray[np.intp],
+    count: int,
+    samples: Callable[[], NDArray[np.uint8]],
+) -> float | None:
+    """Exact circular ranks; gather original-order pixels only for fallback."""
+    vector = complex(np.dot(counts, _HUE_VECTORS)) / count
     magnitude = abs(vector)
     # Histogram reduction changes floating summation order. At the ambiguity
     # boundary or a rounding tie, preserve the original pixel-order computation.
     # These guards select an implementation; they do not relax judgment limits.
     if abs(magnitude - 0.5) <= 1e-12:
-        return median_hue(values.astype(np.float64))
+        return median_hue(samples().astype(np.float64))
     if magnitude < 0.5:
         return None
     angle = float(np.angle(vector)) * 180 / (2 * np.pi)
     if abs(angle - (np.floor(angle) + 0.5)) <= 1e-10:
-        return median_hue(values.astype(np.float64))
+        return median_hue(samples().astype(np.float64))
     center = round(angle) % 180
-    # Ordered bins represent -90..89 about the circular center. The two ranks
-    # reproduce np.median(), including half-integer medians for even samples.
-    cumulative = np.cumsum(np.roll(counts, 90 - center))
-    lower = int(np.searchsorted(cumulative, (values.size - 1) // 2 + 1))
-    upper = int(np.searchsorted(cumulative, values.size // 2 + 1))
+    # Search the tail then wrapped head of original-bin prefix sums. Average
+    # unwrapped offsets, not Hue IDs, to preserve even medians across 179/0.
+    start = (center - 90) % 180
+    cumulative = np.cumsum(counts)
+    base = int(cumulative[start - 1]) if start else 0
+    tail = count - base
+    lower_rank, upper_rank = (count - 1) // 2 + 1, count // 2 + 1
+    lower = int(
+        np.searchsorted(
+            cumulative, lower_rank + base if lower_rank <= tail else lower_rank - tail
+        )
+    )
+    upper = int(
+        np.searchsorted(
+            cumulative, upper_rank + base if upper_rank <= tail else upper_rank - tail
+        )
+    )
+    lower, upper = (lower - start) % 180, (upper - start) % 180
     return float((center + (lower + upper) / 2 - 90) % 180)
+
+
+def _masked_pixel_hue(
+    pixels: NDArray[np.uint8], usable: NDArray[np.uint8], count: int
+) -> float | None:
+    if count == 0:
+        return None
+
+    def samples() -> NDArray[np.uint8]:
+        return pixels[:, :, 0][usable != 0]
+
+    # calcHist has float32 counts: integers through 2**24 are exact. Larger
+    # samples keep the gathered/bincount path rather than lose count precision.
+    if count > 2**24:
+        return median_pixel_hue(samples())
+    counts = (
+        cv2.calcHist([pixels], [0], usable, [180], [0, 180]).ravel().astype(np.intp)
+    )
+    if int(counts.sum()) != count:
+        # Do not silently discard out-of-range Hue bins or discrepant counts.
+        return median_pixel_hue(samples())
+    return _histogram_hue(counts, count, samples)
 
 
 def _geometry(
@@ -192,7 +237,7 @@ def _color(pixels: NDArray[np.uint8], usable: NDArray[np.uint8]) -> ColorMeasure
     minimum = max(12, (usable.size + 19) // 20)
     if count < minimum:
         return ColorMeasurement(None, count, minimum, "insufficient_foreground")
-    hue = median_pixel_hue(pixels[:, :, 0][usable != 0])
+    hue = _masked_pixel_hue(pixels, usable, count)
     return ColorMeasurement(hue, count, minimum, "unusable" if hue is None else None)
 
 
