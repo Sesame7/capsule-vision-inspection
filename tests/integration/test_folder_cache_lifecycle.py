@@ -1,6 +1,8 @@
 """Application-lifetime cache wiring with deterministic controlled native calls."""
 
 from collections.abc import Callable
+from concurrent.futures import Future
+from dataclasses import replace
 from pathlib import Path
 from threading import Event, current_thread, get_ident
 from threading import enumerate as threads
@@ -409,3 +411,69 @@ def test_close_retains_cache_until_actual_active_native_completion(
             engine.release_active.set()
         app.close().result(WAIT)
         assert app.join(WAIT)
+
+
+@pytest.mark.parametrize("mode", ["fixed", "folder", "cached"])
+def test_local_source_modes_share_pacing_after_first_cycle(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    from vimo_demo.ui import local_production
+
+    before = {t.ident for t in threads()}
+    entered = Event()
+    waits: list[tuple[float, float]] = []
+
+    def pacing(stop: Event, started: float, fps: float) -> bool:
+        waits.append((started, fps))
+        entered.set()
+        return stop.wait(WAIT)
+
+    monkeypatch.setattr(local_production, "_wait_for_source_interval", pacing)
+    model, machine, recipe, paths = input_files(tmp_path)
+    if mode != "fixed":
+        sources = replace(folders(tmp_path, loop=mode == "cached"), target_fps=4)
+        save_camera_sources(tmp_path / "camera_sources.json", sources)
+    engines: list[InputEngine] = []
+    source_futures: list[Future[None]] = []
+
+    def factory(_config: object) -> InputEngine:
+        engine = InputEngine()
+        engines.append(engine)
+        return engine
+
+    composition = compose(
+        model,
+        machine,
+        recipe,
+        paths if mode == "fixed" else (),
+        engine_factory=factory,
+        observe_source=source_futures.append,
+    )
+    app = composition.application
+    try:
+        app.start().result(WAIT)
+        engine = engines[0]
+        until(engine.active.is_set)
+        # First production input is claimed before any pacing call.
+        assert waits == [] and app.snapshot().counters.cycles_started == 1
+        engine.release_active.set()
+        assert entered.wait(WAIT)
+        assert len(waits) == 1 and waits[0][1] == (8 if mode == "fixed" else 4)
+        assert app.snapshot().counters.cycles_completed == 1
+        assert [v for v, _ in engine.calls][2:] == (
+            list(range(1, 7)) if mode == "fixed" else [1, 11, 21, 31, 41, 51]
+        )
+        assert len(composition.store.snapshot().frames) == 6
+        app.stop().result(WAIT)
+        assert app.snapshot().state is ApplicationState.READY and engine.closed
+        assert source_futures[0].done() and source_futures[0].exception() is None
+        assert app.snapshot().counters.cycles_completed == 1
+    finally:
+        for engine in engines:
+            engine.release_active.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+    assert not {t.ident for t in threads()} - before

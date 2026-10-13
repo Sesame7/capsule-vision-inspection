@@ -7,7 +7,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Thread
-from time import monotonic
+from time import monotonic, sleep
 
 import cv2
 import numpy as np
@@ -69,6 +69,23 @@ def _cli_image(path: Path) -> NDArray[np.uint8]:
     if image is None:
         raise ValueError(f"Cannot decode uint8 BGR image: {path}")
     return uint8_array(image)
+
+
+def _wait_for_source_interval(stop: Event, started: float, fps: float) -> bool:
+    """B12 pacing: one absolute deadline, interruptible coarse wait, short sleeps."""
+    if stop.is_set():
+        return True
+    deadline = started + 1 / fps
+    coarse = max(0.0, start_interval_wait(started, monotonic(), fps) - 0.012)
+    if coarse > 0 and stop.wait(coarse):
+        return True
+    while not stop.is_set():
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return False
+        # Stop is observed between slices; scheduling can exceed this request.
+        sleep(min(0.0005, remaining))
+    return True
 
 
 class LocalRuntimeSession(ProductionRuntimeSession):
@@ -169,8 +186,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             first = True
             while not self._source_stop.is_set():
                 fps = self._sources.target_fps if self._sources else 8.0
-                if started is not None and self._source_stop.wait(
-                    start_interval_wait(started, monotonic(), fps)
+                if started is not None and _wait_for_source_interval(
+                    self._source_stop, started, fps
                 ):
                     return
                 started = monotonic()

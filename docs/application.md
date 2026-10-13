@@ -447,12 +447,22 @@ Local composition uses one collecting and one queued READY slot with a 30-second
 collection deadline; these are current demo settings, not hardware requirements.
 
 Saved `target_fps` supplies a start-to-start source-iteration budget. The loop
-waits only the remaining interval using a stop-interruptible Event; slow work adds
-no fixed post-result delay or catch-up burst. Iterations include decode/copy,
-admission and result waits. This is serial software pacing, not guaranteed camera
-FPS, physical throughput, PLC synchronization or a hard deadline. Collector timeout
-observation remains explicit; replay does not introduce an autonomous expiration
-scheduler.
+uses the absolute deadline of the previous iteration's monotonic start plus
+`1 / target_fps`. B12 waiting reserves 12 ms from the remaining budget for fine
+waiting: the existing Stop Event directly interrupts the coarse wait, then
+deadline-aware `sleep()` requests of at most 0.5 ms finish the interval, checking
+Stop between slices. An active sleep cannot be interrupted; scheduling can extend
+it, so this is not a cancellation-latency upper bound. Stop checks before new
+source work and actual source/runtime joins remain required.
+
+The first iteration has no pacing wait; the readiness wait before RUNNING is
+unchanged. Work that reaches or exceeds the deadline adds no pacing delay, fixed
+post-result wait or catch-up burst. This policy covers cached Loop replay,
+on-demand non-Loop replay and explicit fixed images (which retain the 8 FPS
+default). Iterations include decode/copy, admission, result waits and display
+publication. This is serial software pacing, not guaranteed camera FPS, physical
+throughput, PLC synchronization or a hard deadline. Collector timeout observation
+remains explicit; replay does not introduce an autonomous expiration scheduler.
 
 Normal non-loop exhaustion requests application Stop and settles `source_done`
 normally. A later source/decode/admission failure settles `source_done`
