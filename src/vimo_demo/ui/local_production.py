@@ -1,5 +1,6 @@
 """Real ViMo Production UI: saved per-camera folders or explicit CLI images."""
 
+import sys
 import traceback
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
@@ -21,6 +22,11 @@ from vimo_demo.application import (
     ProductionApplication,
     ProductionRuntimeSession,
     prepare_configuration,
+)
+from vimo_demo.application.folder_cache import (
+    CacheState,
+    FolderCacheStatus,
+    FolderReplayCache,
 )
 from vimo_demo.application.folder_replay import (
     FolderReplay,
@@ -129,7 +135,18 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         if self._source.ident is not None:
             remaining = None if deadline is None else max(0, deadline - monotonic())
             self._source.join(remaining)
-        return not self._source.is_alive()
+        joined = not self._source.is_alive()
+        if (
+            joined
+            and self.cleanup_safe
+            and self._replay is not None
+            and self._replay.cached
+        ):
+            # No owner can read source pixels now. The application cache survives
+            # Stop, but an old disposable session must not retain the full dataset.
+            self._images = ()
+            self._replay = None
+        return joined
 
     @property
     def thread_names(self) -> tuple[str, ...]:
@@ -172,8 +189,10 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                     if camera.frame_id is not None:
                         # Reuse the actual admitted identity; these source pixels
                         # equal the ingress copy. Store owns a separate display copy.
-                        self._store.publish(
-                            Frame(camera.frame_id, captured, image),
+                        self._store.publish_pixels(
+                            camera.frame_id,
+                            captured,
+                            image,
                             generation=self.generation,
                             source_key=self._sources.camera(camera.camera_id).key(
                                 self._source_base
@@ -199,9 +218,47 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                 self.source_done.set_result(None)
 
 
+class _LocalApplication(ProductionApplication):
+    """Local composition resource only; core lifecycle/activation stays unchanged."""
+
+    def __init__(
+        self,
+        factory: Callable[[PreparedConfiguration, int], LocalRuntimeSession],
+        cache: FolderReplayCache,
+    ) -> None:
+        self.replay_cache = cache
+        super().__init__(factory)
+
+    def close(self) -> Future[None]:
+        completed = super().close()
+        completed.add_done_callback(self._release_cache)
+        return completed
+
+    def _release_cache(self, completed: Future[None]) -> None:
+        # Close success follows safe source/native/runtime joins. A failed Close
+        # keeps ownership/cache; application.join still proves lifecycle-thread exit.
+        if completed.exception(timeout=0) is None:
+            self.replay_cache.clear()
+
+
+def _cache_notice(status: FolderCacheStatus) -> None:
+    if status.state in (
+        CacheState.LOADING,
+        CacheState.READY,
+        CacheState.HIT,
+        CacheState.FALLBACK,
+    ):
+        print(
+            f"FolderReplay cache {status.state.name}: {status.loaded_images}/{status.image_count} images, "
+            f"{status.decoded_bytes} bytes, load={status.load_seconds:.3f}s"
+            + (f"; on-demand fallback: {status.reason}" if status.reason else ""),
+            file=sys.stderr,
+        )
+
+
 @dataclass
 class LocalComposition:
-    application: ProductionApplication
+    application: _LocalApplication
     store: LatestDisplayFrameStore
     choice: RecipeChoice
     editor: RecipeEditorSession
@@ -216,6 +273,7 @@ def compose(
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
     sources_file: Path | None = None,
+    observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
@@ -261,7 +319,11 @@ def compose(
         cli_sources=bool(paths),
     )
     app, store = local_application(
-        editor, paths, engine_factory=engine_factory, observe_source=observe_source
+        editor,
+        paths,
+        engine_factory=engine_factory,
+        observe_source=observe_source,
+        observe_cache=observe_cache,
     )
     app.configure(prepared)
     return LocalComposition(
@@ -275,7 +337,8 @@ def local_application(
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
-) -> tuple[ProductionApplication, LatestDisplayFrameStore]:
+    observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
+) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != 6:
         raise ValueError("Exactly six local image paths are required")
@@ -285,6 +348,7 @@ def local_application(
     sources = editor.camera_sources.saved
     images = tuple(_cli_image(path) for path in paths)
     store = LatestDisplayFrameStore(editor.machine.layout.camera_ids)
+    cache = FolderReplayCache(notify=observe_cache)
     for camera, image in zip(
         editor.machine.layout.cameras if images else (), images, strict=True
     ):
@@ -308,6 +372,7 @@ def local_application(
             saved_sources = load_camera_sources(sources_file) if not paths else sources
             saved_sources.validate_cameras(config.configuration.layout.camera_ids)
         except ConfigurationError as exc:
+            cache.clear()
             raise FolderSourceError(f"Camera sources {sources_file}: {exc}") from exc
         snapshot = (
             saved_sources
@@ -325,8 +390,18 @@ def local_application(
         replay = (
             None
             if paths
-            else FolderReplay(
-                config.configuration.layout, snapshot, sources_file.parent
+            else cache.replay(
+                config.configuration.layout,
+                snapshot,
+                sources_file.parent,
+                cancelled=lambda: (
+                    app.snapshot().state
+                    in (
+                        ApplicationState.STOPPING,
+                        ApplicationState.CLOSED,
+                        ApplicationState.FAULT,
+                    )
+                ),
             )
         )
         group = images if replay is None else replay.next_group()
@@ -346,7 +421,7 @@ def local_application(
         observe_source(session.source_done)
         return session
 
-    app = ProductionApplication(factory)
+    app = _LocalApplication(factory, cache)
     return app, store
 
 

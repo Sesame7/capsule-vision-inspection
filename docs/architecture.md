@@ -23,7 +23,7 @@ Inputs are local; real camera acquisition and PLC communication are unimplemente
 | Collection and runtime | Explicit frame/cycle identity, ordered collection, bounded admission and READY inspection backlog, terminal results/errors and observable shutdown. |
 | Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, selective Size/Color checks, and independent technical status and product judgment. |
 | Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and factual cycle/channel accounting. |
-| Local sources | Owned local image-set ingress, independent per-camera Folder replay and explicit fixed-image developer inputs. |
+| Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
 | Qt shell and editing | Chinese/English Production, Recipe and Vision pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. Communication and History are placeholders. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
 

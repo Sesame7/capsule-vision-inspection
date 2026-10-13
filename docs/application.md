@@ -167,7 +167,8 @@ repair, rollback or recovery wizard is implemented.
 thread. `configure(prepared)` installs already resolved/artifact-checked data;
 `prepare_configuration()` performs blocking artifact verification outside GUI
 dispatch. The supplied session factory must return an unstarted session or raise
-without retaining resources.
+without retaining session/native/thread resources. An application-lifetime source
+dataset has a separate local-composition owner, described under [Folder replay](#folder-replay).
 
 | State | Allowed work and transitions |
 | --- | --- |
@@ -337,13 +338,14 @@ mix independent cycle-ID producers in one session.
 
 ## Folder replay
 
-`FolderReplay` is an on-demand single-owner reader, not a camera adapter. It
+`FolderReplay` is a single-owner reader, not a camera adapter. Its on-demand path
+remains in use for Loop off and memory fallback. It
 snapshots file paths in each configured camera's Folder, nonrecursively, supporting
 PNG/JPG/JPEG/BMP/TIF/TIFF case-insensitively. Natural numeric filename ordering
 uses case-folded text and original spelling to break ties. Camera association is
 explicit layout/source identity, never inferred from filenames or arrival time.
 
-One group contains one decoded image per camera in configured order. Each image
+One group contains one image per camera in configured order. Each image
 must satisfy BGR and saved ROI bounds; subsequent shape changes within a camera's
 replay fail, without resize. Different cameras need not share one image shape.
 Only a complete valid group advances indices. Corrupt files are errors, not
@@ -352,10 +354,89 @@ Loop off, replay ends when any camera exhausts its list. No partial group is
 submitted and no directory watcher refreshes the path snapshot.
 
 Normal local session creation runs on the application lifecycle thread. Each
-Start reloads saved source definitions, checks identities, creates fresh replay
-and decodes its first group **before constructing a runtime session/engine**.
+Start reloads saved source definitions, checks identities and creates a fresh
+replay cursor **before constructing a runtime session/engine**. For saved Loop
+sources, the local application first loads or validates its decoded dataset cache;
+the uncached path instead decodes the first group.
 Readiness uses that group; the first production cycle uses it again only after
 RUNNING. Every restart begins replay at the start, never at a saved cursor.
+
+### Application-lifetime decoded dataset
+
+`FolderReplayCache` belongs to the local application composition. On the first
+Start with saved `loop=true`, it enumerates and decodes every supported file for
+every configured camera, validates uint8 BGR shape and saved ROI bounds, and
+requires consistent dimensions within each camera. Cameras may have different
+dimensions. It publishes one complete dataset only after checking the file
+inventory/metadata again. Any detected change during loading fails Start; there
+is no partial production admission or automatic retry.
+
+Stop retains a successfully loaded dataset. Later Starts validate identity and
+reuse its readonly arrays without decoding. Fresh sessions, generations, replay
+cursors, CycleIds and FrameIds still apply. Every cycle executes the configured
+inspection pipeline; results, masks, classifications and derived HSV/ROI data
+are never cached. Original source ordering, independent wrapping, complete-group
+advancement and remaining-budget pacing are unchanged.
+
+Identity includes the saved source definition (including Loop/pacing), configured
+camera order, naturally ordered resolved file paths, and each file's size,
+nanosecond modification/ctime metadata, device/inode and mode. There is no image
+content hashing on every Start. Ordinary additions/removals/replacements and
+metadata changes trigger retirement and full rebuilding of this one dataset.
+It is not a per-camera multi-dataset cache. Current ROI bounds are revalidated on
+a hit; geometry is never repaired or resized. Unsaved source drafts are ignored.
+
+This fingerprint is a point-in-time check, not a filesystem transaction or
+continuous monitor. Content changes that preserve all observed metadata can
+escape detection, and concurrent filesystem changes cannot be ruled out between
+checks. During RUNNING, cached pixels remain the frozen dataset even if disk files
+change. No hot reload occurs. A detected source change or failed rebuild leaves
+no stale/partial cache to reuse. Cancellation of validation of an otherwise
+unchanged existing cache retains it for a **new validation on the next Start**.
+
+Decoded bytes are actual array `nbytes`; no arbitrary 8 GiB cap applies. Before
+each decode and after allocation, current available physical RAM must leave
+`max(2 GiB, 10% of physical RAM)` for the system/runtime. The preceding image's
+size estimates the next same-camera allocation; the first image has no known
+decoded size until decoding completes. These observations are not an allocator
+reservation or guarantee against concurrent allocations. Cached hits also check
+the reserve. Missing memory telemetry, insufficient reserve, `MemoryError` or
+OpenCV's explicit out-of-memory status discard partial/old cache and select the
+original on-demand reader. This **observable memory fallback** is reported through
+the compact cache status callback and stderr, with its reason; first-group
+preflight and subsequent source errors keep their original behavior. An actual
+corrupt/invalid image is a source error, never a memory-fallback reason or a file
+to silently skip. Files not reached before memory fallback are validated by the
+original on-demand path when read.
+
+Bulk loading stays on the application lifecycle thread, outside Qt and before any
+native engine exists. Start remains asynchronous; the shell uses its existing
+STARTING/STOPPING presentation. Metadata-only progress/status callbacks report
+loading counts, bytes, population time, hits and fallback (default: stderr).
+Callbacks must be short/nonblocking and must not mutate widgets. Stop/Close is
+observed before/after each decode and at enumeration/metadata boundaries. An
+active filesystem/decode operation finishes naturally; it is not force-cancelled.
+Incomplete cancelled loading never constructs the native runtime. Its Start
+Future fails through the existing startup boundary; successful cleanup returns
+READY or completes Close. `runtime_owned=false` while loading does not prove
+lifecycle-thread termination: Stop/Close Futures and actual join remain necessary.
+
+The cache stores readonly views over readonly decoded bases, without another
+full-image copy. Ingress still makes independently owned Frames. Display
+publication copies identified source pixels directly into the existing byte-backed
+display store; borrowed cache views are not misrepresented as owned domain Frames.
+Source aliases remain immutable until their consumer is finished. After actual
+safe joins, disposable sessions drop their dataset references; application cache
+ownership survives Stop. Successful Close releases the cache after safe runtime
+shutdown, and application join confirms owner-thread exit. Failed/unsafe Close
+retains ownership and cache. Chained preload errors discard bulk traceback locals
+as well as partial cache storage.
+
+`loop=false`, explicit fixed-image CLI inputs, and independent Vision Folder
+reference browsing remain uncached with their prior behavior. Normal startup's
+pre-Qt first-group availability check is also unchanged; full residency begins
+only with explicit Start. No source JSON/Recipe fields or persistent cache files
+were added.
 
 Current `LocalRuntimeSession` composes one non-daemon local source thread with the
 existing serial runtime. It waits for its matching RUNNING generation, submits
@@ -488,6 +569,7 @@ manifest recovery and independent feedback outcomes.
 uv run --no-sync pytest tests/unit/test_production_application.py tests/unit/test_configured_execution.py tests/integration/test_application_runtime.py --tb=short
 uv run --no-sync pytest tests/unit/test_application_bootstrap.py tests/integration/test_application_bootstrap_ui.py tests/integration/test_feedback_corrections.py --tb=short
 uv run --no-sync pytest tests/unit/test_folder_replay.py tests/integration/test_local_ingress.py tests/integration/test_camera_setup.py tests/integration/test_local_production_ui.py --tb=short
+uv run --no-sync pytest tests/unit/test_folder_cache.py tests/integration/test_folder_cache_lifecycle.py --tb=short
 ```
 
 Optional real-GPU checks require explicit opt-in and local prerequisites. These
@@ -495,7 +577,14 @@ short readiness/local-composition checks are not full-dataset or stress tests:
 
 ```powershell
 uv run --no-sync pytest tests/integration/test_application_vimo.py tests/integration/test_local_production_vimo.py --run-gpu --require-gpu -s --tb=short
+uv run --no-sync pytest tests/integration/test_folder_cache_vimo.py --run-gpu --require-gpu -s --tb=short
 ```
+
+The cache GPU smoke reads the saved Loop-enabled `data/` configuration and folders,
+preloads once, executes a few real cycles, then verifies reuse through a fresh
+Start/session/engine. It preserves assets/settings and records load bytes/time,
+actual inference signatures and cleanup under its pytest temporary directory.
+It is a wiring observation, not a pacing/performance qualification.
 
 Normal quality commands remain in [AGENTS](../AGENTS.md). Markdown-only reconstruction
 requires static link/path/example/command/whitespace checks, no runtime testing.

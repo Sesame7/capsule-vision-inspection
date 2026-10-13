@@ -408,14 +408,16 @@ def test_finite_replay_restart_snapshot_order_generation_and_cleanup(
     assert not {t.ident for t in threads()} - before
 
 
-def test_replay_bad_later_file_stops_without_partial_cycle(
+def test_uncached_replay_bad_later_file_stops_without_partial_cycle(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     engine = ControlledEngine()
     engine.release_warm.set()
     engine.release_active.set()
     observed: list[Future[None]] = []
-    composition = folder_composition(tmp_path, engine, observe=observed)
+    # Loop=true now rejects every bad preload file before native startup. Keep
+    # the original later-source-error assertion on the unchanged on-demand path.
+    composition = folder_composition(tmp_path, engine, loop=False, observe=observed)
     (tmp_path / "independent-3" / "unrelated2.png").write_bytes(b"broken")
     app = composition.application
     delivery = FutureDelivery()
