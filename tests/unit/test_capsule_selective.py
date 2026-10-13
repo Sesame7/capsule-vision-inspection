@@ -11,7 +11,11 @@ from tests.capsule_support import ROI, SETTINGS, bodies
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
 from vimo_demo.inspection.production.capsule import (
+    BodyMeasurement,
+    CapsuleMeasurement,
     CapsuleSettings,
+    ColorMeasurement,
+    ViewMeasurement,
     judge_capsule,
     measure_capsule,
 )
@@ -35,7 +39,8 @@ def test_only_requested_operations_execute(
     hsv, components, hue = (
         cv2.cvtColor,
         cv2.connectedComponentsWithStats,
-        module.median_pixel_hue,
+        # Private observation point; the assertion concerns selective execution.
+        module._masked_pixel_hue,  # pyright: ignore[reportPrivateUsage]
     )
     image = bodies()
 
@@ -47,9 +52,9 @@ def test_only_requested_operations_execute(
         calls["components"] += 1
         return components(mask, connectivity=connectivity)
 
-    def color_median(values: NDArray[np.uint8]):
+    def color_median(pixels: NDArray[np.uint8], usable: NDArray[np.uint8], count: int):
         calls["hue"] += 1
-        return hue(values)
+        return hue(pixels, usable, count)
 
     def forbidden(*args: object) -> None:
         pytest.fail("No body-interior sampling/erosion in selective paths")
@@ -57,7 +62,7 @@ def test_only_requested_operations_execute(
     monkeypatch.setattr(cv2, "cvtColor", convert)
     monkeypatch.setattr(cv2, "connectedComponentsWithStats", geometry)
     monkeypatch.setattr(cv2, "erode", forbidden)
-    monkeypatch.setattr(module, "median_pixel_hue", color_median)
+    monkeypatch.setattr(module, "_masked_pixel_hue", color_median)
     settings = selected(size, color)
     before = image.copy()
     measured = measure_capsule(image, ROI, settings)
@@ -79,6 +84,54 @@ def test_only_requested_operations_execute(
     assert result.assessment.technical_status is (
         TechnicalStatus.SUCCESS if size or color else TechnicalStatus.DISABLED
     )
+
+
+@pytest.mark.parametrize("size", [False, True])
+@pytest.mark.parametrize("strided", [False, True])
+def test_readonly_views_preserve_complete_scalar_evidence(
+    size: bool, strided: bool
+) -> None:
+    image = bodies()
+    if strided:
+        storage = np.zeros((120, 160, 3), dtype=np.uint8)
+        storage[:, ::2] = image
+        image = storage[:, ::2]
+    image.flags.writeable = False
+    before = image.copy()
+    measured = measure_capsule(image, ROI, selected(size, True))
+    assert measured == CapsuleMeasurement(
+        (
+            ViewMeasurement(
+                "upper",
+                BodyMeasurement(BoundingRect(20, 10, 20, 30)) if size else None,
+                color=ColorMeasurement(30.0, 600, 240),
+            ),
+            ViewMeasurement(
+                "lower",
+                BodyMeasurement(BoundingRect(20, 70, 20, 30)) if size else None,
+                color=ColorMeasurement(30.0, 600, 240),
+            ),
+        ),
+        size,
+        True,
+    )
+    result = judge_capsule(measured, selected(size, True))
+    assert result.assessment.technical_status is TechnicalStatus.SUCCESS
+    assert result.assessment.judgment is ProductJudgment.OK
+    assert not result.reasons
+    fields: list[tuple[str, float, str]] = [
+        ("usable_pixels", 600, "px"),
+        ("hue", 30.0, "opencv_hue"),
+    ]
+    if size:
+        fields[:0] = [("width", 20, "px"), ("height", 30, "px")]
+    expected = [
+        (f"capsule.{view}.{name}", value, unit)
+        for view in ("upper", "lower")
+        for name, value, unit in fields
+    ]
+    assert [(m.name, m.value, m.unit) for m in result.measurements] == expected
+    assert np.array_equal(image, before)
 
 
 @pytest.mark.parametrize("color", [False, True])
@@ -217,7 +270,8 @@ def test_enabling_unmeasured_capability_is_technical_contract_error() -> None:
         judge_capsule(measured, SETTINGS)
 
 
-def test_color_filter_matches_exact_saturation_value_boundaries() -> None:
+@pytest.mark.parametrize("strided", [False, True])
+def test_color_filter_matches_exact_saturation_value_boundaries(strided: bool) -> None:
     from vimo_demo.inspection.production.capsule import median_pixel_hue
 
     rng = np.random.default_rng(40)
@@ -228,9 +282,16 @@ def test_color_filter_matches_exact_saturation_value_boundaries() -> None:
     hsv[24:36, :, 2] = 39
     hsv[36:, :, 2] = 40
     image = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR).astype(np.uint8, copy=False)
+    if strided:
+        image = image[::-1, ::2]
+    image.flags.writeable = False
+    before = image.copy()
     actual = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.uint8, copy=False)
-    measured = measure_capsule(image, BoundingRect(0, 0, 83, 51), selected(False, True))
+    measured = measure_capsule(
+        image, BoundingRect(0, 0, image.shape[1], 51), selected(False, True)
+    )
     for view, pixels in zip(measured.views, (actual[:25], actual[25:]), strict=True):
         mask = (pixels[:, :, 1] >= 40) & (pixels[:, :, 2] >= 40)
         assert view.color and view.color.usable_pixels == int(np.count_nonzero(mask))
         assert view.color.hue == median_pixel_hue(pixels[:, :, 0][mask])
+    assert np.array_equal(image, before)
