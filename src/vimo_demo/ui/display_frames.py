@@ -6,7 +6,9 @@ from threading import Lock
 import numpy as np
 from numpy.typing import NDArray
 
+from vimo_demo.inference._validation import validate_image
 from vimo_demo.inspection import CameraId, Frame, FrameId
+from vimo_demo.inspection.models import timestamp
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -44,20 +46,42 @@ class LatestDisplayFrameStore:
     def publish(
         self, frame: Frame, *, generation: int, source_key: str | None = None
     ) -> bool:
-        if frame.id.camera_id not in self.cameras:
+        return self.publish_pixels(
+            frame.id,
+            frame.captured_at,
+            frame.image,
+            generation=generation,
+            source_key=source_key,
+        )
+
+    def publish_pixels(
+        self,
+        frame_id: FrameId,
+        captured_at: float,
+        pixels: NDArray[np.uint8],
+        *,
+        generation: int,
+        source_key: str | None = None,
+    ) -> bool:
+        """Copy identified source pixels, including readonly borrowed cache views.
+
+        This is display publication, not transfer into a domain Frame. All pixel
+        aliases stay immutable for this call; the store keeps only its own copy.
+        """
+        timestamp(captured_at)
+        pixels = validate_image(pixels)
+        if frame_id.camera_id not in self.cameras:
             raise ValueError("Unknown display camera")
         if type(generation) is not int or generation < 0:
             raise ValueError("Invalid generation")
         # bytes backing prevents consumers from re-enabling ndarray writes.
-        image = np.frombuffer(frame.image.tobytes(), dtype=np.uint8).reshape(
-            frame.image.shape
-        )
+        image = np.frombuffer(pixels.tobytes(), dtype=np.uint8).reshape(pixels.shape)
         with self._lock:
-            previous = self._frames.get(frame.id.camera_id)
+            previous = self._frames.get(frame_id.camera_id)
             if previous is not None and (
                 generation,
-                frame.id.cycle_id,
-                frame.id.sequence,
+                frame_id.cycle_id,
+                frame_id.sequence,
             ) <= (
                 previous.generation,
                 previous.frame_id.cycle_id,
@@ -65,10 +89,10 @@ class LatestDisplayFrameStore:
             ):
                 return False
             self._revision += 1
-            self._frames[frame.id.camera_id] = DisplayFrame(
-                frame.id,
+            self._frames[frame_id.camera_id] = DisplayFrame(
+                frame_id,
                 generation,
-                frame.captured_at,
+                captured_at,
                 self._revision,
                 image,
                 source_key,

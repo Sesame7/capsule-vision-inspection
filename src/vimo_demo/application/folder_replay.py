@@ -61,6 +61,8 @@ def decode_image(path: Path) -> NDArray[np.uint8]:
 class FolderReplay:
     """One serial owner. Paths are snapshotted; only one decoded group is live."""
 
+    cached = False
+
     def __init__(
         self, layout: InspectionLayout, sources: CameraSources, base: Path
     ) -> None:
