@@ -425,7 +425,7 @@ def test_ready_step_button_and_nonblocking_close_at_each_replay_phase(
             window.buttons["secondary"].click()  # Rapid click grants no second step.
             assert app.snapshot().counters == ProductionCounters()
         if phase == "stepping":
-            assert window.state_label.text() != text("replay_paused", "zh")
+            assert window.state_label.text() != text("state_replay_paused", "zh")
         window.close()
         qapp.processEvents()
         if phase != "paused":
@@ -549,12 +549,12 @@ def test_local_buttons_pause_at_boundary_continue_and_end_without_restart(
         primary.click()
         assert primary.text() == text("replay_pausing", language)
         assert not primary.isEnabled() and app.snapshot().counters.cycles_completed == 0
-        assert window.state_label.text() != text("replay_paused", language)
+        assert window.state_label.text() != text("state_replay_paused", language)
         engine.release.set()
         until(lambda: replay_state(composition) is ReplayState.PAUSED)
         bridge.refresh()
         qapp.processEvents()  # Apply layout requests from the longer paused label.
-        assert window.state_label.text() == text("replay_paused", language)
+        assert window.state_label.text() == text("state_replay_paused", language)
         assert primary.text() == text("replay_continue", language)
         assert secondary.text() == text("replay_step", language)
         assert not window.buttons["batch"].isEnabled()  # RUNNING restrictions persist.

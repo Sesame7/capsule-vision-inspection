@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from ctypes import wintypes
@@ -34,12 +35,15 @@ def assert_process_exited(pid: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "launcher,scenario",
-    [("uv", s) for s in ("unused", "visit", "success", "timeout", "pending", "switch")]
-    + [("direct", "unused")],
+    "launcher,scenario,web",
+    [
+        ("uv", s, False)
+        for s in ("unused", "visit", "success", "timeout", "pending", "switch")
+    ]
+    + [("direct", "unused", False), ("direct", "unused", True)],
 )
 def test_normal_app_native_close_exits_process_tree(
-    tmp_path: Path, launcher: str, scenario: str
+    tmp_path: Path, launcher: str, scenario: str, web: bool
 ) -> None:
     (tmp_path / "sitecustomize.py").write_text(
         "from tests.app_close_support import install\ninstall()\n", encoding="utf-8"
@@ -58,6 +62,11 @@ def test_normal_app_native_close_exits_process_tree(
         command = [uv, "run", "--no-sync", "python", "app.py"]
     else:
         command = [str(ROOT / ".venv/Scripts/python.exe"), "app.py"]
+    if web:
+        with socket.socket() as available:
+            available.bind(("127.0.0.1", 0))
+            port = available.getsockname()[1]
+        command.extend(("--web-snapshots", "--web-port", str(port)))
     with subprocess.Popen(
         command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
@@ -92,12 +101,19 @@ def test_normal_app_native_close_exits_process_tree(
     assert stages[-1] == "atexit"
     assert stages.index("last_window_closed") < stages.index("exec_return")
     assert "application_joined" in stages
+    assert (b"Read-only Production snapshots" in stderr) == web
     for record in records:
         if record["stage"] == "last_window_closed" or (
             record["stage"] == "close_return" and record["accepted"]
         ):
             assert record["application_closed"] and record["communication_closed"]
-        if record["stage"] in ("exec_return", "atexit"):
+        if record["stage"] == "exec_return" and web:
+            assert record["threads"] == [
+                "MainThread",
+                "ProductionSnapshotPublisher",
+                "ProductionSnapshotHTTP",
+            ]
+        elif record["stage"] in ("exec_return", "atexit"):
             assert record["threads"] == ["MainThread"]
     if scenario == "pending":
         assert next(r for r in records if r["stage"] == "native_close")["busy"]

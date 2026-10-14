@@ -1,8 +1,9 @@
 """Persistent real-inference entry composition; disk preparation precedes Qt."""
 
+import argparse
 import sys
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -35,6 +36,7 @@ from vimo_demo.configuration import (
     resolve_configuration,
 )
 from vimo_demo.inspection import CameraId
+from vimo_demo.web import ProductionSnapshotService
 
 from .camera_source_editor import CameraSourceDraft
 from .display_frames import LatestDisplayFrameStore
@@ -396,7 +398,24 @@ def create_window(startup: Startup, delivery: FutureDelivery) -> ProductionWindo
     return window
 
 
-def main(entry_directory: Path) -> int:
+def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Persistent ViMo Production application"
+    )
+    parser.add_argument(
+        "--web-snapshots",
+        action="store_true",
+        help="Developer-only read-only localhost snapshots (disabled by default)",
+    )
+    parser.add_argument(
+        "--web-port",
+        type=int,
+        default=8765,
+        help="Snapshot port on 127.0.0.1 (default: 8765)",
+    )
+    args = parser.parse_args(argv)
+    if not 1 <= args.web_port <= 65535:
+        parser.error("--web-port must be between 1 and 65535")
     # Preparation before Qt creation, as in the explicit-path developer launcher.
     startup = load_startup(
         ApplicationData.at_entry(entry_directory),
@@ -406,13 +425,39 @@ def main(entry_directory: Path) -> int:
         print(issue.detail, file=sys.stderr)
     qt = QApplication(sys.argv[:1])
     delivery = FutureDelivery()
+    service: ProductionSnapshotService | None = None
     try:
+        if args.web_snapshots:
+            try:
+                service = ProductionSnapshotService(
+                    startup.application,
+                    startup.frames,
+                    cameras=startup.machine.layout.camera_ids
+                    if startup.machine
+                    else (),
+                    port=args.web_port,
+                )
+                service.start()
+            except Exception as exc:
+                # Optional observation failure cannot invalidate Production readiness.
+                traceback.print_exception(exc)
+            else:
+                print(
+                    f"Read-only Production snapshots: http://127.0.0.1:{service.port}/api/snapshot",
+                    file=sys.stderr,
+                )
         window = create_window(startup, delivery)
         window.resize(1080, 1920)
         window.show()
         return qt.exec()
     finally:
+        if service is not None:
+            service.request_stop()
         # Outside Qt dispatch, retaining ownership until native/source work exits.
-        startup.application.close().result()
-        startup.application.join()
-        delivery.detach()
+        try:
+            startup.application.close().result()
+            startup.application.join()
+        finally:
+            if service is not None:
+                service.join()
+            delivery.detach()

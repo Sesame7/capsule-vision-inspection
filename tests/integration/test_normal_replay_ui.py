@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import enumerate as threads
 
 import pytest
+from PySide6.QtCore import QPoint, QSize
 from PySide6.QtWidgets import QApplication
 from tests.application_support import WAIT
 from tests.integration.test_application_bootstrap_ui import close_window
@@ -108,6 +109,12 @@ def test_normal_ready_step_warms_up_once_then_steps_in_same_generation(
         assert primary.isEnabled() and secondary.isEnabled() and not engines
         before = {path: path.read_bytes() for path in startup.data.root.rglob("*.json")}
         qapp.processEvents()
+        assert primary.size() == secondary.size() == QSize(3 * Style.touch, Style.touch)
+        geometry = tuple(
+            (button.mapTo(window.summary, QPoint()), button.size())
+            for button in (primary, secondary)
+        )
+        region = window.operation_group.geometry()
         assert window.grab().save(str(tmp_path / f"normal-replay-{language}-ready.png"))
         secondary.click()
         until(lambda: bool(engines) and engines[0].entered.is_set())
@@ -115,6 +122,16 @@ def test_normal_ready_step_warms_up_once_then_steps_in_same_generation(
         assert app.snapshot().state is ApplicationState.STARTING
         assert app.snapshot().counters == ProductionCounters()
         assert not primary.isEnabled() and not secondary.isEnabled()
+        assert window.state_label.text() == text("state_STARTING", language)
+        qapp.processEvents()
+        assert (
+            tuple(
+                (button.mapTo(window.summary, QPoint()), button.size())
+                for button in (primary, secondary)
+            )
+            == geometry
+        )
+        assert window.operation_group.geometry() == region
         secondary.click()  # Disabled startup must not queue another step permission.
         engines[0].release.set()
         until(lambda: replay_state(startup) is ReplayState.PAUSED)
@@ -127,6 +144,37 @@ def test_normal_ready_step_warms_up_once_then_steps_in_same_generation(
         assert engines[0].calls == [10, 10, 10, 20, 30, 40, 50, 60]
         assert primary.text() == text("replay_continue", language)
         assert secondary.text() == text("replay_step", language)
+        assert window.state_label.text() == text("state_replay_paused", language)
+        assert text("replay_paused", language) in window.state_label.accessibleName()
+        assert window.state_label.toolTip() == window.state_label.accessibleName()
+        assert Style.warning in window.state_label.styleSheet()
+        qapp.processEvents()
+        assert (
+            tuple(
+                (button.mapTo(window.summary, QPoint()), button.size())
+                for button in (primary, secondary)
+            )
+            == geometry
+        )
+        assert window.operation_group.geometry() == region
+        identity = window.identity_group
+        center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
+        assert abs(center - window.summary.width() / 2) <= 1
+        assert (
+            window.batch_group.mapTo(window.summary, QPoint()).x()
+            == window.summary.contentsRect().left()
+            + window.summary_layout.contentsMargins().left()
+        )
+        window.bridge.refresh()
+        assert all(not card.viewport.empty_message for card in window.cards)
+        images = tuple(card.viewport.image.copy() for card in window.cards)
+        results = tuple(card.result for card in window.cards)
+        conversions = tuple(card.viewport.conversions for card in window.cards)
+        for _ in range(3):
+            window.bridge.refresh()
+        assert tuple(card.viewport.image for card in window.cards) == images
+        assert tuple(card.result for card in window.cards) == results
+        assert tuple(card.viewport.conversions for card in window.cards) == conversions
         assert (
             not window.buttons["batch"].isEnabled() and not window.parameters.editable()
         )
@@ -185,17 +233,51 @@ def test_normal_pause_continue_end_and_restart_preserve_existing_cursor_rules(
     with normal_replay(tmp_path, hold_call=3) as (startup, window, engines):
         app = startup.application
         primary, secondary = window.buttons["operation"], window.buttons["secondary"]
+        qapp.processEvents()
+        geometry = tuple(
+            (button.mapTo(window.summary, QPoint()), button.size())
+            for button in (primary, secondary)
+        )
+
+        def assert_geometry() -> None:
+            qapp.processEvents()
+            assert (
+                primary.size()
+                == secondary.size()
+                == QSize(3 * Style.touch, Style.touch)
+            )
+            assert (
+                tuple(
+                    (button.mapTo(window.summary, QPoint()), button.size())
+                    for button in (primary, secondary)
+                )
+                == geometry
+            )
+            identity = window.identity_group
+            assert (
+                abs(
+                    identity.mapTo(window.summary, QPoint()).x()
+                    + identity.width() / 2
+                    - window.summary.width() / 2
+                )
+                <= 1
+            )
+
         primary.click()
         until(lambda: bool(engines) and engines[0].entered.is_set())
         window.bridge.refresh()
         assert primary.text() == text("replay_pause", window.language)
         assert secondary.text() == text("replay_end", window.language)
+        assert_geometry()
+        assert window.grab().save(str(tmp_path / "header-running.png"))
         primary.click()
         assert replay_state(startup) is ReplayState.PAUSING and not primary.isEnabled()
         assert app.snapshot().counters.cycles_completed == 0
+        assert_geometry()
         engines[0].release.set()
         until(lambda: replay_state(startup) is ReplayState.PAUSED)
         window.bridge.refresh()
+        assert_geometry()
         engines[0].hold_call = 9
         engines[0].entered.clear()
         engines[0].release.clear()
@@ -206,8 +288,11 @@ def test_normal_pause_continue_end_and_restart_preserve_existing_cursor_rules(
             app.snapshot().generation == 1
             and app.snapshot().counters.cycles_started == 2
         )
+        assert_geometry()
         secondary.click()  # End requests real Stop, even with an active fake native call.
         assert app.snapshot().state is ApplicationState.STOPPING
+        assert_geometry()
+        assert window.grab().save(str(tmp_path / "header-stopping.png"))
         assert not primary.isEnabled() and not secondary.isEnabled()
         engines[0].release.set()
         until(lambda: app.snapshot().state is ApplicationState.READY)

@@ -7,9 +7,10 @@ from threading import Event, get_ident
 
 import numpy as np
 import pytest
-from PySide6.QtCore import QObject, QPoint, QSize, QTimer, Slot
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QWidget
+from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Slot
+from PySide6.QtGui import QColor, QIcon
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QLabel, QWidget
 from tests.application_support import FakeSession, prepared, production
 from tests.business_support import channel, mixed_result
 from tests.production_support import source_frame
@@ -309,7 +310,7 @@ def test_close_failure_does_not_quit_or_release_unsafe_runtime(
     assert window.isVisible() and not window.bridge.closed
     assert window.snapshot.runtime_owned
     until(lambda: not window.bridge.closing)
-    assert window.state_label.text() == text("FAULT", window.language)
+    assert window.state_label.text() == text("state_FAULT", window.language)
     assert text("shutdown_error", window.language) in window.event_label.text()
     assert window.snapshot.last_issue is not None
     assert window.snapshot.last_issue.exception_type in window.event_label.text()
@@ -783,8 +784,9 @@ def test_long_recipe_and_batch_keep_pending_activation_visible(
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_summary_groups_center_batch_and_keep_actions_in_bounds(
+def test_summary_groups_center_state_recipe_and_keep_batch_left_actions_right(
     screen: tuple[ProductionWindow, FakeSession],
+    tmp_path: Path,
     size: tuple[int, int],
     language: Language,
 ) -> None:
@@ -799,8 +801,14 @@ def test_summary_groups_center_batch_and_keep_actions_in_bounds(
     )
     QApplication.processEvents()
     batch = window.batch_group
-    batch_center = batch.mapTo(window.summary, QPoint()).x() + batch.width() / 2
-    assert abs(batch_center - window.summary.width() / 2) <= 1
+    assert (
+        batch.mapTo(window.summary, QPoint()).x()
+        == window.summary.contentsRect().left()
+        + window.summary_layout.contentsMargins().left()
+    )
+    identity = window.identity_group
+    center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
+    assert abs(center - window.summary.width() / 2) <= 1
     assert not window.pending_label.isVisible()
     assert "Long Recipe" in window.identity_label.toolTip()
     operation = window.buttons["operation"]
@@ -814,6 +822,9 @@ def test_summary_groups_center_batch_and_keep_actions_in_bounds(
             position + QPoint(widget.width() - 1, widget.height() - 1)
         )
     assert len(window.metrics) == 4 and "channel_ok" in window.metrics
+    assert window.grab().save(
+        str(tmp_path / f"header-{language}-{size[0]}x{size[1]}-long-identities.png")
+    )
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (880, 720)])
@@ -907,6 +918,13 @@ def test_business_indicators_summary_and_bilingual_layout(
     assert neutral != indicator_icon(Indicator.DISABLED).pixmap(18, 18).toImage()
     assert neutral != indicator_icon(Indicator.PENDING).pixmap(18, 18).toImage()
     qapp.processEvents()
+    widths = [window.metric_row.cellRect(0, i).width() for i in range(4)]
+    assert max(widths) - min(widths) <= 1
+    for i, (_value, caption) in enumerate(window.metrics.values()):
+        assert (
+            caption.mapTo(window.summary, QPoint()).x()
+            == window.metric_row.cellRect(0, i).x()
+        )
     for value, caption in window.metrics.values():
         for widget in (value, caption):
             assert widget.width() >= widget.fontMetrics().horizontalAdvance(
@@ -996,6 +1014,7 @@ def test_empty_technical_error_and_failed_occupancy_remain_visible(
 )
 def test_batch_identity_uses_available_width_in_ready_and_running(
     screen: tuple[ProductionWindow, FakeSession],
+    tmp_path: Path,
     language: Language,
     size: tuple[int, int],
     batch_id: str | None,
@@ -1004,7 +1023,7 @@ def test_batch_identity_uses_available_width_in_ready_and_running(
     window.set_language(language)
     window.resize(*size)
     window.bridge.start_batch(batch_id)
-    full_text = f"{text('batch_id', language)} {batch_id or '--'}"
+    full_text = f"{text('batch_id', language)} {batch_id or '—'}"
     operation_positions: list[QPoint] = []
     for state in (
         ApplicationState.READY,
@@ -1047,11 +1066,24 @@ def test_batch_identity_uses_available_width_in_ready_and_running(
         )
         assert edit.size() == QSize(Style.touch, Style.touch)
         group = window.batch_group
-        center = group.mapTo(window.summary, QPoint()).x() + group.width() / 2
+        assert (
+            group.mapTo(window.summary, QPoint()).x()
+            == window.summary.contentsRect().left()
+            + window.summary_layout.contentsMargins().left()
+        )
+        identity = window.identity_group
+        center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
         assert abs(center - window.summary.width() / 2) <= 1
         operation_positions.append(
             window.buttons["operation"].mapTo(window.summary, QPoint())
         )
+        if batch_id == "LOT-20261009-001":
+            assert window.grab().save(
+                str(
+                    tmp_path
+                    / f"header-{language}-{size[0]}x{size[1]}-{state.name}-{window.snapshot.generation}-batch.png"
+                )
+            )
     assert operation_positions[0] == operation_positions[1] == operation_positions[2]
 
 
@@ -1105,6 +1137,7 @@ def test_recipe_summary_candidate_active_and_unconfigured(
 @pytest.mark.parametrize("font_pixels", [19, 23])
 def test_summary_long_identities_adapt_to_narrower_and_larger_text(
     screen: tuple[ProductionWindow, FakeSession],
+    tmp_path: Path,
     language: Language,
     font_pixels: int,
 ) -> None:
@@ -1127,7 +1160,9 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
             batch_id="long-batch-identity-" * 20,
         )
     )
-    for size in ((1920, 1080), (880, 720), (1080, 1920), (1920, 1080)):
+    for index, size in enumerate(
+        ((1920, 1080), (880, 720), (1080, 1920), (1920, 1080))
+    ):
         window.resize(*size)
         QApplication.processEvents()
         for widget in (
@@ -1140,6 +1175,7 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
             assert window.summary.rect().contains(
                 start + QPoint(widget.width() - 1, widget.height() - 1)
             )
+        identity_left = window.identity_group.mapTo(window.summary, QPoint()).x()
         identity_right = (
             window.identity_group.mapTo(window.summary, QPoint()).x()
             + window.identity_group.width()
@@ -1147,11 +1183,42 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
         batch_left = window.batch_group.mapTo(window.summary, QPoint()).x()
         batch_right = batch_left + window.batch_group.width()
         operation_left = window.buttons["operation"].mapTo(window.summary, QPoint()).x()
-        assert identity_right + Style.space <= batch_left
-        assert batch_right + Style.space <= operation_left
+        assert (
+            batch_left
+            == window.summary.contentsRect().left()
+            + window.summary_layout.contentsMargins().left()
+        )
+        assert batch_right + Style.space <= identity_left
+        assert identity_right + Style.space <= operation_left
         assert window.pending_label.text().startswith(text("pending_recipe", language))
         assert window.buttons["operation"].size() == QSize(4 * Style.touch, Style.touch)
         assert window.buttons["batch"].size() == QSize(Style.touch, Style.touch)
+        for widget in (
+            window.state_label,
+            window.recipe_icon,
+            window.identity_label,
+            window.pending_label,
+        ):
+            assert window.identity_group.rect().contains(widget.geometry()), (
+                widget.geometry(),
+                window.identity_group.rect(),
+            )
+        assert (
+            window.identity_label.geometry().right() + Style.small
+            < window.pending_label.geometry().left()
+        ), (window.identity_label.geometry(), window.pending_label.geometry())
+        assert window.batch_group.rect().contains(window.batch_label.geometry())
+        assert (
+            window.buttons["batch"].x()
+            == window.batch_label.x() + window.batch_label.width() + Style.small
+        )
+        for label in (window.identity_label, window.pending_label, window.batch_label):
+            assert (
+                label.fontMetrics().horizontalAdvance(label.text()) <= label.width()
+            ), (label.text(), label.width())
+        assert window.grab().save(
+            str(tmp_path / f"header-{language}-{index}-{size[0]}x{size[1]}-pending.png")
+        )
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
@@ -1339,3 +1406,122 @@ def test_running_and_disabled_batch_icons_are_distinct(qapp: QApplication) -> No
         for x in range(normal.width())
         for y in range(normal.height())
     )
+
+
+@pytest.mark.parametrize("language,size", [("zh", (1080, 1920)), ("en", (1920, 1080))])
+def test_concise_lifecycle_text_and_center_identity_fit_summary(
+    screen: tuple[ProductionWindow, FakeSession],
+    tmp_path: Path,
+    language: Language,
+    size: tuple[int, int],
+) -> None:
+    window, _ = screen
+    window.set_language(language)
+    window.resize(*size)
+    styles: list[str] = []
+    for key, state in (
+        ("READY", ApplicationState.READY),
+        ("STARTING", ApplicationState.STARTING),
+        ("RUNNING", ApplicationState.RUNNING),
+        ("STOPPING", ApplicationState.STOPPING),
+        ("FAULT", ApplicationState.FAULT),
+    ):
+        window.bridge.snapshot_changed.emit(replace(window.snapshot, state=state))
+        QApplication.processEvents()
+        label = window.state_label
+        assert label.text() == text(f"state_{key}", language)
+        assert text(key, language) in label.accessibleName()
+        assert label.toolTip() == label.accessibleName()
+        assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())
+        assert window.summary.height() < 120
+        styles.append(label.styleSheet())
+        assert "background:" not in label.styleSheet()
+        assert (
+            sum(
+                not child.pixmap().isNull()
+                for child in window.identity_group.findChildren(QLabel)
+            )
+            == 1
+        )
+        for widget in (
+            label,
+            window.identity_group,
+            window.batch_group,
+            window.operation_group,
+        ):
+            position = widget.mapTo(window.summary, QPoint())
+            assert window.summary.rect().contains(position)
+            assert window.summary.rect().contains(
+                position + QPoint(widget.width() - 1, widget.height() - 1)
+            )
+        assert window.grab().save(str(tmp_path / f"production-{language}-{key}.png"))
+    assert len(set(styles)) == 5
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_absent_frame_placeholder_does_not_misclassify_valid_dark_pixels(
+    screen: tuple[ProductionWindow, FakeSession], language: Language
+) -> None:
+    window, _ = screen
+    window.set_language(language)
+    card = window.cards[0]
+    assert card.viewport.image.isNull()
+    assert card.viewport.empty_message == text("no_display_frame", language)
+    assert card.viewport.empty_message in card.viewport.accessibleName()
+    # The shared seed is black; publish transfers an independent owned display copy.
+    frame = source_frame()
+    assert np.count_nonzero(frame.image) == 0
+    window.bridge.frames.publish(frame, generation=1)
+    window.bridge.snapshot_changed.emit(
+        replace(window.snapshot, state=ApplicationState.RUNNING, generation=1)
+    )
+    window.bridge.frames_changed.emit(window.bridge.frames.snapshot())
+    assert not card.viewport.image.isNull()
+    assert card.viewport.image.pixelColor(0, 0) == QColor(0, 0, 0)
+    assert not card.viewport.empty_message and card.result is None
+    assert card.viewport.message == text("pending", language)
+    assert window.snapshot.counters == ProductionCounters()
+    # A new generation suppresses old pixels; lack of evidence alone did not.
+    window.bridge.snapshot_changed.emit(
+        replace(window.snapshot, state=ApplicationState.STARTING, generation=2)
+    )
+    assert card.viewport.empty_message == text("no_display_frame", language)
+
+
+def test_production_focus_is_visible_and_keyboard_targets_stay_usable(
+    screen: tuple[ProductionWindow, FakeSession], tmp_path: Path
+) -> None:
+    window, _ = screen
+    window.activateWindow()
+    QApplication.processEvents()
+    batch = window.buttons["batch"]
+    batch.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+    assert batch.hasFocus()
+    assert batch.grab().toImage().pixelColor(batch.width() // 2, 0) == QColor(
+        Style.accent
+    )
+    assert batch.accessibleName() and batch.toolTip()
+    QTest.keyClick(batch, Qt.Key.Key_Tab)
+    assert window.buttons["operation"].hasFocus()
+    operation = window.buttons["operation"]
+    assert operation.grab().toImage().pixelColor(operation.width() // 2, 0) == QColor(
+        Style.primary
+    )
+    indicator = window.cards[0].indicators[0]
+    indicator.setFocus(Qt.FocusReason.TabFocusReason)
+    QApplication.processEvents()
+    assert indicator.hasFocus()
+    assert indicator.grab().toImage().pixelColor(indicator.width() // 2, 0) == QColor(
+        Style.accent
+    )
+    QTest.keyClick(indicator, Qt.Key.Key_Space)
+    assert indicator.text() == "1"  # Same expansion action as pointer input.
+    assert window.grab().save(str(tmp_path / "production-keyboard-focus.png"))
+    window.bridge.snapshot_changed.emit(
+        replace(window.snapshot, state=ApplicationState.STOPPING)
+    )
+    operation = window.buttons["operation"]
+    assert not operation.isEnabled() and operation.accessibleName() == operation.text()
+    operation.setFocus(Qt.FocusReason.TabFocusReason)
+    assert not operation.hasFocus()

@@ -44,6 +44,7 @@ class CameraViewport(QWidget):
         self.conversions = 0
         self.boxes: tuple[BoundingRect, ...] = ()
         self.message = ""
+        self.empty_message = ""
 
     def set_frame(self, frame: DisplayFrame | None) -> None:
         revision = frame.revision if frame else -1
@@ -84,6 +85,11 @@ class CameraViewport(QWidget):
             for box in self.boxes:
                 painter.drawRect(QRectF(*transform.rectangle(box)))
             painter.setClipping(False)
+        elif self.empty_message:
+            painter.setPen(QColor(Style.secondary))
+            painter.drawText(
+                self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_message
+            )
         if self.message:
             painter.setPen(QColor(Style.secondary))
             painter.drawText(
@@ -140,6 +146,7 @@ class CameraCard(QFrame):
             self.indicators.append(button)
         self.timing = QLabel("--")
         self.timing.setProperty("role", "secondary")
+        self.timing.setStyleSheet("font-size: 13px;")
         header.addWidget(self.timing, 0, 2, Qt.AlignmentFlag.AlignRight)
         root.addLayout(header)
         self.viewport = CameraViewport()
@@ -210,7 +217,7 @@ class CameraCard(QFrame):
                 or index in self._expanded
             )
             button.setIcon(indicator_icon(state))
-            button.setIconSize(QSize(18, 18))
+            button.setIconSize(QSize(16, 16))
             button.setText(
                 f"{slot.channel_id}{'!' if error and state in (Indicator.ERROR_NG, Indicator.EMPTY) else ''}"
                 if show_id
@@ -222,8 +229,17 @@ class CameraCard(QFrame):
             button.setToolTip(description)
             button.setAccessibleName(description)
             border = Style.warning if error else "transparent"
+            background = (
+                "#3b242d"
+                if state in (Indicator.NG, Indicator.ERROR_NG)
+                else Style.surface
+            )
             button.setStyleSheet(
-                f"color: {colors[state]}; border: 1px solid {border}; padding: 0px; background: {Style.surface}; font-size: 13px;"
+                f"QPushButton {{ color: {colors[state]}; border: 1px solid {border}; "
+                f"padding: 0px; background: {background}; font-size: 12px; "
+                "border-radius: 8px; outline: none; } "
+                f"QPushButton:hover {{ background: {Style.raised}; border-color: {colors[state]}; }} "
+                f"QPushButton:focus {{ border: 2px solid {Style.accent}; }}"
             )
         result = self.result
         technical = (
@@ -278,6 +294,16 @@ class CameraCard(QFrame):
             and self._frame.generation == self._snapshot.generation
             and result is None
             else ""
+        )
+        self.viewport.empty_message = (
+            text("no_display_frame", self.language)
+            if self.viewport.image.isNull()
+            else ""
+        )
+        self.viewport.setAccessibleName(
+            f"{name} · {self.viewport.empty_message}"
+            if self.viewport.empty_message
+            else name
         )
         self.viewport.update()
 
