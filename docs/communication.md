@@ -368,7 +368,8 @@ uv run --no-sync python app.py
    panel shows protocol ACK/counts. Its displayed ACK is not PLC consumption proof.
 3. Add an independent **W49, count 4** watch and read/refresh it. A manual W49–W52
    write is rejected; reads and unrelated localhost writes remain available.
-4. Stop Production and wait for READY; settings unlock only after cleanup. Start
+4. Use **End / 结束** during automatic replay (Continue first if paused) and wait
+   for READY; settings unlock only after genuine Stop cleanup. Start
    again to verify a new generation reads current W49. Leaving Communication or
    stopping its watch never stops automatic reporting.
 5. Optionally stop the simulator during RUNNING to observe bounded report failures

@@ -1,4 +1,4 @@
-"""Session-local source gating for the explicit local demo, not Production pause."""
+"""Session-local source gating for supported local replay, not Production pause."""
 
 from concurrent.futures import Future
 from dataclasses import dataclass

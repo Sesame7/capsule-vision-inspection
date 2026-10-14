@@ -79,6 +79,12 @@ Batch/counters/results. Invalid required data leaves it UNCONFIGURED; a valid
 candidate with unavailable Folder inputs can remain READY with a warning and a
 failing Start preflight. It never chooses a first configuration, creates missing
 geometry or substitutes fake inference.
+Validated local Folder sources expose the existing Start/Step, Pause/End and
+Continue/Step controls through normal startup. Pause retains the RUNNING session
+and editing locks; End performs genuine Stop. Sources/compositions without this
+capability keep generic Start/Stop. See
+[local replay controls](docs/application.md#local-replay-controls) for cursor,
+shutdown and manual verification.
 
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
 **History / 历史** and **Vision / 视觉**. Communication provides session-local manual
