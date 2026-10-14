@@ -30,7 +30,7 @@ page or explicit developer composition. Reporting preferences are memory-only.
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and Communication pages, including session-local automatic-reporting controls/observations; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
 | Communication | Qt-independent FINS/UDP DM/WR words, first-station projection/two-write submission, localhost simulator, independent manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
-| Web observation | Optional localhost-only read-only snapshot service; independent publisher encodes bounded latest-camera JPEGs, serial HTTP serves cached bytes. No browser UI, LAN binding or runtime commands. |
+| Web observation | Optional read-only snapshot service, default loopback with explicit assigned IPv4 binding on a trusted test LAN; independent publisher encodes bounded latest-camera JPEGs, serial HTTP serves cached bytes and a minimal responsive observer. No runtime commands, authentication or HTTPS. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
 from configured channel judgment. SDK/golden regression verifies integration,
@@ -141,7 +141,8 @@ Identified source Frames
 Optional normal-process Web observation
     -> existing application + display snapshots (not atomic acquisition)
     -> independent latest-only JPEG publisher
-    -> bounded read-only localhost HTTP cache delivery
+    -> bounded read-only loopback / explicit trusted-LAN HTTP cache delivery
+    -> responsive browser observation, not inspection completion or control
 ```
 
 The collector remains responsive during serial inspection in configured camera
@@ -200,6 +201,7 @@ packages, classes, composition hooks or thread topology retain this arrangement.
 | [`application/`](../src/vimo_demo/application/) | `ProductionApplication`, `ProductionRuntimeSession`, `ConfiguredProductionPipeline`, `LocalCycleIngress` and `FolderReplay`. |
 | [`ui/`](../src/vimo_demo/ui/) | Shell, bridges, display copies and configuration/preview widgets; [bootstrap](../src/vimo_demo/ui/bootstrap.py) and [local composition](../src/vimo_demo/ui/local_production.py) host Current desktop startup/source wiring. |
 | [`communication/`](../src/vimo_demo/communication/) | Typed FINS/UDP DM/WR client, first-station projection/submission, optional local reporting owner and finite loopback simulator. |
+| [`web/`](../src/vimo_demo/web/) | Optional snapshot publisher, serial HTTP cache delivery and read-only browser assets; normal bootstrap owns its process lifetime. |
 | [`tests/`](../tests/) and [`scripts/`](../scripts/) | Maintained verification, optional real regression, CLI tools and fake UI review. |
 
 ## Target / Not implemented
@@ -215,7 +217,7 @@ adapter designs or scheduling structures are selected here.
 | PLC integration and counting | Actual equipment/configuration, output association, delivery acknowledgement and physical-product accounting; the standalone FINS/UDP subset does not implement these or a capsule counter. |
 | Machine stopping/commissioning | Safety, emergency-stop responsibilities and hardware recovery; graceful software Stop/close is not machine safety. |
 | Calibrated inspection/acceptance | Lighting/geometry, calibration, thresholds, annotations and field acceptance criteria remain unverified. |
-| History/archive/LAN consumers | Retention, result/image association and delivery requirements; no archive, LAN service or browser UI is implemented. Current localhost-only Web snapshots remain best-effort observation, not result delivery. |
+| History/archive/remote deployment | Retention, result/image delivery, authentication/HTTPS and commissioned network access remain unimplemented. Current trusted-test-LAN Web observation is best-effort and provides neither control nor reliable result delivery. |
 | Performance/concurrency | Measure target workloads and ownership/hardware behavior before choosing concurrency; Current serial execution is not a permanent mandate. |
 
 Future architecture may differ substantially from today's internal topology.

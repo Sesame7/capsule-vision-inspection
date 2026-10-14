@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime
 from http.client import HTTPConnection
 from http.server import HTTPServer
+from ipaddress import IPv4Interface
 from pathlib import Path
 from threading import Event, get_ident
 from threading import enumerate as threads
@@ -30,6 +32,7 @@ from vimo_demo.application import (
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.ui.display_frames import DisplayFrame, LatestDisplayFrameStore
 from vimo_demo.web import ProductionSnapshotService
+from vimo_demo.web.hosts import local_interfaces, validate_host
 from vimo_demo.web.publisher import EncodedImage, SnapshotPublisher, encode_image
 
 CAMERAS = tuple(CameraId(f"CAM{i}") for i in range(6, 0, -1))
@@ -284,7 +287,8 @@ def test_local_read_only_http_revision_and_cleanup(
         assert request(service, "/health")[0] == 200
         assert request(service, "/api/snapshot", "POST")[0] == 405
         assert request(service, "/api/snapshot", "PUT")[0] == 501
-        assert request(service, "/")[0] == 404
+        assert request(service, "/")[0] == 200
+        assert request(service, "/unknown")[0] == 404
         assert request(service, "/api/cameras/CAM6.jpg")[0] == 400
         assert (
             request(
@@ -445,3 +449,154 @@ def test_web_import_is_qt_free_and_public_bridge_import_is_compatible() -> None:
         env={**os.environ, "PYTHONPATH": str(Path("src").resolve())},
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "",
+        "localhost",
+        "::1",
+        "0.0.0.0",
+        "0.1.2.3",
+        "255.255.255.255",
+        "224.0.0.1",
+        "240.0.0.1",
+        "127.0.0.2",
+        "192.168.10.255",
+        "192.168.10.0",
+        "192.0.2.99",
+    ],
+)
+def test_unsafe_invalid_or_unassigned_host_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, host: str
+) -> None:
+    monkeypatch.setattr(
+        "vimo_demo.web.hosts.local_interfaces",
+        lambda: (IPv4Interface("192.168.10.100/24"),),
+    )
+    with pytest.raises(ValueError):
+        validate_host(host)
+
+
+def test_assigned_host_uses_actual_subnet_and_preserves_interface_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # .255 is a valid host on this /23; do not guess broadcast from the suffix.
+    monkeypatch.setattr(
+        "vimo_demo.web.hosts.local_interfaces",
+        lambda: (
+            IPv4Interface("192.168.10.255/23"),
+            IPv4Interface("192.168.10.100/24"),
+        ),
+    )
+    assert validate_host("192.168.10.255") == "192.168.10.255"
+    monkeypatch.setattr(
+        "vimo_demo.web.hosts.local_interfaces",
+        lambda: (IPv4Interface("192.168.10.255/24"),),
+    )
+    with pytest.raises(ValueError, match="broadcast address"):
+        validate_host("192.168.10.255")
+
+    def failed() -> tuple[IPv4Interface, ...]:
+        raise OSError("interface observation failed")
+
+    monkeypatch.setattr("vimo_demo.web.hosts.local_interfaces", failed)
+    assert validate_host("127.0.0.1") == "127.0.0.1"
+    with pytest.raises(OSError, match="interface observation failed"):
+        validate_host("192.168.10.100")
+
+
+def test_explicit_assigned_ipv4_listener_and_port_release() -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows local-interface verification")
+    interfaces = local_interfaces()
+    hosts = [
+        str(interface.ip) for interface in interfaces if not interface.ip.is_loopback
+    ]
+    if not hosts:
+        pytest.skip("No assigned non-loopback IPv4; physical LAN remains manual")
+    source, store = inputs()
+    service = ProductionSnapshotService(source, store, host=hosts[0], port=0)
+    service.start()
+    try:
+        connection = HTTPConnection(service.host, service.port, timeout=2)
+        try:
+            connection.request("GET", "/")
+            response = connection.getresponse()
+            assert response.status == 200
+            assert b"ViMo Observer" in response.read()
+        finally:
+            connection.close()
+    finally:
+        service.request_stop()
+        assert service.join(3)
+    with socket.socket() as client:
+        assert client.connect_ex((service.host, service.port)) != 0
+
+
+def test_static_observer_and_three_clients_reuse_cached_jpegs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, store = inputs()
+    encoded: list[int] = []
+
+    def counted(frame: DisplayFrame) -> EncodedImage:
+        encoded.append(get_ident())
+        return encode_image(frame)
+
+    monkeypatch.setattr("vimo_demo.web.publisher.encode_image", counted)
+    service = ProductionSnapshotService(source, store, port=0, interval=60)
+    original_threads = {thread.ident for thread in threads()}
+    service.start()
+    try:
+        wait(lambda: service.publisher.latest() is not None)
+        for route, content_type in (
+            ("/", "text/html"),
+            ("/observer.js", "text/javascript"),
+            ("/observer.css", "text/css"),
+        ):
+            status, body, headers = request(service, route)
+            assert status == 200 and body
+            assert headers["Content-Type"].startswith(content_type)
+            assert "Access-Control-Allow-Origin" not in headers
+            assert request(service, route, "POST")[0] == 405
+        assert request(service, "/static/../service.py")[0] == 404
+
+        def observe(_client: int) -> int:
+            calls = 0
+            for _ in range(20):
+                status, body, _ = request(service, "/api/snapshot")
+                assert status == 200
+                calls += 1
+                for row in json.loads(body)["cameras"]:
+                    status, image, _ = request(service, row["image_url"])
+                    assert status == 200 and image.startswith(b"\xff\xd8")
+                    calls += 1
+            return calls
+
+        with ThreadPoolExecutor(max_workers=3) as clients:
+            assert list(clients.map(observe, range(3))) == [140, 140, 140]
+        assert len(encoded) == 6 and len(set(encoded)) == 1
+        latest = service.publisher.latest()
+        assert latest is not None and len(latest.images) == 6
+    finally:
+        service.request_stop()
+        assert service.join(3)
+    assert not {thread.ident for thread in threads()} - original_threads
+
+
+def test_browser_polling_identity_and_recovery() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip(
+            "JavaScript checks need an existing Node.js; no dependencies installed"
+        )
+    result = subprocess.run(
+        [node, "--test", "tests/web_observer_checks.cjs"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

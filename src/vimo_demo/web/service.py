@@ -5,6 +5,7 @@ import math
 import socket
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from importlib.resources import files
 from threading import Event, Lock, Thread
 from time import monotonic
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -12,7 +13,14 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from vimo_demo.inspection import CameraId
 from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 
+from .hosts import validate_host
 from .publisher import SnapshotPublisher, SnapshotSource
+
+_ASSETS = {
+    "/": ("observer.html", "text/html; charset=utf-8"),
+    "/observer.css": ("observer.css", "text/css; charset=utf-8"),
+    "/observer.js": ("observer.js", "text/javascript; charset=utf-8"),
+}
 
 # BaseServer's typed hooks include UDP requests; this listener is always TCP.
 type _Request = socket.socket | tuple[bytes, socket.socket]
@@ -27,7 +35,7 @@ class _Server(HTTPServer):
         self.owner = owner
         self._active_lock = Lock()
         self._active: socket.socket | None = None
-        super().__init__(("127.0.0.1", port), _Handler)
+        super().__init__((owner.host, port), _Handler)
         self.timeout = 0.2
 
     def get_request(self) -> tuple[socket.socket, tuple[str, int]]:
@@ -87,7 +95,10 @@ class _Handler(BaseHTTPRequestHandler):
         owner = server.owner
         path = urlsplit(self.path)
         latest = owner.publisher.latest()
-        if path.path == "/health" and not path.query:
+        if path.path in _ASSETS and not path.query:
+            body, content_type = owner.assets[path.path]
+            self._send(200, body, content_type)
+        elif path.path == "/health" and not path.query:
             self._send(
                 200,
                 json.dumps(
@@ -155,14 +166,23 @@ class ProductionSnapshotService:
         frames: LatestDisplayFrameStore,
         *,
         cameras: tuple[CameraId, ...] | None = None,
+        host: str = "127.0.0.1",
         port: int = 8765,
         interval: float = 2.0,
     ) -> None:
         if type(port) is not int or not 0 <= port <= 65535:
-            raise ValueError("Invalid localhost port")
+            raise ValueError("Invalid Web port")
         if not math.isfinite(interval) or interval <= 0:
             raise ValueError("Publication interval must be finite and positive")
         self.publisher = SnapshotPublisher(source, frames, cameras)
+        self.host = validate_host(host)
+        self.assets = {
+            route: (
+                files(__package__).joinpath("static", name).read_bytes(),
+                content_type,
+            )
+            for route, (name, content_type) in _ASSETS.items()
+        }
         self.port, self.interval = port, interval
         self.stopping = Event()
         self._server: _Server | None = None

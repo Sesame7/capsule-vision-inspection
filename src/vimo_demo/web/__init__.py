@@ -1,4 +1,4 @@
-"""Optional read-only localhost observation, independent of Qt and inference."""
+"""Optional read-only localhost/trusted-LAN observation, independent of Qt."""
 
 from .service import ProductionSnapshotService
 

@@ -300,12 +300,23 @@ and frozen-reference transforms remain in the machine/source document.
 
 ## Read-only snapshot publication
 
-Normal `app.py --web-snapshots [--web-port 8765]` optionally starts a process-owned,
-Qt-independent `ProductionSnapshotService`. It is disabled by default, binds only
-`127.0.0.1`, adds no persistence/UI controls and never commands the application or
+Normal `app.py --web-snapshots [--web-host 127.0.0.1] [--web-port 8765]` optionally
+starts a process-owned, Qt-independent `ProductionSnapshotService`. It is disabled
+by default, retains `127.0.0.1` as the default host, adds no persistence/Qt controls
+and never commands the application or
 participates in inspection completion, counters or PLC reporting. `ui` defers its
 public Qt bridge import so the existing pure display/identity modules and Web
 publisher do not load Qt. The bridge export/API itself is unchanged.
+
+**Current Web-2 extends Web-1's loopback-only contract:** explicit host selection
+accepts a specific assigned local unicast IPv4. A read-only Windows
+[GetIpAddrTable](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getipaddrtable)
+query supplies addresses and actual subnet masks; no DNS/interface configuration is
+performed. Wildcard, broadcast/subnet addresses, multicast, reserved addresses,
+IPv6 and hostnames are rejected. Non-default loopback aliases are not accepted.
+Addresses that are unassigned or become unavailable before bind fail observably.
+Host validation/bind errors are optional-service startup errors on stderr; normal
+Production still opens. The default loopback path requires no interface query.
 
 The publisher samples the existing locked application/display snapshots separately;
 this is not one atomic six-camera acquisition. Camera rows follow saved configured
@@ -339,13 +350,15 @@ An in-flight HTTP read may retain its old immutable publication until it finishe
 
 | GET endpoint | Meaning |
 | --- | --- |
+| `/` | Responsive read-only observer; no controls or additional Production callbacks |
+| `/observer.js`, `/observer.css` | Packaged same-origin observer resources; no CDN/build system |
 | `/api/snapshot` | Latest compact JSON; 503 before the first successful publication |
 | `/api/cameras/<CameraId>.jpg?publisher=<publisher_id>&revision=<publication_revision>` | Cached JPEG for that exact publisher/publication; 410 if superseded, 404 if unavailable/unknown, 400 without valid identity parameters |
 | `/health` | Publication availability, publisher liveness and latest publication failure; not Production readiness or connectivity proof |
 
 Use the JPEG URL returned by JSON, including escaped CameraId, publisher ID and revision. A newer
 publication never substitutes new pixels under an old URL. Responses disable cache;
-there is no CORS enablement, browser page, write/configuration/runtime endpoint or
+there is no CORS enablement, write/configuration/runtime endpoint or
 extra FINS request. A single HTTP thread processes one connection at a time with a
 four-connection listen backlog and a one-second socket I/O timeout; slow readers do
 not block publisher/Production. No per-request thread or unbounded task queue exists.
@@ -365,6 +378,62 @@ actual publisher/HTTP termination and socket release, not merely notification.
 Application/native cleanup keeps its existing ownership guarantees; no native call
 is forcibly cancelled. The window's close notification alone is not process/Web exit.
 
+#### Browser observation and resource ownership
+
+The self-contained observer uses three/two/one columns as the viewport narrows,
+preserves image orientation/aspect ratio with contained images, and follows
+configured camera order. It presents each frame's generation, CycleId, sequence
+and original dimensions, plus existing matching channel business/technical statuses.
+It creates no camera/cycle acceptance judgment and adds no overlays. With no valid
+configuration/images it remains an explicit empty/unavailable view. Browser language
+selects Chinese/English explanatory text; authoritative state/status names remain
+visible, including ERROR separately from business NG.
+
+One poll starts approximately every two seconds, after the preceding work settles;
+there are no overlapping polls or catch-up requests. JPEGs are fetched sequentially,
+so each observer has at most one active fetch. Only source identity changes trigger
+image replacement: publisher ID, generation, CycleId, complete FrameId, display-frame
+revision and original shape. A new publication revision alone does not redownload
+an unchanged displayed image; matching status can still update from fresh metadata.
+Every changed/hidden frame loses its previous pixels/status before any download.
+Only successfully decoded matching bytes receive that observation's channel badges.
+
+Exact returned JPEG URLs are used once per poll. A 410 is an ordinary publication
+race: the camera waits for fresh metadata, without an immediate retry loop. Other
+missing JPEGs remain unavailable; connection failures clear current channel badges
+and mark retained pixels as last observations. A five-second poll deadline aborts
+network/decoding work; invalidated late responses cannot replace newer observations.
+Temporary failures recover on later polls. Older revisions of the same publisher
+cannot overwrite newer metadata; a new publisher ID permits process restart safely.
+At most six cards/object URLs and one in-progress decode exist; replaced/disposed
+URLs are revoked. Page disposal aborts work and clears timers/URLs; restoration can
+resume observation.
+
+Connection status and publication freshness are separate from the last observed
+Application state. A publication older than six seconds is labeled stale and its
+current channel badges suppressed; this is a browser observation indicator, not a
+Production deadline or acceptance limit. The age indicator uses the client's wall
+clock; significant clock skew can produce a stale warning. Fresh HTTP/publication timestamps do not
+prove that new camera frames are arriving. Local replay pause remains RUNNING; the
+observer invents no PAUSED application state. The six cards need not be one cycle.
+
+The serial HTTP model is unchanged. CPU tests exercise three concurrent clients
+with 420 successful JSON/JPEG requests while encoding only the initial six JPEGs;
+this is small local compatibility evidence, not physical-LAN capacity qualification.
+Slow links can occupy the single server slot until its one-second I/O timeout and
+delay other observers. No threaded/async server, second publisher or request-driven
+encoding has been introduced.
+
+#### Trusted-LAN deployment boundary
+
+Explicit LAN binding does **not** authenticate clients or restrict their source subnet.
+There is no login, HTTPS or internet/shared-network qualification. Use only an
+isolated trusted internal test network with external access restricted by network
+configuration and Windows Firewall. The application never changes interfaces,
+firewall rules or access policy. Physical computer/phone connectivity and Production
+responsiveness require manual verification; localhost and same-machine LAN-IP
+tests cannot establish them.
+
 Manual verification with existing valid persistent `data/` and local Folder sources:
 
 1. Launch `uv run --no-sync python app.py --web-snapshots --web-port 8765` from the
@@ -379,11 +448,33 @@ Manual verification with existing valid persistent `data/` and local Folder sour
 4. Close normally. Confirm the command exits and the local port stops accepting
    connections. Launch without flags to confirm the service stays disabled.
 
+LAN verification, without changing persistent configuration:
+
+1. Identify the machine's assigned preferred IPv4 with
+   `Get-NetIPAddress -AddressFamily IPv4`. Confirm the isolated network and externally
+   administered access restrictions; do not use a wildcard or guess an address.
+2. Launch `uv run --no-sync python app.py --web-snapshots --web-host <LAN-IP> --web-port 8765`.
+   Open `http://<LAN-IP>:8765/` on one computer and one phone on that network.
+3. Use Start/Step in Qt; confirm six camera identities/order, aspect/color, frame
+   metadata and matching channel badges. Observe up to three browser clients and
+   check that Production remains responsive. This does not measure zero impact.
+4. Temporarily disconnect/reconnect a client. Its connection warning must remain
+   separate from Application state; images/status should recover without reload.
+   Pause/Stop/Start retain the existing application/display identity rules.
+5. Close normally and confirm actual command exit. `Test-NetConnection <LAN-IP> -Port 8765`
+   should no longer connect. Repeat without Web flags to confirm default-disabled startup.
+
 CPU/Fake regressions cover matching/mismatching identity, image encoding, bounded
-replacement, slow publishing/concurrent reads, default/opt-in normal startup and
-native process exit. Real ViMo/PLC/camera performance and deployment are not implied.
-LAN access, authentication, browser UI and hardware commissioning belong to later
-phases; Web-1 provides no production remote-access qualification.
+replacement, IPv4 validation, static/read-only routes, concurrent reads, default/
+opt-in/error normal startup and native process exit. The normal pytest suite runs
+deterministic tests of the actual browser JavaScript through an existing Node.js;
+if Node is absent those checks skip explicitly, with no automatic installation.
+Run them directly with `node --test tests/web_observer_checks.cjs`. They cover
+source-image reuse, identity/revision changes, empty/pending/stale data, 410,
+connection recovery, deadline cancellation and delayed decode disposal. Browser
+viewport inspection complements these tests but is not physical phone/LAN evidence.
+Real ViMo/PLC/camera performance, authenticated deployment and hardware commissioning
+remain unqualified.
 
 ## Feedback
 
