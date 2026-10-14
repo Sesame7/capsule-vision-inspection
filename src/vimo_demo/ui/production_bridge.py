@@ -13,6 +13,10 @@ from vimo_demo.application import (
     ProductionApplicationSnapshot,
 )
 from vimo_demo.application.local_replay import LocalReplayCommands, ReplaySnapshot
+from vimo_demo.communication.reporting import (
+    ProductionReportingCommands,
+    ReportingSnapshot,
+)
 
 from .display_frames import LatestDisplayFrameStore
 from .inference_bridge import FutureDelivery
@@ -28,6 +32,7 @@ class QtProductionBridge(QObject):
     snapshot_changed = Signal(object)
     frames_changed = Signal(object)
     replay_changed = Signal(object)
+    reporting_changed = Signal(object)
     command_finished = Signal(str)
     command_failed = Signal(str, object)
     shutdown_finished = Signal()
@@ -47,6 +52,12 @@ class QtProductionBridge(QObject):
             raise ValueError("Timer intervals must be positive")
         self.application = application
         self.frames = frames
+        self.reporting = (
+            application
+            if isinstance(application, ProductionReportingCommands)
+            else None
+        )
+        self.reporting_snapshot: ReportingSnapshot | None = None
         self.local_replay = local_replay
         self.replay_snapshot: ReplaySnapshot | None = None
         self._snapshot: ProductionApplicationSnapshot | None = None
@@ -173,6 +184,12 @@ class QtProductionBridge(QObject):
             self.snapshot_changed.emit(snapshot)
         if replay_changed:
             self.replay_changed.emit(replay)
+        reporting = (
+            self.reporting.reporting_snapshot() if self.reporting is not None else None
+        )
+        if reporting != self.reporting_snapshot:
+            self.reporting_snapshot = reporting
+            self.reporting_changed.emit(reporting)
         display = self.frames.snapshot()
         revision = display.revision
         if revision != self._revision:

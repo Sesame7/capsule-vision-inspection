@@ -35,14 +35,18 @@ from vimo_demo.application.folder_replay import (
 )
 from vimo_demo.application.local_replay import LocalReplayControl, ReplaySnapshot
 from vimo_demo.application.session import EngineFactory, ProductionCycle
+from vimo_demo.communication import FinsMemoryArea
+from vimo_demo.communication.operations import CommunicationRequest, RequestKind
 from vimo_demo.communication.reporting import (
     FirstStationReport,
     FirstStationReportingWorker,
     LocalReportingSettings,
     ReportIdentity,
     ReportingCapacityError,
+    ReportingSelection,
     ReportingSnapshot,
     ReportingStateError,
+    ReportingWriteProtectedError,
 )
 from vimo_demo.configuration import (
     CameraFolder,
@@ -350,10 +354,18 @@ class _LocalApplication(ProductionApplication):
         cache: FolderReplayCache,
         *,
         replay_controls: bool = False,
+        reporting: LocalReportingSettings | None = None,
+        reporting_editable: bool = False,
     ) -> None:
         self.replay_cache = cache
         self._reporting_lock = Lock()
         self._reporting_worker: FirstStationReportingWorker | None = None
+        self._reporting_selection = ReportingSelection(
+            reporting is not None, reporting or LocalReportingSettings()
+        )
+        self._reporting_editable = reporting_editable
+        self._reporting_generation = 0
+        self._session_reporting: LocalReportingSettings | None = None
         self._replay_lock = Lock()
         self.replay_controls = replay_controls
         self._replay_control: LocalReplayControl | None = None
@@ -366,12 +378,12 @@ class _LocalApplication(ProductionApplication):
         if not self.replay_controls:
             if single_step:
                 raise ApplicationStateError("Local replay controls are not enabled")
-            return super().start()
+            return self._start_reporting_session()
         with self._replay_lock:
             generation = self.snapshot().generation + 1
             control = LocalReplayControl(generation, single_step=single_step)
             step = control.step() if single_step else None
-            startup = super().start()  # Authoritative readiness/activation unchanged.
+            startup = self._start_reporting_session()
             self._replay_control = control
 
         def ready(future: Future[None]) -> None:
@@ -381,6 +393,65 @@ class _LocalApplication(ProductionApplication):
 
         startup.add_done_callback(ready)
         return step if step is not None else startup
+
+    def _start_reporting_session(self) -> Future[None]:
+        with self._condition:
+            startup = super().start()  # Same authoritative readiness/activation.
+            with self._reporting_lock:
+                self._reporting_generation = self.snapshot().generation
+                selection = self._reporting_selection
+                self._session_reporting = (
+                    selection.settings if selection.enabled else None
+                )
+            return startup
+
+    @property
+    def reporting_editable(self) -> bool:
+        return self._reporting_editable
+
+    def reporting_selection(self) -> ReportingSelection:
+        with self._reporting_lock:
+            return self._reporting_selection
+
+    def set_reporting_selection(self, selection: ReportingSelection) -> None:
+        with self._condition:
+            self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+            if not self.reporting_editable:
+                raise ApplicationStateError(
+                    "Reporting settings are fixed by this launcher"
+                )
+            with self._reporting_lock:
+                self._reporting_selection = selection
+
+    def reporting_for_generation(
+        self, generation: int
+    ) -> LocalReportingSettings | None:
+        with self._reporting_lock:
+            return (
+                self._session_reporting
+                if generation == self._reporting_generation
+                else None
+            )
+
+    def validate_manual_request(self, request: CommunicationRequest) -> None:
+        if (
+            request.kind is not RequestKind.WRITE
+            or request.area is not FinsMemoryArea.W
+            or request.start > 52
+            or request.start + request.count <= 49
+        ):
+            return
+        with self._condition:
+            with self._reporting_lock:
+                starting = (
+                    self.snapshot().state is ApplicationState.STARTING
+                    and self._session_reporting is not None
+                )
+                worker = self._reporting_worker
+            if starting or (worker is not None and worker.snapshot().thread_alive):
+                raise ReportingWriteProtectedError(
+                    "Manual W49..W52 writes are reserved while automatic reporting owns the session"
+                )
 
     def replay_control_for(self, generation: int) -> LocalReplayControl | None:
         with self._replay_lock:
@@ -471,6 +542,7 @@ def compose(
     observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
     reporting: LocalReportingSettings | None = None,
     replay_controls: bool = False,
+    reporting_editable: bool = False,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
@@ -523,6 +595,7 @@ def compose(
         observe_cache=observe_cache,
         reporting=reporting,
         replay_controls=replay_controls,
+        reporting_editable=reporting_editable,
     )
     app.configure(prepared)
     return LocalComposition(
@@ -539,6 +612,7 @@ def local_application(
     observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
     reporting: LocalReportingSettings | None = None,
     replay_controls: bool = False,
+    reporting_editable: bool = False,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != 6:
@@ -608,8 +682,11 @@ def local_application(
         group = images if replay is None else replay.next_group()
         if group is None:
             raise ValueError("No complete image group")
+        session_reporting = app.reporting_for_generation(generation)
         report_worker = (
-            FirstStationReportingWorker(generation, reporting) if reporting else None
+            FirstStationReportingWorker(generation, session_reporting)
+            if session_reporting is not None
+            else None
         )
         session = LocalRuntimeSession(
             config,
@@ -628,8 +705,25 @@ def local_application(
         observe_source(session.source_done)
         return session
 
-    app = _LocalApplication(factory, cache, replay_controls=replay_controls)
+    app = _LocalApplication(
+        factory,
+        cache,
+        replay_controls=replay_controls,
+        reporting=reporting,
+        reporting_editable=reporting_editable,
+    )
     return app, store
+
+
+def unconfigured_application() -> ProductionApplication:
+    """Normal stopped shell can edit session preferences without inventing inputs."""
+
+    def unavailable(
+        _config: PreparedConfiguration, _generation: int
+    ) -> LocalRuntimeSession:
+        raise ConfigurationError("Persistent configuration is unavailable")
+
+    return _LocalApplication(unavailable, FolderReplayCache(), reporting_editable=True)
 
 
 class SourceNotifications(QObject):

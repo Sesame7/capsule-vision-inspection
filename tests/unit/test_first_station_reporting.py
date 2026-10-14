@@ -11,6 +11,7 @@ from tests.reporting_support import WAIT, FaultMode, readback, seed, server, set
 from vimo_demo.communication import (
     FinsPlcError,
     FinsTimeoutError,
+    FinsUdpClient,
     FirstStationSubmissionError,
 )
 from vimo_demo.communication.reporting import (
@@ -115,6 +116,30 @@ def test_unassigned_ng_does_not_spread_to_channel_bits() -> None:
 def test_non_localhost_reporting_is_rejected_before_socket(host: str) -> None:
     with pytest.raises(PermissionError, match="exactly 127.0.0.1"):
         LocalReportingSettings(host=host)
+
+
+def test_execution_boundary_rejects_nonlocal_target_before_client_creation() -> None:
+    selected = LocalReportingSettings()
+    # Deliberately bypass frozen-constructor validation to exercise defense in depth.
+    object.__setattr__(selected, "host", "127.0.0.2")
+
+    def forbidden(_settings: LocalReportingSettings) -> FinsUdpClient:
+        raise AssertionError("Execution validation must precede socket creation")
+
+    worker = FirstStationReportingWorker(7, selected, client_factory=forbidden)
+    worker.start()
+    try:
+        observed = worker.submit(report(100)).result(WAIT)
+        assert observed.outcome is ReportOutcome.FAILED
+        assert observed.stage is ReportStage.INITIALIZATION
+        assert (
+            observed.issue is not None
+            and observed.issue.exception_type == "PermissionError"
+        )
+        assert "exactly 127.0.0.1" in observed.issue.message
+    finally:
+        worker.request_stop()
+        assert worker.join(WAIT) and worker.cleanup_safe
 
 
 def test_initial_read_sequence_progression_rollover_and_identical_bitmap() -> None:

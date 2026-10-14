@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from threading import Condition, Thread, current_thread
 from time import perf_counter
+from typing import Protocol, runtime_checkable
 
 from vimo_demo.inspection import CycleId, CycleStatus
 from vimo_demo.inspection.models import nonnegative_integer
@@ -55,6 +56,22 @@ class LocalReportingSettings:
         ).validate()
         if type(self.max_pending) is not int or self.max_pending < 1:
             raise ValueError("max_pending must be a positive integer")
+
+
+@dataclass(frozen=True, slots=True)
+class ReportingSelection:
+    """In-memory next-Start preference, never a persisted machine definition."""
+
+    enabled: bool = False
+    settings: LocalReportingSettings = LocalReportingSettings()
+
+    def __post_init__(self) -> None:
+        if type(self.enabled) is not bool:
+            raise ValueError("Reporting enabled must be bool")
+
+
+class ReportingWriteProtectedError(PermissionError):
+    """Manual W49..W52 writes conflict with the automatic reporting owner."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +192,18 @@ class ReportingSnapshot:
     last_rejected: ReportObservation | None
     failure_issue: ReportingIssue | None
     cleanup_issue: ReportingIssue | None
+
+
+@runtime_checkable
+class ProductionReportingCommands(Protocol):
+    """Optional composition boundary; observations reuse the one H2B owner."""
+
+    @property
+    def reporting_editable(self) -> bool: ...
+    def reporting_selection(self) -> ReportingSelection: ...
+    def set_reporting_selection(self, selection: ReportingSelection) -> None: ...
+    def reporting_snapshot(self) -> ReportingSnapshot | None: ...
+    def validate_manual_request(self, request: CommunicationRequest) -> None: ...
 
 
 class ReportingCapacityError(RuntimeError):
@@ -378,6 +407,8 @@ class FirstStationReportingWorker:
         sequence: int | None = None
         stage = ReportStage.INITIALIZATION
         try:
+            if self.settings.host != "127.0.0.1":
+                raise PermissionError("Automatic reporting requires exactly 127.0.0.1")
             if self._client is None or self._client.closed:
                 self._client = self._factory(self.settings)
                 self._reporter = None

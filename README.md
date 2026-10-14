@@ -83,6 +83,9 @@ geometry or substitutes fake inference.
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
 **History / 历史** and **Vision / 视觉**. Communication provides session-local manual
 FINS/UDP D/W reads, localhost-only writes and optional register-watch refresh;
+normal startup also provides opt-in localhost automatic first-station reporting.
+Its Communication-page enablement/settings are memory-only, initially disabled
+and captured on Start; closing/relaunching disables it again.
 History remains a placeholder.
 Recipe and Vision use **Save and apply**: persistence, candidate preparation/
 installation and successful-Start activation are distinct outcomes. Only successful
@@ -180,11 +183,13 @@ cover the independent communication subset. The
 [first-station protocol](docs/communication.md#first-station-result-projection-and-submission)
 adds explicit 36-channel projection and acknowledged W50–W52 / W49 writes. Optional
 [local automatic reporting](docs/communication.md#local-production-reporting) is
-enabled only by `--report-first-station` in `scripts/run_local_production_ui.py`,
-with a bounded serial owner and exact `127.0.0.1` target; normal `app.py` leaves it
-disabled. The
-[Communication workspace](docs/communication.md#communication-workspace) uses it
-outside the GUI thread; writes remain localhost-only. Real Production PLC integration
+enabled through normal `app.py`'s Communication page or explicitly by
+`--report-first-station` in `scripts/run_local_production_ui.py`, with a bounded
+serial owner and exact `127.0.0.1` target. The
+[normal two-terminal procedure](docs/communication.md#normal-application-manual-verification)
+uses the existing simulator. Manual clients remain independent; new manual
+W49–W52 writes are blocked while automatic reporting owns the session, and reads
+remain available. ACKs are protocol observations, not PLC consumption. Real Production PLC integration
 and hardware commissioning remain unimplemented.
 
 ## Verification

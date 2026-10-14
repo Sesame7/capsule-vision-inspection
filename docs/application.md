@@ -466,10 +466,19 @@ admitted frame identity/generation/source key. Display delivery is not accountin
 Local composition uses one collecting and one queued READY slot with a 30-second
 collection deadline; these are current demo settings, not hardware requirements.
 
-Explicit developer composition may opt into a per-generation first-station report
-owner with `reporting=LocalReportingSettings(...)`. It receives compact terminal
+Normal `app.py` exposes memory-only reporting preferences through Communication;
+they start disabled on every launch. The local application composition owns the
+selection, allows changes only in READY/UNCONFIGURED, and freezes it under the
+same lifecycle lock as each Start request. The disposable generation uses that
+snapshot, without modifying configuration activation or persistence. Startup/warm-up
+failure does not promote the candidate. Stop preserves the selected preference;
+the next Start creates a fresh owner when enabled. Local PAUSED is RUNNING and
+keeps preferences locked. No fields are added to `ProductionApplicationSnapshot`.
+
+Explicit developer composition instead opts into a fixed per-generation report
+owner with `reporting=LocalReportingSettings(...)`. Both paths receive compact terminal
 status projections independently of painting/accounting and uses its own bounded
-serial network thread. Default/normal startup remains disabled. Warm-up causes no
+serial network thread. Default startup remains disabled. Warm-up causes no
 reports or FINS requests. Ordinary communication failures leave visual inspection
 and counters unchanged; report backlog/state rejection records an explicit source
 issue and requests Application Stop. The local application's `reporting_snapshot()`
@@ -640,7 +649,9 @@ The developer-only options are `--fins-port` (9600), `--fins-timeout` (1 second)
 `--fins-pending` (8 waiting reports), `--fins-destination NETWORK NODE UNIT`
 (0 2 0) and `--fins-source NETWORK NODE UNIT` (0 1 0). There is no target-host option.
 See the [two-terminal reporting procedure](communication.md#local-manual-verification).
-This does not enable reporting in `app.py` or persist a PLC profile.
+These CLI settings do not change normal `app.py`'s independent memory-only
+Communication preferences or persist a PLC profile. See the
+[normal application procedure](communication.md#normal-application-manual-verification).
 
 For headless composition, supply prepared configuration and owned warm-up arrays;
 the example performs readiness only, no production admission:
@@ -702,8 +713,8 @@ migration provenance/backups remain preserved separately from current startup
 instructions.
 
 **Target / deferred:** real camera buffer leases and trigger-to-cycle association,
-PLC outputs, physical counting, safety stopping, calibrated production acceptance,
-hardware deadlines/throughput, History/Communication execution and archival
+commissioned PLC outputs, physical counting, safety stopping, calibrated production acceptance,
+hardware deadlines/throughput, History execution and archival
 consumers are unimplemented. Folder replay and current thread topology do not
 decide those designs. No automatic retries, hot activation, cross-file transaction,
 configuration watcher or persistent accounting recovery is promised here.

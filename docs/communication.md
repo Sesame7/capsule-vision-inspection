@@ -7,9 +7,10 @@ FINS transport and loopback simulator. Its first-station projection consumes the
 existing Inspection business-status enum, without changing inspection evidence,
 judgments or counters. Only projection/reporting requires Inspection types;
 transport/simulator imports and the existing CLI demo still require no image stack.
-The transport and reporting owner are Qt/ViMo independent. Explicit local Production
-composition can opt into [automatic first-station reporting](#local-production-reporting)
-to exactly `127.0.0.1`; normal `app.py` leaves it disabled. The Qt Communication
+The transport and reporting owner are Qt/ViMo independent. Normal `app.py` and
+explicit developer composition can opt into
+[automatic first-station reporting](#local-production-reporting)
+to exactly `127.0.0.1`; both default to disabled. The Qt Communication
 workspace uses separate clients for manual D/W operations and explicitly enabled
 register monitoring. There is no PLC configuration persistence, equipment wiring,
 triggering/consumption handshake or hardware commissioning.
@@ -196,8 +197,8 @@ Even both successful ACKs establish only protocol-level write acknowledgement,
 **not proof of PLC scan consumption**. The two requests are not one atomic remote
 transaction. The PLC will eventually own multi-pass accumulation and mechanical
 rejection; this protocol implements neither. The [local reporting owner](#local-production-reporting)
-defines Production scheduling, admission, result association and shutdown. H2C
-presentation, second station and physical synchronization remain unimplemented.
+defines Production scheduling, admission, result association and shutdown.
+Second station and physical synchronization remain unimplemented.
 
 ## Local Production reporting
 
@@ -207,9 +208,11 @@ presentation, second station and physical synchronization remain unimplemented.
 `FirstStationReport`, `FirstStationReportingWorker` and immutable observations.
 Pass `reporting=LocalReportingSettings(...)` to the existing local `compose()` or
 `local_application()` entry. The developer launcher exposes `--report-first-station`;
-the default is disabled. No Recipe, persisted PLC schema or normal recovery path
-changes. Settings reject every host except the exact IPv4 string `127.0.0.1`
-below the CLI/UI boundary, before socket creation.
+the default is disabled. Normal startup exposes the same owner through
+[memory-only preferences](#normal-application-reporting-controls), not CLI flags.
+No Recipe, persisted PLC schema or recovery data changes. Settings reject every
+host except the exact IPv4 string `127.0.0.1` below the CLI/UI boundary; the
+reporting worker repeats this check before client construction at execution.
 
 Each application generation owns one non-daemon `FirstStationReporting-N` thread.
 It alone constructs, uses, replaces and closes its FINS client. Engine ownership
@@ -268,9 +271,12 @@ are intermediate observations, never remote acknowledgement.
 skipped/rejected counts, local next sequence, latest queued/attempted/ACK/outcome
 and latest failure/skip/rejection plus owner/cleanup issues. Only the latest item
 per category is retained; no persistent reporting history is created. The local
-application's `reporting_snapshot()` exposes the current/last generation or `None`
-when disabled, separately from `ProductionApplicationSnapshot`. Later H2C UI may
-consume these Qt-independent observations; no diagnostics UI is added here.
+application's `reporting_snapshot()` exposes the current/last report owner's
+generation, or `None` when no owner exists, separately from
+`ProductionApplicationSnapshot`. A newly created disabled session has no owner;
+changing the next-Start preference alone does not erase the previous generation's
+observation. The normal Communication panel presents these bounded observations
+through the existing Qt bridge timer; neither polling nor rendering causes reports.
 
 ### Stop, restart and Close
 
@@ -291,8 +297,81 @@ its first new report; no old-generation queue survives into it.
 
 This remains localhost protocol testing: ACK is not PLC scan consumption, exclusive
 writer ownership, restart-safe delivery, capsule counting or mechanical rejection.
-Do not concurrently write W49–W52 through manual operations while testing automatic
-reporting. Read-only monitoring uses an independent client and is safe for observation.
+The application manual-dispatch boundary protects W49–W52 while its automatic
+owner is active. Independent external clients/PLC logic are not governed by that
+guard; do not concurrently write those words from outside the application.
+Read-only monitoring uses an independent client and is safe for observation.
+
+### Normal application reporting controls
+
+Normal startup exposes `ReportingSelection(enabled, settings)` through a small
+composition command boundary. It defaults to disabled with port **9600**, timeout
+**1 s**, destination **0/2/0**, source **0/1/0** and hidden `max_pending=8`. The
+target is fixed to **127.0.0.1**; manual endpoint fields remain independent.
+Enablement, port/timeout and collapsible advanced routing are application-memory
+preferences, never written into `data/app.json`, Recipe, MachineLayout or sources.
+Closing/relaunching restores defaults and disables reporting.
+
+Selection changes require application READY or UNCONFIGURED, both at the UI and
+composition command boundary. STARTING/RUNNING/STOPPING/FAULT/CLOSED reject edits;
+local replay PAUSED is still RUNNING. Start atomically snapshots the immutable
+selection for its generation before session construction. The report owner remains
+lazy about networking: warm-up emits no requests/results/counters. Only successful
+readiness activates Production; a failed Start cleans up under the existing rules.
+An UNCONFIGURED shell can edit reporting preferences without creating inputs,
+geometry, a runtime or an engine. It still cannot Start without valid configuration.
+Stop retains preferences; the next Start creates a new report owner/sequence epoch.
+The explicit developer launcher retains fixed CLI settings and replay controls.
+
+The compact panel shows disabled/enabled-for-next-Start/starting/session-active,
+last acknowledged sequence, successful/failed counts and the latest report error.
+Tooltips preserve generation/CycleId/stage/sequence and bounded exception details;
+counts belong to the displayed reporting generation. After Stop the last generation
+remains observable; a later new owner starts with fresh counts. A failure remains
+visible after a later ACK. These facts do not claim persistent connectivity, PLC
+scan consumption, physical rejection or production counts. Ordinary reporting
+failures do not replace global event priorities or modify judgment/Application FAULT.
+
+While an enabled Start is assembling its session or its report thread is alive,
+new manual **W-area writes whose range intersects W49–W52** are rejected with a
+localized reason. Protection is checked before dispatch and again before executing
+the request, including callers bypassing the button. It conservatively applies
+regardless of the manual port. It remains in effect in PAUSED and during Stop until
+actual report-owner exit; it does not rely on the latest ACK. Reads/watch groups,
+other W words and D writes retain their existing rules and independent clients.
+Already executing manual exchanges cannot be forcibly cancelled; external writers
+remain outside this boundary. The low-level `FinsUdpClient` stays unrestricted.
+
+### Normal application manual verification
+
+Use two repository-root PowerShell terminals with already validated persistent
+`data/` and Folder sources. Terminal 1:
+
+```powershell
+uv run --no-sync python scripts/run_fins_simulator.py --port 9600 --trace-first-station
+```
+
+Terminal 2:
+
+```powershell
+uv run --no-sync python app.py
+```
+
+1. In **Communication / 通信**, confirm automatic reporting is disabled and ACK is
+   `--`. Enable it; retain automatic target `127.0.0.1`, port 9600, timeout 1 s and
+   advanced destination/source 0/2/0 and 0/1/0. No request is sent yet.
+2. Return to Production and Start. Settings lock; warm-up produces no report. Once
+   a six-camera cycle completes, the simulator prints processed W49 writes and the
+   panel shows protocol ACK/counts. Its displayed ACK is not PLC consumption proof.
+3. Add an independent **W49, count 4** watch and read/refresh it. A manual W49–W52
+   write is rejected; reads and unrelated localhost writes remain available.
+4. Stop Production and wait for READY; settings unlock only after cleanup. Start
+   again to verify a new generation reads current W49. Leaving Communication or
+   stopping its watch never stops automatic reporting.
+5. Optionally stop the simulator during RUNNING to observe bounded report failures
+   while inspection continues. No failed report is retried. Stop/Close normally;
+   relaunch `app.py` and confirm automatic reporting is disabled again. End the
+   simulator with Ctrl+C. Full Communication redesign remains deferred to H2C-2.
 
 ### Local manual verification
 
@@ -332,9 +411,9 @@ continues until an explicit Stop or genuine backlog overload, with reporting fai
 observations rather than production NG/FAULT. Restarting the simulator allows later
 cycles to attempt new reports; it does not retry old ones, and a newly reset simulator
 is not an industrial sequence-recovery model. Stop/Close the application normally,
-then stop the simulator with Ctrl+C. H2C failure presentation is deferred; inspect
-`reporting_snapshot()` through the local composition API or use the focused tests
-for stage/count verification.
+then stop the simulator with Ctrl+C. The developer launcher retains its fixed CLI
+settings and `reporting_snapshot()` composition observation; normal startup uses
+the compact panel described above.
 
 ## Local simulator and manual demonstration
 
@@ -422,10 +501,12 @@ UNCONFIGURED shell. Opening/navigating to the page sends **no** request. Host/po
 timeout, D/W area, start address, count, write values and watch groups are session-local, never persisted
 into `data/`, Recipes, Model, MachineLayout or source definitions.
 
-Four vertically stacked, scrollable sections use the shared Chinese/English
+The existing four vertically stacked, scrollable manual sections use the shared Chinese/English
 style catalog: connection settings, watch groups/current values, collapsible manual
 register operations and concise communication feedback. Manual operations start
 collapsed; advanced FINS addressing also starts collapsed.
+Normal startup adds the compact automatic-reporting panel above these sections,
+without sharing manual endpoint settings or adding another network owner.
 Common fields are immediately accessible; advanced destination/source network,
 node and unit controls are collapsible. Only FINS/UDP is available. Numeric IPv4
 defaults to `127.0.0.1`, port to 9600 and timeout to one second (UI range **0.05–30
@@ -621,7 +702,7 @@ uv run --no-sync pytest tests/unit/test_communication_operations.py tests/integr
 ```
 
 Remote-read forwarding is verified with a controlled client, **not actual equipment**.
-H1C/hardware supervision, persistent profiles, H2C reporting presentation and
+H1C/hardware supervision, persistent profiles, H2C-2 Communication simplification and
 consumption handshakes remain deferred; this workspace does not select their implementation.
 
 Automatic local reporting tests use fake Production and actual loopback peers,
@@ -633,6 +714,15 @@ responsiveness, independent manual communication and actual thread cleanup:
 
 ```powershell
 uv run --no-sync pytest tests/unit/test_first_station_reporting.py tests/integration/test_local_reporting.py --tb=short
+```
+
+Normal bootstrap/UI integration adds default-disabled and relaunch behavior,
+immutable Start settings, lifecycle locks (including PAUSED), ordinary-failure
+feedback isolation, manual reserved-write dispatch/execution guards, independent
+reads/watches/unrelated writes, generation restart and actual owner cleanup:
+
+```powershell
+uv run --no-sync pytest tests/integration/test_normal_reporting_ui.py tests/integration/test_application_bootstrap_ui.py tests/integration/test_communication_ui.py tests/integration/test_local_production_ui.py --tb=short
 ```
 
 **Not yet verified on NX102:** the specific CPU/version, FINS enablement and port
