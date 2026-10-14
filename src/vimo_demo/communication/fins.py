@@ -104,7 +104,10 @@ def validate_address(value: object) -> FinsAddress:
     return value
 
 
-def _word_range(start: int, count: int, maximum: int, area: object) -> FinsMemoryArea:
+def validate_word_range(
+    start: int, count: int, maximum: int, area: object
+) -> FinsMemoryArea:
+    """Shared pre-I/O validation for transport, manual requests and watches."""
     if not isinstance(area, FinsMemoryArea):
         raise ValueError("area must be a FinsMemoryArea instance")
     validate_integer("start", start, 0, area.word_count - 1)
@@ -189,7 +192,7 @@ class FinsUdpClient:
         self, start: int, count: int = 1, *, area: FinsMemoryArea = FinsMemoryArea.DM
     ) -> tuple[int, ...]:
         """Read consecutive unsigned words; existing calls default to D/DM."""
-        area = _word_range(start, count, MAX_READ_WORDS, area)
+        area = validate_word_range(start, count, MAX_READ_WORDS, area)
         body = struct.pack("!BHBH", area.value, start, 0, count)
         data = self._exchange(READ_COMMAND, body, count * 2)
         return struct.unpack(f"!{count}H", data)
@@ -202,9 +205,9 @@ class FinsUdpClient:
         area: FinsMemoryArea = FinsMemoryArea.DM,
     ) -> None:
         """Write consecutive unsigned words; timeout never triggers a retry."""
-        area = _word_range(start, len(values), MAX_WRITE_WORDS, area)
+        area = validate_word_range(start, len(values), MAX_WRITE_WORDS, area)
         words = tuple(values)
-        _word_range(start, len(words), MAX_WRITE_WORDS, area)
+        validate_word_range(start, len(words), MAX_WRITE_WORDS, area)
         for value in words:
             validate_integer("word", value, 0, 65535)
         body = struct.pack("!BHBH", area.value, start, 0, len(words))

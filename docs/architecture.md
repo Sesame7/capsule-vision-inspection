@@ -27,7 +27,7 @@ unimplemented. A standalone FINS/UDP subset and localhost simulator exist separa
 | Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
-| Communication | Qt-independent synchronous FINS/UDP DM/WR words, first-station channel-business-status projection/two-write submission, localhost simulator and an independent manual D-word Qt workspace; no commissioned hardware or automatic Production wiring. |
+| Communication | Qt-independent synchronous FINS/UDP DM/WR words, first-station channel-business-status projection/two-write submission, localhost simulator and independent manual D/W operations/session-local register watches; no commissioned hardware or automatic Production wiring. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
 from configured channel judgment. SDK/golden regression verifies integration,

@@ -8,8 +8,8 @@ existing Inspection business-status enum, without changing inspection evidence,
 judgments or counters. This dependency is loaded only when projecting statuses;
 transport/simulator imports and the existing CLI demo still require no image stack.
 There is no Qt, ViMo, Production runtime, configuration-persistence or real-equipment
-integration. The Qt Communication workspace uses the transport for explicit manual
-D operations in a separate background context. Automatic Production reporting,
+integration. The Qt Communication workspace uses the transport for manual D/W
+operations and explicitly enabled register monitoring in a separate background context. Automatic Production reporting,
 PLC triggering/consumption handshakes and hardware commissioning are **not implemented**.
 Transport/protocol errors are not inspection outcomes or product judgments.
 
@@ -36,7 +36,7 @@ Local client/simulator agreement alone is not evidence of standards compliance.
 The unit byte range describes encoding, not availability of every unit/service.
 The local example targets CPU unit 0. IP address and FINS node are independent;
 there is no last-IP-octet inference. Hostnames, broadcast, bit access, other memory
-areas, signed/32-bit values, routed-network commissioning, FINS/TCP and polling
+areas, signed/32-bit values, routed-network commissioning, FINS/TCP and implicit client polling
 are outside this subset. Invalid API values/ranges raise `ValueError` before send.
 The simulator accepts protocol-defined zero-count no-ops; the client requires
 positive counts. No silent splitting of an oversized operation is performed.
@@ -248,23 +248,27 @@ end codes, without claiming the complete NX error-precedence behavior:
 The existing Communication navigation destination (`diagnostics`) now hosts
 `CommunicationPage`, independently of Production state. It remains usable in an
 UNCONFIGURED shell. Opening/navigating to the page sends **no** request. Host/port,
-timeout, D start address, count and write values are session-local, never persisted
+timeout, D/W area, start address, count, write values and watch groups are session-local, never persisted
 into `data/`, Recipes, Model, MachineLayout or source definitions.
 
-Three vertically stacked, scrollable sections use the shared Chinese/English
-style catalog: connection settings, register operations and communication feedback.
+Four vertically stacked, scrollable sections use the shared Chinese/English
+style catalog: connection settings, watch groups/current values, collapsible manual
+register operations and concise communication feedback. Manual operations start
+collapsed; advanced FINS addressing also starts collapsed.
 Common fields are immediately accessible; advanced destination/source network,
 node and unit controls are collapsible. Only FINS/UDP is available. Numeric IPv4
 defaults to `127.0.0.1`, port to 9600 and timeout to one second (UI range **0.05–30
 seconds**). FINS nodes remain explicit when the host changes.
 
-**Test read** reads one word at the current D start address; it is not a connection
+**Test read** reads one word at the manual area's current start address; it is not a connection
 handshake. **Read** uses the configured count. **Write** takes decimal unsigned
 words separated by commas/whitespace and writes that many consecutive words from
 the start address; the read-count field does not determine write length. Validation
 rejects invalid host, range, count and values before dispatch. Multiword read values
-are shown with their actual D addresses in a read-only, scrollable table (at most
-999 rows). A write ACK is expressly **not readback verification**: no automatic read
+are shown with their actual D/W addresses, unsigned decimal and four-digit hex in a
+read-only, scrollable table (at most 999 rows, further limited by the selected area).
+`CommunicationRequest.area` defaults to `FinsMemoryArea.DM` for existing callers;
+`FinsMemoryArea.W` is forwarded unchanged to the H2A client. A write ACK is expressly **not readback verification**: no automatic read
 is issued, and the separately timestamped last-read table remains historical.
 
 Reads can target configured numeric unicast IPv4 endpoints. **Writes require the
@@ -275,12 +279,59 @@ such as `127.0.0.2` is rejected. There is no override, target substitution or re
 The unrestricted H1A low-level client API is unchanged; this manual-workspace
 execution policy is a separate boundary in `communication/operations.py`.
 
-Dispatch captures an immutable `CommunicationRequest` (including routing and word
-values). One non-daemon **FinsCommunication** thread constructs, invokes and closes
-one H1A client for that request. No communication queue or permanent polling thread
-exists. Conflicting inputs/actions are disabled until actual thread exit. Navigation
-does not abandon the thread; changing fields programmatically cannot redirect its
-snapshot. This is separate from the ViMo worker and ProductionRuntimeSession.
+### Register watches and refresh
+
+`RegisterWatchGroup(area, start, count=1, name="")` in `communication.operations`
+is a frozen, Qt-independent consecutive-read definition. It validates the same
+area/address/count limits as the transport; names contain at most 64 characters.
+The operator adds/removes groups using a compact form and group selector. The list
+starts empty, accepts at most **16 groups / 2048 total words**, and is never saved.
+Equal or disjoint ranges remain independent groups, including within one area;
+there is no speculative merging or mandatory W49/D100 setup. Display numbering
+distinguishes even groups with identical names/ranges.
+
+Each word has its group, actual D/W address, unsigned decimal, four-digit hexadecimal
+and observation time/status in one read-only table. No bit editing or writes are
+available there. Unread entries show `--`. Only one latest successful observation
+is retained per group; rows/response retention are bounded by the configured limits.
+Failed/unstarted groups retain their old values and **original** observation time,
+marked **Previous / 历史** rather than newly read. Groups successfully read earlier
+in a partially failed pass remain marked **Latest pass / 本批成功**. The status also
+shows the most recent successful group-observation time; it is not the timestamp
+of a failed group or a claim of connectivity.
+
+**Read once** takes one pass over the configured groups in their configured order.
+**Auto refresh · 1 s** must be explicitly started and can be stopped while I/O is
+active. Automatic mode remains off on opening/returning to the page. A single-shot
+Qt timer schedules the next pass **one second after actual owner-thread exit**
+and successful publication of the previous pass. This completion-based cadence is
+nominal, not a guaranteed one-second sampling period: pass duration and GUI dispatch
+add delay. No request/pass overlaps, pending tick queue or catch-up burst exists.
+There is no permanent polling thread. A failure aborts unstarted groups, stops
+automatic scheduling and retains localized error details; restart is explicit.
+Successful automatic passes update values/status without logging each pass. Manual
+passes add one compact record; monitoring errors enter the existing bounded log.
+
+Endpoint/routing, area/ranges and groups are captured as immutable request snapshots
+before dispatch. Manual fields do not determine watch ranges. One non-daemon
+**FinsCommunication** thread executes each admitted manual request or monitoring
+pass through the existing `execute_request()`. For a pass, each group gets a separate
+serial read and client context, constructed/used/closed on that same thread. No
+second transport owner or communication queue is added. GUI state never redirects
+in-flight requests, and callbacks never mutate widgets.
+
+Manual Test/Read/Write, connection fields and watch edits are excluded during a pass
+**and between passes while automatic mode is enabled**. Stop monitoring before
+editing or using manual operations. Stop/leave/approved close sets a pass-local Event
+to skip unstarted group reads; the active bounded request completes naturally and
+closes on its owner. Controls remain unavailable until actual thread exit. Leaving
+the page stops scheduling, and returning does not resume it. Navigation never drops
+the active thread. This ownership is separate from ViMo/ProductionRuntimeSession.
+
+Multiple groups are **not one atomic PLC snapshot**. Monitoring is repeated FINS
+reading, not PLC-pushed events or equipment-readiness verification. Reading W49–W52
+does not interpret them as confirmed Production results or call `FirstStationReporter`.
+No Production result, counter, application state or shared feedback is changed.
 
 The page reuses `FutureDelivery` with explicit queued Qt delivery and a 20-ms timer
 that observes **thread termination**, not PLC connectivity. Future completion or
@@ -290,17 +341,18 @@ requests. Final `dispose()` requires no owned work, revokes delivery, and ignore
 stale notifications; deleting an active workspace prematurely is unsupported.
 
 Window close first uses the existing draft/job guards. Once approved it stops
-communication admission and requests application shutdown independently. Active UDP
+automatic scheduling/unstarted reads and communication admission, and requests application shutdown independently. Active UDP
 I/O finishes/reaches its bounded timeout; its client closes on the same background
 thread. Qt never closes an active client concurrently or forcibly terminates the
 thread. The window stays alive until **both** actual communication exit and the
 existing application close/join condition. Final accepted close disposes delivery.
 If application cleanup fails and keeps the shell open, the live communication page
-resumes admission (still waiting for any active request); no unsafe thread is dropped.
+resumes admission (still waiting for any active request), without restarting automatic
+refresh; no unsafe thread is dropped.
 
-Feedback identifies the current manual request, latest successful response with
+Feedback identifies the current request/pass, latest successful response with
 endpoint/address/time/elapsed duration, and at most **100** compact log entries.
-Only the latest read values are retained; no result/exception history is unbounded.
+Only the latest manual read and per-group observations are retained; no result/exception history is unbounded.
 Localized timeout/transport/protocol/PLC messages retain raw diagnostic details in
 tooltips/logs and preserve PLC end codes. A timed-out write states that its outcome
 is **unknown** and requires explicit verification. A successful response remains a
@@ -317,20 +369,34 @@ uv run --no-sync python scripts/run_fins_simulator.py --port 9600
 uv run --no-sync python app.py
 ```
 
-Do not start Production for this check. Open **Communication / 通信**. Keep target
-`127.0.0.1`, port 9600 and D100. On a fresh simulator, Test read returns 1234. Write
-4321, observe the ACK-only feedback, then explicitly Read and verify D100=4321.
-For multiword review, write `0, 65535, 4321`, set Read words to 3 and read D100–D102.
-Switch Chinese/English and page destinations; observations remain page-local.
-Change target to `192.0.2.10` **without sending**: Write is disabled. This is only a
-permission-display check, not a remote PLC test. Restore localhost for operations.
+Do not start Production for this check; all operations below target localhost.
 
-Stop the simulator with Ctrl+C, then Test read: observe a local timeout or OS
-transport error, with Production unaffected. To review active close, choose an
-unused localhost port and a few-second timeout, submit Read, then close the shell;
-it stays responsive until actual communication exit. At smaller windows/expanded
-advanced settings, scroll to feedback rather than squeezing controls. Verify on
-native Windows DPI/touch settings; offscreen screenshots do not certify these.
+1. Open **Communication / 通信**, leaving `127.0.0.1:9600`. The watch list is empty
+   and no request is sent. Expand **Manual register operations**. Select D/D100:
+   Test read returns 1234 on a fresh simulator. Write 4321, observe ACK-only feedback,
+   then explicitly Read to verify. Repeat with W/W50 and `0, 65535, 4321`, read count
+   3: addresses W50–W52, decimal values and `0000 / FFFF / 10E1` should agree.
+2. Add named watch groups W49/count 4 and D100/count 1. Click **Read once**; verify
+   actual addresses, values and per-group times. These addresses are examples only,
+   not preloaded mandatory settings. Add/remove another valid group.
+3. Start **Auto refresh · 1 s**. Inputs/manual operations lock; successful updates
+   do not flood the operation log. Stop explicitly, wait for active work to exit,
+   then edit or write. Change values with manual Write, and Read once to verify.
+4. Start automatic refresh and navigate away. Future refreshes stop, the current
+   read finishes, and returning keeps automatic mode off with observations retained.
+5. Stop the simulator while monitoring. A timeout or OS transport error stops
+   scheduling; retained values keep their old times and historical markers. Restart
+   the simulator, then explicitly restart monitoring. It must not retry itself.
+6. Stop monitoring, change the host to `192.0.2.10` **without sending** and verify
+   Write is disabled in both D/W modes. Restore localhost. This is a display/policy
+   check, not a remote-device test.
+7. For active close, use an unused localhost port with a few-second timeout, start
+   a watch pass, then close the shell. It stays responsive until actual thread exit;
+   unstarted reads are skipped. No communication thread should remain afterward.
+
+Switch Chinese/English and check portrait/landscape layouts. Expanded advanced/manual
+forms or small windows may require vertical scrolling to feedback. Native Windows
+DPI/touch review remains manual; offscreen screenshots do not certify ergonomics.
 
 ## Verification and hardware limitations
 
@@ -367,6 +433,10 @@ Inspection models/NumPy locally, without a ViMo model or GPU. The independent
 `python -S` transport/demo check still verifies no Qt/NumPy/SmartMore imports.
 
 Workspace tests separately cover real localhost UDP read/write/explicit readback,
+mixed D/W watch passes, group bounds/add/remove, decimal/hex/timestamp display,
+slow-pass deadline delivery without overlap/backlog, automatic failure/restart,
+historical values, input exclusion, stop/leave skipping unstarted groups,
+actual-exit scheduling and absence of automatic-success log flooding,
 worker-only client construction/use/close, malformed/timeout/PLC feedback, guarded
 non-loopback writes, controlled remote-read parameter forwarding, duplicate admission,
 navigation, actual thread/socket exit, application-close failure recovery, bounded
