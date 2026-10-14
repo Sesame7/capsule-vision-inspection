@@ -97,6 +97,8 @@ reviewed portrait/landscape sizes. Unusually long IDs elide only when necessary.
 The Batch label stays enabled for full-value tooltip/accessibility access even
 when editing is disabled in RUNNING.
 
+For compositions without local replay-control capability:
+
 | Application state | Presented primary operation | Batch edit |
 | --- | --- | --- |
 | UNCONFIGURED | Disabled Start with configuration feedback | Disabled |
@@ -106,10 +108,12 @@ when editing is disabled in RUNNING.
 | FAULT | Reset only when runtime ownership is released; application still validates safety | Disabled |
 | CLOSED | Disabled Closed | Disabled |
 
-### Local demo operations
+### Local replay operations
 
-Only the explicit local-image launcher wires `QtProductionBridge.local_replay`.
-It presents two compact Qt-drawn Play/Pause/Stop-square/Step-forward operation
+Validated Folder composition in normal startup and the explicit developer launcher
+wire the same `QtProductionBridge.local_replay` boundary. The optional source
+capability determines presentation; generic/fake modes without it retain the table
+above. It presents two compact Qt-drawn Play/Pause/Stop-square/Step-forward operation
 buttons, with localized labels, tooltips and accessibility names:
 
 | Local presentation | Primary | Secondary |
@@ -125,7 +129,8 @@ while PAUSED; Continue followed by End, application Stop or window Close still
 performs genuine shutdown. End invokes the existing application Stop. Pause/Step
 do not release resources, unlock editing, reset counters or imply a PLC ACK.
 The replay-paused state label is page-scoped presentation with explanatory tooltip,
-never `ApplicationState.PAUSED`. Normal/fake shells keep the table above unchanged.
+never `ApplicationState.PAUSED`. Persistent configuration/source selection and
+reporting/Recipe/Vision editing restrictions remain authoritative while paused.
 
 The bridge observes a small replay snapshot separately from the application
 snapshot and delivers operation Futures through the existing queued gate. It

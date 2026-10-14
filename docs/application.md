@@ -514,10 +514,18 @@ The source completion Future is notification, not proof of source-thread exit.
 
 ## Local replay controls
 
-The explicit `scripts/run_local_production_ui.py` demo enables session-local
-Pause/Continue/Step controls. API composition opts in with `replay_controls=True`;
-normal `app.py`, fake review and other default compositions retain their existing
-Start/Stop behavior. This is local image-source control, not a new application
+Normal `app.py` enables the existing session-local Pause/Continue/Step controls
+when its composition has validated saved Folder sources. Bootstrap carries the
+optional `LocalReplayCommands` reference in `Startup.local_replay`; `create_window()`
+passes it to the existing Qt bridge. Model, Recipe, MachineLayout, camera order and
+source selection still come from the manifest/configuration restoration path, with
+no CLI override or new persisted settings. Invalid/absent source definitions do
+not manufacture a capability or fallback source. Unavailable folders can still
+advertise the supported source capability but must pass normal Start preflight.
+
+The explicit `scripts/run_local_production_ui.py` developer launcher and API opt-in
+`replay_controls=True` use the same gate. Generic/fake compositions without that
+capability retain Start/Stop. This is local image-source control, not a new application
 PAUSED state or real-camera trigger contract.
 
 `LocalReplayControl` is a Qt-independent Condition/Event gate owned by one source
@@ -567,7 +575,38 @@ does not cancel an active report, and reporting failures do not resume/pause the
 source or change judgment/counters. Reporting overload still requests genuine Stop;
 unsent reports during any shutdown follow the existing explicit-skip policy. See
 [communication](communication.md#local-production-reporting) and the
-[local demo button presentation](ui-shell.md#local-demo-operations).
+[local replay button presentation](ui-shell.md#local-replay-operations).
+
+### Normal-entry manual verification
+
+With already validated persistent `data/` and saved Folder sources, launch from
+the repository root. For paused/Continue checks use Loop-enabled sources or groups
+remaining after the first Step; a final non-Loop group returns directly to READY:
+
+```powershell
+uv run --no-sync python app.py
+```
+
+1. Confirm READY shows **Start / 开始** and **Step / 单步**. Step performs normal
+   readiness/warm-up and one six-camera cycle, then presents **Continue / 继续**
+   and **Step / 单步**. Warm-up does not contribute production counters/results.
+2. Step again: one additional group is processed, preserving generation and cursor.
+   Recipe, Vision and automatic-reporting settings stay locked because the
+   application remains RUNNING. No End button is required while paused.
+3. Continue resumes automatic replay. Pause lets the already claimed cycle finish
+   before waiting; it does not restart the engine or reset accounting.
+4. During automatic replay use **End / 结束** and wait for READY. From paused mode
+   Continue first, or Close directly. A later Start/READY Step uses a fresh session
+   and rewinds its source cursor, retaining counters until explicit Batch reset.
+5. With Loop off, the final full group triggers genuine Stop instead of waiting
+   paused. Close and internal source/runtime/reporting-overload Stop remain
+   authoritative. If localhost reporting is enabled, Step completion still does
+   not wait for its independent FINS ACK; use the
+   [reporting procedure](communication.md#normal-application-manual-verification).
+
+These controls operate on local images only. They do not imply real-camera pause,
+hardware triggering or a new application state; Production visual redesign is
+deferred to H2D-2.
 
 ## Shutdown
 
@@ -688,6 +727,14 @@ uv run --no-sync pytest tests/unit/test_production_application.py tests/unit/tes
 uv run --no-sync pytest tests/unit/test_application_bootstrap.py tests/integration/test_application_bootstrap_ui.py tests/integration/test_feedback_corrections.py --tb=short
 uv run --no-sync pytest tests/unit/test_folder_replay.py tests/integration/test_local_ingress.py tests/integration/test_camera_setup.py tests/integration/test_local_production_ui.py --tb=short
 uv run --no-sync pytest tests/unit/test_folder_cache.py tests/integration/test_folder_cache_lifecycle.py --tb=short
+```
+
+Normal-entry fake regression checks restored Folder capability, readiness/one-cycle
+Step, cursor/generation/camera identity, generic fallback, editing/reporting locks,
+End/Close, exhaustion/failure/overload cleanup, and developer-path equivalence:
+
+```powershell
+uv run --no-sync pytest tests/integration/test_normal_replay_ui.py tests/integration/test_application_bootstrap_ui.py tests/unit/test_local_replay_control.py --tb=short
 ```
 
 Optional real-GPU checks require explicit opt-in and local prerequisites. These

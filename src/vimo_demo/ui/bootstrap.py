@@ -16,6 +16,7 @@ from vimo_demo.application import (
     prepare_configuration,
 )
 from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
+from vimo_demo.application.local_replay import LocalReplayCommands
 from vimo_demo.application.preferences import (
     ApplicationPreferences,
     read_preferences,
@@ -119,6 +120,7 @@ class Startup:
     choice: RecipeChoice | None
     issues: tuple[StartupIssue, ...]
     preferences_writable: bool
+    local_replay: LocalReplayCommands | None = None
 
 
 def load_startup(
@@ -272,6 +274,7 @@ def load_startup(
                 StartupIssue("startup_source_unavailable", str(exc), blocking=False)
             )
 
+    local_replay: LocalReplayCommands | None = None
     if editor is None or editor.camera_sources is None:
         application = unconfigured_application()
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
@@ -287,7 +290,11 @@ def load_startup(
             engine_factory=engine_factory,
             observe_source=observe_source,
             reporting_editable=True,
+            replay_controls=True,
         )
+        # This branch has validated Folder-only sources and no CLI image override.
+        # Carry its actual capability, not an entry-point-specific UI mode.
+        local_replay = application
     choice = None
     if prepared is not None:
         application.configure(prepared)
@@ -302,6 +309,7 @@ def load_startup(
         choice,
         tuple(issues),
         preferences_writable,
+        local_replay,
     )
 
 
@@ -365,7 +373,9 @@ class PreferenceNotifications(QObject):
 
 
 def create_window(startup: Startup, delivery: FutureDelivery) -> ProductionWindow:
-    bridge = QtProductionBridge(startup.application, startup.frames)
+    bridge = QtProductionBridge(
+        startup.application, startup.frames, local_replay=startup.local_replay
+    )
     SourceNotifications(bridge, delivery)
     window = ProductionWindow(
         bridge,
