@@ -1,10 +1,16 @@
 """Manual dispatch policy is Qt independent; no remote network access."""
 
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
-from vimo_demo.communication import FinsAddress, FinsMemoryArea, FinsUdpClient
+from vimo_demo.communication import (
+    FinsAddress,
+    FinsMemoryArea,
+    FinsTransport,
+    FinsUdpClient,
+)
 from vimo_demo.communication.operations import (
     CommunicationRequest,
     RegisterWatchGroup,
@@ -28,6 +34,7 @@ def request() -> CommunicationRequest:
 @pytest.mark.parametrize(
     "invalid",
     [
+        replace(request(), transport=cast(FinsTransport, "tcp")),
         replace(request(), host="localhost"),
         replace(request(), host="224.0.0.1"),
         replace(request(), host="0.0.0.0"),
@@ -73,17 +80,27 @@ def test_invalid_request_rejected_before_socket_creation(
 
 @pytest.mark.parametrize("host", ["192.0.2.10", "127.0.0.2", "127.1.1.1"])
 @pytest.mark.parametrize("area", list(FinsMemoryArea))
+@pytest.mark.parametrize("transport", list(FinsTransport))
 def test_write_permission_is_enforced_at_execution_boundary(
-    host: str, area: FinsMemoryArea, monkeypatch: pytest.MonkeyPatch
+    host: str,
+    area: FinsMemoryArea,
+    transport: FinsTransport,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def no_socket(*args: object, **kwargs: object) -> None:
         pytest.fail("Forbidden write reached socket construction")
 
     monkeypatch.setattr("vimo_demo.communication.operations.FinsUdpClient", no_socket)
+    monkeypatch.setattr("vimo_demo.communication.operations.FinsTcpClient", no_socket)
     with pytest.raises(PermissionError, match="127.0.0.1"):
         execute_request(
             replace(
-                request(), kind=RequestKind.WRITE, host=host, values=(4321,), area=area
+                request(),
+                kind=RequestKind.WRITE,
+                host=host,
+                values=(4321,),
+                area=area,
+                transport=transport,
             )
         )
 

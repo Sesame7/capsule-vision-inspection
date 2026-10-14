@@ -11,6 +11,7 @@ from tests.reporting_support import WAIT, FaultMode, readback, seed, server, set
 from vimo_demo.communication import (
     FinsPlcError,
     FinsTimeoutError,
+    FinsTransport,
     FinsUdpClient,
     FirstStationSubmissionError,
 )
@@ -113,13 +114,19 @@ def test_unassigned_ng_does_not_spread_to_channel_bits() -> None:
 
 
 @pytest.mark.parametrize("host", ["192.0.2.1", "127.0.0.2", "localhost"])
-def test_non_localhost_reporting_is_rejected_before_socket(host: str) -> None:
+@pytest.mark.parametrize("transport", list(FinsTransport))
+def test_non_localhost_reporting_is_rejected_before_socket(
+    host: str, transport: FinsTransport
+) -> None:
     with pytest.raises(PermissionError, match="exactly 127.0.0.1"):
-        LocalReportingSettings(host=host)
+        LocalReportingSettings(host=host, transport=transport)
 
 
-def test_execution_boundary_rejects_nonlocal_target_before_client_creation() -> None:
-    selected = LocalReportingSettings()
+@pytest.mark.parametrize("transport", list(FinsTransport))
+def test_execution_boundary_rejects_nonlocal_target_before_client_creation(
+    transport: FinsTransport,
+) -> None:
+    selected = LocalReportingSettings(transport=transport)
     # Deliberately bypass frozen-constructor validation to exercise defense in depth.
     object.__setattr__(selected, "host", "127.0.0.2")
 

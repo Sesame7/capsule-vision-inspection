@@ -12,10 +12,13 @@ from .fins import (
     MAX_WRITE_WORDS,
     FinsAddress,
     FinsMemoryArea,
+    FinsTransport,
     FinsUdpClient,
     validate_integer,
+    validate_transport,
     validate_word_range,
 )
+from .fins_tcp import FinsTcpClient
 
 MAX_WATCH_GROUPS = 16
 MAX_WATCH_WORDS = 2048
@@ -54,9 +57,11 @@ class CommunicationRequest:
     count: int = 1
     values: tuple[int, ...] = ()
     area: FinsMemoryArea = FinsMemoryArea.DM
+    transport: FinsTransport = FinsTransport.UDP
 
     def validate(self) -> None:
         """Cheap dispatch validation, repeated at the execution boundary."""
+        validate_transport(self.transport)
         address = IPv4Address(self.host)
         if address.is_unspecified or address.is_multicast or int(address) == 0xFFFFFFFF:
             raise ValueError("Target must be a numeric unicast IPv4 address")
@@ -98,20 +103,25 @@ class CommunicationResponse:
 
 
 def execute_request(request: CommunicationRequest) -> CommunicationResponse:
-    """One caller constructs, uses and closes the H1A client, without retries.
+    """One caller constructs, uses and closes the selected client, without retries.
 
     Write permission is enforced here, before socket creation, even if callers
     bypass the UI. A write response is acknowledgement, never implicit readback.
     """
     request.validate()
     started = perf_counter()
-    with FinsUdpClient(
-        request.host,
-        port=request.port,
-        timeout=request.timeout,
-        destination=request.destination,
-        source=request.source,
-    ) as client:
+    connection = (
+        FinsTcpClient(request.host, port=request.port, timeout=request.timeout)
+        if request.transport is FinsTransport.TCP
+        else FinsUdpClient(
+            request.host,
+            port=request.port,
+            timeout=request.timeout,
+            destination=request.destination,
+            source=request.source,
+        )
+    )
+    with connection as client:
         if request.kind is RequestKind.WRITE:
             client.write_words(request.start, request.values, area=request.area)
             values = None

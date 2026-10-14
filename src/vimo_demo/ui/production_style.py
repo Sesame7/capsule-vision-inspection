@@ -357,6 +357,10 @@ STRINGS: dict[str, tuple[str, str]] = {
     "comm_table_hex": ("HEX", "HEX"),
     "comm_table_observed": ("观察 / 状态", "Observed / status"),
     "comm_protocol": ("协议", "Protocol"),
+    "comm_tcp_nodes": (
+        "TCP 节点由握手分配；保留的 UDP 地址不参与 TCP。",
+        "TCP nodes are negotiated; retained UDP addresses are not used for TCP.",
+    ),
     "comm_host": ("目标 IPv4", "Target IPv4"),
     "comm_port": ("UDP 端口", "UDP port"),
     "comm_timeout": ("请求超时（秒）", "Timeout (seconds)"),

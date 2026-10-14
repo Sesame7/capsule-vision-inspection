@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from vimo_demo.application.folder_replay import folder_images
-from vimo_demo.communication import FinsAddress
+from vimo_demo.communication import FinsAddress, FinsTransport
 from vimo_demo.communication.reporting import LocalReportingSettings
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.local_production import SourceNotifications as SourceNotifications
@@ -44,6 +44,12 @@ def main() -> int:
         help="Opt-in automatic W49..W52 reporting to exactly 127.0.0.1",
     )
     parser.add_argument("--fins-port", type=int, default=9600)
+    parser.add_argument(
+        "--fins-transport",
+        choices=("udp", "tcp"),
+        default="udp",
+        help="Local reporting transport; TCP nodes are negotiated",
+    )
     parser.add_argument("--fins-timeout", type=float, default=1.0)
     parser.add_argument(
         "--fins-pending",
@@ -88,6 +94,7 @@ def main() -> int:
                 max_pending=args.fins_pending,
                 destination=FinsAddress(*args.fins_destination),
                 source=FinsAddress(*args.fins_source),
+                transport=FinsTransport(args.fins_transport),
             )
             if args.report_first_station
             else None,

@@ -467,10 +467,12 @@ Local composition uses one collecting and one queued READY slot with a 30-second
 collection deadline; these are current demo settings, not hardware requirements.
 
 Normal `app.py` exposes memory-only reporting preferences through Communication;
-they start disabled on every launch. The local application composition owns the
+they start disabled with UDP on every launch. Manual and automatic UDP/TCP
+preferences are independent. The local application composition owns the
 selection, allows changes only in READY/UNCONFIGURED, and freezes it under the
 same lifecycle lock as each Start request. The disposable generation uses that
-snapshot, without modifying configuration activation or persistence. Startup/warm-up
+snapshot, including transport, without modifying configuration activation or persistence.
+Startup/warm-up
 failure does not promote the candidate. Stop preserves the selected preference;
 the next Start creates a fresh owner when enabled. Local PAUSED is RUNNING and
 keeps preferences locked. No fields are added to `ProductionApplicationSnapshot`.

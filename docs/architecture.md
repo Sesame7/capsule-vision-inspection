@@ -16,8 +16,8 @@ Inputs are local; real camera acquisition and commissioned Production PLC integr
 are unimplemented. A FINS/UDP subset and localhost simulator support manual operations
 and opt-in automatic first-station reporting through normal startup's Communication
 page or explicit developer composition. Reporting preferences are memory-only.
-A standalone synchronous FINS/TCP word client supports automatic node negotiation;
-it is not wired to the Communication UI or Production reporting.
+The Communication workspace and optional reporting independently select UDP/TCP,
+defaulting to UDP; TCP negotiation remains on their existing serial network owners.
 
 ## Current capabilities
 
@@ -31,7 +31,7 @@ it is not wired to the Communication UI or Production reporting.
 | Local sources | Owned image-set ingress, independent per-camera Folder replay (application-lifetime RAM dataset for saved Loop sources), explicit fixed images, and session-local Pause/Continue/Step for supported Folder sources in normal startup and opt-in developer composition. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and Communication pages, including session-local automatic-reporting controls/observations; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
-| Communication | Qt-independent UDP and standalone TCP DM/WR words; TCP auto-node negotiation has no UI/reporting wiring. UDP retains first-station projection/submission, localhost simulation, manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
+| Communication | Qt-independent UDP/TCP DM/WR words with independent manual/reporting selection, default UDP; TCP automatic nodes, shared first-station projection/submission, manual operations/register watches and opt-in bounded local Production reporting. UDP simulator; no commissioned hardware. |
 | Web observation | Optional read-only snapshot service, default loopback with explicit assigned IPv4 binding on a trusted test LAN; independent publisher encodes bounded latest-camera JPEGs, serial HTTP serves cached bytes and a minimal responsive observer. No runtime commands, authentication or HTTPS. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
@@ -202,7 +202,7 @@ packages, classes, composition hooks or thread topology retain this arrangement.
 | [`runtime/`](../src/vimo_demo/runtime/) | `InferenceWorker` and `RuntimeCoordinator`; sole collector owner, serial cycle runner and worker engine owner. |
 | [`application/`](../src/vimo_demo/application/) | `ProductionApplication`, `ProductionRuntimeSession`, `ConfiguredProductionPipeline`, `LocalCycleIngress` and `FolderReplay`. |
 | [`ui/`](../src/vimo_demo/ui/) | Shell, bridges, display copies and configuration/preview widgets; [bootstrap](../src/vimo_demo/ui/bootstrap.py) and [local composition](../src/vimo_demo/ui/local_production.py) host Current desktop startup/source wiring. |
-| [`communication/`](../src/vimo_demo/communication/) | Typed FINS UDP/TCP DM/WR clients, UDP first-station projection/submission, optional local reporting owner and finite UDP loopback simulator. |
+| [`communication/`](../src/vimo_demo/communication/) | Typed FINS UDP/TCP DM/WR clients, shared first-station projection/submission and local reporting owner, manual request execution and finite UDP loopback simulator. |
 | [`web/`](../src/vimo_demo/web/) | Optional snapshot publisher, serial HTTP cache delivery and read-only browser assets; normal bootstrap owns its process lifetime. |
 | [`tests/`](../tests/) and [`scripts/`](../scripts/) | Maintained verification, optional real regression, CLI tools and fake UI review. |
 

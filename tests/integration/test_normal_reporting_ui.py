@@ -1,7 +1,7 @@
 """Normal bootstrap reporting preferences, loopback observations and ownership."""
 
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, get_ident
@@ -12,10 +12,11 @@ import pytest
 from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication
 from tests.cycle_support import image_result
+from tests.fins_tcp_support import TcpPeer
 from tests.integration.test_application_bootstrap_ui import close_window
 from tests.integration.test_local_production_ui import input_files
 from tests.qt_support import ensure_test_fonts, until
-from tests.reporting_support import WAIT, readback, seed, server, settings
+from tests.reporting_support import WAIT, readback, seed, server
 from tests.unit.test_application_bootstrap import close, saved_data
 
 from vimo_demo.application import (
@@ -27,6 +28,7 @@ from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.communication import (
     FinsAddress,
     FinsMemoryArea,
+    FinsTransport,
     FinsUdpClient,
     first_station_reject_words,
 )
@@ -35,7 +37,11 @@ from vimo_demo.communication.operations import (
     RegisterWatchGroup,
     RequestKind,
 )
-from vimo_demo.communication.reporting import ReportingSelection, ReportStage
+from vimo_demo.communication.reporting import (
+    LocalReportingSettings,
+    ReportingSelection,
+    ReportStage,
+)
 from vimo_demo.configuration import load_camera_sources, save_camera_sources
 from vimo_demo.inference import ImageResult
 from vimo_demo.inference._validation import uint8_array
@@ -103,6 +109,7 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
     with normal_window(tmp_path, engine) as (startup, window, panel):
         commands = panel.controller
         assert commands.reporting_selection() == ReportingSelection()
+        assert panel.protocol.currentText() == "FINS/UDP"
         assert commands.reporting_snapshot() is None
         assert text("plc_disabled", window.language) in panel.status.text()
         assert "ACK --" in panel.status.text() and not panel.error.isVisible()
@@ -125,6 +132,7 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         panel = window.communication.reporting_panel
         assert panel is not None
         assert panel.controller.reporting_selection() == ReportingSelection()
+        assert panel.protocol.currentText() == "FINS/UDP"
         close_window(window)
         delivery.detach()
     finally:
@@ -234,7 +242,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         window.communication.settings_button.click()
         assert not panel.port.isEnabled() and window.communication.host.isEnabled()
         window.communication.host.setText("192.0.2.10")
-        assert panel.endpoint.text() == f"127.0.0.1:{peer.port}"
+        assert panel.endpoint.text() == f"FINS/UDP · 127.0.0.1:{peer.port}"
         window.communication.host.setText("127.0.0.1")
         window.communication.settings_dialog.reject()
 
@@ -451,11 +459,19 @@ def test_manual_execution_rechecks_protection_after_dispatch(
             release.set()
 
 
+@pytest.mark.parametrize("transport", list(FinsTransport))
 def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
-    qapp: QApplication, tmp_path: Path
+    qapp: QApplication,
+    tmp_path: Path,
+    transport: FinsTransport,
 ) -> None:
     model, machine, recipe, paths = input_files(tmp_path)
-    with server() as peer:
+    with ExitStack() as stack:
+        peer = (
+            stack.enter_context(TcpPeer())
+            if transport is FinsTransport.TCP
+            else stack.enter_context(server())
+        )
         engine = Engine(hold=100)
         local = compose(
             model,
@@ -463,7 +479,9 @@ def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
             recipe,
             paths,
             engine_factory=lambda _: engine,
-            reporting=settings(peer),
+            reporting=LocalReportingSettings(
+                port=peer.port, timeout=0.2, transport=transport
+            ),
             replay_controls=True,
         )
         bridge = QtProductionBridge(
@@ -474,6 +492,12 @@ def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
             assert window.communication.reporting_panel is None
             assert not local.application.reporting_editable
             local.application.step_replay().result(WAIT)
+            until(
+                lambda: (
+                    (s := local.application.reporting_snapshot()) is not None
+                    and s.acknowledged_count == 1
+                )
+            )
             replay = local.application.replay_snapshot()
             assert replay is not None and replay.state is ReplayState.PAUSED
             assert local.application.snapshot().state is ApplicationState.RUNNING
@@ -486,6 +510,51 @@ def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
         finally:
             close_window(window)
         assert engine.closed
+
+
+def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    with TcpPeer() as peer:
+        peer.hold_next("bitmap")
+        with normal_window(tmp_path, Engine(hold=100)) as (startup, window, panel):
+            panel.protocol.setCurrentIndex(1)
+            panel.port.setValue(peer.port)
+            panel.timeout.setValue(5)
+            panel.enabled.setChecked(True)
+            try:
+                window.bridge.step_replay()
+                assert peer.entered.wait(WAIT)
+                window.bridge.stop()
+                until(
+                    lambda: (
+                        startup.application.snapshot().state
+                        is ApplicationState.STOPPING
+                    )
+                )
+                window.bridge.refresh()
+                observed = panel.controller.reporting_snapshot()
+                assert observed is not None and observed.thread_alive
+                assert not panel.protocol.isEnabled()
+                page = window.communication
+                page.area.setCurrentIndex(1)
+                page.address.setValue(49)
+                page.write_values.setText("7")
+                assert not page.dispatch(RequestKind.WRITE)
+                peer.release.set()
+                until(
+                    lambda: (
+                        startup.application.snapshot().state is ApplicationState.READY
+                    )
+                )
+                window.bridge.refresh()
+                stopped = panel.controller.reporting_snapshot()
+                assert stopped is not None and not stopped.thread_alive
+                assert stopped.acknowledged_count == 1 and stopped.cleanup_issue is None
+                assert panel.protocol.isEnabled()
+            finally:
+                peer.release.set()
 
 
 def test_fault_and_closed_keep_preferences_locked(
@@ -574,3 +643,156 @@ def test_reporting_panel_localized_layout(
         assert window.grab().save(
             str(tmp_path / f"communication-populated-{language}-{width}x{height}.png")
         )
+
+
+@pytest.mark.parametrize("manual_transport", list(FinsTransport))
+@pytest.mark.parametrize("automatic_transport", list(FinsTransport))
+def test_independent_transports_capture_reservation_and_stop_start_generation(
+    qapp: QApplication,
+    tmp_path: Path,
+    manual_transport: FinsTransport,
+    automatic_transport: FinsTransport,
+) -> None:
+    first, second = Engine(hold=1), Engine(hold=100)
+    with ExitStack() as stack:
+        automatic = (
+            stack.enter_context(TcpPeer(88))
+            if automatic_transport is FinsTransport.TCP
+            else stack.enter_context(server())
+        )
+        manual = (
+            stack.enter_context(TcpPeer())
+            if manual_transport is FinsTransport.TCP
+            else stack.enter_context(server())
+        )
+        if not isinstance(automatic, TcpPeer):
+            seed(automatic, 88)
+        before = len(automatic.packets)
+        startup, window, panel = stack.enter_context(
+            normal_window(tmp_path, first, second)
+        )
+        files = {p: p.read_bytes() for p in startup.data.root.rglob("*.json")}
+        page = window.communication
+        page.protocol.setCurrentIndex(1 if manual_transport is FinsTransport.TCP else 0)
+        page.port.setValue(manual.port)
+        panel.source[1].setValue(3)
+        panel.protocol.setCurrentIndex(
+            1 if automatic_transport is FinsTransport.TCP else 0
+        )
+        panel.port.setValue(automatic.port)
+        panel.timeout.setValue(0.2)
+        panel.enabled.setChecked(True)
+        selected = panel.controller.reporting_selection()
+        assert selected.settings.transport is automatic_transport
+        window.bridge.step_replay()
+        assert first.entered.wait(WAIT)
+        window.bridge.refresh()
+        assert startup.application.snapshot().state is ApplicationState.STARTING
+        assert len(automatic.packets) == before
+        if isinstance(automatic, TcpPeer):
+            assert automatic.connections == 0  # Warm-up does not even negotiate.
+        assert not panel.protocol.isEnabled()
+        panel.protocol.setCurrentIndex(1 - panel.protocol.currentIndex())
+        assert panel.controller.reporting_selection() is selected
+        assert panel.protocol.currentIndex() == (
+            1 if automatic_transport is FinsTransport.TCP else 0
+        )
+        first.release.set()
+        until(
+            lambda: (
+                (s := panel.controller.reporting_snapshot()) is not None
+                and s.acknowledged_count == 1
+            )
+        )
+        until(
+            lambda: (
+                window.bridge.local_replay is not None
+                and (r := window.bridge.local_replay.replay_snapshot()) is not None
+                and r.state is ReplayState.PAUSED
+            )
+        )
+        window.bridge.refresh()
+        assert startup.application.snapshot().state is ApplicationState.RUNNING
+        assert not panel.protocol.isEnabled()
+        observed = panel.controller.reporting_snapshot()
+        assert observed is not None and observed.generation == 1
+        assert (
+            observed.last_acknowledged is not None
+            and observed.last_acknowledged.sequence == 89
+        )
+        result = startup.application.snapshot().latest_production_result
+        assert result is not None
+        words = first_station_reject_words(
+            (r.channel_id, r.business_status) for r in result.channels
+        )
+        if isinstance(automatic, TcpPeer):
+            assert automatic.words(49, 4) == (89, *words)
+            assert all(
+                p[3:9] == bytes.fromhex("00 14 00 00 65 00") for p in automatic.packets
+            )
+        else:
+            assert readback(automatic) == (89, *words)
+        counters = startup.application.snapshot().counters
+        page.area.setCurrentIndex(1)
+        page.address.setValue(49)
+        page.write_values.setText("7")
+        manual_before = len(manual.packets)
+        assert not page.dispatch(RequestKind.WRITE)
+        assert len(manual.packets) == manual_before
+        guarded = CommunicationRequest(
+            RequestKind.WRITE,
+            "127.0.0.1",
+            manual.port,
+            0.2,
+            FinsAddress(0, 2, 0),
+            FinsAddress(0, 1, 0),
+            49,
+            values=(7,),
+            area=FinsMemoryArea.W,
+            transport=manual_transport,
+        )
+        with pytest.raises(PermissionError):
+            panel.controller.validate_manual_request(guarded)
+        assert page.dispatch(RequestKind.READ)  # Reservation never blocks reads.
+        until(lambda: not page.busy)
+        assert page.last_response is not None
+        assert page.last_response.request.transport is manual_transport
+        assert panel.controller.reporting_selection() is selected
+        assert startup.application.snapshot().counters == counters
+        window.bridge.stop()
+        until(lambda: startup.application.snapshot().state is ApplicationState.READY)
+        window.bridge.refresh()
+        stopped = panel.controller.reporting_snapshot()
+        assert (
+            stopped is not None
+            and not stopped.thread_alive
+            and stopped.cleanup_issue is None
+        )
+        assert panel.controller.reporting_selection() is selected
+        window.bridge.step_replay()
+        until(
+            lambda: (
+                (s := panel.controller.reporting_snapshot()) is not None
+                and s.generation == 2
+                and s.acknowledged_count == 1
+            )
+        )
+        outcome = panel.controller.reporting_snapshot()
+        assert outcome is not None and outcome.last_acknowledged is not None
+        assert outcome.last_acknowledged.sequence == 90
+        window.bridge.stop()
+        until(lambda: startup.application.snapshot().state is ApplicationState.READY)
+        window.bridge.refresh()
+        panel.protocol.setCurrentIndex(1 - panel.protocol.currentIndex())
+        assert (
+            panel.controller.reporting_selection().settings.transport
+            is not automatic_transport
+        )
+        assert page.protocol.currentIndex() == (
+            1 if manual_transport is FinsTransport.TCP else 0
+        )
+        panel.protocol.setCurrentIndex(
+            1 if automatic_transport is FinsTransport.TCP else 0
+        )
+        assert panel.source[1].value() == 3  # Inactive UDP values survive TCP switches.
+        assert {p: p.read_bytes() for p in files} == files

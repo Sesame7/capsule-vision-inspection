@@ -3,6 +3,7 @@
 from PySide6.QtCore import QSize, Qt, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from vimo_demo.application import ApplicationState, ApplicationStateError
-from vimo_demo.communication import FinsAddress
+from vimo_demo.communication import FinsAddress, FinsTransport
 from vimo_demo.communication.reporting import (
     LocalReportingSettings,
     ProductionReportingCommands,
@@ -70,6 +71,8 @@ class ReportingPanel(QFrame):
         self._captions.append(("plc_reporting", caption))
         settings.addWidget(caption)
         self.host = QLabel("127.0.0.1")  # No editable automatic target.
+        self.protocol = QComboBox()
+        self.protocol.addItems(("FINS/UDP", "FINS/TCP"))
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
         self.timeout = QDoubleSpinBox()
@@ -84,6 +87,7 @@ class ReportingPanel(QFrame):
         common = QGridLayout()
         for column, (key, widget) in enumerate(
             (
+                ("comm_protocol", self.protocol),
                 ("comm_host", self.host),
                 ("comm_port", self.port),
                 ("comm_timeout", self.timeout),
@@ -96,7 +100,7 @@ class ReportingPanel(QFrame):
             widget.setMinimumHeight(Style.touch)
             common.addWidget(widget, 1, column)
             common.setColumnStretch(column, 1)
-        common.addWidget(self.advanced_button, 2, 0, 1, 3, Qt.AlignmentFlag.AlignRight)
+        common.addWidget(self.advanced_button, 2, 0, 1, 4, Qt.AlignmentFlag.AlignRight)
         settings.addLayout(common)
         self.advanced = QWidget()
         grid = QGridLayout(self.advanced)
@@ -130,6 +134,7 @@ class ReportingPanel(QFrame):
         for field in self._fields:
             field.valueChanged.connect(self._changed)
         self.enabled.toggled.connect(self._changed)
+        self.protocol.currentIndexChanged.connect(self._changed)
         self._load_selection()
         self.set_language("zh")
 
@@ -146,6 +151,9 @@ class ReportingPanel(QFrame):
         self._syncing = True
         try:
             self.enabled.setChecked(selected.enabled)
+            self.protocol.setCurrentIndex(
+                1 if selected.settings.transport is FinsTransport.TCP else 0
+            )
             self.port.setValue(selected.settings.port)
             self.timeout.setValue(selected.settings.timeout)
             for fields, address in (
@@ -176,6 +184,9 @@ class ReportingPanel(QFrame):
                         ),
                         source=FinsAddress(*(field.value() for field in self.source)),
                         max_pending=previous.settings.max_pending,
+                        transport=FinsTransport.TCP
+                        if self.protocol.currentIndex() == 1
+                        else FinsTransport.UDP,
                     ),
                 )
             )
@@ -197,7 +208,11 @@ class ReportingPanel(QFrame):
         self.host.setToolTip(text("plc_session_only", language))
         for key, caption in self._captions:
             caption.setText(text(key, language))
-        for key, widget in (("comm_port", self.port), ("comm_timeout", self.timeout)):
+        for key, widget in (
+            ("comm_protocol", self.protocol),
+            ("comm_port", self.port),
+            ("comm_timeout", self.timeout),
+        ):
             widget.setAccessibleName(text(key, language))
         for key, fields in (
             ("comm_destination", self.destination),
@@ -218,10 +233,18 @@ class ReportingPanel(QFrame):
     @Slot()
     def refresh(self) -> None:
         editable = self.state in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
-        for widget in (self.enabled, *self._fields):
+        for widget in (self.enabled, self.protocol, *self._fields):
             widget.setEnabled(editable)
         selected = self.controller.reporting_selection()
-        self.endpoint.setText(f"127.0.0.1:{selected.settings.port}")
+        udp = selected.settings.transport is FinsTransport.UDP
+        self.advanced.setEnabled(editable and udp)
+        self.advanced_button.setEnabled(editable and udp)
+        self.protocol.setToolTip(
+            text("comm_protocol" if udp else "comm_tcp_nodes", self.language)
+        )
+        self.endpoint.setText(
+            f"FINS/{selected.settings.transport.name} · 127.0.0.1:{selected.settings.port}"
+        )
         self.endpoint.setToolTip(text("plc_session_only", self.language))
         snapshot = self.controller.reporting_snapshot()
         key = "plc_disabled" if not selected.enabled else "plc_enabled"
