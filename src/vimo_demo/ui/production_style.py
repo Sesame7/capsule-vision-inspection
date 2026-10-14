@@ -244,6 +244,13 @@ STRINGS: dict[str, tuple[str, str]] = {
     "replay_pausing": ("暂停中…", "Pausing…"),
     "replay_stepping": ("单步中…", "Stepping…"),
     "replay_paused": ("回放已暂停", "Replay paused"),
+    "state_READY": ("就绪", "Ready"),
+    "state_STARTING": ("预热中", "Warming up"),
+    "state_RUNNING": ("运行", "Running"),
+    "state_replay_paused": ("暂停", "Paused"),
+    "state_STOPPING": ("停止中", "Stopping"),
+    "state_FAULT": ("故障", "Fault"),
+    "state_closing": ("关闭中", "Closing"),
     "replay_help": (
         "仅暂停本地图片源；检测会话仍在运行，配置保持锁定。单步完成不代表 PLC 已确认。",
         "Local source only; the inspection session stays RUNNING and editing stays locked. Step completion is not PLC ACK.",
@@ -307,6 +314,7 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Close incomplete · still waiting for runtime exit",
     ),
     "pending": ("等待结果", "Pending"),
+    "no_display_frame": ("暂无检测图像", "No inspection image"),
     "no_image": ("等待图像", "Waiting for image"),
     "reference": ("参考图像 · 非当前运行", "Reference image · previous run"),
     "ok": ("OK", "OK"),
@@ -536,6 +544,11 @@ def stylesheet() -> str:
     QPushButton:disabled, QComboBox:disabled {{ color: #707681; background: {Style.surface}; }}
     QPushButton#start {{ background: {Style.accent}; color: #18202c; font-weight: 600; }}
     QPushButton#start:disabled {{ background: {Style.raised}; color: #707681; }}
+    QWidget#production QPushButton {{ outline: none; }}
+    QWidget#production QPushButton:hover:enabled {{ border-color: {Style.accent}; }}
+    QWidget#production QPushButton:focus:enabled {{ border: 2px solid {Style.accent}; }}
+    QWidget#production QPushButton#start:focus:enabled {{ border-color: {Style.primary}; }}
+    QWidget#production QPushButton:disabled {{ border-color: {Style.border}; }}
     QLineEdit {{ background: {Style.surface}; padding: 8px; border: 1px solid {Style.border}; }}
     QDialog {{ background: {Style.background}; }}
     QComboBox QAbstractItemView {{ background: {Style.raised}; color: {Style.primary}; }}
@@ -629,6 +642,10 @@ def production_icon(kind: str) -> QIcon:
     color = (
         Style.fault
         if kind == "FAULT"
+        else Style.warning
+        if kind in ("STOPPING", "replay_paused")
+        else Style.accent
+        if kind == "STARTING"
         else Style.ok
         if kind in ("READY", "RUNNING")
         else Style.background
@@ -656,7 +673,7 @@ def production_icon(kind: str) -> QIcon:
                 painter.drawLine(a, b)
             if kind == "replay_step":
                 painter.drawLine(19, 4, 19, 18)
-        elif kind == "replay_pause":
+        elif kind in ("replay_pause", "replay_paused"):
             painter.drawLine(7, 5, 7, 17)
             painter.drawLine(15, 5, 15, 17)
         elif kind in ("stop", "replay_end"):
@@ -683,7 +700,9 @@ def production_icon(kind: str) -> QIcon:
                 painter.drawLine(a, b)
             painter.drawLine(11, 8, 11, 13)
             painter.drawPoint(11, 16)
-        elif kind in ("STARTING", "STOPPING"):
+        elif kind == "STOPPING":
+            painter.drawRect(QRectF(5, 5, 12, 12))
+        elif kind == "STARTING":
             painter.drawEllipse(QRectF(3, 3, 16, 16))
             painter.drawLine(11, 6, 11, 11)
             painter.drawLine(11, 11, 16, 13)

@@ -86,6 +86,22 @@ capability keep generic Start/Stop. See
 [local replay controls](docs/application.md#local-replay-controls) for cursor,
 shutdown and manual verification.
 
+Optional developer-only **read-only snapshots** use the same normal process:
+
+```powershell
+uv run --no-sync python app.py --web-snapshots --web-port 8765
+Invoke-RestMethod http://127.0.0.1:8765/api/snapshot
+Invoke-RestMethod http://127.0.0.1:8765/health
+```
+
+Disabled by default; localhost-only, no persistent settings or commands. Start/Step
+the existing Folder source in the application to obtain Production images. JSON
+contains each camera's exact revision-qualified JPEG URL; request that URL rather
+than guessing a camera/image identity. Publication is nominally every two seconds,
+at most 640px per dimension, JPEG quality 70. Superseded URLs return unavailable.
+See [snapshot publication](docs/ui-shell.md#read-only-snapshot-publication) for
+identity, lifecycle, API and manual verification. LAN/browser UI remain deferred.
+
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
 **History / 历史** and **Vision / 视觉**. Communication provides session-local manual
 FINS/UDP D/W reads, localhost-only writes and optional register-watch refresh;

@@ -102,6 +102,7 @@ class ProductionWindow(QMainWindow):
         self._active_choice: RecipeChoice | None = None
         self._source_issue: tuple[str | None, str] | None = None
         self._closing = False
+        self._presenting_identity = False
         self.setMinimumSize(*Style.minimum)
         self.setWindowTitle("ViMo · Production")
         font = QFont()
@@ -137,6 +138,7 @@ class ProductionWindow(QMainWindow):
         self.pages = QStackedWidget()
         root.addWidget(self.pages, 1)
         production = QWidget()
+        production.setObjectName("production")
         page = QVBoxLayout(production)
         page.setContentsMargins(0, 0, 0, 0)
         page.setSpacing(Style.space)
@@ -157,11 +159,9 @@ class ProductionWindow(QMainWindow):
         identity_row = QHBoxLayout(self.identity_group)
         identity_row.setContentsMargins(0, 0, 0, 0)
         identity_row.setSpacing(Style.small)
-        header.addWidget(self.identity_group, 0, 0)
-        self.state_icon = QLabel()
-        self.state_icon.setFixedSize(Style.icon, Style.icon)
-        identity_row.addWidget(self.state_icon)
+        header.addWidget(self.identity_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
         self.state_label = QLabel()
+        self.state_label.setObjectName("productionState")
         self.state_label.setStyleSheet("font-weight: 600;")
         identity_row.addWidget(self.state_label)
         self.recipe_icon = QLabel()
@@ -186,7 +186,7 @@ class ProductionWindow(QMainWindow):
         batch_row = QHBoxLayout(self.batch_group)
         batch_row.setContentsMargins(0, 0, 0, 0)
         batch_row.setSpacing(Style.small)
-        header.addWidget(self.batch_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self.batch_group, 0, 0, Qt.AlignmentFlag.AlignLeft)
         self.batch_label = QLabel()
         self.batch_label.setTextFormat(Qt.TextFormat.PlainText)
         batch_row.addWidget(self.batch_label)
@@ -215,16 +215,22 @@ class ProductionWindow(QMainWindow):
             operation.setFixedWidth(3 * Style.touch)
             operations.addWidget(operation)
             secondary = QPushButton()
-            secondary.setFixedSize(2 * Style.touch, Style.touch)
+            secondary.setFixedSize(3 * Style.touch, Style.touch)
+            policy = secondary.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            secondary.setSizePolicy(policy)
             secondary.setIconSize(QSize(Style.icon, Style.icon))
             secondary.clicked.connect(self._secondary_operation)
             operations.addWidget(secondary)
             self.buttons["secondary"] = secondary
         header.addWidget(self.operation_group, 0, 2, Qt.AlignmentFlag.AlignRight)
         summary_layout.addLayout(header)
-        metric_row = QHBoxLayout()
+        metric_row = self.metric_row = QGridLayout()
+        metric_row.setHorizontalSpacing(Style.space)
         self.metrics: dict[str, tuple[QLabel, QLabel]] = {}
-        for key in ("cycles", "channel_ok", "channel_ng", "processing"):
+        for column, key in enumerate(
+            ("cycles", "channel_ok", "channel_ng", "processing")
+        ):
             metric = QHBoxLayout()
             metric.setSpacing(Style.small)
             caption = QLabel()
@@ -234,7 +240,8 @@ class ProductionWindow(QMainWindow):
             metric.addWidget(caption)
             metric.addWidget(value)
             metric.addStretch()
-            metric_row.addLayout(metric, 3 if key in ("cycles", "processing") else 2)
+            metric_row.addLayout(metric, 0, column)
+            metric_row.setColumnStretch(column, 1)
             self.metrics[key] = (value, caption)
         summary_layout.addLayout(metric_row)
         page.addWidget(summary)
@@ -679,14 +686,14 @@ class ProductionWindow(QMainWindow):
         }.get(action, False)
         operation = self.buttons["operation"]
         operation.setEnabled(bool(enabled) and not self._closing)
-        operation.setText(
-            text(
-                "replay_start"
-                if action == "start" and self.bridge.local_replay
-                else action,
-                language,
-            )
+        action_label = (
+            "replay_start"
+            if action == "start" and self.bridge.local_replay
+            else f"state_{action}"
+            if action in ("STARTING", "STOPPING") and self.bridge.local_replay
+            else action
         )
+        operation.setText(text(action_label, language))
         operation.setIcon(production_icon(action))
         operation.setAccessibleName(operation.text())
         operation.setToolTip(
@@ -720,27 +727,47 @@ class ProductionWindow(QMainWindow):
             )
         self.buttons["batch"].setEnabled(availability.batch and not self._closing)
         state = "closing" if self._closing else snapshot.state.name
-        self.state_label.setText(text(state, language))
         if (
-            snapshot.state is ApplicationState.RUNNING
+            not self._closing
+            and snapshot.state is ApplicationState.RUNNING
             and self.bridge.replay_snapshot is not None
             and self.bridge.replay_snapshot.state is ReplayState.PAUSED
         ):
-            self.state_label.setText(text("replay_paused", language))
+            state = "replay_paused"
+        self.state_label.setText(
+            text(
+                f"state_{state}"
+                if state
+                in (
+                    "READY",
+                    "STARTING",
+                    "RUNNING",
+                    "replay_paused",
+                    "STOPPING",
+                    "FAULT",
+                    "closing",
+                )
+                else state,
+                language,
+            )
+        )
         self.state_label.setToolTip(
-            text("replay_help", language)
+            text(state, language) + "\n" + text("replay_help", language)
             if self.bridge.local_replay is not None
-            else text("simulation", language)
+            else text(state, language) + "\n" + text("simulation", language)
             if self.simulation
-            else ""
+            else text(state, language)
         )
-        self.state_icon.setPixmap(
-            production_icon(snapshot.state.name).pixmap(Style.icon, Style.icon)
-        )
-        color = (
-            Style.fault if snapshot.state is ApplicationState.FAULT else Style.secondary
-        )
+        color = {
+            "READY": Style.secondary,
+            "STARTING": Style.accent,
+            "RUNNING": Style.ok,
+            "replay_paused": Style.warning,
+            "STOPPING": Style.warning,
+            "FAULT": Style.fault,
+        }.get(state, Style.secondary)
         self.state_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self.state_label.setAccessibleName(self.state_label.toolTip())
         self._render_identity()
         counts = snapshot.counters
         for key, count in (
@@ -929,6 +956,16 @@ class ProductionWindow(QMainWindow):
         )
 
     def _render_identity(self) -> None:
+        # Child resize events must not interrupt a partially updated header layout.
+        if self._presenting_identity:
+            return
+        self._presenting_identity = True
+        try:
+            self._update_identity()
+        finally:
+            self._presenting_identity = False
+
+    def _update_identity(self) -> None:
         snapshot, language = self.snapshot, self.language
         active, candidate = snapshot.active, snapshot.candidate
         if active and (
@@ -997,29 +1034,70 @@ class ProductionWindow(QMainWindow):
                 f"{text('pending_recipe', language)}: …"
             )
         )
-        batch = f"{text('batch_id', language)} {snapshot.batch_id or '--'}"
-        # Reserve equal side columns so the whole Batch/edit group is centered.
-        # Only shorten its text when the actual row cannot fit the full identity.
+        batch = f"{text('batch_id', language)} {snapshot.batch_id or '—'}"
+        # Equal side columns center state/Recipe, while bounding long identities.
+        # Keep pending configuration readable before allocating overflow to Batch.
         margins = self.summary_layout.contentsMargins()
         row_width = (
             self.summary.contentsRect().width() - margins.left() - margins.right()
         )
-        side_width = max(
-            self.identity_group.minimumSizeHint().width(),
-            self.operation_group.sizeHint().width()
-            if self.bridge.local_replay is not None
-            else self.buttons["operation"].width(),
+        gaps = self.summary_header.horizontalSpacing()
+        identity_spacing = (3 if pending else 2) * Style.small
+        fixed_identity = (
+            self.state_label.sizeHint().width()
+            + self.recipe_icon.width()
+            + identity_spacing
+        )
+        identity_minimum = (
+            fixed_identity
+            + self.identity_label.minimumWidth()
+            + (self.pending_label.minimumWidth() if pending else 0)
+        )
+        side_capacity = max(
+            self.operation_group.sizeHint().width(),
+            (row_width - identity_minimum - 2 * gaps) // 2,
         )
         batch_width = max(
-            1,
-            row_width
-            - 2 * (side_width + self.summary_header.horizontalSpacing())
-            - self.buttons["batch"].width()
-            - Style.small,
+            1, side_capacity - self.buttons["batch"].width() - Style.small
         )
         self.batch_label.setFixedWidth(
             min(batch_width, self.batch_label.fontMetrics().horizontalAdvance(batch))
         )
+        batch_group_width = (
+            self.batch_label.width() + self.buttons["batch"].width() + Style.small
+        )
+        self.batch_group.setFixedWidth(batch_group_width)
+        side_width = max(
+            batch_group_width,
+            self.operation_group.sizeHint().width(),
+        )
+        self.summary_header.setColumnMinimumWidth(0, side_width)
+        self.summary_header.setColumnMinimumWidth(2, side_width)
+        available_identity = max(identity_minimum, row_width - 2 * (side_width + gaps))
+        main_width = max(
+            self.identity_label.minimumWidth(),
+            self.identity_label.fontMetrics().horizontalAdvance(display_name),
+        )
+        pending_width = (
+            max(
+                self.pending_label.minimumWidth(),
+                self.pending_label.fontMetrics().horizontalAdvance(pending_text),
+            )
+            if pending
+            else 0
+        )
+        self.identity_label.setMaximumWidth(main_width)
+        self.pending_label.setMaximumWidth(
+            max(pending_width, self.pending_label.minimumWidth())
+        )
+        self.identity_group.setFixedWidth(
+            min(available_identity, fixed_identity + main_width + pending_width)
+        )
+        self.summary_header.activate()
+        for group in (self.batch_group, self.identity_group):
+            layout = group.layout()
+            if layout is not None:
+                layout.activate()
         self.identity_label.setText(
             self.identity_label.fontMetrics().elidedText(
                 display_name, Qt.TextElideMode.ElideRight, self.identity_label.width()

@@ -30,6 +30,7 @@ page or explicit developer composition. Reporting preferences are memory-only.
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and Communication pages, including session-local automatic-reporting controls/observations; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
 | Communication | Qt-independent FINS/UDP DM/WR words, first-station projection/two-write submission, localhost simulator, independent manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
+| Web observation | Optional localhost-only read-only snapshot service; independent publisher encodes bounded latest-camera JPEGs, serial HTTP serves cached bytes. No browser UI, LAN binding or runtime commands. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
 from configured channel judgment. SDK/golden regression verifies integration,
@@ -136,6 +137,11 @@ Eligible terminal Production result (explicit local opt-in only)
 Identified source Frames
     -> separate latest-per-camera display copies
     -> Qt image presentation / identity-matched result overlays
+
+Optional normal-process Web observation
+    -> existing application + display snapshots (not atomic acquisition)
+    -> independent latest-only JPEG publisher
+    -> bounded read-only localhost HTTP cache delivery
 ```
 
 The collector remains responsive during serial inspection in configured camera
@@ -209,7 +215,7 @@ adapter designs or scheduling structures are selected here.
 | PLC integration and counting | Actual equipment/configuration, output association, delivery acknowledgement and physical-product accounting; the standalone FINS/UDP subset does not implement these or a capsule counter. |
 | Machine stopping/commissioning | Safety, emergency-stop responsibilities and hardware recovery; graceful software Stop/close is not machine safety. |
 | Calibrated inspection/acceptance | Lighting/geometry, calibration, thresholds, annotations and field acceptance criteria remain unverified. |
-| History/archive/read-only consumers | Retention, result/image association and delivery requirements; no archive or web service is implemented. |
+| History/archive/LAN consumers | Retention, result/image association and delivery requirements; no archive, LAN service or browser UI is implemented. Current localhost-only Web snapshots remain best-effort observation, not result delivery. |
 | Performance/concurrency | Measure target workloads and ownership/hardware behavior before choosing concurrency; Current serial execution is not a permanent mandate. |
 
 Future architecture may differ substantially from today's internal topology.

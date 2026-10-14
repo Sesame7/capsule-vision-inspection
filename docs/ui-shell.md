@@ -65,15 +65,30 @@ geometry. Startup/recovery policy belongs to
 
 ### Summary and commands
 
-The summary has two compact rows. In the first, application state and Recipe
-information are left, Batch ID/edit action centered, and the operation group right
-(one primary control normally; two in the explicit local demo). Equal flexible
-side columns center the whole Batch/edit group
+The summary has two compact rows. In the first, Batch ID/edit action is left,
+application/replay state and Recipe identity centered, and the operation group right
+(two context-sensitive controls with local replay capability; one otherwise).
+Equal flexible side columns center the compact state/Recipe group
 across the row; the operation area stays stable across states. The second row
 shows completed cycles, **CH OK**, **CH NG**, and available latest-inspection elapsed ms.
 CH OK/NG read the application's separate business-occurrence counters, never legacy
-judgment totals. Aggregate EMPTY/UNKNOWN counts are not displayed. Compact metric
-width allocation gives the longer cycle/time captions more room at narrow widths.
+judgment totals. Aggregate EMPTY/UNKNOWN counts are not displayed. The four metrics
+occupy equal-width columns with left-aligned secondary captions and modestly
+emphasized values; their definitions, timing scope and missing-value semantics
+are unchanged.
+
+State uses one short localized text label without a duplicate state icon/badge:
+neutral READY `就绪` / `Ready`, accent STARTING `预热中` / `Warming up`, restrained
+green RUNNING `运行` / `Running`, amber local PAUSED `暂停` / `Paused`, amber STOPPING
+`停止中` / `Stopping`, and violet FAULT `故障` / `Fault`. Closing is also compact.
+The full existing state explanation remains in tooltip/accessibility text; issue
+details retain the shared feedback policy. PAUSED is still application RUNNING.
+These labels do not introduce states, activate configuration or drive commands.
+
+Production buttons replace native focus outlines with a visible two-pixel rounded
+focus border (light on the primary action, accent on other targets). Hover and
+disabled styles are scoped to Production; keyboard navigation, accessible names
+and touch targets remain intact. Other pages/navigation keep their existing styles.
 
 Recipe presentation uses the Recipe navigation icon followed by a read-only name:
 
@@ -90,12 +105,15 @@ the [successful-Start boundary](application.md#activation) remains authoritative
 Long names elide when needed, with full Recipe/pending information in tooltips and
 accessibility text.
 
-Batch is labeled `批号` / `Batch`, without an extra identity icon. Its edit icon
-stays adjacent. Width is allocated from available space and text metrics; ordinary
+Batch is labeled `批号` / `Batch`, with neutral `—` when unset and no extra identity
+icon. Its edit icon stays adjacent. Width is allocated from available space and
+text metrics; ordinary
 IDs such as `12313123`, `1231312213123` and `LOT-20261009-001` remain visible at the
 reviewed portrait/landscape sizes. Unusually long IDs elide only when necessary.
-The Batch label stays enabled for full-value tooltip/accessibility access even
-when editing is disabled in RUNNING.
+Long Batch/Recipe identities share available width through Qt layout constraints
+and text metrics, retaining readable Pending Start text. The Batch label stays
+enabled for full-value tooltip/accessibility access even when editing is disabled
+in RUNNING.
 
 For compositions without local replay-control capability:
 
@@ -115,6 +133,12 @@ wire the same `QtProductionBridge.local_replay` boundary. The optional source
 capability determines presentation; generic/fake modes without it retain the table
 above. It presents two compact Qt-drawn Play/Pause/Stop-square/Step-forward operation
 buttons, with localized labels, tooltips and accessibility names:
+
+Both replay targets are 132 x 44 logical pixels, with equal icon sizes/strokes.
+Their positions remain stable across Start/Pause/Continue/Step/End and disabled
+progress; an unavailable secondary action is hidden but retains its layout space.
+Primary/secondary treatments remain distinct and keyboard focus remains visible.
+Without replay capability the existing single 176 x 44 operation is retained.
 
 | Local presentation | Primary | Secondary |
 | --- | --- | --- |
@@ -173,10 +197,10 @@ available timing right. Abnormal/expanded IDs do not shift indicator slots.
 | --- | --- |
 | No matching result | Pending outline circle |
 | Business OK | Restrained green check |
-| Business NG | Red cross |
+| Business NG | Red cross on a subdued red background |
 | Business EMPTY | Neutral gray outlined empty slot, distinct from pending dot/disabled dash |
 | Business UNKNOWN | Amber warning |
-| ERROR + NG | Red NG treatment with amber border and `!`; both meanings retained |
+| ERROR + NG | Red NG treatment/background with amber border and `!`; both meanings retained |
 | ERROR + EMPTY | Gray EMPTY treatment with amber border and `!`; valid Occupancy and technical failure coexist |
 
 Abnormal channels show ChannelId; clicking an indicator toggles its ID display.
@@ -202,7 +226,7 @@ Current layout/review baselines, in **logical pixels**:
 | Grid switch | Three columns when width >= 1.2 x height, otherwise two; reuse the same cards |
 | Minimum window | 880 x 720; not a promise that every minimum-size orientation is an operator target |
 | Indicator slots | 44 x 44, 2-pixel gap |
-| Primary operation | 176 x 44 |
+| Operation targets | 176 x 44 without replay capability; two equal 132 x 44 targets with replay |
 | Shared status strip | Fixed 33-pixel height, one row |
 
 Qt layouts/DPI handle logical coordinates. Icons have common DPR variants and
@@ -254,13 +278,18 @@ same camera identity alone is insufficient. A matching retained result uses its
 **own** camera/slot layout even after a different candidate is prepared.
 
 Generation-zero launcher/Folder references remain available for Vision but are
-hidden on Production. Initial viewports are dark/empty with pending indicators,
-without repeated waiting labels. Stop retains latest production pixels and any
+hidden on Production. A viewport without a displayed QImage shows a centered,
+restrained `暂无检测图像` / `No inspection image` placeholder and pending indicators.
+This depends on actual display availability (including generation suppression),
+never brightness, Occupancy or missing inference evidence. A valid dark image
+removes the placeholder. Stop retains latest production pixels and any
 still-matching evidence; READY signals the stopped state without a global frozen
 label. During a later STARTING/RUNNING/STOPPING generation, previous-generation
 pixels are hidden locally and old results do not match. A current-generation
 RUNNING image without its result may show the localized pending message.
 This presentation does not reset the store, results or counters.
+Local replay PAUSED retains the last pixels, matching results and overlays; only
+the summary state label and existing operation buttons describe the paused source.
 
 `ImageTransform` preserves image orientation, aspect ratio and centered letterboxing
 and maps source-image boxes to logical display coordinates. QPainter draws clipped
@@ -268,6 +297,93 @@ hollow red rectangles independently of the bitmap, using existing assigned/unass
 findings and NG reason boxes, with duplicate boxes removed. Production adds no
 colored mask, contour geometry or invented region to domain results. ROI editing
 and frozen-reference transforms remain in the machine/source document.
+
+## Read-only snapshot publication
+
+Normal `app.py --web-snapshots [--web-port 8765]` optionally starts a process-owned,
+Qt-independent `ProductionSnapshotService`. It is disabled by default, binds only
+`127.0.0.1`, adds no persistence/UI controls and never commands the application or
+participates in inspection completion, counters or PLC reporting. `ui` defers its
+public Qt bridge import so the existing pure display/identity modules and Web
+publisher do not load Qt. The bridge export/API itself is unchanged.
+
+The publisher samples the existing locked application/display snapshots separately;
+this is not one atomic six-camera acquisition. Camera rows follow saved configured
+order (none when normal startup has no valid machine layout). Each available source
+identity includes generation, CycleId, CameraId, sequence, source dimensions,
+monotonic capture timestamp and display-frame revision. JSON adds application state,
+latest formal CycleId, process-specific publisher ID, publication revision and UTC
+observation/publication timestamps. A new publisher ID prevents old-process URLs
+from aliasing a restarted process's revision numbers; it is not an authentication key.
+
+The same `matching_camera()` rules authorize channel business/technical statuses:
+generation, CycleId, complete FrameId and original dimensions must all match.
+Unmatched current pixels are pending during RUNNING; missing evidence while stopped
+is unavailable. Retained older-generation pixels explicitly carry their old identity
+and stale/unavailable judgments. Generation-zero references and older-generation
+pixels during STARTING/RUNNING/STOPPING are not served as Production JPEGs.
+Stop/PAUSE can retain already observed pixels; HTTP availability does not imply
+RUNNING. No brightness/Occupancy heuristics or new judgment/acceptance aggregation
+is introduced. A failed encode removes that camera's published JPEG/status rather
+than substituting old bytes under a new identity.
+
+One non-daemon publisher thread samples nominally every two seconds, using OpenCV
+BGR directly, preserving orientation/aspect ratio and limiting the largest dimension
+to 640px at JPEG quality 70. Unchanged frame revisions reuse encoded bytes. It holds
+one current observation while building one replacement, never a queued history or
+catch-up workload; the next sample reads the latest store. Encoding/copying runs
+outside inference callbacks, the inference worker and GUI dispatch. The cached
+publication owns only compact JSON and at most one latest JPEG per configured
+camera: no masks, contour arrays, native inference references or full result history.
+An in-flight HTTP read may retain its old immutable publication until it finishes.
+
+| GET endpoint | Meaning |
+| --- | --- |
+| `/api/snapshot` | Latest compact JSON; 503 before the first successful publication |
+| `/api/cameras/<CameraId>.jpg?publisher=<publisher_id>&revision=<publication_revision>` | Cached JPEG for that exact publisher/publication; 410 if superseded, 404 if unavailable/unknown, 400 without valid identity parameters |
+| `/health` | Publication availability, publisher liveness and latest publication failure; not Production readiness or connectivity proof |
+
+Use the JPEG URL returned by JSON, including escaped CameraId, publisher ID and revision. A newer
+publication never substitutes new pixels under an old URL. Responses disable cache;
+there is no CORS enablement, browser page, write/configuration/runtime endpoint or
+extra FINS request. A single HTTP thread processes one connection at a time with a
+four-connection listen backlog and a one-second socket I/O timeout; slow readers do
+not block publisher/Production. No per-request thread or unbounded task queue exists.
+
+The service spans application Stop/Start generations. Bind/start/publication failure
+is isolated from Production; startup reports optional service errors to stderr and
+continues normal composition. Per-camera encode errors appear in compact metadata;
+whole-observation errors retain the last timestamped publication and appear in
+health/stderr. It makes no zero-performance-impact claim: encoding and HTTP still
+use shared CPU/memory, and no real-GPU performance qualification was performed.
+
+After the Qt event loop returns, the normal entry requests service stop: reject new
+requests, interrupt any active socket, stop future publication, and join outside GUI
+dispatch. An active encoder is allowed to finish; `join(timeout)` returns false
+while any owned thread remains alive and retains ownership. Successful join means
+actual publisher/HTTP termination and socket release, not merely notification.
+Application/native cleanup keeps its existing ownership guarantees; no native call
+is forcibly cancelled. The window's close notification alone is not process/Web exit.
+
+Manual verification with existing valid persistent `data/` and local Folder sources:
+
+1. Launch `uv run --no-sync python app.py --web-snapshots --web-port 8765` from the
+   repository root. The application opens stopped; inspect `/health` and
+   `/api/snapshot` using `Invoke-RestMethod http://127.0.0.1:8765/api/snapshot`.
+2. Use Start or Step. After publication, fetch a camera's returned URL with
+   `Invoke-WebRequest ("http://127.0.0.1:8765" + $snapshot.cameras[0].image_url)`,
+   where `$snapshot` is a fresh `Invoke-RestMethod` result. Verify original camera
+   identity/order, reduced dimensions/colors and matching channel statuses.
+3. Pause/Stop and inspect retained identity/state; Start again and check the new
+   generation. Reusing a superseded URL should return 410, not a newer image.
+4. Close normally. Confirm the command exits and the local port stops accepting
+   connections. Launch without flags to confirm the service stays disabled.
+
+CPU/Fake regressions cover matching/mismatching identity, image encoding, bounded
+replacement, slow publishing/concurrent reads, default/opt-in normal startup and
+native process exit. Real ViMo/PLC/camera performance and deployment are not implied.
+LAN access, authentication, browser UI and hardware commissioning belong to later
+phases; Web-1 provides no production remote-access qualification.
 
 ## Feedback
 
