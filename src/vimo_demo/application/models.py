@@ -9,6 +9,7 @@ from vimo_demo.configuration import (
     validate_model_artifact,
 )
 from vimo_demo.inspection.production import (
+    ChannelBusinessStatus,
     ProductionInspectionResult,
     ProductJudgment,
     TechnicalStatus,
@@ -85,6 +86,10 @@ class ProductionCounters:
     channel_disabled: int = 0
     production_ng_cycles: int = 0
     technical_error_cycles: int = 0
+    business_ok: int = 0
+    business_ng: int = 0
+    business_empty: int = 0
+    business_unknown: int = 0
 
     def admitted(self) -> ProductionCounters:
         return replace(self, cycles_started=self.cycles_started + 1)
@@ -93,7 +98,9 @@ class ProductionCounters:
         if self.cycles_completed >= self.cycles_started:
             raise ApplicationError("Cannot complete an unadmitted cycle")
         ok = ng = unknown = disabled = 0
+        business = dict.fromkeys(ChannelBusinessStatus, 0)
         for channel in result.channels:
+            business[channel.business_status] += 1
             assessment = channel.assessment
             if assessment.technical_status is TechnicalStatus.DISABLED:
                 disabled += 1
@@ -115,6 +122,11 @@ class ProductionCounters:
             + int(assessment.judgment is ProductJudgment.NG),
             technical_error_cycles=self.technical_error_cycles
             + int(assessment.technical_status is TechnicalStatus.ERROR),
+            business_ok=self.business_ok + business[ChannelBusinessStatus.OK],
+            business_ng=self.business_ng + business[ChannelBusinessStatus.NG],
+            business_empty=self.business_empty + business[ChannelBusinessStatus.EMPTY],
+            business_unknown=self.business_unknown
+            + business[ChannelBusinessStatus.UNKNOWN],
         )
 
 

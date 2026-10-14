@@ -14,6 +14,7 @@ from tests.application_support import (
     prepared,
     production,
 )
+from tests.business_support import mixed_result
 
 from vimo_demo.application import (
     ApplicationCapacityError,
@@ -233,6 +234,82 @@ def test_admission_capacity_batch_and_stale_results(tmp_path: Path) -> None:
         assert app.snapshot().batch_id == "batch-2"
         assert app.snapshot().counters == ProductionCounters()
         assert app.snapshot().latest_production_result is None
+    finally:
+        close(app)
+
+
+def test_business_occurrences_account_once_retain_and_reset_with_legacy_counters(
+    tmp_path: Path,
+) -> None:
+    sessions = [FakeSession(), FakeSession()]
+    app = ProductionApplication(lambda _, generation: sessions[generation - 1])
+    candidate = prepared(tmp_path)
+    try:
+        app.configure(candidate)
+        app.start().result(WAIT)
+        assert app.snapshot().counters == ProductionCounters()
+        for cycle_id in (1, 2):
+            handle = app.begin_cycle(CycleId(cycle_id))
+            source = sessions[0].cycles[-1]
+            source.accepted.set_result(None)
+            source.result.set_result(mixed_result(cycle_id))
+            handle.result.result(WAIT)
+            counts = app.snapshot().counters
+            assert (
+                counts.business_ok,
+                counts.business_ng,
+                counts.business_empty,
+                counts.business_unknown,
+            ) == tuple(n * cycle_id for n in (6, 12, 6, 12))
+            assert (
+                counts.channel_ok,
+                counts.channel_ng,
+                counts.channel_unknown,
+                counts.channel_disabled,
+            ) == tuple(n * cycle_id for n in (18, 12, 6, 0))
+            assert (
+                counts.production_ng_cycles == counts.technical_error_cycles == cycle_id
+            )
+            assert (
+                sum(
+                    (
+                        counts.business_ok,
+                        counts.business_ng,
+                        counts.business_empty,
+                        counts.business_unknown,
+                    )
+                )
+                == 36 * cycle_id
+            )
+            assert isinstance(source.result, ReplayFuture)
+            assert isinstance(source.accepted, ReplayFuture)
+            source.result.replay()
+            source.accepted.replay()
+            assert app.snapshot().counters == counts
+            assert app.snapshot().state is ApplicationState.RUNNING
+        app.stop().result(WAIT)
+        app.configure(
+            replace(
+                candidate,
+                configuration=replace(candidate.configuration, recipe_id="another"),
+            )
+        )
+        assert app.snapshot().counters == counts
+        app.start().result(WAIT)
+        assert (
+            app.snapshot().counters == counts
+            and app.snapshot().latest_production_result is None
+        )
+        handle = app.begin_cycle(CycleId(1))
+        source = sessions[1].cycles[-1]
+        source.accepted.set_result(None)
+        source.result.set_exception(ValueError("unfinished inspection work"))
+        with pytest.raises(ValueError):
+            handle.result.result(WAIT)
+        assert app.snapshot().counters == replace(counts, cycles_started=3)
+        app.stop().result(WAIT)
+        app.start_batch("explicit-reset")
+        assert app.snapshot().counters == ProductionCounters()
     finally:
         close(app)
 
