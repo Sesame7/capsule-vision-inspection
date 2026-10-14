@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ViMo Observer</title>
+  <link rel="stylesheet" href="/observer.css">
+  <script src="/observer.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="title"><h1>ViMo Observer</h1><span id="connection" role="status">Connecting…</span></div>
+    <p id="scope">Read-only · Best-effort observations · Cameras need not share one cycle</p>
+    <dl>
+      <div><dt id="state-label">Application</dt><dd id="state">—</dd></div>
+      <div><dt id="cycle-label">Latest completed cycle</dt><dd id="cycle">—</dd></div>
+      <div><dt id="time-label">Publication time</dt><dd id="time">—</dd></div>
+    </dl>
+  </header>
+  <main><p id="empty">Waiting for configuration / images…</p><div id="cameras"></div></main>
+</body>
+</html>

@@ -94,13 +94,27 @@ Invoke-RestMethod http://127.0.0.1:8765/api/snapshot
 Invoke-RestMethod http://127.0.0.1:8765/health
 ```
 
-Disabled by default; localhost-only, no persistent settings or commands. Start/Step
+Open `http://127.0.0.1:8765/` for the responsive read-only observer. Disabled by
+default, with `127.0.0.1` still the default host; no persistent settings or commands.
+Start/Step
 the existing Folder source in the application to obtain Production images. JSON
 contains each camera's exact revision-qualified JPEG URL; request that URL rather
 than guessing a camera/image identity. Publication is nominally every two seconds,
 at most 640px per dimension, JPEG quality 70. Superseded URLs return unavailable.
 See [snapshot publication](docs/ui-shell.md#read-only-snapshot-publication) for
-identity, lifecycle, API and manual verification. LAN/browser UI remain deferred.
+identity, lifecycle, API and manual verification.
+
+On a **trusted, isolated test LAN**, explicitly select an assigned local IPv4:
+
+```powershell
+uv run --no-sync python app.py --web-snapshots --web-host 192.168.10.100 --web-port 8765
+```
+
+Replace the illustrative address with this machine's actual LAN IP, then open
+`http://<LAN-IP>:8765/` on the computer/phone. The observer polls about every two
+seconds and reuses unchanged images. No login/HTTPS is provided; a specific bind
+address is not a client-subnet restriction. Network isolation and Windows Firewall
+must restrict access externally. The application does not configure either.
 
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
 **History / 历史** and **Vision / 视觉**. Communication provides session-local manual

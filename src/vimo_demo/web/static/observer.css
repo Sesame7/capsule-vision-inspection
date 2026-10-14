@@ -1,0 +1,30 @@
+:root { color-scheme: dark; font-family: system-ui, "Microsoft YaHei", sans-serif; background: #111820; color: #e6edf3; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; }
+header { margin: 0 auto 16px; max-width: 1920px; }
+h1 { font-size: 21px; margin: 0; font-weight: 600; }
+.title { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+#connection { font-size: 14px; color: #91cba5; }
+#connection[data-tone="warning"] { color: #e3bc73; }
+#scope, dt, .identity, .observation { font-size: 13px; color: #a2afbd; }
+#scope { margin: 7px 0 12px; }
+dl { display: flex; gap: 12px 32px; margin: 0; flex-wrap: wrap; }
+dl > div { display: flex; gap: 8px; align-items: baseline; }
+dd { margin: 0; overflow-wrap: anywhere; font-size: 14px; }
+main { max-width: 1920px; margin: auto; }
+#cameras { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.camera { background: #1a2531; border: 1px solid #2b3949; border-radius: 7px; padding: 10px; min-width: 0; }
+h2 { font-size: 16px; font-weight: 600; margin: 0 0 6px; overflow-wrap: anywhere; }
+.picture { display: grid; place-items: center; aspect-ratio: 4 / 3; background: #0c1117; border-radius: 3px; }
+.picture img { width: 100%; height: 100%; object-fit: contain; }
+[hidden] { display: none !important; }
+.placeholder { color: #8392a2; text-align: center; padding: 12px; font-size: 14px; }
+.identity, .observation { margin: 7px 0; overflow-wrap: anywhere; }
+.channels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; font-size: 12px; }
+.channel { padding: 4px 5px; background: #263444; border-radius: 3px; overflow-wrap: anywhere; }
+.channel.ok { color: #92cfa9; }
+.channel.ng { color: #ed9599; background: #422a32; }
+.channel.empty { color: #a2afbd; }
+.channel.unknown { color: #e3bc73; }
+@media (max-width: 1100px) { #cameras { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { body { padding: 10px; } #cameras { grid-template-columns: minmax(0, 1fr); } dl { gap: 6px 18px; } }

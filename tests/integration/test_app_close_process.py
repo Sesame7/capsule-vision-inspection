@@ -35,15 +35,20 @@ def assert_process_exited(pid: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "launcher,scenario,web",
+    "launcher,scenario,web_host",
     [
-        ("uv", s, False)
+        ("uv", s, None)
         for s in ("unused", "visit", "success", "timeout", "pending", "switch")
     ]
-    + [("direct", "unused", False), ("direct", "unused", True)],
+    + [
+        ("direct", "unused", None),
+        ("direct", "unused", "127.0.0.1"),
+        ("direct", "unused", "0.0.0.0"),
+        ("direct", "unused", "192.0.2.99"),
+    ],
 )
 def test_normal_app_native_close_exits_process_tree(
-    tmp_path: Path, launcher: str, scenario: str, web: bool
+    tmp_path: Path, launcher: str, scenario: str, web_host: str | None
 ) -> None:
     (tmp_path / "sitecustomize.py").write_text(
         "from tests.app_close_support import install\ninstall()\n", encoding="utf-8"
@@ -62,11 +67,14 @@ def test_normal_app_native_close_exits_process_tree(
         command = [uv, "run", "--no-sync", "python", "app.py"]
     else:
         command = [str(ROOT / ".venv/Scripts/python.exe"), "app.py"]
-    if web:
+    web_started = web_host == "127.0.0.1"
+    if web_host is not None:
         with socket.socket() as available:
             available.bind(("127.0.0.1", 0))
             port = available.getsockname()[1]
-        command.extend(("--web-snapshots", "--web-port", str(port)))
+        command.extend(
+            ("--web-snapshots", "--web-host", web_host, "--web-port", str(port))
+        )
     with subprocess.Popen(
         command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
@@ -101,13 +109,15 @@ def test_normal_app_native_close_exits_process_tree(
     assert stages[-1] == "atexit"
     assert stages.index("last_window_closed") < stages.index("exec_return")
     assert "application_joined" in stages
-    assert (b"Read-only Production snapshots" in stderr) == web
+    assert (b"Read-only Production snapshots" in stderr) == web_started
+    if web_host is not None and not web_started:
+        assert b"ValueError" in stderr
     for record in records:
         if record["stage"] == "last_window_closed" or (
             record["stage"] == "close_return" and record["accepted"]
         ):
             assert record["application_closed"] and record["communication_closed"]
-        if record["stage"] == "exec_return" and web:
+        if record["stage"] == "exec_return" and web_started:
             assert record["threads"] == [
                 "MainThread",
                 "ProductionSnapshotPublisher",

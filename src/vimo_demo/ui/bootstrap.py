@@ -405,13 +405,18 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--web-snapshots",
         action="store_true",
-        help="Developer-only read-only localhost snapshots (disabled by default)",
+        help="Developer-only read-only snapshots (disabled by default)",
+    )
+    parser.add_argument(
+        "--web-host",
+        default="127.0.0.1",
+        help="Specific local IPv4 on a trusted test LAN (default: 127.0.0.1)",
     )
     parser.add_argument(
         "--web-port",
         type=int,
         default=8765,
-        help="Snapshot port on 127.0.0.1 (default: 8765)",
+        help="Snapshot listening port (default: 8765)",
     )
     args = parser.parse_args(argv)
     if not 1 <= args.web_port <= 65535:
@@ -435,6 +440,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                     cameras=startup.machine.layout.camera_ids
                     if startup.machine
                     else (),
+                    host=args.web_host,
                     port=args.web_port,
                 )
                 service.start()
@@ -443,7 +449,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                 traceback.print_exception(exc)
             else:
                 print(
-                    f"Read-only Production snapshots: http://127.0.0.1:{service.port}/api/snapshot",
+                    f"Read-only Production snapshots: http://{service.host}:{service.port}/",
                     file=sys.stderr,
                 )
         window = create_window(startup, delivery)
