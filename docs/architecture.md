@@ -12,8 +12,9 @@ performance, accuracy or machine-safety guarantee.
 
 Current Production uses six ordered cameras with six channels each (36 channels).
 Their identities/geometry are configuration, not an immutable hardware architecture.
-Inputs are local; real camera acquisition and Production PLC integration are
-unimplemented. A standalone FINS/UDP subset and localhost simulator exist separately.
+Inputs are local; real camera acquisition and commissioned Production PLC integration
+are unimplemented. A FINS/UDP subset and localhost simulator support manual operations
+and opt-in automatic first-station reporting from explicit local composition.
 
 ## Current capabilities
 
@@ -27,7 +28,7 @@ unimplemented. A standalone FINS/UDP subset and localhost simulator exist separa
 | Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
-| Communication | Qt-independent synchronous FINS/UDP DM/WR words, first-station channel-business-status projection/two-write submission, localhost simulator and independent manual D/W operations/session-local register watches; no commissioned hardware or automatic Production wiring. |
+| Communication | Qt-independent FINS/UDP DM/WR words, first-station projection/two-write submission, localhost simulator, independent manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
 from configured channel judgment. SDK/golden regression verifies integration,
@@ -60,7 +61,7 @@ A stopped candidate is not an active inference session.
 | [UI shell](ui-shell.md) | Application commands, nonblocking notifications, localized presentation and independently owned display pixels. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, reference/tuning previews and persistence/preparation workflows, under configuration/application authority. |
 | [Performance tooling](inspection-performance.md) | Workloads, timing scopes, reports and interpretation; no runtime admission policy or machine-capacity specification. |
-| [Communication](communication.md) | Independent synchronous protocol/socket ownership, communication-specific projection of existing business statuses and loopback simulation; no judgment changes, application lifecycle or Qt dependency. |
+| [Communication](communication.md) | Protocol/socket ownership, business-status projection, per-generation bounded reporting execution and loopback simulation; no judgment changes or Qt dependency. Application/session composition owns reporting lifecycle. |
 
 Presentation/composition depends on the Qt-independent application, configuration,
 inspection, runtime and inference domains, never the reverse. Configuration resolves
@@ -126,6 +127,11 @@ Local Folder replay or explicit fixed image inputs
     -> application terminal result / factual accounting / bounded observations
     -> Qt snapshot and completed-Future notifications -> Production presentation
 
+Eligible terminal Production result (explicit local opt-in only)
+    -> scalar generation/CycleId + 36 channel statuses
+    -> bounded serial first-station report owner -> localhost FINS simulator
+    -> independent compact ACK/failure/skip/rejection observations
+
 Identified source Frames
     -> separate latest-per-camera display copies
     -> Qt image presentation / identity-matched result overlays
@@ -147,6 +153,13 @@ admitted cycles/channel judgments, not capsules; only explicit Batch resets it,
 not Stop/Start or Recipe changes. The local source waits for RUNNING and each cycle
 before advancing. Overlapping-collection support is not physical-throughput evidence.
 
+Optional reporting performs no network work on the inference, completion-callback
+or Qt threads. Ordinary communication errors do not change inspection/accounting;
+backlog rejection explicitly requests Application Stop. Session release additionally
+requires reporting-thread exit and safe socket cleanup. The
+[communication contract](communication.md#local-production-reporting) owns sequence,
+eligibility and shutdown details; the manual workspace remains independent.
+
 ## Implementation navigation
 
 These locations explain the Current code. They do not mandate that Target
@@ -160,7 +173,7 @@ packages, classes, composition hooks or thread topology retain this arrangement.
 | [`runtime/`](../src/vimo_demo/runtime/) | `InferenceWorker` and `RuntimeCoordinator`; sole collector owner, serial cycle runner and worker engine owner. |
 | [`application/`](../src/vimo_demo/application/) | `ProductionApplication`, `ProductionRuntimeSession`, `ConfiguredProductionPipeline`, `LocalCycleIngress` and `FolderReplay`. |
 | [`ui/`](../src/vimo_demo/ui/) | Shell, bridges, display copies and configuration/preview widgets; [bootstrap](../src/vimo_demo/ui/bootstrap.py) and [local composition](../src/vimo_demo/ui/local_production.py) host Current desktop startup/source wiring. |
-| [`communication/`](../src/vimo_demo/communication/) | Standalone typed FINS/UDP DM/WR client, first-station projection/submission and finite loopback simulator; not composed into Production. |
+| [`communication/`](../src/vimo_demo/communication/) | Typed FINS/UDP DM/WR client, first-station projection/submission, optional local reporting owner and finite loopback simulator. |
 | [`tests/`](../tests/) and [`scripts/`](../scripts/) | Maintained verification, optional real regression, CLI tools and fake UI review. |
 
 ## Target / Not implemented
@@ -206,7 +219,7 @@ original documents remain recoverable at Git checkpoint
 | [UI shell](ui-shell.md) | Presentation, display identity, feedback, Qt delivery, closing and review workflows. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, references, ROI/tuning workflows and distinct Save/Apply/activation stages. |
 | [Inspection performance](inspection-performance.md) | Measurement workloads/boundaries, reports, interpretation, historical results and verification. |
-| [Communication](communication.md) | Standalone FINS/UDP subset, socket lifecycle/errors, local simulation and deferred hardware/UI integration. |
+| [Communication](communication.md) | FINS/UDP subset, socket lifecycle/errors, local reporting/simulation, manual workspace and deferred hardware/reporting UI integration. |
 
 [README](../README.md) owns setup, usage and verification commands; [AGENTS](../AGENTS.md)
 owns durable engineering safeguards and proportional checks. Temporary migration

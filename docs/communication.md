@@ -5,12 +5,14 @@
 `vimo_demo.communication` provides a standalone, synchronous, standard-library
 FINS transport and loopback simulator. Its first-station projection consumes the
 existing Inspection business-status enum, without changing inspection evidence,
-judgments or counters. This dependency is loaded only when projecting statuses;
+judgments or counters. Only projection/reporting requires Inspection types;
 transport/simulator imports and the existing CLI demo still require no image stack.
-There is no Qt, ViMo, Production runtime, configuration-persistence or real-equipment
-integration. The Qt Communication workspace uses the transport for manual D/W
-operations and explicitly enabled register monitoring in a separate background context. Automatic Production reporting,
-PLC triggering/consumption handshakes and hardware commissioning are **not implemented**.
+The transport and reporting owner are Qt/ViMo independent. Explicit local Production
+composition can opt into [automatic first-station reporting](#local-production-reporting)
+to exactly `127.0.0.1`; normal `app.py` leaves it disabled. The Qt Communication
+workspace uses separate clients for manual D/W operations and explicitly enabled
+register monitoring. There is no PLC configuration persistence, equipment wiring,
+triggering/consumption handshake or hardware commissioning.
 Transport/protocol errors are not inspection outcomes or product judgments.
 
 The protocol authority is Omron's [NX FINS manual W596-E1-06](https://www.omron-ap.com/data_pdf/mnu/w596-e1-06_nx701_nx502_nx102.pdf?id=3900).
@@ -149,8 +151,10 @@ Consecutive successful submissions change W49 even when their bitmaps are equal.
 W49 is the **proposed first-station commit sequence**, not part of the original
 Excel reject bitmap. Explicit initialization alone does not establish that the
 first write differs from the PLC's current W49. Restart/recovery, initial sequence
-synchronization and scan-cycle consumption guarantees remain deferred. There is
-no persistent synchronization state, automatic read, retry or reconnect.
+synchronization and scan-cycle consumption guarantees are not supplied by this
+synchronous helper. It has no persistent synchronization state, automatic read,
+retry or reconnect. The optional local owner below adds initial W49 reading and
+later-cycle socket recovery, without industrial delivery guarantees.
 
 For example, with the loopback simulator already running:
 
@@ -191,9 +195,137 @@ an explicit caller decision; local sequence advancement is not a recovery protoc
 Even both successful ACKs establish only protocol-level write acknowledgement,
 **not proof of PLC scan consumption**. The two requests are not one atomic remote
 transaction. The PLC will eventually own multi-pass accumulation and mechanical
-rejection; H2A implements neither. H2B must define Production scheduling, admission,
-result association, failure policy and shutdown ownership before wiring reporting;
-H2C UI, second station and physical synchronization remain outside this contract.
+rejection; this protocol implements neither. The [local reporting owner](#local-production-reporting)
+defines Production scheduling, admission, result association and shutdown. H2C
+presentation, second station and physical synchronization remain unimplemented.
+
+## Local Production reporting
+
+### Handoff and ownership
+
+`vimo_demo.communication.reporting` adds `LocalReportingSettings`,
+`FirstStationReport`, `FirstStationReportingWorker` and immutable observations.
+Pass `reporting=LocalReportingSettings(...)` to the existing local `compose()` or
+`local_application()` entry. The developer launcher exposes `--report-first-station`;
+the default is disabled. No Recipe, persisted PLC schema or normal recovery path
+changes. Settings reject every host except the exact IPv4 string `127.0.0.1`
+below the CLI/UI boundary, before socket creation.
+
+Each application generation owns one non-daemon `FirstStationReporting-N` thread.
+It alone constructs, uses, replaces and closes its FINS client. Engine ownership
+remains with `InferenceWorker`; manual Communication requests/watches use their
+own clients and lifecycle. Neither painting nor application snapshot polling
+drives report submission.
+
+A terminal Production task callback projects a COMPLETE or FAILED result only
+when all six cameras have collected frames and the 36 channel statuses are valid.
+TIMED_OUT, SHUTDOWN, exceptional runtime outcomes and incomplete/invalid projections
+are explicitly skipped. Warm-up creates no production reports, counters or network
+requests. The handoff retains only generation, CycleId, immutable channel/status
+pairs and three reject words, never images, masks, contours or full results.
+Only channel business status drives the bitmap; unassigned camera-level ViMo NG
+does not spread reject bits.
+
+The callback performs validation and nonblocking admission, not network I/O.
+Local source execution waits for each inspection result, so reports enter FIFO in
+local pass order. A per-generation accepted-CycleId high-water mark rejects duplicate
+or out-of-order submissions without retaining an identity history. This is a local
+monotonic-source contract, not ordering for arbitrary external hardware traffic.
+
+### Admission, failures and observations
+
+The FIFO holds at most `max_pending` reports (default **8**), plus one claimed
+active report. There is no eviction, replacement, retry queue or completed history.
+Admission rejection raises `ReportingCapacityError` or `ReportingStateError` and
+records the rejected identity. In local composition it stops source admission via
+the existing application Stop boundary and completes `source_done` exceptionally.
+The already completed inspection still reaches accounting; overload is not product
+NG or an ordinary model/check failure and does not itself enter application FAULT.
+
+Before the first report, the owner reads W49 and starts at `(W49 + 1) & 0xffff`.
+Production CycleId is never the PLC sequence. Failed initialization is observable
+with no invented sequence; a later new cycle may read W49 again. Once initialized,
+each submission preserves the helper's attempted-sequence advancement, including
+gaps. If transport failure closed the socket, a later cycle gets a fresh client
+and the known local next sequence, without rereading or reusing the failed attempt.
+No failed cycle/uncertain write is resent and no memory rollback is attempted.
+
+Ordinary communication failures do not change inspection judgments, counters or
+Production RUNNING state. They preserve initialization/bitmap/sequence stage,
+generation/CycleId, attempted sequence/words where available, the original FINS
+exception and its cause, bounded diagnostic text and duration. A later successful
+report does not retroactively deliver a prior failure. Unexpected reporting-owner
+failure closes its admission; a later handoff exposes a state rejection and Stop.
+Unsafe resource cleanup remains subject to the application's ownership safeguards.
+
+`submit()` returns a noncancellable `Future[ReportObservation]` for an admitted
+report. It resolves to ACKNOWLEDGED, FAILED or explicitly SKIPPED; it is separate
+from the inspection task Future and from proof of thread exit. Observer callbacks
+must remain short/nonblocking and must not mutate widgets. QUEUED and ATTEMPTED
+are intermediate observations, never remote acknowledgement.
+
+`snapshot()` reports pending/peak/active state, queued/attempted/acknowledged/failed/
+skipped/rejected counts, local next sequence, latest queued/attempted/ACK/outcome
+and latest failure/skip/rejection plus owner/cleanup issues. Only the latest item
+per category is retained; no persistent reporting history is created. The local
+application's `reporting_snapshot()` exposes the current/last generation or `None`
+when disabled, separately from `ProductionApplicationSnapshot`. Later H2C UI may
+consume these Qt-independent observations; no diagnostics UI is added here.
+
+### Stop, restart and Close
+
+Session Stop revokes reporting admission immediately. Unclaimed pending reports
+are finalized SKIPPED on the reporting thread, with no socket requests. A result
+finishing after Stop is also explicitly skipped. The claimed logical report is
+allowed to finish naturally, including its ordered bitmap/sequence writes and,
+if needed, initial read. Each exchange has the configured bounded timeout; Stop
+does not interrupt between the helper's acknowledged write stages or force-cancel
+a UDP request. Observer callbacks can also delay actual owner termination.
+
+Session join must observe source, runtime and reporting thread exit and safe cleanup
+before application READY or owner release. Repeated Stop is harmless. Failed socket
+cleanup retains unsafe ownership rather than declaring success. Close keeps the
+existing nonblocking Qt workflow; a new generation cannot start while the old
+session is retained. Stop/Start creates a fresh report owner and rereads W49 before
+its first new report; no old-generation queue survives into it.
+
+This remains localhost protocol testing: ACK is not PLC scan consumption, exclusive
+writer ownership, restart-safe delivery, capsule counting or mechanical rejection.
+Do not concurrently write W49–W52 through manual operations while testing automatic
+reporting. Read-only monitoring uses an independent client and is safe for observation.
+
+### Local manual verification
+
+Use two repository-root PowerShell terminals and existing validated local assets.
+Terminal 1 runs the simulator:
+
+```powershell
+uv run --no-sync python scripts/run_fins_simulator.py --port 9600
+```
+
+Terminal 2 explicitly enables reporting in the real local developer launcher:
+
+```powershell
+uv run --no-sync python scripts/run_local_production_ui.py --model-config data/models/model.json --machine-config data/machine/machine.json --recipe data/recipes/local.recipe.json --sources-config data/sources/camera_sources.json --language zh --report-first-station --fins-port 9600 --fins-timeout 1 --fins-pending 8 --fins-destination 0 2 0 --fins-source 0 1 0
+```
+
+These local filenames must exist and validate. This command uses the real model;
+fake/localhost tests below need no GPU. Click Start, then in the independent
+Communication page add a **W49, count 4** watch and enable refresh. A fresh simulator
+starts W49 at zero; acknowledged passes advance it, even for identical bitmaps.
+W50–W52 reflect OK=0 and NG/EMPTY/UNKNOWN=1; W52 upper bits remain zero. Watch reads
+are not atomic with the two writes, so a transitional read is not a delivery verdict.
+Stopping monitoring or leaving Communication does not stop automatic reporting.
+
+Stop and wait for READY before restarting; the new generation reads the current
+W49. To observe ordinary communication failure, stop the simulator: inspection
+continues until an explicit Stop or genuine backlog overload, with reporting failure
+observations rather than production NG/FAULT. Restarting the simulator allows later
+cycles to attempt new reports; it does not retry old ones, and a newly reset simulator
+is not an industrial sequence-recovery model. Stop/Close the application normally,
+then stop the simulator with Ctrl+C. H2C failure presentation is deferred; inspect
+`reporting_snapshot()` through the local composition API or use the focused tests
+for stage/count verification.
 
 ## Local simulator and manual demonstration
 
@@ -447,8 +579,19 @@ uv run --no-sync pytest tests/unit/test_communication_operations.py tests/integr
 ```
 
 Remote-read forwarding is verified with a controlled client, **not actual equipment**.
-H1C/hardware supervision, persistent profiles, automatic Production reporting and consumption handshakes
-remain deferred; this workspace does not select their implementation.
+H1C/hardware supervision, persistent profiles, H2C reporting presentation and
+consumption handshakes remain deferred; this workspace does not select their implementation.
+
+Automatic local reporting tests use fake Production and actual loopback peers,
+independently of Qt result polling. They cover eligible COMPLETE/FAILED projection,
+unassigned-NG isolation, invalid/runtime skips, initial read/rollover, stage-specific
+lost ACKs before/after mutation, later-cycle recovery without retry, bounded FIFO
+rejection, Stop/Start isolation, warm-up exclusion, counters, slow-network GUI
+responsiveness, independent manual communication and actual thread cleanup:
+
+```powershell
+uv run --no-sync pytest tests/unit/test_first_station_reporting.py tests/integration/test_local_reporting.py --tb=short
+```
 
 **Not yet verified on NX102:** the specific CPU/version, FINS enablement and port
 settings, IP/node/routing conversion tables, host source-address handling, network
@@ -456,5 +599,5 @@ filtering/write protection and actual allocated CJ-compatible DM/WR memory. W596
 identifies built-in EtherNet/IP **port 2** for FINS and requires configured
 CJ-compatible memory; it also cautions that future products may not support FINS.
 This phase does not configure Sysmac Studio or send to equipment. It establishes
-the local protocol subset, not hardware compatibility, machine safety, delivery
-guarantees or Production integration.
+the local protocol subset and opt-in local Production wiring, not hardware
+compatibility, machine safety or industrial delivery guarantees.
