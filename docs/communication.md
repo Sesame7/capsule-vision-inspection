@@ -2,18 +2,23 @@
 
 ## Current scope and authority
 
-`vimo_demo.communication` is a standalone, synchronous, standard-library protocol
-library. It has no Qt, ViMo, Production, configuration-persistence or real-equipment
-integration. The Qt Communication workspace uses this library for explicit manual
-operations in a separate background context. PLC triggering, result handshakes and
-hardware commissioning are **not implemented**.
+`vimo_demo.communication` provides a standalone, synchronous, standard-library
+FINS transport and loopback simulator. Its first-station projection consumes the
+existing Inspection business-status enum, without changing inspection evidence,
+judgments or counters. This dependency is loaded only when projecting statuses;
+transport/simulator imports and the existing CLI demo still require no image stack.
+There is no Qt, ViMo, Production runtime, configuration-persistence or real-equipment
+integration. The Qt Communication workspace uses the transport for explicit manual
+D operations in a separate background context. Automatic Production reporting,
+PLC triggering/consumption handshakes and hardware commissioning are **not implemented**.
 Transport/protocol errors are not inspection outcomes or product judgments.
 
 The protocol authority is Omron's [NX FINS manual W596-E1-06](https://www.omron-ap.com/data_pdf/mnu/w596-e1-06_nx701_nx502_nx102.pdf?id=3900).
 Its sections 1-1 and 4-1 refer frame formats/end codes to
 [communications reference W342-E1-18](https://assets.omron.eu/downloads/latest/manual/en/w342_cs_cj_cp_nsj_communications_commands_reference_manual_en.pdf).
 Implementation and literal test vectors use W342 sections 3-3, 5-1-3, 5-2-1/2 and
-5-3-2/3; W596 sections 1-4 and 2-2 establish NX transport/command support.
+5-3-2/3; W342 section 5-2-2 lists WR word code `B1` and W0–W511.
+W596 sections 1-4 and 2-2 establish NX transport/command support.
 Local client/simulator agreement alone is not evidence of standards compliance.
 
 ## Supported subset
@@ -22,7 +27,7 @@ Local client/simulator agreement alone is not evidence of standards compliance.
 | --- | --- |
 | Transport | Numeric unicast IPv4, UDP port 9600 by default; one response-required request at a time |
 | Addressing | Explicit destination/source `FinsAddress(network, node, unit)`; network 0–127, unicast node 1–254, unit encoded as a byte 0–255 |
-| Memory | DM/D **words** only, area code `82`, D0–D32767, bit address zero |
+| Memory | DM/D **words**, code `82`, D0–D32767; W/WR **words**, code `B1`, W0–W511; bit address zero |
 | Read | `01 01`; 1–999 consecutive unsigned words |
 | Write | `01 02`; 1–997 consecutive unsigned words, values 0–65535 |
 | Wire | 10-byte FINS header; big-endian address/count/word data; at most 2012 bytes per FINS datagram |
@@ -81,6 +86,115 @@ reconnection occurs. A write timeout or missing/malformed acknowledgement does
 late responses being consumed by another request on that client; recreating a
 client is an explicit caller decision, not permission to retry a write.
 
+### W/WR access
+
+`read_words(start, count=1, *, area=FinsMemoryArea.DM)` and
+`write_words(start, values, *, area=FinsMemoryArea.DM)` preserve existing D calls.
+Pass `area=FinsMemoryArea.W` for W words; raw integer/string area selectors are
+rejected. Both areas reuse the same framing, count limits, serial socket lifecycle
+and response/error validation. The W range itself permits at most 512 words.
+
+```python
+from vimo_demo.communication import FinsMemoryArea
+
+# Inside the explicitly owned localhost client context above:
+client.write_words(50, (1, 32768, 15), area=FinsMemoryArea.W)
+words = client.read_words(49, 4, area=FinsMemoryArea.W)
+```
+
+## First-station result projection and submission
+
+This is a communication-specific projection of **one inspection pass**, not a
+change to [channel business status](inspection.md#channel-business-status), an
+accumulated observation of a physical capsule or a new application counter.
+
+`first_station_reject_words(statuses)` accepts an iterable of explicit
+`(ChannelId, ChannelBusinessStatus)` pairs. It requires exactly one entry for each
+CH1–CH36; missing, duplicate, non-integer/bool and out-of-range identities, or
+non-enum statuses, raise `ValueError` before I/O. Input order is irrelevant;
+camera arrival order, slot position and presentation order never determine bits.
+It returns an immutable three-word tuple in W50–W52 order:
+
+| Channels | Address / bits | Projection |
+| --- | --- | --- |
+| CH1–CH16 | W50, bits 0–15 | OK=0; NG / EMPTY / UNKNOWN=1 |
+| CH17–CH32 | W51, bits 0–15 | Same |
+| CH33–CH36 | W52, bits 0–3 | Same; bits 4–15 are always zero |
+
+The caller may explicitly project `((row.channel_id, row.business_status) for row
+in result.channels)` from an existing result. No automatic result subscriber or
+Production wiring is installed.
+
+`FirstStationReporter(client, *, initial_sequence)` borrows an existing client;
+one serial caller owns **both** objects and closes the client. Do not use the client
+for unrelated operations during a submission. Overlapping `submit()` calls fail
+with `FinsTransportError`, without a queue or interleaved submission writes.
+`initial_sequence` is required, unsigned 0–65535, and is the **first attempted**
+sequence, not the previous committed value. It is not derived from CycleId.
+
+`submit(statuses)` validates the complete projection, reserves the sequence, then:
+
+1. Sends one `01 02` request containing all three words to W50–W52.
+2. Only after its validated successful ACK, sends one `01 02` request to W49 with
+   the reserved sequence.
+3. Only after the second successful ACK, returns `FirstStationCommit(sequence,
+   reject_words)`. No readback occurs inside submission.
+
+Every valid attempt reserves the next sequence modulo 65536, including attempts
+that fail. Thus failures can leave gaps, and an uncertain sequence write is never
+implicitly reused. Invalid inputs/overlapping calls reserve nothing.
+`next_sequence` is local instrumentation, not remote confirmed/consumed state.
+Consecutive successful submissions change W49 even when their bitmaps are equal.
+
+W49 is the **proposed first-station commit sequence**, not part of the original
+Excel reject bitmap. Explicit initialization alone does not establish that the
+first write differs from the PLC's current W49. Restart/recovery, initial sequence
+synchronization and scan-cycle consumption guarantees remain deferred. There is
+no persistent synchronization state, automatic read, retry or reconnect.
+
+For example, with the loopback simulator already running:
+
+```python
+from vimo_demo.communication import (
+    FinsAddress, FinsMemoryArea, FinsUdpClient, FirstStationReporter,
+)
+from vimo_demo.inspection.production import ChannelBusinessStatus, ChannelId
+
+statuses = tuple((ChannelId(i), ChannelBusinessStatus.UNKNOWN) for i in range(1, 37))
+with FinsUdpClient(
+    "127.0.0.1", destination=FinsAddress(0, 2, 0), source=FinsAddress(0, 1, 0),
+) as client:
+    reporter = FirstStationReporter(client, initial_sequence=1)  # Fresh simulator W49=0.
+    first = reporter.submit(statuses)   # W49=1, W50=65535, W51=65535, W52=15.
+    second = reporter.submit(statuses)  # Same bitmap; W49=2.
+    observed = client.read_words(49, 4, area=FinsMemoryArea.W)  # Explicit verification.
+    assert observed == (2, 65535, 65535, 15)
+```
+
+### Submission failures and limits
+
+`FirstStationSubmissionError` preserves `stage` (`SubmissionStage.BITMAP` or
+`SEQUENCE`), attempted `sequence` / `reject_words`, and the original `FinsError` as its chained
+cause, including raw PLC end codes or timeout diagnostics. It is never a successful
+commit:
+
+- Bitmap failure prevents the sequence request entirely.
+- Sequence failure may leave the newly written bitmap present without an
+  acknowledged commit. No rollback is attempted.
+- Timeout or malformed/missing ACK leaves that stage's remote write outcome
+  uncertain, even if memory actually changed. Transport failure closes the client
+  under the existing error contract; PLC end-code errors leave it usable.
+
+The reporter does not close/recreate the borrowed socket, retry, repair remote
+state, persist results or retain submission history. After an error, recovery is
+an explicit caller decision; local sequence advancement is not a recovery protocol.
+Even both successful ACKs establish only protocol-level write acknowledgement,
+**not proof of PLC scan consumption**. The two requests are not one atomic remote
+transaction. The PLC will eventually own multi-pass accumulation and mechanical
+rejection; H2A implements neither. H2B must define Production scheduling, admission,
+result association, failure policy and shutdown ownership before wiring reporting;
+H2C UI, second station and physical synchronization remain outside this contract.
+
 ## Local simulator and manual demonstration
 
 From the repository root, use two PowerShell terminals.
@@ -106,8 +220,8 @@ cleanup. `--max-requests 3` optionally exits the simulator after the three demo
 datagrams. Alternate ports work by passing the same port to both commands;
 `--port 0` is useful for automatically allocated test ports.
 
-The simulator binds **only** `127.0.0.1`, owns a finite D0–D32767 map initialized
-to zero except D100=1234, and has no scan/ladder/physical-I/O behavior. Writes are
+The simulator binds **only** `127.0.0.1`, owns separate finite D0–D32767 and W0–W511
+maps initialized to zero except D100=1234, and has no scan/ladder/physical-I/O behavior. Writes are
 validated fully before mutation. Its public `serve(stop_event)` runs on the caller;
 an Event requests stop, with an idle receive wait of at most 100 ms. If tests use
 a serve thread, they join it before closing/releasing its socket. No thread is
@@ -124,8 +238,8 @@ end codes, without claiming the complete NX error-precedence behavior:
 | `1001` | Command too long |
 | `1002` | Command too short |
 | `1003` | Write count/data-length mismatch |
-| `1101` | Area not implemented by this DM-only simulator |
-| `1103` | Invalid DM starting word/bit address |
+| `1101` | Area not implemented by this DM/WR simulator |
+| `1103` | Invalid starting word/bit address in the selected area |
 | `1104` | End word outside the map |
 | `110B` | Requested read response too long |
 
@@ -234,6 +348,24 @@ An independent-process CLI test runs with `python -S` and verifies that neither
 Qt, NumPy nor SmartMore is imported. Normal repository gates still apply; no GPU,
 model, dataset or hardware is used by these communication tests.
 
+The H2A localhost verification includes all 36 reject bit positions and business
+states, shuffled identity order, invalid identity/status rejection, reserved bits,
+W multiword literal vectors, separate DM/W maps, boundary/atomicity validation,
+two-request ordering, unchanged bitmaps, 65535→0 rollover and W49–W52 readback.
+Test-only peers inject PLC errors, lost ACKs before/after remote mutation and
+malformed ACKs at both stages; no retries or sequence write after bitmap failure
+are permitted. Peers/clients terminate and release sockets. These are memory/protocol
+checks, not PLC scan/ladder or mechanical-rejection simulation.
+
+```powershell
+uv run --no-sync python -m pytest --confcutdir=tests/unit tests/unit/test_fins.py tests/unit/test_first_station.py --tb=short
+```
+
+Using `python -m pytest` keeps the repository root importable for the existing
+test-support package even with the Qt conftest excluded. Projection tests use
+Inspection models/NumPy locally, without a ViMo model or GPU. The independent
+`python -S` transport/demo check still verifies no Qt/NumPy/SmartMore imports.
+
 Workspace tests separately cover real localhost UDP read/write/explicit readback,
 worker-only client construction/use/close, malformed/timeout/PLC feedback, guarded
 non-loopback writes, controlled remote-read parameter forwarding, duplicate admission,
@@ -245,12 +377,12 @@ uv run --no-sync pytest tests/unit/test_communication_operations.py tests/integr
 ```
 
 Remote-read forwarding is verified with a controlled client, **not actual equipment**.
-H1C/hardware supervision, persistent profiles, PLC mapping and production handshakes
+H1C/hardware supervision, persistent profiles, automatic Production reporting and consumption handshakes
 remain deferred; this workspace does not select their implementation.
 
 **Not yet verified on NX102:** the specific CPU/version, FINS enablement and port
 settings, IP/node/routing conversion tables, host source-address handling, network
-filtering/write protection and actual allocated CJ-compatible DM memory. W596
+filtering/write protection and actual allocated CJ-compatible DM/WR memory. W596
 identifies built-in EtherNet/IP **port 2** for FINS and requires configured
 CJ-compatible memory; it also cautions that future products may not support FINS.
 This phase does not configure Sysmac Studio or send to equipment. It establishes

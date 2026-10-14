@@ -27,7 +27,7 @@ unimplemented. A standalone FINS/UDP subset and localhost simulator exist separa
 | Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
-| Communication | Qt-independent synchronous FINS/UDP DM words, localhost simulator and an independent manual Qt workspace; no commissioned hardware or Production wiring. |
+| Communication | Qt-independent synchronous FINS/UDP DM/WR words, first-station channel-business-status projection/two-write submission, localhost simulator and an independent manual D-word Qt workspace; no commissioned hardware or automatic Production wiring. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
 from configured channel judgment. SDK/golden regression verifies integration,
@@ -60,7 +60,7 @@ A stopped candidate is not an active inference session.
 | [UI shell](ui-shell.md) | Application commands, nonblocking notifications, localized presentation and independently owned display pixels. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, reference/tuning previews and persistence/preparation workflows, under configuration/application authority. |
 | [Performance tooling](inspection-performance.md) | Workloads, timing scopes, reports and interpretation; no runtime admission policy or machine-capacity specification. |
-| [Communication](communication.md) | Independent synchronous protocol/socket ownership and loopback simulation; no inspection judgments, application lifecycle or Qt dependency. |
+| [Communication](communication.md) | Independent synchronous protocol/socket ownership, communication-specific projection of existing business statuses and loopback simulation; no judgment changes, application lifecycle or Qt dependency. |
 
 Presentation/composition depends on the Qt-independent application, configuration,
 inspection, runtime and inference domains, never the reverse. Configuration resolves
@@ -160,7 +160,7 @@ packages, classes, composition hooks or thread topology retain this arrangement.
 | [`runtime/`](../src/vimo_demo/runtime/) | `InferenceWorker` and `RuntimeCoordinator`; sole collector owner, serial cycle runner and worker engine owner. |
 | [`application/`](../src/vimo_demo/application/) | `ProductionApplication`, `ProductionRuntimeSession`, `ConfiguredProductionPipeline`, `LocalCycleIngress` and `FolderReplay`. |
 | [`ui/`](../src/vimo_demo/ui/) | Shell, bridges, display copies and configuration/preview widgets; [bootstrap](../src/vimo_demo/ui/bootstrap.py) and [local composition](../src/vimo_demo/ui/local_production.py) host Current desktop startup/source wiring. |
-| [`communication/`](../src/vimo_demo/communication/) | Standalone typed FINS/UDP client and finite loopback simulator; not composed into Production. |
+| [`communication/`](../src/vimo_demo/communication/) | Standalone typed FINS/UDP DM/WR client, first-station projection/submission and finite loopback simulator; not composed into Production. |
 | [`tests/`](../tests/) and [`scripts/`](../scripts/) | Maintained verification, optional real regression, CLI tools and fake UI review. |
 
 ## Target / Not implemented

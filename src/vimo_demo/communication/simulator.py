@@ -1,4 +1,4 @@
-"""Finite localhost-only FINS DM-word test double, not an NX102 emulator."""
+"""Finite localhost-only FINS DM/WR-word test double, not an NX102 emulator."""
 
 import socket
 import struct
@@ -13,6 +13,8 @@ from .fins import (
     MAX_READ_WORDS,
     MAX_WRITE_WORDS,
     READ_COMMAND,
+    W_WORD_AREA,
+    W_WORDS,
     WRITE_COMMAND,
     FinsAddress,
     validate_address,
@@ -37,6 +39,7 @@ class FinsUdpSimulator:
         self._address = validate_address(address)
         self._words = [0] * DM_WORDS
         self._words[100] = 1234
+        self._w_words = [0] * W_WORDS
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             self._socket.bind(("127.0.0.1", port))
@@ -106,25 +109,29 @@ class FinsUdpSimulator:
         if len(request) < 18:
             return 0x1002, b""  # Command too short.
         area, start, bit, count = struct.unpack("!BHBH", request[12:18])
-        if area != DM_WORD_AREA:
+        if area == DM_WORD_AREA:
+            words = self._words
+        elif area == W_WORD_AREA:
+            words = self._w_words
+        else:
             return 0x1101, b""  # Area classification missing in this subset.
         if bit != 0:
-            return 0x1103, b""  # Not a valid DM word starting address.
-        if start >= DM_WORDS:
+            return 0x1103, b""  # Not a valid word starting address.
+        if start >= len(words):
             return 0x1103, b""
-        if start + count > DM_WORDS:
+        if start + count > len(words):
             return 0x1104, b""  # End address exceeds accessible area.
         if command == READ_COMMAND:
             if len(request) != 18:
                 return 0x1001, b""
             if count > MAX_READ_WORDS:
                 return 0x110B, b""  # Response too long.
-            return 0, struct.pack(f"!{count}H", *self._words[start : start + count])
+            return 0, struct.pack(f"!{count}H", *words[start : start + count])
         if len(request) != 18 + count * 2:
             return 0x1003, b""  # Elements and write data do not match.
         if count > MAX_WRITE_WORDS:
             return 0x1001, b""
         # W342 allows count=0 as a no-op; the client API requires at least one.
         values = struct.unpack(f"!{count}H", request[18:])
-        self._words[start : start + count] = values
+        words[start : start + count] = values
         return 0, b""
