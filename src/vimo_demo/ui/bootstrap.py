@@ -38,7 +38,12 @@ from vimo_demo.inspection import CameraId
 from .camera_source_editor import CameraSourceDraft
 from .display_frames import LatestDisplayFrameStore
 from .inference_bridge import FutureDelivery
-from .local_production import SourceNotifications, local_application, real_engine
+from .local_production import (
+    SourceNotifications,
+    local_application,
+    real_engine,
+    unconfigured_application,
+)
 from .production_bridge import QtProductionBridge, RecipeChoice
 from .production_window import ProductionWindow
 from .recipe_catalog import RecipeCatalog
@@ -268,11 +273,7 @@ def load_startup(
             )
 
     if editor is None or editor.camera_sources is None:
-
-        def unavailable(_config: PreparedConfiguration, _generation: int):
-            raise ConfigurationError("Persistent configuration is unavailable")
-
-        application = ProductionApplication(unavailable)
+        application = unconfigured_application()
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
         cameras = (
             machine.layout.camera_ids
@@ -282,7 +283,10 @@ def load_startup(
         frames = LatestDisplayFrameStore(cameras)
     else:
         application, frames = local_application(
-            editor, engine_factory=engine_factory, observe_source=observe_source
+            editor,
+            engine_factory=engine_factory,
+            observe_source=observe_source,
+            reporting_editable=True,
         )
     choice = None
     if prepared is not None:

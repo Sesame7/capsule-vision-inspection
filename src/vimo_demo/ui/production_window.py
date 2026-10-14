@@ -265,7 +265,10 @@ class ProductionWindow(QMainWindow):
         self.parameters.applied.connect(self._recipe_applied)
         self.parameters.sources_verified.connect(self._sources_verified)
         self.parameters.setup_changed.connect(self._render)
-        self.communication = CommunicationPage()
+        self.communication = CommunicationPage(reporting=bridge.reporting)
+        if self.communication.reporting_panel is not None:
+            self.communication.reporting_panel.update_state(self.snapshot.state)
+            bridge.reporting_changed.connect(self.communication.reporting_panel.refresh)
         for name in PAGES[1:]:
             if name == "parameters":
                 self.pages.addWidget(self.parameters)
@@ -559,6 +562,8 @@ class ProductionWindow(QMainWindow):
                     )
                 )
             self.snapshot = snapshot
+            if self.communication.reporting_panel is not None:
+                self.communication.reporting_panel.update_state(snapshot.state)
             self._render()
 
     @Slot(object)

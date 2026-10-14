@@ -47,9 +47,14 @@ from vimo_demo.communication.operations import (
     RequestKind,
     execute_request,
 )
+from vimo_demo.communication.reporting import (
+    ProductionReportingCommands,
+    ReportingWriteProtectedError,
+)
 
 from .inference_bridge import FutureDelivery
 from .production_style import Language, Style, text
+from .reporting_panel import ReportingPanel
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +91,14 @@ class CommunicationPage(QWidget):
         execute: Callable[
             [CommunicationRequest], CommunicationResponse
         ] = execute_request,
+        reporting: ProductionReportingCommands | None = None,
     ) -> None:
         super().__init__()
         self.setObjectName("communication")
         self.language: Language = "zh"
         self._execute = execute
+        self._reporting = reporting
+        self.reporting_panel: ReportingPanel | None = None
         self._thread: Thread | None = None
         self._completion: tuple[object, object] | None = None
         self._request: CommunicationRequest | None = None
@@ -155,6 +163,9 @@ class CommunicationPage(QWidget):
             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
         )
 
+        if reporting is not None and reporting.reporting_editable:
+            self.reporting_panel = ReportingPanel(reporting)
+            layout.addWidget(self.reporting_panel)
         settings = self._panel(layout, "comm_settings")
         common = QGridLayout()
         common.setHorizontalSpacing(Style.space)
@@ -451,6 +462,8 @@ class CommunicationPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        if self.reporting_panel is not None:
+            self.reporting_panel.set_language(language)
         for key, caption in self._captions:
             caption.setText(text(key, language))
         for key, button in self._buttons.items():
@@ -748,6 +761,15 @@ class CommunicationPage(QWidget):
     ) -> bool:
         if QThread.currentThread() != self.thread():
             raise RuntimeError("Communication dispatch requires the GUI thread")
+        if self._reporting is not None:
+            try:
+                for request in requests:
+                    request.validate()
+                    self._reporting.validate_manual_request(request)
+            except (ValueError, PermissionError) as exc:
+                self._error(exc, requests[0])
+                self._refresh()
+                return False
         self._request = requests[0]
         self._watch_pass = watch
         self._pass_auto = self._auto_refresh
@@ -757,11 +779,18 @@ class CommunicationPage(QWidget):
         self._state_key, self._detail = "comm_busy", ""
         future: Future[CommunicationResponse | _WatchOutcome] = Future()
         execute = self._execute
+        guard = (
+            self._reporting.validate_manual_request
+            if self._reporting is not None
+            else None
+        )
 
         def run() -> None:
             # No widgets or page reference: all socket work/cleanup stays here.
             try:
                 if not watch:
+                    if guard is not None:
+                        guard(requests[0])
                     future.set_result(execute(requests[0]))
                     return
                 responses: list[CommunicationResponse] = []
@@ -898,7 +927,9 @@ class CommunicationPage(QWidget):
     def _error(
         self, error: BaseException, request: CommunicationRequest | None
     ) -> None:
-        if isinstance(error, PermissionError):
+        if isinstance(error, ReportingWriteProtectedError):
+            key = "plc_reserved_write"
+        elif isinstance(error, PermissionError):
             key = "comm_permission"
         elif isinstance(error, FinsTimeoutError):
             key = (

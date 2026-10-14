@@ -11,6 +11,27 @@ from .production_presentation import Indicator
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "plc_reporting": ("PLC 自动报告", "PLC automatic reporting"),
+    "plc_enable": ("启用", "Enable"),
+    "plc_session_only": (
+        "仅本次应用有效；下次启动检测时生效，不保存到配置。",
+        "This application only; takes effect at the next Start and is never saved.",
+    ),
+    "plc_disabled": ("自动报告已关闭", "Reporting disabled"),
+    "plc_enabled": ("已启用 · 待启动", "Enabled · next Start"),
+    "plc_starting": ("已启用 · 启动中", "Enabled · starting"),
+    "plc_active": ("报告会话运行中", "Reporting session active"),
+    "plc_success": ("成功", "Successful"),
+    "plc_failed": ("失败", "Failed"),
+    "plc_last_error": ("最近报告失败", "Last reporting failure"),
+    "plc_ack_hint": (
+        "ACK 仅确认 FINS 写响应，不代表 PLC 已消费结果或持续在线。计数属于标注的报告会话。",
+        "ACK confirms the FINS write response only, not PLC consumption or persistent connectivity. Counts belong to the indicated reporting generation.",
+    ),
+    "plc_reserved_write": (
+        "自动报告运行期间，禁止手动写入 W49–W52。",
+        "Manual W49–W52 writes are blocked while automatic reporting owns the session.",
+    ),
     "preferences_error": (
         "启动偏好未保存；请修复 app.json 后重启。",
         "Application preferences not saved; repair app.json and restart.",

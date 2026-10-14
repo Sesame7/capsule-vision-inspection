@@ -14,7 +14,8 @@ Current Production uses six ordered cameras with six channels each (36 channels)
 Their identities/geometry are configuration, not an immutable hardware architecture.
 Inputs are local; real camera acquisition and commissioned Production PLC integration
 are unimplemented. A FINS/UDP subset and localhost simulator support manual operations
-and opt-in automatic first-station reporting from explicit local composition.
+and opt-in automatic first-station reporting through normal startup's Communication
+page or explicit developer composition. Reporting preferences are memory-only.
 
 ## Current capabilities
 
@@ -26,7 +27,7 @@ and opt-in automatic first-station reporting from explicit local composition.
 | Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, always-on scalar Occupancy with explicit EMPTY traditional skips, selective Size/Color checks, and independent technical status and product judgment. |
 | Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and separate factual judgment/business-occurrence accounting. |
 | Local sources | Owned image-set ingress, independent per-camera Folder replay (application-lifetime RAM dataset for saved Loop sources), explicit fixed images and opt-in session-local Pause/Continue/Step in the developer demo. |
-| Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
+| Qt shell and editing | Chinese/English Production, Recipe, Vision and Communication pages, including session-local automatic-reporting controls/observations; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
 | Communication | Qt-independent FINS/UDP DM/WR words, first-station projection/two-write submission, localhost simulator, independent manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
 
@@ -166,6 +167,10 @@ backlog rejection explicitly requests Application Stop. Session release addition
 requires reporting-thread exit and safe socket cleanup. The
 [communication contract](communication.md#local-production-reporting) owns sequence,
 eligibility and shutdown details; the manual workspace remains independent.
+Normal composition captures the selected immutable reporting settings at Start;
+the Communication page only commands/presents that optional boundary through the
+existing Qt bridge. Its manual dispatch protects W49–W52 until the reporting owner
+exits, without blocking reads or changing the low-level client API.
 
 ## Implementation navigation
 
@@ -226,7 +231,7 @@ original documents remain recoverable at Git checkpoint
 | [UI shell](ui-shell.md) | Presentation, display identity, feedback, Qt delivery, closing and review workflows. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, references, ROI/tuning workflows and distinct Save/Apply/activation stages. |
 | [Inspection performance](inspection-performance.md) | Measurement workloads/boundaries, reports, interpretation, historical results and verification. |
-| [Communication](communication.md) | FINS/UDP subset, socket lifecycle/errors, local reporting/simulation, manual workspace and deferred hardware/reporting UI integration. |
+| [Communication](communication.md) | FINS/UDP subset, socket lifecycle/errors, local reporting/simulation, session-local UI controls/observations, manual workspace and deferred commissioned hardware integration. |
 
 [README](../README.md) owns setup, usage and verification commands; [AGENTS](../AGENTS.md)
 owns durable engineering safeguards and proportional checks. Temporary migration
