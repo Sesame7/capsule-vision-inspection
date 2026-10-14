@@ -2,6 +2,7 @@
 
 import socket
 import struct
+from collections.abc import Callable
 from threading import Event
 from types import TracebackType
 
@@ -33,13 +34,19 @@ class FinsUdpSimulator:
     """
 
     def __init__(
-        self, *, port: int = DEFAULT_PORT, address: FinsAddress = _LOCAL_ADDRESS
+        self,
+        *,
+        port: int = DEFAULT_PORT,
+        address: FinsAddress = _LOCAL_ADDRESS,
+        on_first_station_write: Callable[[int, tuple[int, int, int]], None]
+        | None = None,
     ) -> None:
         validate_integer("port", port, 0, 65535)
         self._address = validate_address(address)
         self._words = [0] * DM_WORDS
         self._words[100] = 1234
         self._w_words = [0] * W_WORDS
+        self._on_first_station_write = on_first_station_write
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             self._socket.bind(("127.0.0.1", port))
@@ -134,4 +141,16 @@ class FinsUdpSimulator:
         # W342 allows count=0 as a no-op; the client API requires at least one.
         values = struct.unpack(f"!{count}H", request[18:])
         words[start : start + count] = values
+        if (
+            area == W_WORD_AREA
+            and start <= 49 < start + count
+            and self._on_first_station_write is not None
+        ):
+            try:
+                self._on_first_station_write(
+                    words[49], (words[50], words[51], words[52])
+                )
+            except Exception:
+                # Diagnostics must not turn an accepted write into a missing ACK.
+                pass
         return 0, b""

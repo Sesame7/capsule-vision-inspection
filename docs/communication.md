@@ -300,7 +300,7 @@ Use two repository-root PowerShell terminals and existing validated local assets
 Terminal 1 runs the simulator:
 
 ```powershell
-uv run --no-sync python scripts/run_fins_simulator.py --port 9600
+uv run --no-sync python scripts/run_fins_simulator.py --port 9600 --trace-first-station
 ```
 
 Terminal 2 explicitly enables reporting in the real local developer launcher:
@@ -313,6 +313,8 @@ These local filenames must exist and validate. This command uses the real model;
 fake/localhost tests below need no GPU. Click Start, then in the independent
 Communication page add a **W49, count 4** watch and enable refresh. A fresh simulator
 starts W49 at zero; acknowledged passes advance it, even for identical bitmaps.
+The simulator terminal prints each processed W49 write and its current bitmap;
+this [event trace](#first-station-write-trace) does not require register monitoring.
 W50–W52 reflect OK=0 and NG/EMPTY/UNKNOWN=1; W52 upper bits remain zero. Watch reads
 are not atomic with the two writes, so a transitional read is not a delivery verdict.
 Stopping monitoring or leaving Communication does not stop automatic reporting.
@@ -374,6 +376,36 @@ end codes, without claiming the complete NX error-precedence behavior:
 | `1103` | Invalid starting word/bit address in the selected area |
 | `1104` | End word outside the map |
 | `110B` | Requested read response too long |
+
+### First-station write trace
+
+`--trace-first-station` is opt-in and disabled by default. It prints one line for
+each accepted W-area write whose nonempty range includes W49, even for a repeated
+sequence or unchanged bitmap. Rejected/malformed writes, reads, zero-count no-ops,
+D49 writes and bitmap-only writes produce no event. The simulator's serial owner
+observes W49 and W50–W52 **after mutation**; there are no extra requests, polling,
+threads or retained event history. The optional `on_first_station_write` callback
+receives scalar sequence/word values; diagnostic-sink exceptions do not change
+the accepted memory write or response.
+
+Example format (local wall-clock timestamp with UTC offset):
+
+```text
+[2026-10-14T15:30:01.123+08:00] W49=1 W50=0x8001 W51=0x8001 W52=0x0009 reject_CH=1,16,17,32,33,36
+```
+
+`reject_CH=-` means no CH1–CH36 reject bits are set. The existing
+[first-station mapping](#first-station-result-projection-and-submission) supplies
+channel decoding; raw W52 upper bits remain visible in hex but are not channels.
+An event proves simulator memory processing, **not client ACK receipt, PLC scan
+consumption or mechanical rejection**. Console output is synchronous diagnostic
+work and may affect latency; it is not a performance measurement workflow.
+
+For manual review, use the [local reporting procedure](#local-manual-verification):
+start the simulator with this flag, launch opt-in Production in the second terminal
+and click Start. Observe successive sequence/bitmap lines, then Stop and Close
+Production normally and stop the simulator with Ctrl+C. Omit the flag for the
+previous quiet behavior. No real PLC connection is involved.
 
 ## Communication workspace
 
@@ -545,6 +577,9 @@ explicit overlap rejection, thread joining and socket rebinding after cleanup.
 An independent-process CLI test runs with `python -S` and verifies that neither
 Qt, NumPy nor SmartMore is imported. Normal repository gates still apply; no GPU,
 model, dataset or hardware is used by these communication tests.
+Trace tests also compare enabled/disabled response bytes and memory, accepted
+multiword W49 writes, rejected/no-op isolation, repeated sequences, rollover,
+reserved-bit decoding, output failure isolation and graceful CLI socket release.
 
 The H2A localhost verification includes all 36 reject bit positions and business
 states, shuffled identity order, invalid identity/status rejection, reserved bits,

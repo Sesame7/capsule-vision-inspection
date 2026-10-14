@@ -10,6 +10,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from threading import Event, Thread
 from threading import enumerate as threads
@@ -17,6 +18,7 @@ from time import perf_counter
 from typing import cast
 
 import pytest
+from run_fins_simulator import trace_first_station
 
 from vimo_demo.communication import (
     FinsAddress,
@@ -51,6 +53,7 @@ W49_WORDS = bytes.fromhex(
 WRITE_W50 = bytes.fromhex(
     "80 00 02 00 02 00 00 01 00 01 01 02 B1 00 32 00 00 03 00 01 80 00 00 0F"
 )
+WRITE_W49 = bytes.fromhex("80 00 02 00 02 00 00 01 00 01 01 02 B1 00 31 00 00 01 FF FF")
 
 
 def client(port: int, *, timeout: float = 0.5) -> FinsUdpClient:
@@ -467,6 +470,120 @@ def test_malformed_udp_does_not_terminate_simulator(
         assert connection.read_words(100) == (1234,)
 
 
+def test_first_station_observer_reads_accepted_memory_without_protocol_changes() -> (
+    None
+):
+    events: list[tuple[int, tuple[int, int, int]]] = []
+    with (
+        FinsUdpSimulator(port=0) as plain,
+        FinsUdpSimulator(
+            port=0,
+            on_first_station_write=lambda seq, words: events.append((seq, words)),
+        ) as traced,
+    ):
+        # The last write starts at W48 and updates all of W49..W52 in one request.
+        multiword = WRITE_W49[:13] + bytes.fromhex(
+            "00 30 00 00 05 12 34 00 07 80 01 80 01 FF F9"
+        )
+        for packet in (
+            WRITE_W50,
+            WRITE_W49,
+            WRITE_W49,  # Repeated sequence/bitmap still produces a new event.
+            WRITE_W49[:-2] + b"\x00\x00",  # Rollover is not suppressed.
+            multiword,
+        ):
+            assert traced.handle_datagram(packet) == plain.handle_datagram(packet)
+        assert events == [
+            (65535, (1, 32768, 15)),
+            (65535, (1, 32768, 15)),
+            (0, (1, 32768, 15)),
+            (7, (0x8001, 0x8001, 0xFFF9)),
+        ]
+        assert traced.handle_datagram(READ_W49) == plain.handle_datagram(READ_W49)
+        assert traced.handle_datagram(READ_W49) == W49_WORDS[:14] + bytes.fromhex(
+            "00 07 80 01 80 01 FF F9"
+        )
+        assert len(events) == 4  # Reads introduce no events or additional requests.
+    assert traced.closed and plain.closed
+
+
+@pytest.mark.parametrize(
+    "packet",
+    [
+        WRITE_W49[:-1],
+        WRITE_W49 + b"\x00",
+        WRITE_W49 + bytes(2012),
+        WRITE_W49[:15] + b"\x01" + WRITE_W49[16:],
+        WRITE_W49[:12] + b"\xb0" + WRITE_W49[13:],
+        WRITE_W49[:16] + bytes.fromhex("01 D0") + bytes(464 * 2),
+        WRITE_W49[:4] + b"\x03" + WRITE_W49[5:],
+        WRITE_W49[:7] + b"\x00" + WRITE_W49[8:],
+        WRITE_W49[:10] + b"\x06\x01" + WRITE_W49[12:],
+        b"broken",
+    ],
+)
+def test_rejected_or_malformed_w49_writes_never_emit_trace(packet: bytes) -> None:
+    events: list[tuple[int, tuple[int, int, int]]] = []
+    with (
+        FinsUdpSimulator(port=0) as plain,
+        FinsUdpSimulator(
+            port=0,
+            on_first_station_write=lambda seq, words: events.append((seq, words)),
+        ) as traced,
+    ):
+        assert traced.handle_datagram(packet) == plain.handle_datagram(packet)
+        assert traced.handle_datagram(READ_W49) == W49_WORDS[:14] + bytes(8)
+        assert events == []
+
+
+def test_read_dm_bitmap_and_zero_count_writes_do_not_emit_trace() -> None:
+    events: list[tuple[int, tuple[int, int, int]]] = []
+    with FinsUdpSimulator(
+        port=0, on_first_station_write=lambda seq, words: events.append((seq, words))
+    ) as server:
+        assert server.handle_datagram(READ_W49) is not None
+        assert server.handle_datagram(WRITE_W50) == WRITE_ACK
+        assert (
+            server.handle_datagram(WRITE_W49[:12] + b"\x82" + WRITE_W49[13:])
+            == WRITE_ACK
+        )
+        assert server.handle_datagram(WRITE_W49[:16] + b"\x00\x00") == WRITE_ACK
+        assert events == []
+
+
+def test_diagnostic_sink_failure_does_not_change_memory_or_ack() -> None:
+    def broken_sink(sequence: int, words: tuple[int, int, int]) -> None:
+        raise OSError("test-only unavailable trace output")
+
+    with FinsUdpSimulator(port=0, on_first_station_write=broken_sink) as server:
+        assert server.handle_datagram(WRITE_W49) == WRITE_ACK
+        assert server.handle_datagram(READ_W49) == W49_WORDS[:14] + bytes.fromhex(
+            "FF FF 00 00 00 00 00 00"
+        )
+
+
+@pytest.mark.parametrize(
+    ("words", "channels"),
+    [
+        ((0, 0, 0), "-"),
+        ((0x8001, 0x8001, 0xFFF9), "1,16,17,32,33,36"),
+        ((0xFFFF, 0xFFFF, 0xFFFF), ",".join(str(i) for i in range(1, 37))),
+    ],
+)
+def test_trace_format_has_local_timestamp_hex_words_and_only_36_channels(
+    capsys: pytest.CaptureFixture[str], words: tuple[int, int, int], channels: str
+) -> None:
+    trace_first_station(123, words)
+    output = capsys.readouterr().out
+    assert len(output.splitlines()) == 1
+    timestamp, detail = output.strip().split("] ", 1)
+    assert datetime.fromisoformat(timestamp[1:]).utcoffset() is not None
+    assert detail == (
+        f"W49=123 W50=0x{words[0]:04X} W51=0x{words[1]:04X} "
+        f"W52=0x{words[2]:04X} reject_CH={channels}"
+    )
+
+
 def test_overlapping_request_and_close_fail_without_cancelling_active_call() -> None:
     admitted, release = Event(), Event()
 
@@ -500,8 +617,7 @@ def test_overlapping_request_and_close_fail_without_cancelling_active_call() -> 
         assert outcomes == [(1234,)]
 
 
-def test_cli_demo_in_independent_processes_without_site_packages() -> None:
-    root = Path(__file__).resolve().parents[2]
+def stdlib_cli_command() -> list[str]:
     # -S omits installed Qt/NumPy/ViMo packages; add only our source path.
     bootstrap = "\n".join(
         (
@@ -514,7 +630,12 @@ def test_cli_demo_in_independent_processes_without_site_packages() -> None:
             "assert not any(n.startswith(('PySide6','smartmore','numpy')) for n in sys.modules)",
         )
     )
-    command = [sys.executable, "-B", "-S", "-u", "-c", bootstrap]
+    return [sys.executable, "-B", "-S", "-u", "-c", bootstrap]
+
+
+def test_cli_demo_in_independent_processes_without_site_packages() -> None:
+    root = Path(__file__).resolve().parents[2]
+    command = stdlib_cli_command()
     with subprocess.Popen(
         command
         + ["scripts/run_fins_simulator.py", "--port", "0", "--max-requests", "3"],
@@ -562,6 +683,59 @@ def test_cli_demo_in_independent_processes_without_site_packages() -> None:
         assert "Expected timeout:" in demo.stdout
         assert "Demo sockets closed" in demo.stdout
     assert not any(t.name.startswith("fins-test-") for t in threads())
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_cli_first_station_trace_is_opt_in_and_socket_closes(enabled: bool) -> None:
+    root = Path(__file__).resolve().parents[2]
+    command = stdlib_cli_command() + [
+        "scripts/run_fins_simulator.py",
+        "--port",
+        "0",
+        "--max-requests",
+        "5",
+    ]
+    if enabled:
+        command.append("--trace-first-station")
+    with subprocess.Popen(
+        command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    ) as process:
+        assert process.stdout is not None
+        ready = process.stdout.readline()
+        assert "FINS simulator 127.0.0.1:" in ready
+        port = int(ready.split(":", 1)[1].split(";", 1)[0])
+        try:
+            with client(port) as connection:
+                connection.write_words(50, (0x8001, 0x8001, 9), area=FinsMemoryArea.W)
+                for sequence in (65535, 0, 0):
+                    connection.write_words(49, (sequence,), area=FinsMemoryArea.W)
+                assert connection.read_words(49, 4, area=FinsMemoryArea.W) == (
+                    0,
+                    0x8001,
+                    0x8001,
+                    9,
+                )
+            output, errors = process.communicate(timeout=5)
+        finally:
+            # Preserve graceful finite-server cleanup if a client assertion fails.
+            if process.poll() is None:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as cleanup:
+                    for _ in range(5):
+                        cleanup.sendto(b"", ("127.0.0.1", port))
+                process.communicate(timeout=3)
+        assert process.returncode == 0, errors
+        assert "Simulator socket closed" in output
+        traces = [line for line in output.splitlines() if "reject_CH=" in line]
+        if enabled:
+            assert [line.split("] ", 1)[1] for line in traces] == [
+                f"W49={sequence} W50=0x8001 W51=0x8001 W52=0x0009 "
+                "reject_CH=1,16,17,32,33,36"
+                for sequence in (65535, 0, 0)
+            ]
+        else:
+            assert output == "Simulator socket closed\n"
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as replacement:
+        replacement.bind(("127.0.0.1", port))
 
 
 def test_socket_setup_failure_preserves_cause_and_releases_socket(
