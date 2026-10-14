@@ -132,9 +132,8 @@ def test_bilingual_geometry_and_navigation(
         )
     window.navigation[2].click()
     assert window.pages.currentIndex() == 2
-    assert (
-        text("diagnostics_note", language) in window.placeholders["diagnostics"].text()
-    )
+    assert window.pages.currentWidget() is window.communication
+    assert window.communication.test_button.text() == text("comm_test", language)
     window.navigation[0].click()
     window.resize(size[1], size[0])
     qapp.processEvents()

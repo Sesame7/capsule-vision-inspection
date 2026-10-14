@@ -72,9 +72,8 @@ def test_five_destinations_switch_language_and_keep_navigation_contract(
         assert window.bridge.application.snapshot() == before
     assert window.pages.currentWidget() is window.parameters.settings
     window.navigation[2].click()
-    assert (
-        text("diagnostics_note", language) in window.placeholders["diagnostics"].text()
-    )
+    assert window.pages.currentWidget() is window.communication
+    assert window.communication.test_button.text() == text("comm_test", language)
     window.language_button.click()
     alternate = (
         ("Production", "Recipe", "Communication", "History", "Vision")

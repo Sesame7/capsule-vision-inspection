@@ -12,7 +12,8 @@ performance, accuracy or machine-safety guarantee.
 
 Current Production uses six ordered cameras with six channels each (36 channels).
 Their identities/geometry are configuration, not an immutable hardware architecture.
-Inputs are local; real camera acquisition and PLC communication are unimplemented.
+Inputs are local; real camera acquisition and Production PLC integration are
+unimplemented. A standalone FINS/UDP subset and localhost simulator exist separately.
 
 ## Current capabilities
 
@@ -24,8 +25,9 @@ Inputs are local; real camera acquisition and PLC communication are unimplemente
 | Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, selective Size/Color checks, and independent technical status and product judgment. |
 | Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and factual cycle/channel accounting. |
 | Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
-| Qt shell and editing | Chinese/English Production, Recipe and Vision pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. Communication and History are placeholders. |
+| Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
+| Communication | Qt-independent synchronous FINS/UDP DM words, localhost simulator and an independent manual Qt workspace; no commissioned hardware or Production wiring. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
 from configured channel judgment. SDK/golden regression verifies integration,
@@ -58,6 +60,7 @@ A stopped candidate is not an active inference session.
 | [UI shell](ui-shell.md) | Application commands, nonblocking notifications, localized presentation and independently owned display pixels. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, reference/tuning previews and persistence/preparation workflows, under configuration/application authority. |
 | [Performance tooling](inspection-performance.md) | Workloads, timing scopes, reports and interpretation; no runtime admission policy or machine-capacity specification. |
+| [Communication](communication.md) | Independent synchronous protocol/socket ownership and loopback simulation; no inspection judgments, application lifecycle or Qt dependency. |
 
 Presentation/composition depends on the Qt-independent application, configuration,
 inspection, runtime and inference domains, never the reverse. Configuration resolves
@@ -154,6 +157,7 @@ packages, classes, composition hooks or thread topology retain this arrangement.
 | [`runtime/`](../src/vimo_demo/runtime/) | `InferenceWorker` and `RuntimeCoordinator`; sole collector owner, serial cycle runner and worker engine owner. |
 | [`application/`](../src/vimo_demo/application/) | `ProductionApplication`, `ProductionRuntimeSession`, `ConfiguredProductionPipeline`, `LocalCycleIngress` and `FolderReplay`. |
 | [`ui/`](../src/vimo_demo/ui/) | Shell, bridges, display copies and configuration/preview widgets; [bootstrap](../src/vimo_demo/ui/bootstrap.py) and [local composition](../src/vimo_demo/ui/local_production.py) host Current desktop startup/source wiring. |
+| [`communication/`](../src/vimo_demo/communication/) | Standalone typed FINS/UDP client and finite loopback simulator; not composed into Production. |
 | [`tests/`](../tests/) and [`scripts/`](../scripts/) | Maintained verification, optional real regression, CLI tools and fake UI review. |
 
 ## Target / Not implemented
@@ -166,7 +170,7 @@ adapter designs or scheduling structures are selected here.
 | Real cameras/adapters | Hardware/SDK choice, acquisition mode and failure behavior; local inputs do not implement cameras. |
 | Trigger/cycle association | Explicit hardware/frame association, buffer leases, captured/arrival clocks and synchronization. |
 | Hardware capacity/deadlines/overload | Measured limits, deadline events and machine responses; software bounds/pacing do not establish field capacity. |
-| PLC/communication and counting | Output association, delivery acknowledgement and physical-product accounting; no transport or capsule counter is implemented. |
+| PLC integration and counting | Actual equipment/configuration, output association, delivery acknowledgement and physical-product accounting; the standalone FINS/UDP subset does not implement these or a capsule counter. |
 | Machine stopping/commissioning | Safety, emergency-stop responsibilities and hardware recovery; graceful software Stop/close is not machine safety. |
 | Calibrated inspection/acceptance | Lighting/geometry, calibration, thresholds, annotations and field acceptance criteria remain unverified. |
 | History/archive/read-only consumers | Retention, result/image association and delivery requirements; no archive or web service is implemented. |
@@ -199,6 +203,7 @@ original documents remain recoverable at Git checkpoint
 | [UI shell](ui-shell.md) | Presentation, display identity, feedback, Qt delivery, closing and review workflows. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, references, ROI/tuning workflows and distinct Save/Apply/activation stages. |
 | [Inspection performance](inspection-performance.md) | Measurement workloads/boundaries, reports, interpretation, historical results and verification. |
+| [Communication](communication.md) | Standalone FINS/UDP subset, socket lifecycle/errors, local simulation and deferred hardware/UI integration. |
 
 [README](../README.md) owns setup, usage and verification commands; [AGENTS](../AGENTS.md)
 owns durable engineering safeguards and proportional checks. Temporary migration
