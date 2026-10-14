@@ -105,7 +105,16 @@ Size/Color at capsule scope). Model/module, saved ROIs, thresholds, required
 policies and label filters remain identical. No algorithm, queue-capacity or
 ownership change is made by selecting a mode.
 
-Current B executes Size geometry without HSV/Hue work. E/F execute whole-view
+Every Current mode also executes always-on [Occupancy](inspection.md#always-on-occupancy).
+End-to-end cycle timing includes that CPU cost even in A. Confirmed EMPTY skips
+enabled traditional work; PRESENT/UNKNOWN retain the full-ROI capabilities below.
+The input's Occupancy distribution therefore matters to the measured workload.
+Per-camera `CameraTiming.occupancy_ms` is available independently; the existing
+benchmark report's named traditional/ViMo/mapping fields do not separately export
+this new stage, and residual time must not be interpreted as Occupancy alone.
+Historical pre-E1 timings excluded this integration and are not paired comparisons.
+
+For non-EMPTY channels, Current B executes Size geometry without HSV/Hue work. E/F execute whole-view
 Color independently of body geometry; C/D execute both and reuse HSV where
 needed. Disabled capabilities produce no fabricated measurements. Current
 [Size](inspection.md#size) and [Color](inspection.md#color) are authoritative,

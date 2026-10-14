@@ -181,8 +181,11 @@ a DISABLED traditional check; it does not claim Size/Color ran.
 Current `ConfiguredProductionPipeline` composes the
 [resolved policies](configuration.md#resolution) with the same mapping/judgment:
 
-- For READY collection, measure/judge each channel once if either capsule capability
-  is enabled; both disabled skip measurement. One combined TRADITIONAL check results.
+- For READY collection, evaluate Occupancy for every channel regardless of Recipe
+  Size/Color/ViMo enablement. Confirmed EMPTY skips enabled traditional work with
+  explicit provenance; otherwise measure/judge enabled Size/Color once on the
+  full original ROI. Both capabilities disabled still skip traditional measurement.
+  One combined TRADITIONAL check results.
 - Call serial inference **once per full camera** when any channel enables ViMo,
   not once per ROI. A six-camera cycle needs at most six calls, never 36 crop calls.
 - Filter assigned ViMo evidence independently per channel by exact disabled labels.
@@ -195,6 +198,65 @@ Normal per-frame inference exceptions retain type/message in the configured raw
 outcome (without a formatted traceback), mark raw status FAILED, and permit later
 cameras to run. Normal capsule exceptions yield `capsule.execution_error`. Scheduling,
 engine ownership and candidate activation remain application/runtime responsibilities.
+
+### Always-on Occupancy
+
+`measure_occupancy(image, roi)` borrows full-resolution uint8 BGR pixels and keeps
+only immutable scalar evidence. It first validates the **original** saved ROI,
+including two nonempty views. Measurement width is `max(1, roi.width * 70 // 100)`;
+left offset is `(roi.width - measurement_width) // 2`. An odd unused margin leaves
+one extra pixel on the right. Height/y are unchanged and split at `roi.height // 2`.
+For a 176×960 ROI this measures 123×480 pixels in each view, offset 26 pixels.
+Saved geometry and the Size/Color region are never replaced by this center window.
+
+Every pixel with **any BGR channel >20** is foreground. No sparse sampling, HSV,
+components or morphology is used. Each view classifies independently:
+
+| Foreground ratio | OccupancyState |
+| --- | --- |
+| ≤1% | EMPTY |
+| ≥5% | PRESENT |
+| Between those bounds | UNKNOWN |
+
+Only EMPTY/EMPTY fuses to EMPTY and PRESENT/PRESENT to PRESENT. All other valid
+pairs fuse to UNKNOWN. PRESENT/UNKNOWN execute the unchanged enabled Size/Color
+capabilities on the original ROI; there is no persisted Occupancy switch or setting.
+
+Configured `ChannelInspectionResult.occupancy` carries an `OccupancyResult`:
+`evidence` has the measurement rectangle, upper/lower integer foreground/total
+counts, derived ratios/view states and fused state. Failure instead carries
+`error_code`, optional `exception_type` and message; its state is UNKNOWN with no
+fabricated zero counts. Codes are `occupancy.result_unavailable` for incomplete/
+missing inputs and `occupancy.execution_error` for ordinary execution exceptions.
+Incomplete cycles execute neither Occupancy nor other algorithms. Occupancy is
+required independently of Recipe: failure forces channel technical ERROR,
+preserving any definite NG. Raw cycle status still describes full-camera inference/
+collection; an ordinary Occupancy error is a returned result, not application FAULT.
+Mapping-only `ProductionPipeline` has no pixels and leaves `occupancy=None`.
+
+When Size/Color is enabled but Occupancy confirms EMPTY, `traditional_skip` is
+`TraditionalSkipReason.CONFIRMED_EMPTY`. The TRADITIONAL check is neutral,
+DISABLED/UNKNOWN, with **no** measurements or executed reasons. Its `required`
+flag retains the configured enabled requirement, explicitly exempted by this skip.
+Recipe-disabled traditional work instead has `required=False` and no skip provenance.
+This distinction does not fabricate a passing check or change Recipe configuration.
+The channel invariant requires EMPTY evidence and a neutral check for this skip.
+
+Successful Occupancy does not contribute OK/NG evidence to `aggregate()`.
+EMPTY with no enabled executed checks remains DISABLED/UNKNOWN; an executed
+successful ViMo check without accepted defects can still yield SUCCESS/OK through
+the existing aggregation. **Occupancy=EMPTY and ProductJudgment=NG may coexist**:
+accepted assigned ViMo findings/reasons survive unchanged. Full-camera inference,
+disabled-label filtering, assignment and unassigned camera-level NG are untouched.
+No new business classification, counter, UI indicator or PLC mapping is defined.
+
+This center-region rule is approved only for the current normally centered capsule,
+same-capsule upper/lower views and dark-background demonstration. The E1 1% EMPTY
+band is an explicit integration choice; E0-R's historical preferred review baseline
+was strict zero. Seven external EMPTY neighbor cases support interference exclusion;
+local reviewed shortlist labels provide additional limited evidence, with their own
+provenance limits. Neither establishes industrial accuracy. Extreme displacement,
+other lighting/products and certified false-EMPTY limits remain outside that evidence.
 
 ## Judgment
 
@@ -350,9 +412,12 @@ evidence remains valid after engine cleanup. Raw inspection results may still
 retain ImageResult masks; converting to production evidence does not clear a
 caller-held raw result/Future. Release those separately.
 
-Per-camera timing records nullable `traditional_ms` / `vimo_ms`, `mapping_ms`,
+Per-camera timing records nullable `occupancy_ms` / `traditional_ms` / `vimo_ms`, `mapping_ms`,
 and a sum of available stages. Disabled configured traditional work can measure
-fast-path overhead; None means not measured/run. ViMo interval may include worker
+fast-path overhead; None means not measured/run. `occupancy_ms` separately measures
+the six scalar channel measurements and failure wrapping, outside traditional/ViMo
+timing, and is None for incomplete collection or mapping-only conversion.
+ViMo interval may include worker
 wait/normalization, not just GPU work. Collection/queue latency is not included in
 that stage sum. Production records inspection start/result readiness/aggregation;
 runtime milestones remain in its envelope. Timings are descriptive, share the host
@@ -371,7 +436,8 @@ Current code pointers: [identity/results](../src/vimo_demo/inspection/models.py)
 [layout/overlap](../src/vimo_demo/inspection/production/layout.py),
 [judgment/evidence](../src/vimo_demo/inspection/production/models.py),
 [mapping](../src/vimo_demo/inspection/production/pipeline.py),
-[capsule algorithms](../src/vimo_demo/inspection/production/capsule.py) and
+[capsule algorithms](../src/vimo_demo/inspection/production/capsule.py),
+[Occupancy](../src/vimo_demo/inspection/production/occupancy.py) and
 [configured composition](../src/vimo_demo/application/pipeline.py).
 These are navigation to Current code, not a permanent internal class-layout mandate.
 
@@ -380,7 +446,7 @@ overlapping collection, bbox assignment to multiple ROIs, required/optional erro
 unassigned NG, configured filtering, selective capabilities and numerical boundaries:
 
 ```powershell
-uv run --no-sync pytest tests/unit/test_inspection_cycle.py tests/unit/test_production_inspection.py tests/unit/test_configured_execution.py tests/unit/test_capsule.py tests/unit/test_capsule_selective.py tests/unit/test_capsule_optimization.py tests/integration/test_production_pipeline.py --tb=short
+uv run --no-sync pytest tests/unit/test_inspection_cycle.py tests/unit/test_production_inspection.py tests/unit/test_configured_execution.py tests/unit/test_occupancy.py tests/unit/test_configured_occupancy.py tests/unit/test_capsule.py tests/unit/test_capsule_selective.py tests/unit/test_capsule_optimization.py tests/integration/test_production_pipeline.py --tb=short
 ```
 
 [Cycle-to-Production integration](../tests/integration/test_production_pipeline.py) and
@@ -388,3 +454,11 @@ uv run --no-sync pytest tests/unit/test_inspection_cycle.py tests/unit/test_prod
 check composition without making every domain test load ViMo. Historical model
 regression/visual parity in [validation findings](archive/validation-evidence.md) validates SDK
 integration, not annotation quality or these traditional algorithms' accuracy.
+
+The optional [saved-source E1 smoke](../tests/integration/test_occupancy_vimo.py)
+reads local `data/` without saving it, runs a few real six-camera Folder cycles,
+checks scalar Occupancy/ViMo evidence and actual Stop/Close termination:
+
+```powershell
+uv run --no-sync pytest tests/integration/test_occupancy_vimo.py --run-gpu --require-gpu --tb=short -s
+```

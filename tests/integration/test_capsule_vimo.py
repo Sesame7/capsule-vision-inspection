@@ -25,8 +25,10 @@ from vimo_demo.configuration import (
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import (
     CameraLayout,
+    OccupancyState,
     ProductJudgment,
     TechnicalStatus,
+    TraditionalSkipReason,
 )
 from vimo_demo.inspection.production.capsule import (
     CapsuleSettings,
@@ -106,10 +108,18 @@ def test_real_local_capsule(
         assert result is not None and len(result.channels) == 36
         assert result.assessment.technical_status is TechnicalStatus.SUCCESS
         assert result.assessment.judgment is ProductJudgment.NG
-        assert all(
-            channel.checks[0].assessment.judgment is ProductJudgment.NG
-            for channel in result.channels
-        )
+        for channel in result.channels:
+            assert channel.occupancy is not None
+            if channel.occupancy.state is OccupancyState.EMPTY:
+                assert channel.traditional_skip is TraditionalSkipReason.CONFIRMED_EMPTY
+                assert (
+                    channel.checks[0].assessment.technical_status
+                    is TechnicalStatus.DISABLED
+                )
+                assert channel.checks[0].measurements == channel.checks[0].reasons == ()
+            else:
+                assert channel.traditional_skip is None
+                assert channel.checks[0].assessment.judgment is ProductJudgment.NG
         assert any(channel.checks[0].measurements for channel in result.channels)
         for camera, row in zip(result.cameras, rows, strict=True):
             findings = {
@@ -120,7 +130,7 @@ def test_real_local_capsule(
                 row["regions_per_label"].values()
             )
         print(
-            "Real six-frame ViMo + shared Size/Color: 36 traditional NG judgments; ViMo findings preserved; Stop completed"
+            "Real six-frame ViMo + Size/Color: non-EMPTY traditional NG, confirmed EMPTY skipped; ViMo findings preserved; Stop completed"
         )
     finally:
         close = app.close()
