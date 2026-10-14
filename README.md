@@ -81,7 +81,8 @@ failing Start preflight. It never chooses a first configuration, creates missing
 geometry or substitutes fake inference.
 
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
-**History / 历史** and **Vision / 视觉**. Communication and History are placeholders.
+**History / 历史** and **Vision / 视觉**. Communication provides session-local manual
+FINS/UDP reads and localhost-only writes; History remains a placeholder.
 Recipe and Vision use **Save and apply**: persistence, candidate preparation/
 installation and successful-Start activation are distinct outcomes. Only successful
 Start activates. Counters measure admitted cycles/channel judgments, not physical
@@ -153,6 +154,7 @@ not mandatory daily validation:
 | [benchmark_production.py](scripts/benchmark_production.py) | Fixed six-image configured Production cycles, including ingress copies/admission/result delivery; `outputs/inspection_performance/` |
 | [stress_inference.py](scripts/stress_inference.py) | One engine, six calls per round, semantic/latency/resource observations; `outputs/stress/` |
 | [visualize_inference.py](scripts/visualize_inference.py) | Raw-mask/contour/bbox overlays and label legend; `outputs/visualization/` |
+| [run_fins_simulator.py](scripts/run_fins_simulator.py) / [fins_local_demo.py](scripts/fins_local_demo.py) | Standalone localhost FINS/UDP DM-word simulator and read/write/error demo; no Qt/GPU or Production integration |
 
 Replace `images/example.png` with an existing image. Benchmark and stress commands
 below intentionally execute GPU work; run them only for a scoped investigation.
@@ -171,6 +173,12 @@ measurement scopes. Neither benchmark proves hardware throughput; stress reports
 make no automatic leak verdict. The visualizer uses existing Pillow/fonts for
 Chinese where available, otherwise ASCII references with Chinese labels in JSON;
 it installs nothing.
+
+The [FINS/UDP contract and two-terminal demo](docs/communication.md#local-simulator-and-manual-demonstration)
+cover the independent communication subset. The
+[Communication workspace](docs/communication.md#communication-workspace) uses it
+outside the GUI thread; writes remain localhost-only. Real Production PLC integration
+and hardware commissioning remain unimplemented.
 
 ## Verification
 
@@ -215,6 +223,7 @@ Current contracts and procedures:
 | [UI shell](docs/ui-shell.md) | Bilingual presentation, display identity, feedback, Qt delivery and closing |
 | [UI configuration](docs/ui-configuration.md) | Recipe/Vision drafts, ROI/reference/tuning and Save and apply |
 | [Inspection performance](docs/inspection-performance.md) | Measurement workloads, boundaries, reports and interpretation |
+| [Communication](docs/communication.md) | Standalone FINS/UDP subset, socket ownership/errors, localhost simulator and hardware limitations |
 
 Frozen **Historical** archives, separate from Current contracts:
 

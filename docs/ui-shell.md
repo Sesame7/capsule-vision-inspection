@@ -23,14 +23,16 @@ documents; this page covers their interaction with the shell, not their controls
 | --- | --- | --- |
 | 生产 / Production | Summary and six configured camera cards | `production` |
 | 配方 / Recipe | Saved/draft Recipe workspace and Tune preview | `parameters` |
-| 通信 / Communication | Explicitly unimplemented placeholder | `diagnostics` |
+| 通信 / Communication | Manual FINS/UDP diagnostic workspace | `diagnostics` |
 | 历史 / History | Unimplemented placeholder | `history` |
 | 视觉 / Vision | Camera sources, reference images and Machine ROI workspace | `settings` |
 
 **Vision** is the visible page name. Legacy `settings`/`diagnostics` identifiers
 are implementation routes, not extra Settings/Diagnostics features. Communication
-does not expose connection controls or pretend to have protocol state; History
-does not archive cycles. Navigation, Qt-drawn icons, language switching,
+provides explicit manual reads and localhost-only writes, without persistent online
+state or Production coupling; its controls/ownership belong to
+[communication](communication.md#communication-workspace). History does not archive
+cycles. Navigation, Qt-drawn icons, language switching,
 selection, tooltips/accessibility names and keyboard/touch controls share the
 Chinese/English style catalog in `production_style.py`. The language button names
 the language it switches to. Camera headers use the same monochrome Qt camera
@@ -354,8 +356,16 @@ Once approved, the initial close event is ignored, controls are disabled and
 application close is requested once. Qt remains responsive while the application
 releases its session/source/runtime. Successful close Future delivery is followed
 by `application.join(0)` observation; only actual lifecycle-thread exit emits final
-shutdown and accepts window close. Normal Qt Quit requests use this deferred path.
+shutdown. The independent communication owner also stops admission and drains any
+active request on its background thread. Window close is accepted only after both
+application termination and communication-thread exit; communication delivery is
+disposed at that point. Application cleanup failure keeps the shell open and resumes
+the live communication workspace. Normal Qt Quit requests use this deferred path.
 Repeated requests do not reset a pending close deadline.
+
+An idle communication drain can notify synchronously during the initial native
+close event. The shell requests its final close only when **both** owners have
+terminated, avoiding a reentrant close that hides the window before cleanup.
 
 The default **30-second** bridge deadline reports continued waiting once and keeps
 observing. It does not cancel native work, drop ownership or declare termination.
@@ -367,7 +377,11 @@ are in [runtime shutdown](inference-runtime.md#shutdown) and
 
 Final accepted close detaches delivery and removes the Quit filter. Launchers'
 blocking fallback close/join occurs only **after** the Qt event loop exits, never
-inside GUI dispatch. Direct process termination/forced exit or OS shutdown is not
+inside GUI dispatch. Successful shell shutdown also requires the Qt event loop
+to exit and the launching command to return; a hidden window alone is insufficient.
+The Windows virtual-environment Python redirector and uv may legitimately be
+parent processes during execution; all launched processes must terminate.
+Direct process termination/forced exit or OS shutdown is not
 a supported safe-recovery mechanism.
 
 ### One-image diagnostic
@@ -467,6 +481,6 @@ Native Browse/dialogs, larger fonts and actual-screen ergonomics need separate
 manual acceptance; no such testing is performed in this documentation batch.
 
 **Target / deferred:** commissioned camera/PLC integration, physical production
-counting/safety, History/archive execution, Communication protocols, a diagnostics
+counting/safety, History/archive execution, commissioned Communication hardware wiring, a diagnostics
 panel/message-history service and hardware throughput/deadline guarantees remain
 unimplemented. Current Qt topology and layout do not settle those future designs.

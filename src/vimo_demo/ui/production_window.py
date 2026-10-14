@@ -31,6 +31,7 @@ from vimo_demo.inspection.production import (
 )
 
 from .camera_card import CameraCard
+from .communication_page import CommunicationPage
 from .display_frames import DisplayFrame, DisplaySnapshot
 from .parameters_page import ParametersPage
 from .production_bridge import QtProductionBridge, RecipeChoice
@@ -243,12 +244,16 @@ class ProductionWindow(QMainWindow):
         self.parameters.applied.connect(self._recipe_applied)
         self.parameters.sources_verified.connect(self._sources_verified)
         self.parameters.setup_changed.connect(self._render)
+        self.communication = CommunicationPage()
         for name in PAGES[1:]:
             if name == "parameters":
                 self.pages.addWidget(self.parameters)
                 continue
             if name == "settings":
                 self.pages.addWidget(self.parameters.settings)
+                continue
+            if name == "diagnostics":
+                self.pages.addWidget(self.communication)
                 continue
             placeholder = QWidget()
             container = QVBoxLayout(placeholder)
@@ -340,6 +345,7 @@ class ProductionWindow(QMainWindow):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.parameters.set_language(language)
+        self.communication.set_language(language)
         self.language_button.setText("English" if language == "zh" else "中文")
         for key, button in zip(PAGES, self.navigation, strict=True):
             button.setText(text(key, language))
@@ -355,9 +361,7 @@ class ProductionWindow(QMainWindow):
         self.metrics["channel_ng"][1].setToolTip(text("channel_count_help", language))
         for key, label in self.placeholders.items():
             label.setText(
-                f"{text(key, language)}\n\n{text(key + '_note', language)}"
-                if key == "diagnostics"
-                else f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
+                f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
             )
         self._render()
         self.language_changed.emit(language)
@@ -505,6 +509,8 @@ class ProductionWindow(QMainWindow):
             self._source_issue = (camera, type(source_error).__name__)
         if command == "close" and not self.bridge.closing:
             self._closing = False
+            if not self.bridge.closed:
+                self.communication.resume()
         # One bounded command/type summary; never retain the exception or raw SDK text.
         self._command_issue = (
             command,
@@ -919,15 +925,18 @@ class ProductionWindow(QMainWindow):
 
     @Slot()
     def _shutdown_finished(self) -> None:
-        if self._closing:
+        # An idle Communication page can call back inside the first closeEvent.
+        # Reclosing there hides a native window before deferred cleanup finishes.
+        if self._closing and self.bridge.closed and self.communication.closed:
             self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self.bridge.closed:
+        if self.bridge.closed and self.communication.closed:
             application = QApplication.instance()
             if application is not None:
                 application.removeEventFilter(self)
             self.bridge.detach()
+            self.communication.dispose()
             event.accept()
         else:
             event.ignore()
@@ -937,4 +946,5 @@ class ProductionWindow(QMainWindow):
     def _begin_close(self) -> None:
         self._closing = True
         self._render()
+        self.communication.request_close(self._shutdown_finished)
         self.bridge.close()

@@ -1,0 +1,632 @@
+"""Communication workspace: controlled lifecycle and real loopback UDP, no GPU."""
+
+import socket
+from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import Event, Thread, get_ident
+from threading import enumerate as threads
+
+import pytest
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+from tests.application_support import FakeSession
+from tests.integration.test_production_ui import screen as screen
+from tests.qt_support import ensure_test_fonts, until
+
+from vimo_demo.application import ApplicationState
+from vimo_demo.communication import (
+    FinsAddress,
+    FinsPlcError,
+    FinsProtocolError,
+    FinsTimeoutError,
+    FinsTransportError,
+    FinsUdpClient,
+)
+from vimo_demo.communication.operations import (
+    CommunicationRequest,
+    CommunicationResponse,
+    RequestKind,
+)
+from vimo_demo.communication.simulator import FinsUdpSimulator
+from vimo_demo.ui.communication_page import CommunicationPage
+from vimo_demo.ui.production_style import Language, Style, text
+from vimo_demo.ui.production_window import ProductionWindow
+
+
+def response(request: CommunicationRequest) -> CommunicationResponse:
+    return CommunicationResponse(
+        request,
+        None if request.kind is RequestKind.WRITE else tuple(range(request.count)),
+        1.25,
+        datetime.now(UTC),
+    )
+
+
+def cell(page: CommunicationPage, row: int, column: int) -> str:
+    item = page.values_table.item(row, column)
+    assert item is not None
+    return item.text()
+
+
+@pytest.fixture
+def page(qapp: QApplication) -> Iterator[CommunicationPage]:
+    widget = CommunicationPage()
+    widget.show()
+    yield widget
+    widget.request_close(lambda: None)
+    until(lambda: widget.closed)
+    widget.deleteLater()
+
+
+@pytest.fixture
+def simulator() -> Iterator[FinsUdpSimulator]:
+    stop = Event()
+    failures: list[BaseException] = []
+    with FinsUdpSimulator(port=0) as server:
+
+        def serve() -> None:
+            try:
+                server.serve(stop)
+            except BaseException as exc:
+                failures.append(exc)
+
+        owner = Thread(target=serve, name="h1b-test-simulator")
+        owner.start()
+        try:
+            yield server
+        finally:
+            stop.set()
+            owner.join(2)
+            assert not owner.is_alive() and not failures
+    assert server.closed
+
+
+def test_idle_communication_drain_does_not_reenter_first_close(
+    screen: tuple[ProductionWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, _ = screen
+    close_states: list[tuple[bool, bool]] = []
+    original_close = window.close
+
+    def observed_close() -> bool:
+        close_states.append((window.bridge.closed, window.communication.closed))
+        return original_close()
+
+    monkeypatch.setattr(window, "close", observed_close)
+    assert not window.close()
+    # Idle drain notification is synchronous inside this first close event.
+    assert close_states == [(False, False)]
+    until(lambda: not window.isVisible())
+    assert close_states == [(False, False), (True, True)]
+    assert window.bridge.application.join(0)
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_actual_udp_ui_read_write_readback_and_owner_thread(
+    page: CommunicationPage,
+    simulator: FinsUdpSimulator,
+    monkeypatch: pytest.MonkeyPatch,
+    language: Language,
+) -> None:
+    identities: list[tuple[str, int]] = []
+    clients: list[FinsUdpClient] = []
+
+    class TrackedClient(FinsUdpClient):
+        def __init__(
+            self,
+            host: str,
+            *,
+            destination: FinsAddress,
+            source: FinsAddress,
+            port: int,
+            timeout: float,
+        ) -> None:
+            identities.append(("create", get_ident()))
+            super().__init__(
+                host, destination=destination, source=source, port=port, timeout=timeout
+            )
+            clients.append(self)
+
+        def read_words(self, start: int, count: int = 1) -> tuple[int, ...]:
+            identities.append(("read", get_ident()))
+            return super().read_words(start, count)
+
+        def write_words(self, start: int, values: Sequence[int]) -> None:
+            identities.append(("write", get_ident()))
+            super().write_words(start, values)
+
+        def close(self) -> None:
+            identities.append(("close", get_ident()))
+            super().close()
+
+    monkeypatch.setattr(
+        "vimo_demo.communication.operations.FinsUdpClient", TrackedClient
+    )
+    page.set_language(language)
+    page.port.setValue(simulator.port)
+    page.test_button.click()
+    until(lambda: not page.busy)
+    assert page.last_response is not None and page.last_response.values == (1234,)
+    assert page.status.text() == text("comm_test_ok", language)
+    page.count.setValue(3)
+    page.write_values.setText("0, 65535 4321")
+    page.write_button.click()
+    until(lambda: not page.busy)
+    assert page.last_response is not None and page.last_response.values is None
+    assert page.status.text() == text("comm_write_ok", language)
+    assert page.last_read is not None and page.last_read.values == (1234,)
+    assert cell(page, 0, 1) == "1234"  # Not silent readback.
+    page.read_button.click()
+    until(lambda: not page.busy)
+    assert page.last_response is not None and page.last_response.values == (
+        0,
+        65535,
+        4321,
+    )
+    assert [cell(page, row, 0) for row in range(3)] == [
+        "D100",
+        "D101",
+        "D102",
+    ]
+    assert [cell(page, row, 1) for row in range(3)] == [
+        "0",
+        "65535",
+        "4321",
+    ]
+    assert page.log_count == 3 and "ms" in page.success.text()
+    assert [name for name, _ in identities] == [
+        "create",
+        "read",
+        "close",
+        "create",
+        "write",
+        "close",
+        "create",
+        "read",
+        "close",
+    ]
+    for offset in (0, 3, 6):
+        assert len({ident for _, ident in identities[offset : offset + 3]}) == 1
+    assert all(ident != get_ident() for _, ident in identities)
+    assert all(client.closed for client in clients)
+    assert not any(t.name == "FinsCommunication" for t in threads())
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_validation_remote_read_and_localhost_only_write(
+    qapp: QApplication, language: Language
+) -> None:
+    calls: list[CommunicationRequest] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        calls.append(request)
+        return response(request)
+
+    page = CommunicationPage(execute=execute)
+    page.set_language(language)
+    page.show()
+    try:
+        assert not calls and page.status.text() == text("comm_idle", language)
+        assert page.protocol.count() == 1 and page.protocol.isEnabled()
+        assert not page.advanced.isVisible()
+        page.advanced_button.click()
+        assert page.advanced.isVisible()
+        page.host.setText("192.0.2.10")
+        assert not page.write_button.isEnabled() and page.read_button.isEnabled()
+        assert text("comm_remote_read", language) == page.permission.text()
+        assert not page.dispatch(RequestKind.WRITE) and not calls
+        page.destination[1].setValue(19)
+        assert page.dispatch(RequestKind.READ)
+        until(lambda: not page.busy)
+        assert calls[-1].host == "192.0.2.10" and calls[-1].destination.node == 19
+        page.host.setText("127.0.0.2")
+        assert not page.write_button.isEnabled() and not page.dispatch(
+            RequestKind.WRITE
+        )
+        page.host.setText("localhost")
+        assert not page.dispatch(RequestKind.READ)
+        assert page.status.text() == text("comm_invalid", language)
+        page.host.setText("127.0.0.1")
+        for values in ("", "-1", "65536", "abc", "1," + "0," * 998):
+            page.write_values.setText(values)
+            assert not page.dispatch(RequestKind.WRITE)
+        page.address.setValue(32767)
+        page.count.setValue(2)
+        assert not page.dispatch(RequestKind.READ)
+        assert len(calls) == 1
+        assert page.write_button.toolTip() == text("comm_local_write", language)
+    finally:
+        page.request_close(lambda: None)
+        until(lambda: page.closed)
+        page.deleteLater()
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize(
+    "error,key",
+    [
+        (FinsTimeoutError("deadline"), "comm_timeout_error"),
+        (FinsTransportError("network unreachable"), "comm_transport_error"),
+        (FinsProtocolError("wrong SID"), "comm_protocol_error"),
+        (FinsPlcError(b"\x01\x01", 0x1103, b""), "comm_plc_error"),
+    ],
+)
+def test_localized_error_feedback(
+    qapp: QApplication, language: Language, error: BaseException, key: str
+) -> None:
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        raise error
+
+    page = CommunicationPage(execute=execute)
+    try:
+        page.set_language(language)
+        assert page.dispatch(RequestKind.READ)
+        until(lambda: not page.busy)
+        assert text(key, language) in page.status.text()
+        assert type(error).__name__ in page.status.toolTip()
+        if isinstance(error, FinsPlcError):
+            assert "0x1103" in page.status.text() and "0x1103" in page.log.toPlainText()
+        page.set_language("en" if language == "zh" else "zh")
+        assert text(key, page.language) in page.status.text()
+    finally:
+        page.request_close(lambda: None)
+        page.deleteLater()
+
+
+def test_real_udp_timeout_and_malformed_response_feedback(
+    page: CommunicationPage,
+) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as silent:
+        silent.bind(("127.0.0.1", 0))
+        page.port.setValue(silent.getsockname()[1])
+        page.timeout.setValue(0.05)
+        page.write_button.click()
+        until(lambda: not page.busy)
+        assert page.status.text() == text("comm_write_unknown", page.language)
+        silent.settimeout(0.05)
+        assert silent.recvfrom(65535)[0][10:12] == b"\x01\x02"
+        with pytest.raises(TimeoutError):
+            silent.recvfrom(65535)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as malformed:
+        malformed.bind(("127.0.0.1", 0))
+        malformed.settimeout(1)
+        page.port.setValue(malformed.getsockname()[1])
+        page.timeout.setValue(1)
+        failures: list[BaseException] = []
+
+        def send() -> None:
+            try:
+                _, sender = malformed.recvfrom(65535)
+                malformed.sendto(b"broken", sender)
+            except BaseException as exc:
+                failures.append(exc)
+
+        owner = Thread(target=send, name="h1b-test-malformed")
+        owner.start()
+        try:
+            page.read_button.click()
+            until(lambda: not page.busy)
+        finally:
+            owner.join(2)
+        assert not owner.is_alive() and not failures
+        assert page.status.text() == text("comm_protocol_error", page.language)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_navigation_busy_snapshot_and_production_isolation(
+    screen: tuple[ProductionWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+    fail: bool,
+) -> None:
+    window, _ = screen
+    entered, release, tick = Event(), Event(), Event()
+    requests: list[CommunicationRequest] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        requests.append(request)
+        entered.set()
+        assert release.wait(3)
+        if fail:
+            raise FinsProtocolError("controlled local failure")
+        return response(request)
+
+    # Inject only before dispatch; use the real page/close composition.
+    monkeypatch.setattr(window.communication, "_execute", execute)
+    page = window.communication
+    baseline = window.bridge.application.snapshot()
+    window.navigate(2)
+    try:
+        assert page.dispatch(RequestKind.READ)
+        until(entered.is_set)
+        assert not page.dispatch(RequestKind.READ)
+        assert not page.host.isEnabled() and not page.read_button.isEnabled()
+        QTimer.singleShot(0, tick.set)
+        until(tick.is_set)
+        page.host.setText("192.0.2.99")  # Programmatic edit cannot redirect snapshot.
+        window.navigate(3)
+        assert window.pages.currentIndex() == 3 and page.busy
+        assert window.bridge.application.snapshot() == baseline
+    finally:
+        release.set()
+        until(lambda: not page.busy)
+    assert len(requests) == 1 and requests[0].host == "127.0.0.1"
+    if fail:
+        assert page.last_response is None
+        assert page.status.text() == text("comm_protocol_error", page.language)
+    else:
+        assert (
+            page.last_response is not None
+            and page.last_response.request.host == "127.0.0.1"
+        )
+    assert window.bridge.application.snapshot() == baseline
+    assert not window.event_label.text()
+    window.navigate(2)
+    assert (page.last_response is not None) == (not fail)
+
+
+def test_close_waits_for_actual_exit_not_future_notification(
+    screen: tuple[ProductionWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, _ = screen
+    returned, release = Event(), Event()
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        return response(request)
+
+    class HeldThread(Thread):
+        def run(self) -> None:
+            super().run()
+            returned.set()
+            assert release.wait(3)
+
+    monkeypatch.setattr("vimo_demo.ui.communication_page.Thread", HeldThread)
+    monkeypatch.setattr(window.communication, "_execute", execute)
+    page = window.communication
+    try:
+        assert page.dispatch(RequestKind.READ)
+        until(returned.is_set)
+        QApplication.processEvents()
+        assert page.busy and page.last_response is None
+        window.close()
+        window.close()
+        until(lambda: window.bridge.closed)
+        assert window.isVisible() and not page.closed
+        assert not page.dispatch(RequestKind.READ)
+        with pytest.raises(RuntimeError, match="active"):
+            page.dispose()
+    finally:
+        release.set()
+        until(lambda: page.closed and not window.isVisible())
+    assert page.last_response is None  # Success suppressed after closing.
+    assert not any(t.name == "FinsCommunication" for t in threads())
+
+
+def test_close_during_real_udp_wait_keeps_socket_on_worker_until_reply(
+    screen: tuple[ProductionWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, _ = screen
+    entered, release = Event(), Event()
+    clients: list[FinsUdpClient] = []
+    closes: list[int] = []
+    failures: list[BaseException] = []
+
+    class TrackedClient(FinsUdpClient):
+        def __init__(
+            self,
+            host: str,
+            *,
+            destination: FinsAddress,
+            source: FinsAddress,
+            port: int,
+            timeout: float,
+        ) -> None:
+            super().__init__(
+                host, destination=destination, source=source, port=port, timeout=timeout
+            )
+            clients.append(self)
+
+        def close(self) -> None:
+            closes.append(get_ident())
+            super().close()
+
+    monkeypatch.setattr(
+        "vimo_demo.communication.operations.FinsUdpClient", TrackedClient
+    )
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+        peer.bind(("127.0.0.1", 0))
+        peer.settimeout(2)
+
+        def serve() -> None:
+            try:
+                packet, sender = peer.recvfrom(65535)
+                entered.set()
+                assert release.wait(3)
+                reply = (
+                    bytes.fromhex("C0 00 02 00 01 00 00 02 00")
+                    + packet[9:12]
+                    + bytes.fromhex("00 00 04 D2")
+                )
+                peer.sendto(reply, sender)
+            except BaseException as exc:
+                failures.append(exc)
+
+        owner = Thread(target=serve, name="h1b-test-close-peer")
+        owner.start()
+        page = window.communication
+        page.port.setValue(peer.getsockname()[1])
+        page.timeout.setValue(2)
+        try:
+            assert page.dispatch(RequestKind.READ)
+            until(entered.is_set)
+            window.close()
+            until(lambda: window.bridge.closed)
+            assert window.isVisible() and page.busy and not page.closed
+            assert len(clients) == 1 and not clients[0].closed and not closes
+        finally:
+            release.set()
+            owner.join(3)
+            until(lambda: page.closed and not window.isVisible())
+        assert not owner.is_alive() and not failures
+        assert clients[0].closed and len(closes) == 1 and closes[0] != get_ident()
+        assert not any(t.name == "FinsCommunication" for t in threads())
+
+
+def test_application_close_failure_keeps_communication_usable(
+    screen: tuple[ProductionWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, session = screen
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    session.cleanup_safe = False
+    entered, release = Event(), Event()
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        entered.set()
+        assert release.wait(3)
+        return response(request)
+
+    monkeypatch.setattr(window.communication, "_execute", execute)
+    page = window.communication
+    try:
+        assert page.dispatch(RequestKind.READ)
+        until(entered.is_set)
+        window.close()
+        until(
+            lambda: (
+                not window.bridge.closing
+                and window.snapshot.state is ApplicationState.FAULT
+            )
+        )
+        assert window.isVisible() and page.busy and not page.closed
+    finally:
+        release.set()
+        session.cleanup_safe = True
+        until(lambda: not page.busy)
+    assert page.read_button.isEnabled() and not page.closed
+    assert page.last_response is not None
+    assert page.dispatch(RequestKind.READ)
+    until(lambda: not page.busy)
+
+
+def test_stale_delivery_and_bounded_log(qapp: QApplication) -> None:
+    class DeliveryProbe(CommunicationPage):
+        def replay(self, name: str) -> None:
+            self._completed(name, None, FinsProtocolError("stale"))
+
+    page = DeliveryProbe(execute=response)
+    try:
+        for _ in range(102):
+            assert page.dispatch(RequestKind.TEST)
+            until(lambda: not page.busy)
+        assert page.log_count == 100 and page.log.blockCount() == 100
+        current = page.status.text()
+        page.replay("1")
+        assert page.status.text() == current
+        page.request_close(lambda: None)
+        page.dispose()
+        page.replay("102")
+        assert page.closed and page.log_count == 100
+    finally:
+        page.request_close(lambda: None)
+        page.deleteLater()
+
+
+@pytest.mark.parametrize(
+    "language,size",
+    [
+        ("zh", (1080, 1920)),
+        ("en", (1920, 1080)),
+        ("en", (1080, 1920)),
+        ("zh", (1920, 1080)),
+        ("zh", (880, 720)),
+        ("en", (900, 1200)),
+    ],
+)
+def test_communication_layout_screenshot(
+    screen: tuple[ProductionWindow, FakeSession],
+    qapp: QApplication,
+    tmp_path: Path,
+    language: Language,
+    size: tuple[int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ensure_test_fonts()
+    window, _ = screen
+    window.set_language(language)
+    window.resize(*size)
+    window.navigate(2)
+    window.communication.advanced_button.click()
+    monkeypatch.setattr(window.communication, "_execute", response)
+    window.communication.count.setValue(3)
+    window.communication.read_button.click()
+    until(lambda: not window.communication.busy)
+    qapp.processEvents()
+    page = window.communication
+    for control in (
+        page.host,
+        page.port,
+        page.timeout,
+        page.address,
+        page.count,
+        page.read_button,
+        page.test_button,
+        page.write_button,
+        page.advanced_button,
+        *page.destination,
+        *page.source,
+    ):
+        parent = control.parentWidget()
+        assert parent is not None and parent.rect().contains(control.geometry())
+        assert control.height() >= Style.touch
+    assert page.body.width() <= page.scroll_area.viewport().width()
+    assert (
+        page.read_button.width()
+        >= page.read_button.fontMetrics().horizontalAdvance(page.read_button.text())
+        + 20
+    )
+    assert window.event_frame.height() == 33
+    assert window.grab().save(
+        str(tmp_path / f"communication-{language}-{size[0]}x{size[1]}.png")
+    )
+
+
+def test_failed_thread_start_leaves_no_owner_or_disabled_controls(
+    page: CommunicationPage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Unstarted(Thread):
+        def start(self) -> None:
+            raise RuntimeError("thread startup unavailable")
+
+    monkeypatch.setattr("vimo_demo.ui.communication_page.Thread", Unstarted)
+    assert not page.dispatch(RequestKind.READ)
+    assert not page.busy and page.read_button.isEnabled()
+    assert page.status.text() == text("comm_unexpected_error", page.language)
+    assert not any(t.name == "FinsCommunication" for t in threads())
+
+
+def test_unconfigured_shell_communication_has_no_production_dependency(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    from vimo_demo.ui.bootstrap import ApplicationData, create_window, load_startup
+    from vimo_demo.ui.inference_bridge import FutureDelivery
+
+    delivery = FutureDelivery()
+    startup = load_startup(ApplicationData.at_entry(tmp_path))
+    window = create_window(startup, delivery)
+    try:
+        window.show()
+        window.navigate(2)
+        assert window.snapshot.state is ApplicationState.UNCONFIGURED
+        assert window.communication.read_button.isEnabled()
+        assert window.communication.test_button.isEnabled()
+        assert window.communication.last_response is None
+        assert window.communication.log_count == 0
+        assert not window.snapshot.runtime_owned
+    finally:
+        window.close()
+        until(lambda: window.bridge.closed and window.communication.closed)
+        window.deleteLater()
+        delivery.detach()
