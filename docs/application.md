@@ -466,6 +466,17 @@ admitted frame identity/generation/source key. Display delivery is not accountin
 Local composition uses one collecting and one queued READY slot with a 30-second
 collection deadline; these are current demo settings, not hardware requirements.
 
+Explicit developer composition may opt into a per-generation first-station report
+owner with `reporting=LocalReportingSettings(...)`. It receives compact terminal
+status projections independently of painting/accounting and uses its own bounded
+serial network thread. Default/normal startup remains disabled. Warm-up causes no
+reports or FINS requests. Ordinary communication failures leave visual inspection
+and counters unchanged; report backlog/state rejection records an explicit source
+issue and requests Application Stop. The local application's `reporting_snapshot()`
+exposes current/last-generation observations without changing the core application
+snapshot schema. Eligibility, sequence, network failure and reporting Future
+semantics belong to [communication](communication.md#local-production-reporting).
+
 Saved `target_fps` supplies a start-to-start source-iteration budget. The loop
 uses the absolute deadline of the previous iteration's monotonic start plus
 `1 / target_fps`. B12 waiting reserves 12 ms from the remaining budget for fine
@@ -503,8 +514,10 @@ It cannot force-cancel an active native call; see
 
 Application lifecycle cleanup requests session Stop, joins its owned runtime
 threads, verifies `cleanup_safe`, and resolves outstanding observations before
-release. Local composition must also join its source; READY cannot precede its
-exit. Stop success establishes session termination/ownership release, while the
+release. Local composition must also join its source and any enabled report owner;
+READY cannot precede their exit. Reporting Stop skips unclaimed work but allows
+its claimed logical submission to finish; safe socket cleanup is required. Stop
+success establishes session termination/ownership release, while the
 application lifecycle thread remains alive for another Start. A pending repeated
 Stop shares completion; idle READY/UNCONFIGURED Stop needs no session.
 
@@ -564,6 +577,13 @@ process, repeated serially. They do not save sources or become normal persistent
 Folder configuration. Artifact paths still resolve relative to model metadata;
 there is no runtime/model substitution. Operator persistence and draft workflows
 remain in the existing UI documents.
+
+For opt-in localhost automatic first-station reporting, add `--report-first-station`.
+The developer-only options are `--fins-port` (9600), `--fins-timeout` (1 second),
+`--fins-pending` (8 waiting reports), `--fins-destination NETWORK NODE UNIT`
+(0 2 0) and `--fins-source NETWORK NODE UNIT` (0 1 0). There is no target-host option.
+See the [two-terminal reporting procedure](communication.md#local-manual-verification).
+This does not enable reporting in `app.py` or persist a PLC profile.
 
 For headless composition, supply prepared configuration and owned warm-up arrays;
 the example performs readiness only, no production admission:

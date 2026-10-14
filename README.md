@@ -178,8 +178,11 @@ it installs nothing.
 The [FINS/UDP contract and two-terminal demo](docs/communication.md#local-simulator-and-manual-demonstration)
 cover the independent communication subset. The
 [first-station protocol](docs/communication.md#first-station-result-projection-and-submission)
-adds explicit 36-channel projection and acknowledged W50–W52 / W49 writes without
-automatic Production reporting. The
+adds explicit 36-channel projection and acknowledged W50–W52 / W49 writes. Optional
+[local automatic reporting](docs/communication.md#local-production-reporting) is
+enabled only by `--report-first-station` in `scripts/run_local_production_ui.py`,
+with a bounded serial owner and exact `127.0.0.1` target; normal `app.py` leaves it
+disabled. The
 [Communication workspace](docs/communication.md#communication-workspace) uses it
 outside the GUI thread; writes remain localhost-only. Real Production PLC integration
 and hardware commissioning remain unimplemented.

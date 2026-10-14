@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from time import monotonic, sleep
 
 import cv2
@@ -33,7 +33,16 @@ from vimo_demo.application.folder_replay import (
     FolderSourceError,
     start_interval_wait,
 )
-from vimo_demo.application.session import EngineFactory
+from vimo_demo.application.session import EngineFactory, ProductionCycle
+from vimo_demo.communication.reporting import (
+    FirstStationReport,
+    FirstStationReportingWorker,
+    LocalReportingSettings,
+    ReportIdentity,
+    ReportingCapacityError,
+    ReportingSnapshot,
+    ReportingStateError,
+)
 from vimo_demo.configuration import (
     CameraFolder,
     CameraSources,
@@ -48,6 +57,7 @@ from vimo_demo.configuration import (
 from vimo_demo.inference import VimoSegmentationEngine
 from vimo_demo.inference._validation import uint8_array
 from vimo_demo.inspection import CycleId, Frame, FrameId
+from vimo_demo.inspection.production import ProductionInspectionResult
 from vimo_demo.runtime import CoordinatorStoppedError, InferenceEngine
 from vimo_demo.ui.camera_source_editor import CameraSourceDraft
 from vimo_demo.ui.display_frames import LatestDisplayFrameStore
@@ -107,6 +117,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         replay: FolderReplay | None = None,
         sources: CameraSources | None = None,
         source_base: Path = Path("."),
+        reporting: FirstStationReportingWorker | None = None,
     ) -> None:
         def warmup(config: PreparedConfiguration) -> Sequence[NDArray[np.generic]]:
             for camera, image in zip(
@@ -128,6 +139,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         self._layout = prepared.configuration.layout
         self._replay, self._sources, self._source_base = replay, sources, source_base
         self._source_stop = Event()
+        self.reporting = reporting
+        self._reporting_overload: RuntimeError | None = None
         self.source_done: Future[None] = Future()
         self.source_done.set_running_or_notify_cancel()
         self._source = Thread(
@@ -137,13 +150,54 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         )
 
     def start(self) -> Future[None]:
+        if self.reporting is not None:
+            self.reporting.start()
         ready = super().start()
         self._source.start()
         return ready
 
     def request_stop(self) -> None:
         self._source_stop.set()
+        if self.reporting is not None:
+            self.reporting.request_stop()
         super().request_stop()
+
+    def begin_cycle(self, cycle_id: CycleId) -> ProductionCycle:
+        cycle = super().begin_cycle(cycle_id)
+        if self.reporting is not None:
+            cycle.result.add_done_callback(
+                lambda future: self._report_result(cycle_id, future)
+            )
+        return cycle
+
+    def _report_result(
+        self, cycle_id: CycleId, future: Future[ProductionInspectionResult]
+    ) -> None:
+        reporter = self.reporting
+        assert reporter is not None
+        identity = ReportIdentity(self.generation, cycle_id)
+        try:
+            result = future.result()  # Terminal Future only; no I/O or unfinished wait.
+            if result.cycle_id != cycle_id:
+                raise ValueError("Reporting result belongs to another cycle")
+            report = FirstStationReport.from_result(self.generation, result)
+        except BaseException as exc:
+            reporter.note_skipped(
+                identity, exc
+            )  # Scalar diagnostic, no traceback retention.
+            return
+        try:
+            reporter.submit(report)  # Nonblocking FIFO admission; never socket work.
+        except (ReportingCapacityError, ReportingStateError) as exc:
+            # Keep a fresh, traceback-free source issue. The completed inspection
+            # still reaches accounting; overload is not model NG/application FAULT.
+            with self._lock:
+                self._reporting_overload = type(exc)(str(exc))
+            self._source_stop.set()
+            try:
+                self._application.stop()
+            except ApplicationStateError:
+                pass  # Close/Stop may already own the shutdown boundary.
 
     def join(self, timeout: float | None = None) -> bool:
         deadline = None if timeout is None else monotonic() + timeout
@@ -153,6 +207,9 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             remaining = None if deadline is None else max(0, deadline - monotonic())
             self._source.join(remaining)
         joined = not self._source.is_alive()
+        if self.reporting is not None:
+            remaining = None if deadline is None else max(0, deadline - monotonic())
+            joined = self.reporting.join(remaining) and joined
         if (
             joined
             and self.cleanup_safe
@@ -166,8 +223,18 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         return joined
 
     @property
+    def cleanup_safe(self) -> bool:
+        return super().cleanup_safe and (
+            self.reporting is None or self.reporting.cleanup_safe
+        )
+
+    @property
     def thread_names(self) -> tuple[str, ...]:
-        return (*super().thread_names, self._source.name)
+        return (
+            *super().thread_names,
+            self._source.name,
+            *((self.reporting.thread_name,) if self.reporting else ()),
+        )
 
     def _produce(self) -> None:
         try:
@@ -232,7 +299,12 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                 self._application.stop()
         finally:
             if not self.source_done.done():
-                self.source_done.set_result(None)
+                with self._lock:
+                    reporting_error = self._reporting_overload
+                if reporting_error is not None:
+                    self.source_done.set_exception(reporting_error)
+                else:
+                    self.source_done.set_result(None)
 
 
 class _LocalApplication(ProductionApplication):
@@ -244,7 +316,19 @@ class _LocalApplication(ProductionApplication):
         cache: FolderReplayCache,
     ) -> None:
         self.replay_cache = cache
+        self._reporting_lock = Lock()
+        self._reporting_worker: FirstStationReportingWorker | None = None
         super().__init__(factory)
+
+    def set_reporting_owner(self, worker: FirstStationReportingWorker | None) -> None:
+        with self._reporting_lock:
+            self._reporting_worker = worker
+
+    def reporting_snapshot(self) -> ReportingSnapshot | None:
+        """Current/last generation only; no report/result history or Qt dependency."""
+        with self._reporting_lock:
+            worker = self._reporting_worker
+        return worker.snapshot() if worker else None
 
     def close(self) -> Future[None]:
         completed = super().close()
@@ -291,6 +375,7 @@ def compose(
     observe_source: Callable[[Future[None]], None] = lambda _: None,
     sources_file: Path | None = None,
     observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
+    reporting: LocalReportingSettings | None = None,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
@@ -341,6 +426,7 @@ def compose(
         engine_factory=engine_factory,
         observe_source=observe_source,
         observe_cache=observe_cache,
+        reporting=reporting,
     )
     app.configure(prepared)
     return LocalComposition(
@@ -355,6 +441,7 @@ def local_application(
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
     observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
+    reporting: LocalReportingSettings | None = None,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != 6:
@@ -424,6 +511,9 @@ def local_application(
         group = images if replay is None else replay.next_group()
         if group is None:
             raise ValueError("No complete image group")
+        report_worker = (
+            FirstStationReportingWorker(generation, reporting) if reporting else None
+        )
         session = LocalRuntimeSession(
             config,
             generation,
@@ -434,7 +524,9 @@ def local_application(
             replay=replay,
             sources=snapshot,
             source_base=sources_file.parent,
+            reporting=report_worker,
         )
+        app.set_reporting_owner(report_worker)
         observe_source(session.source_done)
         return session
 

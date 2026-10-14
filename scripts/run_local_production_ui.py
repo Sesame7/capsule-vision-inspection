@@ -8,6 +8,8 @@ from pathlib import Path
 from PySide6.QtWidgets import QApplication
 
 from vimo_demo.application.folder_replay import folder_images
+from vimo_demo.communication import FinsAddress
+from vimo_demo.communication.reporting import LocalReportingSettings
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.local_production import SourceNotifications as SourceNotifications
 from vimo_demo.ui.local_production import compose as compose
@@ -36,6 +38,33 @@ def main() -> int:
     )
     parser.add_argument("--language", choices=("zh", "en"), default="zh")
     parser.add_argument("--size", default="1080x1920")
+    parser.add_argument(
+        "--report-first-station",
+        action="store_true",
+        help="Opt-in automatic W49..W52 reporting to exactly 127.0.0.1",
+    )
+    parser.add_argument("--fins-port", type=int, default=9600)
+    parser.add_argument("--fins-timeout", type=float, default=1.0)
+    parser.add_argument(
+        "--fins-pending",
+        type=int,
+        default=8,
+        help="Pending report limit, excluding the active report",
+    )
+    parser.add_argument(
+        "--fins-destination",
+        nargs=3,
+        type=int,
+        default=(0, 2, 0),
+        metavar=("NETWORK", "NODE", "UNIT"),
+    )
+    parser.add_argument(
+        "--fins-source",
+        nargs=3,
+        type=int,
+        default=(0, 1, 0),
+        metavar=("NETWORK", "NODE", "UNIT"),
+    )
     args = parser.parse_args()
     try:
         width, height = (int(n) for n in args.size.lower().split("x"))
@@ -53,6 +82,15 @@ def main() -> int:
             paths,
             observe_source=lambda future: delivery.watch("folder_source", future),
             sources_file=args.sources_config,
+            reporting=LocalReportingSettings(
+                port=args.fins_port,
+                timeout=args.fins_timeout,
+                max_pending=args.fins_pending,
+                destination=FinsAddress(*args.fins_destination),
+                source=FinsAddress(*args.fins_source),
+            )
+            if args.report_first_station
+            else None,
         )
     except Exception:
         traceback.print_exc()
