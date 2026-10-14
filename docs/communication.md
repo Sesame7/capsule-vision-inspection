@@ -315,6 +315,13 @@ Communication page add a **W49, count 4** watch and enable refresh. A fresh simu
 starts W49 at zero; acknowledged passes advance it, even for identical bitmaps.
 The simulator terminal prints each processed W49 write and its current bitmap;
 this [event trace](#first-station-write-trace) does not require register monitoring.
+For one-pass review, use **Step / 单步** from READY: normal startup/warm-up precedes
+one six-camera inspection, then local replay pauses within RUNNING. Further Step
+advances one group; Continue/Pause switches automatic replay without resetting
+CycleId or PLC sequence. Step completion does not wait for this asynchronous
+report's ACK. To end a paused session, Continue then End, or close the window.
+Genuine End/Close and non-Loop exhaustion retain normal report draining/skipping;
+see [local replay controls](application.md#local-replay-controls).
 W50–W52 reflect OK=0 and NG/EMPTY/UNKNOWN=1; W52 upper bits remain zero. Watch reads
 are not atomic with the two writes, so a transitional read is not a delivery verdict.
 Stopping monitoring or leaving Communication does not stop automatic reporting.

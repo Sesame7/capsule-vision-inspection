@@ -214,6 +214,18 @@ STRINGS: dict[str, tuple[str, str]] = {
     "settings": ("视觉", "Vision"),
     "start": ("开始检测", "Start inspection"),
     "stop": ("停止检测", "Stop inspection"),
+    "replay_pause": ("暂停", "Pause"),
+    "replay_start": ("开始", "Start"),
+    "replay_continue": ("继续", "Continue"),
+    "replay_step": ("单步", "Step"),
+    "replay_end": ("结束", "End"),
+    "replay_pausing": ("暂停中…", "Pausing…"),
+    "replay_stepping": ("单步中…", "Stepping…"),
+    "replay_paused": ("回放已暂停", "Replay paused"),
+    "replay_help": (
+        "仅暂停本地图片源；检测会话仍在运行，配置保持锁定。单步完成不代表 PLC 已确认。",
+        "Local source only; the inspection session stays RUNNING and editing stays locked. Step completion is not PLC ACK.",
+    ),
     "reset": ("复位", "Reset"),
     "recipe": ("选择配方", "Select recipe"),
     "batch": ("新建 / 更换批次", "New / change batch"),
@@ -590,7 +602,7 @@ def production_icon(kind: str) -> QIcon:
         else Style.ok
         if kind in ("READY", "RUNNING")
         else Style.background
-        if kind in ("start", "stop", "reset")
+        if kind in ("start", "stop", "reset", "replay_pause", "replay_continue")
         else Style.secondary
     )
     icon = QIcon()
@@ -605,14 +617,19 @@ def production_icon(kind: str) -> QIcon:
             painter.drawEllipse(QRectF(3, 3, 16, 16))
             painter.setBrush(QColor(color))
             painter.drawEllipse(QRectF(8, 8, 6, 6))
-        elif kind == "start":
+        elif kind in ("start", "replay_continue", "replay_step"):
             for a, b in (
                 (QPointF(6, 4), QPointF(18, 11)),
                 (QPointF(18, 11), QPointF(6, 18)),
                 (QPointF(6, 18), QPointF(6, 4)),
             ):
                 painter.drawLine(a, b)
-        elif kind == "stop":
+            if kind == "replay_step":
+                painter.drawLine(19, 4, 19, 18)
+        elif kind == "replay_pause":
+            painter.drawLine(7, 5, 7, 17)
+            painter.drawLine(15, 5, 15, 17)
+        elif kind in ("stop", "replay_end"):
             painter.drawRect(QRectF(5, 5, 12, 12))
         elif kind == "reset":
             painter.drawArc(4, 4, 14, 14, 30 * 16, 290 * 16)

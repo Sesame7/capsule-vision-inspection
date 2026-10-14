@@ -23,6 +23,7 @@ from vimo_demo.application import (
     ProductionApplicationSnapshot,
 )
 from vimo_demo.application.folder_replay import FolderSourceError
+from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import (
     FindingSource,
@@ -35,7 +36,13 @@ from .communication_page import CommunicationPage
 from .display_frames import DisplayFrame, DisplaySnapshot
 from .parameters_page import ParametersPage
 from .production_bridge import QtProductionBridge, RecipeChoice
-from .production_presentation import Indicator, controls, grid_columns, primary_action
+from .production_presentation import (
+    Indicator,
+    controls,
+    grid_columns,
+    primary_action,
+    replay_actions,
+)
 from .production_style import (
     Language,
     Style,
@@ -198,8 +205,22 @@ class ProductionWindow(QMainWindow):
         operation.setFixedSize(4 * Style.touch, Style.touch)
         operation.setIconSize(QSize(Style.icon, Style.icon))
         operation.clicked.connect(self._operate)
-        header.addWidget(operation, 0, 2, Qt.AlignmentFlag.AlignRight)
         self.buttons = {"batch": batch, "operation": operation}
+        self.operation_group: QWidget = operation
+        if bridge.local_replay is not None:
+            self.operation_group = QWidget()
+            operations = QHBoxLayout(self.operation_group)
+            operations.setContentsMargins(0, 0, 0, 0)
+            operations.setSpacing(Style.small)
+            operation.setFixedWidth(3 * Style.touch)
+            operations.addWidget(operation)
+            secondary = QPushButton()
+            secondary.setFixedSize(2 * Style.touch, Style.touch)
+            secondary.setIconSize(QSize(Style.icon, Style.icon))
+            secondary.clicked.connect(self._secondary_operation)
+            operations.addWidget(secondary)
+            self.buttons["secondary"] = secondary
+        header.addWidget(self.operation_group, 0, 2, Qt.AlignmentFlag.AlignRight)
         summary_layout.addLayout(header)
         metric_row = QHBoxLayout()
         self.metrics: dict[str, tuple[QLabel, QLabel]] = {}
@@ -283,6 +304,7 @@ class ProductionWindow(QMainWindow):
         root.addWidget(event)
         self.parameters.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
+        bridge.replay_changed.connect(self._replay_changed)
         bridge.frames_changed.connect(self._frames_changed)
         bridge.command_failed.connect(self._command_failed)
         bridge.command_finished.connect(self._command_finished)
@@ -376,11 +398,21 @@ class ProductionWindow(QMainWindow):
     def _operate(self) -> None:
         if self._closing or not self.buttons["operation"].isEnabled():
             return
-        action = primary_action(self.snapshot.state)
+        action = self._actions()[0]
         current = self.bridge.application.snapshot()
-        if action != primary_action(current.state):
+        current_action = (
+            self._current_actions()[0]
+            if self.bridge.local_replay is not None
+            else primary_action(current.state)
+        )
+        if action != current_action or (
+            self.bridge.local_replay is not None
+            and current.generation != self.snapshot.generation
+        ):
             # A completed replay may reach READY before the next UI poll. Never
             # reinterpret a still-visible Stop/Reset click as a new Start.
+            if self.bridge.local_replay is not None:
+                self.bridge.refresh()
             self._snapshot_changed(current)
             return
         if action == "start":
@@ -389,6 +421,52 @@ class ProductionWindow(QMainWindow):
             self.bridge.stop()
         elif action == "reset":
             self.bridge.reset()
+        elif action == "replay_pause":
+            self.bridge.pause_replay()
+        elif action == "replay_continue":
+            self.bridge.continue_replay()
+
+    def _actions(self) -> tuple[str, str | None]:
+        replay = self.bridge.replay_snapshot
+        return (
+            replay_actions(self.snapshot.state, replay.state if replay else None)
+            if self.bridge.local_replay is not None
+            else (primary_action(self.snapshot.state), None)
+        )
+
+    def _current_actions(self) -> tuple[str, str | None]:
+        current = self.bridge.application.snapshot()
+        replay = (
+            self.bridge.local_replay.replay_snapshot()
+            if self.bridge.local_replay is not None
+            else None
+        )
+        return (
+            replay_actions(current.state, replay.state if replay else None)
+            if self.bridge.local_replay is not None
+            else (primary_action(current.state), None)
+        )
+
+    @Slot()
+    def _secondary_operation(self) -> None:
+        secondary = self.buttons.get("secondary")
+        if self._closing or secondary is None or not secondary.isEnabled():
+            return
+        action = self._actions()[1]
+        if (
+            action != self._current_actions()[1]
+            or self.snapshot.generation != self.bridge.application.snapshot().generation
+        ):
+            self.bridge.refresh()
+            return
+        if action == "replay_step":
+            self.bridge.step_replay()
+        elif action == "replay_end":
+            self.bridge.stop()
+
+    @Slot(object)
+    def _replay_changed(self, _snapshot: object) -> None:
+        self._render()
 
     @Slot(object)
     def _recipe_applied(self, choice: object) -> None:
@@ -492,7 +570,7 @@ class ProductionWindow(QMainWindow):
     @Slot(str, object)
     def _command_failed(self, command: str, error: object) -> None:
         source_error = error if command == "folder_source" else None
-        if command == "start" and isinstance(error, BaseException):
+        if command in ("start", "replay_step") and isinstance(error, BaseException):
             cause: BaseException | None = error
             for _ in range(8):  # Existing lifecycle wrapping preserves source causes.
                 if isinstance(cause, FolderSourceError):
@@ -575,7 +653,7 @@ class ProductionWindow(QMainWindow):
         snapshot, language = self.snapshot, self.language
         self.configuration_placeholder.setText(text("configure_first", language))
         availability = controls(snapshot)
-        action = primary_action(snapshot.state)
+        action, secondary_action = self._actions()
         enabled = {
             "start": availability.start
             and not self.parameters.busy
@@ -591,10 +669,19 @@ class ProductionWindow(QMainWindow):
             ),
             "stop": availability.stop,
             "reset": availability.reset,
+            "replay_pause": snapshot.state is ApplicationState.RUNNING,
+            "replay_continue": snapshot.state is ApplicationState.RUNNING,
         }.get(action, False)
         operation = self.buttons["operation"]
         operation.setEnabled(bool(enabled) and not self._closing)
-        operation.setText(text(action, language))
+        operation.setText(
+            text(
+                "replay_start"
+                if action == "start" and self.bridge.local_replay
+                else action,
+                language,
+            )
+        )
         operation.setIcon(production_icon(action))
         operation.setAccessibleName(operation.text())
         operation.setToolTip(
@@ -604,11 +691,43 @@ class ProductionWindow(QMainWindow):
             if action == "stop"
             else operation.text()
         )
+        secondary = self.buttons.get("secondary")
+        if secondary is not None:
+            secondary.setVisible(secondary_action is not None)
+            secondary.setText(text(secondary_action or "replay_step", language))
+            secondary.setIcon(production_icon(secondary_action or "replay_step"))
+            secondary.setAccessibleName(secondary.text())
+            secondary.setToolTip(
+                text(
+                    "software_stop"
+                    if secondary_action == "replay_end"
+                    else "replay_help",
+                    language,
+                )
+            )
+            secondary.setEnabled(
+                not self._closing
+                and (
+                    enabled
+                    if action == "start"
+                    else secondary_action in ("replay_step", "replay_end")
+                )
+            )
         self.buttons["batch"].setEnabled(availability.batch and not self._closing)
         state = "closing" if self._closing else snapshot.state.name
         self.state_label.setText(text(state, language))
+        if (
+            snapshot.state is ApplicationState.RUNNING
+            and self.bridge.replay_snapshot is not None
+            and self.bridge.replay_snapshot.state is ReplayState.PAUSED
+        ):
+            self.state_label.setText(text("replay_paused", language))
         self.state_label.setToolTip(
-            text("simulation", language) if self.simulation else ""
+            text("replay_help", language)
+            if self.bridge.local_replay is not None
+            else text("simulation", language)
+            if self.simulation
+            else ""
         )
         self.state_icon.setPixmap(
             production_icon(snapshot.state.name).pixmap(Style.icon, Style.icon)
@@ -882,7 +1001,9 @@ class ProductionWindow(QMainWindow):
         )
         side_width = max(
             self.identity_group.minimumSizeHint().width(),
-            self.buttons["operation"].width(),
+            self.operation_group.sizeHint().width()
+            if self.bridge.local_replay is not None
+            else self.buttons["operation"].width(),
         )
         batch_width = max(
             1,

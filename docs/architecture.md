@@ -25,7 +25,7 @@ and opt-in automatic first-station reporting from explicit local composition.
 | Collection and runtime | Explicit frame/cycle identity, ordered collection, bounded admission and READY inspection backlog, terminal results/errors and observable shutdown. |
 | Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, always-on scalar Occupancy with explicit EMPTY traditional skips, selective Size/Color checks, and independent technical status and product judgment. |
 | Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and separate factual judgment/business-occurrence accounting. |
-| Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
+| Local sources | Owned image-set ingress, independent per-camera Folder replay (application-lifetime RAM dataset for saved Loop sources), explicit fixed images and opt-in session-local Pause/Continue/Step in the developer demo. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
 | Communication | Qt-independent FINS/UDP DM/WR words, first-station projection/two-write submission, localhost simulator, independent manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
@@ -152,6 +152,13 @@ Readiness warm-up produces no production data or counters. Accounting measures
 admitted cycles/channel judgments, not capsules; only explicit Batch resets it,
 not Stop/Start or Recipe changes. The local source waits for RUNNING and each cycle
 before advancing. Overlapping-collection support is not physical-throughput evidence.
+
+The explicit local demo can gate subsequent source groups with Pause/Continue/Step
+while the application remains RUNNING. This creates no general Production PAUSED
+state, additional inference owner or real-camera semantics. The
+[application contract](application.md#local-replay-controls) owns group claiming,
+formal-result observation, cursor/pacing and genuine shutdown; Qt only commands
+and presents that optional boundary. Normal startup controls remain unchanged.
 
 Optional reporting performs no network work on the inference, completion-callback
 or Qt threads. Ordinary communication errors do not change inspection/accounting;
