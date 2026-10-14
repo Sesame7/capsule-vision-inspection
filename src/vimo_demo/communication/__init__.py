@@ -7,6 +7,7 @@ from .fins import (
     FinsPlcError,
     FinsProtocolError,
     FinsTimeoutError,
+    FinsTransport,
     FinsTransportError,
     FinsUdpClient,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "FinsTcpClient",
     "FinsTcpEnvelopeError",
     "FinsTimeoutError",
+    "FinsTransport",
     "FinsTransportError",
     "FinsUdpClient",
     "FirstStationCommit",

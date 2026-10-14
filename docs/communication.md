@@ -3,8 +3,9 @@
 ## Current scope and authority
 
 `vimo_demo.communication` provides a standalone, synchronous, standard-library
-FINS/UDP transport and loopback simulator, plus a standalone FINS/TCP client.
-TCP is not connected to manual UI, register watches or Production reporting.
+FINS UDP/TCP clients and a UDP loopback simulator. Manual operations/register
+watches and optional Production reporting independently select UDP/TCP, defaulting
+to UDP. These are memory-only preferences; no persistent PLC profile is added.
 The existing first-station projection consumes the Inspection business-status enum,
 without changing inspection evidence,
 judgments or counters. Only projection/reporting requires Inspection types;
@@ -35,7 +36,7 @@ Local client/simulator agreement alone is not evidence of standards compliance.
 
 | Item | Current contract |
 | --- | --- |
-| Transport | Numeric unicast IPv4, UDP or standalone TCP port 9600 by default; one response-required request at a time |
+| Transport | Numeric unicast IPv4, UDP or TCP port 9600 by default; one response-required request at a time |
 | Addressing | UDP: explicit destination/source `FinsAddress(network, node, unit)`; network 0–127, unicast node 1–254, unit byte 0–255. TCP: negotiated nodes, network/unit zero only. |
 | Memory | DM/D **words**, code `82`, D0–D32767; W/WR **words**, code `B1`, W0–W511; bit address zero |
 | Read | `01 01`; 1–999 consecutive unsigned words |
@@ -177,8 +178,8 @@ A write timeout, disconnect or invalid/missing ACK has **unknown execution outco
 Timeout/OS error text and protocol/closed-stream exception notes retain that warning.
 The client does not retry even when the peer already mutated memory. A valid write
 response acknowledges protocol processing, not PLC scan consumption or rejection
-actuation. Adding this low-level transport changes no UI/reporting localhost-write
-policy and authorizes no real-equipment test.
+actuation. Both manual and reporting execution boundaries restrict writes to
+exactly `127.0.0.1`, independently of transport; no real-equipment test is authorized.
 
 Safe CPU-only localhost verification from the repository root:
 
@@ -192,8 +193,9 @@ envelopes/identities, fragmentation, maximum payloads, SID rollover, PLC errors,
 ambiguous writes before/after remote mutation, ownership and socket/thread release.
 An explicit test clock verifies partial-receive deadlines without sleep polling;
 `python -S` verifies transport imports without Qt/NumPy/SmartMore. No persistent TCP
-simulator CLI or application TCP configuration is added. This is protocol verification,
-not NX102 hardware certification; real settings/allocated memory still need commissioning.
+simulator CLI or persisted application TCP configuration is added. This is protocol
+verification, not NX102 hardware certification; real settings/allocated memory still
+need commissioning.
 
 ## First-station result projection and submission
 
@@ -298,11 +300,18 @@ Second station and physical synchronization remain unimplemented.
 `FirstStationReport`, `FirstStationReportingWorker` and immutable observations.
 Pass `reporting=LocalReportingSettings(...)` to the existing local `compose()` or
 `local_application()` entry. The developer launcher exposes `--report-first-station`;
-the default is disabled. Normal startup exposes the same owner through
+the default is disabled. `--fins-transport {udp,tcp}` selects its fixed transport
+(default UDP); source/destination arguments apply only to UDP. Normal startup exposes
+the same owner through
 [memory-only preferences](#normal-application-reporting-controls), not CLI flags.
 No Recipe, persisted PLC schema or recovery data changes. Settings reject every
 host except the exact IPv4 string `127.0.0.1` below the CLI/UI boundary; the
 reporting worker repeats this check before client construction at execution.
+`LocalReportingSettings.transport` uses `FinsTransport.UDP` or `.TCP`. The same
+`FirstStationReporter` and reporting thread serve both; TCP connect/negotiation
+happen on that owner, not inference, completion-callback or Qt threads. A later
+new cycle may create a new TCP client after failure, retaining an already initialized
+local next sequence; the failed report is never resubmitted.
 
 Each application generation owns one non-daemon `FirstStationReporting-N` thread.
 It alone constructs, uses, replaces and closes its FINS client. Engine ownership
@@ -376,7 +385,7 @@ finishing after Stop is also explicitly skipped. The claimed logical report is
 allowed to finish naturally, including its ordered bitmap/sequence writes and,
 if needed, initial read. Each exchange has the configured bounded timeout; Stop
 does not interrupt between the helper's acknowledged write stages or force-cancel
-a UDP request. Observer callbacks can also delay actual owner termination.
+a UDP/TCP exchange. Observer callbacks can also delay actual owner termination.
 
 Session join must observe source, runtime and reporting thread exit and safe cleanup
 before application READY or owner release. Repeated Stop is harmless. Failed socket
@@ -395,12 +404,16 @@ Read-only monitoring uses an independent client and is safe for observation.
 ### Normal application reporting controls
 
 Normal startup exposes `ReportingSelection(enabled, settings)` through a small
-composition command boundary. It defaults to disabled with port **9600**, timeout
+composition command boundary. It defaults to disabled with **UDP**, port **9600**, timeout
 **1 s**, destination **0/2/0**, source **0/1/0** and hidden `max_pending=8`. The
 target is fixed to **127.0.0.1**; manual endpoint fields remain independent.
-Enablement, port/timeout and collapsible advanced routing are application-memory
+Automatic protocol, enablement, port/timeout and collapsible UDP addressing are application-memory
 preferences, never written into `data/app.json`, Recipe, MachineLayout or sources.
 Closing/relaunching restores defaults and disables reporting.
+Manual protocol/endpoint settings are separate and never redirect the reporting
+owner. Both selectors live in the existing connection-settings dialog. In TCP mode,
+the UDP-only address editors are disabled, retaining their values for switching back;
+the TCP client uses negotiated nodes instead. Endpoint summaries identify transport.
 
 Selection changes require application READY or UNCONFIGURED, both at the UI and
 composition command boundary. STARTING/RUNNING/STOPPING/FAULT/CLOSED reject edits;
@@ -509,6 +522,63 @@ then stop the simulator with Ctrl+C. The developer launcher retains its fixed CL
 settings and `reporting_snapshot()` composition observation; normal startup uses
 the compact panel described above.
 
+### TCP localhost verification
+
+The existing `run_fins_simulator.py` serves **UDP only**. For interactive TCP
+verification, this test-only peer can be held in a repository-root PowerShell
+terminal. It uses no GPU/Qt and starts two independent localhost ports:
+
+```powershell
+$tcpPeerCode = @'
+from tests.fins_tcp_support import TcpPeer
+with TcpPeer() as manual, TcpPeer(sequence=10) as automatic:
+    print(f"Manual TCP: 127.0.0.1:{manual.port}", flush=True)
+    print(f"Reporting TCP: 127.0.0.1:{automatic.port}", flush=True)
+    input("Close the application first, then press Enter to stop both test peers. ")
+    print("Final reporting W49-W52:", automatic.words(49, 4))
+'@
+uv run --no-sync python -c $tcpPeerCode
+```
+
+In another terminal launch normal `uv run --no-sync python app.py` with existing
+valid local configuration. In Communication's settings dialog:
+
+1. Select manual **FINS/TCP**, host `127.0.0.1`, and the printed **Manual TCP** port.
+   UDP address controls become inactive; no request occurs merely by switching.
+   Test read D100 (initially 1234), write/read back D100, and add a W49/count-4
+   watch. Switching back to UDP restores the original address values. Manual
+   remote reads remain an explicitly configured operation; writes stay localhost-only.
+2. Independently select automatic **FINS/TCP**, its printed **Reporting TCP** port,
+   and enable reporting while READY. Use Production Step/Start. Readiness has zero
+   reports; the first successful submission has sequence 11 and ordered bitmap then
+   W49 writes. Observe ACK/counts in the existing reporting bar. PAUSED remains
+   RUNNING with automatic preferences locked; manual settings remain independent.
+3. A manual W49–W52 write is blocked while reporting owns the generation, for either
+   manual transport. Reads remain permitted. This narrow peer serves one connection
+   at a time per port, so the separate Manual TCP port allows concurrent observation;
+   it is not a general multi-client PLC simulator or a PLC-consumption model.
+4. End/Stop and wait for READY before changing automatic settings or starting a
+   new generation. Close the application normally, then press Enter in the peer
+   terminal; both sockets/threads terminate. A restarted application defaults to
+   reporting disabled/UDP. No configuration files or profiles are written.
+
+For the existing explicit-path developer command above, append
+`--fins-transport tcp` and replace `--fins-port 9600` with the printed Reporting TCP
+port. Its automatic settings remain fixed by that launcher; UDP source/destination
+arguments are retained for compatibility but do not supply TCP node addresses.
+The normal application uses the dialog preference, not a new startup flag.
+
+CPU-only checks of these workflows, including injected TCP failures and later-cycle
+recovery, can be run without a model or camera:
+
+```powershell
+uv run --no-sync pytest tests/integration/test_tcp_communication.py tests/unit/test_tcp_reporting.py tests/integration/test_normal_reporting_ui.py --tb=short -o cache_dir=outputs/pytest-cache-tcp2
+```
+
+Their independent peer verifies actual negotiated addressing, memory values and
+write order. Neither the peer nor protocol ACK establishes NX102 hardware
+compatibility, PLC scan consumption or mechanical rejection.
+
 ## Local simulator and manual demonstration
 
 From the repository root, use two PowerShell terminals.
@@ -615,10 +685,16 @@ for inspection while controls are locked. Language changes and disclosure toggle
 do not stop/restart requests. Navigation and approved application close hide it,
 while retaining the existing page/request shutdown rules below.
 
-Only FINS/UDP is available in this workspace; the standalone TCP API has no UI wiring.
-Numeric IPv4
+Manual **FINS/UDP** (default) and **FINS/TCP** selection is session-local, independent
+of automatic reporting. Numeric IPv4
 defaults to `127.0.0.1`, port to 9600 and timeout to one second (UI range **0.05–30
 seconds**). FINS nodes remain explicit when the host changes.
+UDP retains explicit source/destination addresses; TCP negotiation replaces only
+their use on the wire, not their saved widget values. Switching protocol itself
+starts no connection. Each request/watch pass captures its transport/endpoint and
+uses the same existing background owner and completion-based refresh cadence.
+TCP negotiation/transport/PLC errors use existing feedback and stop automatic
+refresh on failure; there is no persistent online indicator or reconnect loop.
 
 **Test read** reads one word at the manual area's current start address; it is not a connection
 handshake. **Read** uses the configured count. **Write** takes decimal unsigned
@@ -680,13 +756,18 @@ automatic scheduling and retains localized error details; restart is explicit.
 Successful automatic passes update values/status without logging each pass. Manual
 passes add one compact record; monitoring errors enter the existing bounded log.
 
-Endpoint/routing, area/ranges and groups are captured as immutable request snapshots
+Transport/endpoint/routing, area/ranges and groups are captured as immutable request snapshots
 before dispatch. Manual fields do not determine watch ranges. One non-daemon
 **FinsCommunication** thread executes each admitted manual request or monitoring
 pass through the existing `execute_request()`. For a pass, each group gets a separate
 serial read and client context, constructed/used/closed on that same thread. No
 second transport owner or communication queue is added. GUI state never redirects
 in-flight requests, and callbacks never mutate widgets.
+Each TCP manual operation/watch group negotiates its own connection, then closes
+it; its elapsed observation includes negotiation and the memory exchange. These
+have separate bounded deadlines. Unlike that short-lived manual context, the
+automatic reporting owner reuses its negotiated client across reports until failure
+or shutdown. No connection pool or background connectivity monitor is introduced.
 
 Manual Test/Read/Write, connection fields and watch edits are excluded during a pass
 **and between passes while automatic mode is enabled**. Stop monitoring before
@@ -777,10 +858,10 @@ DPI/touch review remains manual; offscreen screenshots do not certify ergonomics
 
 ## Verification and hardware limitations
 
-The focused tests can omit the project's Qt conftest entirely:
+The focused UDP/TCP protocol tests can omit the project's Qt conftest entirely:
 
 ```powershell
-uv run --no-sync pytest --confcutdir=tests/unit tests/unit/test_fins.py --tb=short
+uv run --no-sync pytest --confcutdir=tests/unit tests/unit/test_fins.py tests/unit/test_fins_tcp.py --tb=short -o cache_dir=outputs/pytest-cache-fins-tcp
 ```
 
 They use dynamic loopback ports, independent literal request/response vectors,

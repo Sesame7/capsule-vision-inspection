@@ -13,6 +13,7 @@ from .fins import (
     FinsUdpClient,
     validate_integer,
 )
+from .fins_tcp import FinsTcpClient
 
 if TYPE_CHECKING:
     from vimo_demo.inspection.production import ChannelBusinessStatus, ChannelId
@@ -92,7 +93,9 @@ class FirstStationReporter:
     The owner must not use the borrowed client elsewhere during submission.
     """
 
-    def __init__(self, client: FinsUdpClient, *, initial_sequence: int) -> None:
+    def __init__(
+        self, client: FinsUdpClient | FinsTcpClient, *, initial_sequence: int
+    ) -> None:
         validate_integer("initial_sequence", initial_sequence, 0, 65535)
         self._client = client
         self._next_sequence = initial_sequence

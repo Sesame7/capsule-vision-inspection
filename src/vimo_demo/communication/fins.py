@@ -27,6 +27,17 @@ READ_COMMAND = b"\x01\x01"
 WRITE_COMMAND = b"\x01\x02"
 
 
+class FinsTransport(Enum):
+    UDP = "udp"
+    TCP = "tcp"
+
+
+def validate_transport(value: object) -> FinsTransport:
+    if not isinstance(value, FinsTransport):
+        raise ValueError("transport must be a FinsTransport instance")
+    return value
+
+
 class FinsMemoryArea(Enum):
     """Word access only; WR range follows W342 section 5-2-2."""
 

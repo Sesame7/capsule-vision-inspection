@@ -38,6 +38,7 @@ from vimo_demo.communication import (
     FinsPlcError,
     FinsProtocolError,
     FinsTimeoutError,
+    FinsTransport,
     FinsTransportError,
 )
 from vimo_demo.communication.operations import (
@@ -195,6 +196,7 @@ class CommunicationPage(QWidget):
         common.setHorizontalSpacing(Style.space)
         self.protocol = QComboBox()
         self.protocol.addItem("FINS/UDP")
+        self.protocol.addItem("FINS/TCP")
         self._inputs.append(self.protocol)
         self.host = QLineEdit("127.0.0.1")
         self.host.setMaxLength(64)
@@ -423,6 +425,7 @@ class CommunicationPage(QWidget):
         self.log.hide()
         layout.addStretch(1)
         self.host.textChanged.connect(self._refresh)
+        self.protocol.currentIndexChanged.connect(self._refresh)
         self.port.valueChanged.connect(self._refresh)
         self.set_language("zh")
 
@@ -550,6 +553,7 @@ class CommunicationPage(QWidget):
             button.setAccessibleName(button.text())
             button.setToolTip(button.text())
         for key, widget in (
+            ("comm_protocol", self.protocol),
             ("comm_host", self.host),
             ("comm_port", self.port),
             ("comm_timeout", self.timeout),
@@ -646,6 +650,9 @@ class CommunicationPage(QWidget):
             else self.count.value(),
             values,
             self._selected_area(self.area),
+            FinsTransport.TCP
+            if self.protocol.currentIndex() == 1
+            else FinsTransport.UDP,
         )
 
     @property
@@ -1085,7 +1092,9 @@ class CommunicationPage(QWidget):
             _LogEntry(
                 datetime.now().strftime("%H:%M:%S"),
                 "comm_" + request.kind.value if request else "comm_registers",
-                f"{request.host}:{request.port}" if request else self.host.text()[:64],
+                f"FINS/{request.transport.name} · {request.host}:{request.port}"
+                if request
+                else self.host.text()[:64],
                 f"{request.area.prefix}{request.start}–{request.area.prefix}{request.start + request.count - 1}"
                 if request
                 else "",
@@ -1098,7 +1107,7 @@ class CommunicationPage(QWidget):
     @staticmethod
     def _response_description(response: CommunicationResponse) -> str:
         request = response.request
-        return f"{response.completed_at.astimezone().strftime('%H:%M:%S')} · {request.host}:{request.port} · {request.area.prefix}{request.start}–{request.area.prefix}{request.start + request.count - 1} · {response.elapsed_ms:.1f} ms"
+        return f"{response.completed_at.astimezone().strftime('%H:%M:%S')} · FINS/{request.transport.name} · {request.host}:{request.port} · {request.area.prefix}{request.start}–{request.area.prefix}{request.start + request.count - 1} · {response.elapsed_ms:.1f} ms"
 
     @Slot()
     def _refresh(self) -> None:
@@ -1109,6 +1118,12 @@ class CommunicationPage(QWidget):
             widget.setEnabled(editable)
         for button in self._buttons.values():
             button.setEnabled(editable)
+        udp = self.protocol.currentIndex() == 0
+        self.advanced.setEnabled(editable and udp)
+        self.advanced_button.setEnabled(editable and udp)
+        self.protocol.setToolTip(
+            text("comm_protocol" if udp else "comm_tcp_nodes", self.language)
+        )
         for button in (
             self.settings_button,
             self.watch_editor_button,
@@ -1117,7 +1132,7 @@ class CommunicationPage(QWidget):
         ):
             button.setEnabled(not (self._closing or self._disposed))
         self.manual_endpoint.setText(
-            f"FINS/UDP · {self.host.text().strip()}:{self.port.value()}"
+            f"{self.protocol.currentText()} · {self.host.text().strip()}:{self.port.value()}"
         )
         self.manual_endpoint.setToolTip(text("comm_manual_connection", self.language))
         self.watch_remove.setEnabled(editable and bool(self._watch_groups))

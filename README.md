@@ -215,8 +215,11 @@ Chinese where available, otherwise ASCII references with Chinese labels in JSON;
 it installs nothing.
 
 The [standalone FINS/TCP client](docs/communication.md#standalone-finstcp-client)
-supports automatic node allocation and serial D/W words, with CPU-only loopback
-tests; it has no UI or Production reporting integration. The
+supports automatic node allocation and serial D/W words. Communication manual
+operations/watches and optional reporting independently select UDP/TCP, default UDP.
+The developer launcher adds `--fins-transport tcp`; see the
+[localhost TCP procedure](docs/communication.md#tcp-localhost-verification).
+The existing simulator CLI remains UDP-only. The
 [FINS/UDP contract and two-terminal demo](docs/communication.md#local-simulator-and-manual-demonstration)
 cover the independent communication subset. The
 [first-station protocol](docs/communication.md#first-station-result-projection-and-submission)

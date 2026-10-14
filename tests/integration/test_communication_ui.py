@@ -243,7 +243,7 @@ def test_validation_remote_read_and_localhost_only_write(
     page.show()
     try:
         assert not calls and page.status.text() == text("comm_idle", language)
-        assert page.protocol.count() == 1 and page.protocol.isEnabled()
+        assert page.protocol.count() == 2 and page.protocol.isEnabled()
         page.settings_button.click()
         assert page.settings_dialog.isVisible() and not calls
         assert not page.advanced.isVisible()

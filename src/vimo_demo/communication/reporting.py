@@ -22,8 +22,11 @@ from .fins import (
     FinsError,
     FinsMemoryArea,
     FinsPlcError,
+    FinsTransport,
     FinsUdpClient,
+    validate_transport,
 )
+from .fins_tcp import FinsTcpClient
 from .first_station import (
     FirstStationReporter,
     FirstStationSubmissionError,
@@ -40,6 +43,7 @@ class LocalReportingSettings:
     destination: FinsAddress = FinsAddress(0, 2, 0)
     source: FinsAddress = FinsAddress(0, 1, 0)
     max_pending: int = 8
+    transport: FinsTransport = FinsTransport.UDP
 
     def __post_init__(self) -> None:
         if self.host != "127.0.0.1":
@@ -53,6 +57,7 @@ class LocalReportingSettings:
             self.source,
             49,
             area=FinsMemoryArea.W,
+            transport=self.transport,
         ).validate()
         if type(self.max_pending) is not int or self.max_pending < 1:
             raise ValueError("max_pending must be a positive integer")
@@ -207,7 +212,7 @@ class ProductionReportingCommands(Protocol):
 
 
 class ReportingCapacityError(RuntimeError):
-    """Rejected result, never an inspection judgment or an ordinary UDP failure."""
+    """Rejected result, never an inspection judgment or ordinary transport failure."""
 
 
 class ReportingStateError(RuntimeError):
@@ -220,7 +225,11 @@ class _PendingReport:
     completed: Future[ReportObservation]
 
 
-def _client(settings: LocalReportingSettings) -> FinsUdpClient:
+def _client(settings: LocalReportingSettings) -> FinsUdpClient | FinsTcpClient:
+    if settings.transport is FinsTransport.TCP:
+        return FinsTcpClient(
+            settings.host, port=settings.port, timeout=settings.timeout
+        )
     return FinsUdpClient(
         settings.host,
         port=settings.port,
@@ -242,7 +251,9 @@ class FirstStationReportingWorker:
         generation: int,
         settings: LocalReportingSettings,
         *,
-        client_factory: Callable[[LocalReportingSettings], FinsUdpClient] = _client,
+        client_factory: Callable[
+            [LocalReportingSettings], FinsUdpClient | FinsTcpClient
+        ] = _client,
     ) -> None:
         ReportIdentity(generation, CycleId(0))
         self.generation, self.settings = generation, settings
@@ -254,7 +265,7 @@ class FirstStationReportingWorker:
         self._active: ReportIdentity | None = None
         self._last_seen: CycleId | None = None
         self._next_sequence: int | None = None
-        self._client: FinsUdpClient | None = None
+        self._client: FinsUdpClient | FinsTcpClient | None = None
         self._reporter: FirstStationReporter | None = None
         self._queued = self._attempted = self._acknowledged = 0
         self._failed = self._skipped = self._rejected = self._peak = 0
@@ -409,6 +420,7 @@ class FirstStationReportingWorker:
         try:
             if self.settings.host != "127.0.0.1":
                 raise PermissionError("Automatic reporting requires exactly 127.0.0.1")
+            validate_transport(self.settings.transport)
             if self._client is None or self._client.closed:
                 self._client = self._factory(self.settings)
                 self._reporter = None
