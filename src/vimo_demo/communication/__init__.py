@@ -1,4 +1,4 @@
-"""Standalone FINS/UDP words; no application, Qt, or equipment integration."""
+"""Standalone FINS UDP/TCP words; no Qt or equipment commissioning."""
 
 from .fins import (
     FinsAddress,
@@ -10,6 +10,7 @@ from .fins import (
     FinsTransportError,
     FinsUdpClient,
 )
+from .fins_tcp import FinsTcpClient, FinsTcpEnvelopeError
 from .first_station import (
     FirstStationCommit,
     FirstStationReporter,
@@ -24,6 +25,8 @@ __all__ = [
     "FinsMemoryArea",
     "FinsPlcError",
     "FinsProtocolError",
+    "FinsTcpClient",
+    "FinsTcpEnvelopeError",
     "FinsTimeoutError",
     "FinsTransportError",
     "FinsUdpClient",

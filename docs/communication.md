@@ -1,10 +1,12 @@
-# FINS/UDP communication
+# FINS communication
 
 ## Current scope and authority
 
 `vimo_demo.communication` provides a standalone, synchronous, standard-library
-FINS transport and loopback simulator. Its first-station projection consumes the
-existing Inspection business-status enum, without changing inspection evidence,
+FINS/UDP transport and loopback simulator, plus a standalone FINS/TCP client.
+TCP is not connected to manual UI, register watches or Production reporting.
+The existing first-station projection consumes the Inspection business-status enum,
+without changing inspection evidence,
 judgments or counters. Only projection/reporting requires Inspection types;
 transport/simulator imports and the existing CLI demo still require no image stack.
 The transport and reporting owner are Qt/ViMo independent. Normal `app.py` and
@@ -22,24 +24,29 @@ Its sections 1-1 and 4-1 refer frame formats/end codes to
 Implementation and literal test vectors use W342 sections 3-3, 5-1-3, 5-2-1/2 and
 5-3-2/3; W342 section 5-2-2 lists WR word code `B1` and W0–W511.
 W596 sections 1-4 and 2-2 establish NX transport/command support.
+TCP framing/automatic node allocation follow
+[Ethernet applications manual W421-E1-04](https://assets.omron.eu/downloads/latest/manual/en/w421_cj1w-etn21_cs1w-etn21_ethernet_units_-_construction_of_applications_operation_manual_en.pdf),
+section 7-4-2 (printed pages 177–180), with direct-address fields from its
+7-4-3 sample program. W421 describes CS/CJ Ethernet transport; NX compatibility and
+memory restrictions remain governed by W596, not inferred from that example.
 Local client/simulator agreement alone is not evidence of standards compliance.
 
 ## Supported subset
 
 | Item | Current contract |
 | --- | --- |
-| Transport | Numeric unicast IPv4, UDP port 9600 by default; one response-required request at a time |
-| Addressing | Explicit destination/source `FinsAddress(network, node, unit)`; network 0–127, unicast node 1–254, unit encoded as a byte 0–255 |
+| Transport | Numeric unicast IPv4, UDP or standalone TCP port 9600 by default; one response-required request at a time |
+| Addressing | UDP: explicit destination/source `FinsAddress(network, node, unit)`; network 0–127, unicast node 1–254, unit byte 0–255. TCP: negotiated nodes, network/unit zero only. |
 | Memory | DM/D **words**, code `82`, D0–D32767; W/WR **words**, code `B1`, W0–W511; bit address zero |
 | Read | `01 01`; 1–999 consecutive unsigned words |
 | Write | `01 02`; 1–997 consecutive unsigned words, values 0–65535 |
-| Wire | 10-byte FINS header; big-endian address/count/word data; at most 2012 bytes per FINS datagram |
+| Wire | 10-byte FINS header; big-endian address/count/word data; at most 2012 bytes per FINS frame (UDP datagram or TCP payload) |
 | Result | Read returns an immutable tuple in address order; write returns `None` after a successful response |
 
 The unit byte range describes encoding, not availability of every unit/service.
 The local example targets CPU unit 0. IP address and FINS node are independent;
 there is no last-IP-octet inference. Hostnames, broadcast, bit access, other memory
-areas, signed/32-bit values, routed-network commissioning, FINS/TCP and implicit client polling
+areas, signed/32-bit values, routed-network commissioning and implicit client polling
 are outside this subset. Invalid API values/ranges raise `ValueError` before send.
 The simulator accepts protocol-defined zero-count no-ops; the client requires
 positive counts. No silent splitting of an oversized operation is performed.
@@ -66,7 +73,7 @@ Overlapping calls or close during an active request fail explicitly with
 `FinsTransportError`. `close()` is idempotent after a request returns; a context
 manager also closes on exceptions. A new client is a new socket lifecycle.
 Calls block for a bounded send/receive deadline and belong outside a future GUI
-thread. Socket creation performs no handshake and proves nothing about PLC online
+thread. UDP socket creation performs no handshake and proves nothing about PLC online
 state. The OS selects the local UDP source port; source FINS address is explicit.
 
 Responses must come from the configured IPv4 **and port**, have response direction,
@@ -104,6 +111,89 @@ from vimo_demo.communication import FinsMemoryArea
 client.write_words(50, (1, 32768, 15), area=FinsMemoryArea.W)
 words = client.read_words(49, 4, area=FinsMemoryArea.W)
 ```
+
+## Standalone FINS/TCP client
+
+`FinsTcpClient(host, *, port=9600, timeout=1.0)` connects and negotiates during
+construction. It has the same `read_words()` / `write_words()` word API, ranges,
+immutable read tuple and acknowledged write return as UDP. `.source` and
+`.destination` expose immutable negotiated `FinsAddress` values; `.closed`,
+idempotent `close()` and context-manager cleanup expose socket ownership.
+
+```python
+from vimo_demo.communication import FinsMemoryArea, FinsTcpClient
+
+# Requires an independently started localhost FINS/TCP test peer at this port.
+# The existing run_fins_simulator.py CLI serves UDP, not TCP.
+with FinsTcpClient("127.0.0.1", port=9600, timeout=1.0) as client:
+    client_nodes = (client.source.node, client.destination.node)
+    values = client.read_words(100, 3)
+    client.write_words(50, (1, 32768, 15), area=FinsMemoryArea.W)
+```
+
+The supported handshake sends `FINS`, big-endian length `12`, outer command `0`,
+error field `0` and a 32-bit client node `0` requesting automatic allocation.
+The successful response has length `16`, command `1`, error `0`, followed by the
+32-bit client/server nodes. Both must be in 1–254 and distinct. The returned
+nodes supply embedded SA1/DA1; DNA/SNA/DA2/SA2 are zero for the direct CPU-unit
+subset. Node addresses are not inferred from either IPv4 address, or substituted
+from UDP settings. Failed negotiation closes the connection before memory I/O.
+Fixed-node negotiation and advanced routing are unimplemented.
+
+Memory requests/responses use outer command `2`. Length counts the two 32-bit
+command/error fields and embedded FINS frame, excluding the eight-byte magic/length
+prefix. The bound is 2020 bytes for that field, or 2028 total, preserving the
+2012-byte FINS limit and existing 999-read/997-write word limits. Exact-length
+stream reads handle partial TCP delivery without assuming `recv()` boundaries.
+Oversized lengths are rejected before payload allocation. Embedded validation
+shares UDP's W342 direction, reversed routes, SID/command, end-code and payload
+rules; response RSV/GCT/reserved ICF bits remain outside identity validation.
+
+There is one total host-monotonic deadline for connect plus negotiation, and one
+for each command's send plus receive. Each partial read uses the remaining time,
+not a new timeout. There are no threads, queues, retries, reconnects or polling.
+One serial owner must keep blocking calls outside Qt dispatch; overlapping
+operations and concurrent close fail explicitly without disrupting active ownership.
+No unsolicited PLC commands or connection-confirmation traffic is serviced;
+unexpected outer commands retire this narrow connection.
+
+| Failure | TCP state and evidence |
+| --- | --- |
+| Invalid API values | `ValueError` before socket creation or memory-command I/O; invalid word calls leave an established connection usable |
+| Connection/stream failure | `FinsTransportError`; original OS cause chained, connection closed |
+| Total deadline | `FinsTimeoutError`; original timeout chained, connection closed |
+| Invalid magic/length/nodes/embedded response | `FinsProtocolError`, connection closed |
+| Unexpected outer command/nonzero envelope error | `FinsTcpEnvelopeError` (protocol subclass), raw 32-bit `.command` / `.error_code` preserved, connection closed |
+| Valid nonzero embedded PLC end code | Existing `FinsPlcError` with raw code/command/data, connection remains usable |
+
+This subset accepts only zero-error command-2 envelopes; W421 calls that error
+field unused rather than a PLC end code. Command `3` is an outer error notification
+and cannot become successful memory acknowledgement. Exceptions/interruption during
+an exchange release the operation guard and retire unsafe sockets; a valid PLC
+end-code response is the recoverable exception. A fresh client is an explicit new
+lifecycle, never an automatic replay decision.
+
+A write timeout, disconnect or invalid/missing ACK has **unknown execution outcome**.
+Timeout/OS error text and protocol/closed-stream exception notes retain that warning.
+The client does not retry even when the peer already mutated memory. A valid write
+response acknowledges protocol processing, not PLC scan consumption or rejection
+actuation. Adding this low-level transport changes no UI/reporting localhost-write
+policy and authorizes no real-equipment test.
+
+Safe CPU-only localhost verification from the repository root:
+
+```powershell
+uv run --no-sync pytest --confcutdir=tests/unit tests/unit/test_fins_tcp.py tests/unit/test_fins.py --tb=short -o cache_dir=outputs/pytest-cache-fins-tcp
+```
+
+The maintained tests start bounded loopback peers on ephemeral ports, including
+literal automatic-negotiation and D/W single/multiword vectors. They check invalid
+envelopes/identities, fragmentation, maximum payloads, SID rollover, PLC errors,
+ambiguous writes before/after remote mutation, ownership and socket/thread release.
+An explicit test clock verifies partial-receive deadlines without sleep polling;
+`python -S` verifies transport imports without Qt/NumPy/SmartMore. No persistent TCP
+simulator CLI or application TCP configuration is added. This is protocol verification,
+not NX102 hardware certification; real settings/allocated memory still need commissioning.
 
 ## First-station result projection and submission
 
@@ -525,7 +615,8 @@ for inspection while controls are locked. Language changes and disclosure toggle
 do not stop/restart requests. Navigation and approved application close hide it,
 while retaining the existing page/request shutdown rules below.
 
-Only FINS/UDP is available. Numeric IPv4
+Only FINS/UDP is available in this workspace; the standalone TCP API has no UI wiring.
+Numeric IPv4
 defaults to `127.0.0.1`, port to 9600 and timeout to one second (UI range **0.05–30
 seconds**). FINS nodes remain explicit when the host changes.
 
