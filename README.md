@@ -82,7 +82,8 @@ geometry or substitutes fake inference.
 
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
 **History / 历史** and **Vision / 视觉**. Communication provides session-local manual
-FINS/UDP reads and localhost-only writes; History remains a placeholder.
+FINS/UDP D/W reads, localhost-only writes and optional register-watch refresh;
+History remains a placeholder.
 Recipe and Vision use **Save and apply**: persistence, candidate preparation/
 installation and successful-Start activation are distinct outcomes. Only successful
 Start activates. Counters measure admitted cycles/channel judgments, not physical

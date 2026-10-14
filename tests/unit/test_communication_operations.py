@@ -4,9 +4,10 @@ from dataclasses import replace
 
 import pytest
 
-from vimo_demo.communication import FinsAddress, FinsUdpClient
+from vimo_demo.communication import FinsAddress, FinsMemoryArea, FinsUdpClient
 from vimo_demo.communication.operations import (
     CommunicationRequest,
+    RegisterWatchGroup,
     RequestKind,
     execute_request,
 )
@@ -47,6 +48,16 @@ def request() -> CommunicationRequest:
         replace(request(), kind=RequestKind.WRITE, values=(True,)),
         replace(request(), kind=RequestKind.WRITE, count=998, values=(0,) * 998),
         replace(request(), kind=RequestKind.WRITE, count=2, values=(1,)),
+        replace(request(), area=FinsMemoryArea.W, start=512),
+        replace(request(), area=FinsMemoryArea.W, start=511, count=2),
+        replace(
+            request(),
+            area=FinsMemoryArea.W,
+            kind=RequestKind.WRITE,
+            start=511,
+            count=2,
+            values=(1, 2),
+        ),
     ],
 )
 def test_invalid_request_rejected_before_socket_creation(
@@ -61,8 +72,9 @@ def test_invalid_request_rejected_before_socket_creation(
 
 
 @pytest.mark.parametrize("host", ["192.0.2.10", "127.0.0.2", "127.1.1.1"])
+@pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_write_permission_is_enforced_at_execution_boundary(
-    host: str, monkeypatch: pytest.MonkeyPatch
+    host: str, area: FinsMemoryArea, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def no_socket(*args: object, **kwargs: object) -> None:
         pytest.fail("Forbidden write reached socket construction")
@@ -70,12 +82,16 @@ def test_write_permission_is_enforced_at_execution_boundary(
     monkeypatch.setattr("vimo_demo.communication.operations.FinsUdpClient", no_socket)
     with pytest.raises(PermissionError, match="127.0.0.1"):
         execute_request(
-            replace(request(), kind=RequestKind.WRITE, host=host, values=(4321,))
+            replace(
+                request(), kind=RequestKind.WRITE, host=host, values=(4321,), area=area
+            )
         )
 
 
+@pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_nonloopback_read_uses_configured_address_without_substitution(
     monkeypatch: pytest.MonkeyPatch,
+    area: FinsMemoryArea,
 ) -> None:
     observed: list[tuple[str, object]] = []
 
@@ -90,8 +106,14 @@ def test_nonloopback_read_uses_configured_address_without_substitution(
     ) -> None:
         observed.append(("construct", (host, port, timeout, destination, source)))
 
-    def read(self: FinsUdpClient, start: int, count: int = 1) -> tuple[int, ...]:
-        observed.append(("read", (start, count)))
+    def read(
+        self: FinsUdpClient,
+        start: int,
+        count: int = 1,
+        *,
+        area: FinsMemoryArea = FinsMemoryArea.DM,
+    ) -> tuple[int, ...]:
+        observed.append(("read", (start, count, area)))
         return (0, 65535)
 
     def close(self: FinsUdpClient) -> None:
@@ -111,6 +133,7 @@ def test_nonloopback_read_uses_configured_address_without_substitution(
         count=2,
         destination=FinsAddress(7, 19, 0),
         source=FinsAddress(3, 41, 0),
+        area=area,
     )
     response = execute_request(target)
     assert response.request == target and response.values == (0, 65535)
@@ -126,6 +149,32 @@ def test_nonloopback_read_uses_configured_address_without_substitution(
                 target.source,
             ),
         ),
-        ("read", (100, 2)),
+        ("read", (100, 2, area)),
         ("close", None),
     ]
+
+
+@pytest.mark.parametrize(
+    "area,start,count",
+    [
+        (FinsMemoryArea.DM, 32767, 2),
+        (FinsMemoryArea.W, 511, 2),
+        (FinsMemoryArea.W, 512, 1),
+        (FinsMemoryArea.DM, 0, 1000),
+        (FinsMemoryArea.DM, -1, 1),
+        (FinsMemoryArea.W, 0, 0),
+        (FinsMemoryArea.DM, True, 1),
+    ],
+)
+def test_watch_group_range_validation(
+    area: FinsMemoryArea, start: int, count: int
+) -> None:
+    with pytest.raises(ValueError):
+        RegisterWatchGroup(area, start, count)
+
+
+def test_watch_group_boundary_and_name() -> None:
+    assert RegisterWatchGroup(FinsMemoryArea.W, 0, 512, "work area").count == 512
+    assert RegisterWatchGroup(FinsMemoryArea.DM, 0, 999).count == 999
+    with pytest.raises(ValueError, match="64"):
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "x" * 65)

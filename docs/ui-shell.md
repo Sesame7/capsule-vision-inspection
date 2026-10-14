@@ -23,14 +23,16 @@ documents; this page covers their interaction with the shell, not their controls
 | --- | --- | --- |
 | 生产 / Production | Summary and six configured camera cards | `production` |
 | 配方 / Recipe | Saved/draft Recipe workspace and Tune preview | `parameters` |
-| 通信 / Communication | Manual FINS/UDP diagnostic workspace | `diagnostics` |
+| 通信 / Communication | Manual D/W operations and session-local register watches | `diagnostics` |
 | 历史 / History | Unimplemented placeholder | `history` |
 | 视觉 / Vision | Camera sources, reference images and Machine ROI workspace | `settings` |
 
 **Vision** is the visible page name. Legacy `settings`/`diagnostics` identifiers
 are implementation routes, not extra Settings/Diagnostics features. Communication
-provides explicit manual reads and localhost-only writes, without persistent online
-state or Production coupling; its controls/ownership belong to
+provides explicit manual reads, localhost-only writes and optional one-second register
+watch refresh, without persistent online state or Production coupling. Leaving the
+page stops future refresh/unstarted reads while preserving the active owner until
+actual exit; its controls/ownership belong to
 [communication](communication.md#communication-workspace). History does not archive
 cycles. Navigation, Qt-drawn icons, language switching,
 selection, tooltips/accessibility names and keyboard/touch controls share the

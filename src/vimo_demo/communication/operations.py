@@ -1,4 +1,4 @@
-"""Session-local manual requests; no Qt, Production, polling or persistence."""
+"""Session-local register requests/watch definitions; no Qt or scheduling."""
 
 import math
 from dataclasses import dataclass
@@ -8,13 +8,32 @@ from ipaddress import IPv4Address
 from time import perf_counter
 
 from .fins import (
-    DM_WORDS,
     MAX_READ_WORDS,
     MAX_WRITE_WORDS,
     FinsAddress,
+    FinsMemoryArea,
     FinsUdpClient,
     validate_integer,
+    validate_word_range,
 )
+
+MAX_WATCH_GROUPS = 16
+MAX_WATCH_WORDS = 2048
+
+
+@dataclass(frozen=True, slots=True)
+class RegisterWatchGroup:
+    """One consecutive read; session-local name, no merging or PLC meaning."""
+
+    area: FinsMemoryArea
+    start: int
+    count: int = 1
+    name: str = ""
+
+    def __post_init__(self) -> None:
+        validate_word_range(self.start, self.count, MAX_READ_WORDS, self.area)
+        if len(self.name) > 64:
+            raise ValueError("Watch name must contain at most 64 characters")
 
 
 class RequestKind(Enum):
@@ -34,6 +53,7 @@ class CommunicationRequest:
     start: int
     count: int = 1
     values: tuple[int, ...] = ()
+    area: FinsMemoryArea = FinsMemoryArea.DM
 
     def validate(self) -> None:
         """Cheap dispatch validation, repeated at the execution boundary."""
@@ -47,12 +67,11 @@ class CommunicationRequest:
             or not 0.05 <= self.timeout <= 30
         ):
             raise ValueError("Request timeout must be in 0.05..30 seconds")
-        validate_integer("start", self.start, 0, DM_WORDS - 1)
-        validate_integer(
-            "count",
+        validate_word_range(
+            self.start,
             self.count,
-            1,
             MAX_WRITE_WORDS if self.kind is RequestKind.WRITE else MAX_READ_WORDS,
+            self.area,
         )
         if self.kind is RequestKind.WRITE:
             if self.host != "127.0.0.1":
@@ -68,8 +87,6 @@ class CommunicationRequest:
                 raise ValueError(
                     "Read requests carry no write values; test reads one word"
                 )
-        if self.start + self.count > DM_WORDS:
-            raise ValueError("Word range exceeds D32767")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,10 +113,10 @@ def execute_request(request: CommunicationRequest) -> CommunicationResponse:
         source=request.source,
     ) as client:
         if request.kind is RequestKind.WRITE:
-            client.write_words(request.start, request.values)
+            client.write_words(request.start, request.values, area=request.area)
             values = None
         else:
-            values = client.read_words(request.start, request.count)
+            values = client.read_words(request.start, request.count, area=request.area)
     return CommunicationResponse(
         request, values, (perf_counter() - started) * 1000, datetime.now(UTC)
     )

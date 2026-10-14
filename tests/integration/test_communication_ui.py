@@ -2,7 +2,7 @@
 
 import socket
 from collections.abc import Iterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread, get_ident
 from threading import enumerate as threads
@@ -27,7 +27,9 @@ from vimo_demo.communication import (
 from vimo_demo.communication.operations import (
     CommunicationRequest,
     CommunicationResponse,
+    RegisterWatchGroup,
     RequestKind,
+    execute_request,
 )
 from vimo_demo.communication.simulator import FinsUdpSimulator
 from vimo_demo.ui.communication_page import CommunicationPage
@@ -50,9 +52,16 @@ def cell(page: CommunicationPage, row: int, column: int) -> str:
     return item.text()
 
 
+class WatchProbe(CommunicationPage):
+    @property
+    def refresh_timer(self) -> QTimer:
+        """Test-only deadline delivery; never change the production interval."""
+        return self._auto_timer
+
+
 @pytest.fixture
-def page(qapp: QApplication) -> Iterator[CommunicationPage]:
-    widget = CommunicationPage()
+def page(qapp: QApplication) -> Iterator[WatchProbe]:
+    widget = WatchProbe()
     widget.show()
     yield widget
     widget.request_close(lambda: None)
@@ -104,11 +113,13 @@ def test_idle_communication_drain_does_not_reenter_first_close(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_actual_udp_ui_read_write_readback_and_owner_thread(
     page: CommunicationPage,
     simulator: FinsUdpSimulator,
     monkeypatch: pytest.MonkeyPatch,
     language: Language,
+    area: FinsMemoryArea,
 ) -> None:
     identities: list[tuple[str, int]] = []
     clients: list[FinsUdpClient] = []
@@ -137,7 +148,6 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
             area: FinsMemoryArea = FinsMemoryArea.DM,
         ) -> tuple[int, ...]:
             identities.append(("read", get_ident()))
-            assert area is FinsMemoryArea.DM  # H1B manual UI remains D-only.
             return super().read_words(start, count, area=area)
 
         def write_words(
@@ -148,7 +158,6 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
             area: FinsMemoryArea = FinsMemoryArea.DM,
         ) -> None:
             identities.append(("write", get_ident()))
-            assert area is FinsMemoryArea.DM
             super().write_words(start, values, area=area)
 
         def close(self) -> None:
@@ -160,9 +169,13 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
     )
     page.set_language(language)
     page.port.setValue(simulator.port)
+    page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
     page.test_button.click()
     until(lambda: not page.busy)
-    assert page.last_response is not None and page.last_response.values == (1234,)
+    assert page.last_response is not None and page.last_response.values == (
+        (1234,) if area is FinsMemoryArea.DM else (0,)
+    )
+    assert page.last_response.request.area is area
     assert page.status.text() == text("comm_test_ok", language)
     page.count.setValue(3)
     page.write_values.setText("0, 65535 4321")
@@ -170,8 +183,12 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
     until(lambda: not page.busy)
     assert page.last_response is not None and page.last_response.values is None
     assert page.status.text() == text("comm_write_ok", language)
-    assert page.last_read is not None and page.last_read.values == (1234,)
-    assert cell(page, 0, 1) == "1234"  # Not silent readback.
+    assert page.last_read is not None and page.last_read.values == (
+        (1234,) if area is FinsMemoryArea.DM else (0,)
+    )
+    assert cell(page, 0, 1) == (
+        "1234" if area is FinsMemoryArea.DM else "0"
+    )  # No auto-readback.
     page.read_button.click()
     until(lambda: not page.busy)
     assert page.last_response is not None and page.last_response.values == (
@@ -180,9 +197,9 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
         4321,
     )
     assert [cell(page, row, 0) for row in range(3)] == [
-        "D100",
-        "D101",
-        "D102",
+        f"{area.prefix}100",
+        f"{area.prefix}101",
+        f"{area.prefix}102",
     ]
     assert [cell(page, row, 1) for row in range(3)] == [
         "0",
@@ -190,6 +207,7 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
         "4321",
     ]
     assert page.log_count == 3 and "ms" in page.success.text()
+    assert [cell(page, row, 2) for row in range(3)] == ["0000", "FFFF", "10E1"]
     assert [name for name, _ in identities] == [
         "create",
         "read",
@@ -209,8 +227,9 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_validation_remote_read_and_localhost_only_write(
-    qapp: QApplication, language: Language
+    qapp: QApplication, language: Language, area: FinsMemoryArea
 ) -> None:
     calls: list[CommunicationRequest] = []
 
@@ -220,6 +239,7 @@ def test_validation_remote_read_and_localhost_only_write(
 
     page = CommunicationPage(execute=execute)
     page.set_language(language)
+    page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
     page.show()
     try:
         assert not calls and page.status.text() == text("comm_idle", language)
@@ -246,7 +266,7 @@ def test_validation_remote_read_and_localhost_only_write(
         for values in ("", "-1", "65536", "abc", "1," + "0," * 998):
             page.write_values.setText(values)
             assert not page.dispatch(RequestKind.WRITE)
-        page.address.setValue(32767)
+        page.address.setValue(area.word_count - 1)
         page.count.setValue(2)
         assert not page.dispatch(RequestKind.READ)
         assert len(calls) == 1
@@ -574,9 +594,18 @@ def test_communication_layout_screenshot(
     window.resize(*size)
     window.navigate(2)
     window.communication.advanced_button.click()
+    window.communication.manual_button.click()
+    window.communication.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "提交 / Commit")
+    )
+    window.communication.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.DM, 100, 3, "测试 / Test")
+    )
     monkeypatch.setattr(window.communication, "_execute", response)
     window.communication.count.setValue(3)
     window.communication.read_button.click()
+    until(lambda: not window.communication.busy)
+    window.communication.read_watch_once()
     until(lambda: not window.communication.busy)
     qapp.processEvents()
     page = window.communication
@@ -590,6 +619,16 @@ def test_communication_layout_screenshot(
         page.test_button,
         page.write_button,
         page.advanced_button,
+        page.area,
+        page.watch_area,
+        page.watch_address,
+        page.watch_count,
+        page.watch_name,
+        page.watch_selector,
+        page.watch_add,
+        page.watch_remove,
+        page.watch_once,
+        page.watch_auto,
         *page.destination,
         *page.source,
     ):
@@ -597,6 +636,10 @@ def test_communication_layout_screenshot(
         assert parent is not None and parent.rect().contains(control.geometry())
         assert control.height() >= Style.touch
     assert page.body.width() <= page.scroll_area.viewport().width()
+    for button in (page.watch_add, page.watch_remove, page.watch_once, page.watch_auto):
+        assert (
+            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 20
+        )
     assert (
         page.read_button.width()
         >= page.read_button.fontMetrics().horizontalAdvance(page.read_button.text())
@@ -645,3 +688,325 @@ def test_unconfigured_shell_communication_has_no_production_dependency(
         until(lambda: window.bridge.closed and window.communication.closed)
         window.deleteLater()
         delivery.detach()
+
+
+def watch_cell(page: CommunicationPage, row: int, column: int) -> str:
+    item = page.watch_table.item(row, column)
+    assert item is not None
+    return item.text()
+
+
+def test_watch_editor_validation_and_identity(page: CommunicationPage) -> None:
+    assert not page.watch_groups and page.watch_table.rowCount() == 0
+    assert not page.watch_once.isEnabled() and not page.watch_auto.isEnabled()
+    assert not page.start_monitoring()
+    page.watch_area.setCurrentIndex(1)
+    page.watch_address.setValue(511)
+    page.watch_count.setValue(2)
+    page.watch_add.click()
+    assert not page.watch_groups and not page.busy
+    assert page.status.text() == text("comm_invalid", page.language)
+    page.watch_address.setValue(49)
+    page.watch_count.setValue(4)
+    page.watch_name.setText("First station")
+    page.watch_add.click()
+    assert page.watch_groups == (
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "First station"),
+    )
+    assert [watch_cell(page, i, 1) for i in range(4)] == ["W49", "W50", "W51", "W52"]
+    assert watch_cell(page, 0, 2) == "--"
+    assert watch_cell(page, 0, 4) == text("comm_not_read", page.language)
+    # Equal ranges are separate named groups, not silently merged.
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Other"))
+    page.watch_selector.setCurrentIndex(0)
+    page.watch_remove.click()
+    assert page.watch_groups == (RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Other"),)
+    assert page.watch_table.rowCount() == 4
+    page.watch_remove.click()
+    assert not page.watch_groups and not page.watch_remove.isEnabled()
+    assert (
+        page.watch_table.editTriggers() == page.watch_table.EditTrigger.NoEditTriggers
+    )
+
+
+@pytest.mark.parametrize("word_limit", [False, True])
+def test_watch_bounds(page: CommunicationPage, word_limit: bool) -> None:
+    groups = (
+        tuple(RegisterWatchGroup(FinsMemoryArea.DM, 0, n) for n in (999, 999, 50))
+        if word_limit
+        else tuple(RegisterWatchGroup(FinsMemoryArea.DM, i) for i in range(16))
+    )
+    for group in groups:
+        assert page.add_watch_group(group)
+    assert not page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 0))
+    assert page.watch_groups == groups
+    assert page.watch_table.rowCount() == (2048 if word_limit else 16)
+
+
+def test_watch_localhost_mixed_groups_read_once_and_thread_ownership(
+    page: CommunicationPage,
+    simulator: FinsUdpSimulator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with FinsUdpClient(
+        "127.0.0.1",
+        port=simulator.port,
+        destination=FinsAddress(0, 2, 0),
+        source=FinsAddress(0, 1, 0),
+    ) as client:
+        client.write_words(49, (10, 32768, 65535, 15), area=FinsMemoryArea.W)
+    calls: list[tuple[CommunicationRequest, int]] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        calls.append((request, get_ident()))
+        return execute_request(request)
+
+    monkeypatch.setattr(page, "_execute", execute)
+    page.port.setValue(simulator.port)
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Reject"))
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100, 1))
+    assert not calls
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    assert [(r.area, r.start, r.count, r.kind) for r, _ in calls] == [
+        (FinsMemoryArea.W, 49, 4, RequestKind.READ),
+        (FinsMemoryArea.DM, 100, 1, RequestKind.READ),
+    ]
+    assert len({ident for _, ident in calls}) == 1
+    assert all(ident != get_ident() for _, ident in calls)
+    assert [watch_cell(page, i, 2) for i in range(5)] == [
+        "10",
+        "32768",
+        "65535",
+        "15",
+        "1234",
+    ]
+    assert [watch_cell(page, i, 3) for i in range(5)] == [
+        "000A",
+        "8000",
+        "FFFF",
+        "000F",
+        "04D2",
+    ]
+    assert watch_cell(page, 4, 1) == "D100"
+    assert all(
+        text("comm_current", page.language) in watch_cell(page, i, 4) for i in range(5)
+    )
+    assert page.last_read is None
+    assert page.log_count == 1 and not page.auto_refresh
+    assert not any(t.name == "FinsCommunication" for t in threads())
+
+
+def test_auto_slow_pass_no_overlap_or_tick_backlog_and_snapshot(
+    page: WatchProbe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = Event(), Event()
+    requests: list[CommunicationRequest] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        requests.append(request)
+        if len(requests) == 1:
+            entered.set()
+            assert release.wait(3)
+        return response(request)
+
+    monkeypatch.setattr(page, "_execute", execute)
+    for group in (
+        RegisterWatchGroup(FinsMemoryArea.W, 50, 2),
+        RegisterWatchGroup(FinsMemoryArea.DM, 112),
+    ):
+        assert page.add_watch_group(group)
+    assert page.start_monitoring()
+    try:
+        until(entered.is_set)
+        assert page.auto_refresh and page.busy and page.watch_auto.isEnabled()
+        assert (
+            not page.refresh_timer.isActive() and page.refresh_timer.interval() == 1000
+        )
+        assert not page.dispatch(RequestKind.READ) and not page.dispatch(
+            RequestKind.WRITE
+        )
+        assert not page.read_watch_once() and not page.start_monitoring()
+        assert not page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 3))
+        assert not page.remove_watch_group(0)
+        assert not page.host.isEnabled() and not page.watch_name.isEnabled()
+        page.host.setText("192.0.2.99")
+        page.destination[1].setValue(33)
+        for _ in range(10):
+            page.refresh_timer.timeout.emit()
+            QApplication.processEvents()
+        assert len(requests) == 1
+    finally:
+        release.set()
+        until(lambda: not page.busy)
+    assert len(requests) == 2
+    assert all(r.host == "127.0.0.1" and r.destination.node == 2 for r in requests)
+    assert page.refresh_timer.isActive() and not page.host.isEnabled()
+    assert not page.dispatch(RequestKind.TEST)
+    assert page.log_count == 0
+    page.refresh_timer.stop()
+    page.refresh_timer.timeout.emit()
+    until(lambda: not page.busy)
+    assert len(requests) == 4 and page.log_count == 0
+    page.stop_monitoring()
+    page.refresh_timer.timeout.emit()
+    QApplication.processEvents()
+    assert len(requests) == 4 and not page.auto_refresh
+    assert page.host.isEnabled() and page.read_button.isEnabled()
+
+
+def test_monitor_failure_retains_per_group_timestamp_and_requires_restart(
+    page: WatchProbe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 10, 14, tzinfo=UTC)
+    calls: list[CommunicationRequest] = []
+    fail = False
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        calls.append(request)
+        if fail and request.area is FinsMemoryArea.W:
+            raise FinsTimeoutError("controlled timeout")
+        return CommunicationResponse(
+            request, (len(calls),), 1, now + timedelta(seconds=len(calls))
+        )
+
+    monkeypatch.setattr(page, "_execute", execute)
+    for group in (
+        RegisterWatchGroup(FinsMemoryArea.DM, 112),
+        RegisterWatchGroup(FinsMemoryArea.W, 50),
+        RegisterWatchGroup(FinsMemoryArea.DM, 200),
+    ):
+        assert page.add_watch_group(group)
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    retained = watch_cell(page, 1, 4).split(" · ")[0]
+    fail = True
+    assert page.start_monitoring()
+    until(lambda: not page.busy)
+    assert len(calls) == 5
+    assert not page.auto_refresh and not page.refresh_timer.isActive()
+    assert page.status.text() == text("comm_timeout_error", page.language)
+    assert text("comm_watch_failed", page.language) in page.watch_status.text()
+    assert watch_cell(page, 0, 2) == "4" and text(
+        "comm_current", page.language
+    ) in watch_cell(page, 0, 4)
+    assert watch_cell(page, 1, 2) == "2"
+    assert watch_cell(page, 1, 4) == retained + " · " + text(
+        "comm_previous", page.language
+    )
+    assert text("comm_previous", page.language) in watch_cell(page, 2, 4)
+    assert page.log_count == 2
+    page.refresh_timer.timeout.emit()
+    QApplication.processEvents()
+    assert len(calls) == 5
+    page.set_language("en")
+    assert text("comm_watch_failed", "en") in page.watch_status.text()
+    assert "Previous" in watch_cell(page, 1, 4)
+    fail = False
+    assert page.start_monitoring()
+    until(lambda: not page.busy)
+    page.stop_monitoring()
+    assert len(calls) == 8 and page.log_count == 2
+    page.host.setText("localhost")  # Pre-dispatch failures also leave old values stale.
+    assert not page.start_monitoring()
+    assert len(calls) == 8 and not page.auto_refresh
+    assert all("Previous" in watch_cell(page, i, 4) for i in range(3))
+
+
+@pytest.mark.parametrize("action", ["stop", "leave", "close"])
+def test_active_monitor_stops_unstarted_groups_and_preserves_owner(
+    screen: tuple[ProductionWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    window, _ = screen
+    window.navigate(2)
+    page = window.communication
+    baseline = window.bridge.application.snapshot()
+    entered, release = Event(), Event()
+    calls: list[CommunicationRequest] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        calls.append(request)
+        entered.set()
+        assert release.wait(3)
+        return response(request)
+
+    monkeypatch.setattr(page, "_execute", execute)
+    for group in (
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4),
+        RegisterWatchGroup(FinsMemoryArea.DM, 100),
+    ):
+        assert page.add_watch_group(group)
+    assert page.start_monitoring()
+    try:
+        until(entered.is_set)
+        if action == "stop":
+            page.watch_auto.click()
+        elif action == "leave":
+            window.navigate(0)
+        else:
+            window.close()
+            until(lambda: window.bridge.closed)
+            assert window.isVisible() and not page.closed
+        assert not page.auto_refresh and page.busy
+        assert not page.read_button.isEnabled()
+        with pytest.raises(RuntimeError, match="active"):
+            page.dispose()
+    finally:
+        release.set()
+        until(lambda: not page.busy)
+    assert len(calls) == 1 and not any(t.name == "FinsCommunication" for t in threads())
+    if action == "close":
+        until(lambda: not window.isVisible())
+        assert page.closed
+    else:
+        assert window.bridge.application.snapshot() == baseline
+        assert not window.event_label.text()
+        window.navigate(2)
+        QApplication.processEvents()
+        assert not page.auto_refresh and len(calls) == 1
+        assert page.host.isEnabled()
+
+
+def test_auto_waits_for_actual_exit_and_stopped_delivery_does_not_restart(
+    page: WatchProbe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    returned, release = Event(), Event()
+
+    class HeldThread(Thread):
+        def run(self) -> None:
+            super().run()
+            returned.set()
+            assert release.wait(3)
+
+    monkeypatch.setattr("vimo_demo.ui.communication_page.Thread", HeldThread)
+    monkeypatch.setattr(page, "_execute", response)
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 50))
+    assert page.start_monitoring()
+    try:
+        until(returned.is_set)
+        QApplication.processEvents()
+        assert page.busy and not page.refresh_timer.isActive()
+        assert watch_cell(page, 0, 2) == "--"
+        page.stop_monitoring()
+    finally:
+        release.set()
+        until(lambda: not page.busy)
+    assert not page.auto_refresh and not page.refresh_timer.isActive()
+    assert text("comm_watch_stopped", page.language) in page.watch_status.text()
+    assert not any(t.name == "FinsCommunication" for t in threads())
+
+
+def test_auto_start_failure_leaves_no_timer_or_owner(
+    page: WatchProbe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Unstarted(Thread):
+        def start(self) -> None:
+            raise RuntimeError("controlled startup failure")
+
+    monkeypatch.setattr("vimo_demo.ui.communication_page.Thread", Unstarted)
+    page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100))
+    assert not page.start_monitoring()
+    assert not page.auto_refresh and not page.busy and not page.refresh_timer.isActive()
+    assert text("comm_watch_failed", page.language) in page.watch_status.text()
