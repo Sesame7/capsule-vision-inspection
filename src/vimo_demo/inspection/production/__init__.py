@@ -15,8 +15,16 @@ from .models import (
     ProductJudgment,
     Reason,
     TechnicalStatus,
+    TraditionalSkipReason,
     ViMoFinding,
     aggregate,
+)
+from .occupancy import (
+    OccupancyEvidence,
+    OccupancyResult,
+    OccupancyState,
+    OccupancyView,
+    measure_occupancy,
 )
 from .pipeline import (
     ProductionPipeline,
@@ -38,14 +46,20 @@ __all__ = [
     "FindingSource",
     "InspectionLayout",
     "Measurement",
+    "OccupancyEvidence",
+    "OccupancyResult",
+    "OccupancyState",
+    "OccupancyView",
     "OverlapPolicy",
     "ProductJudgment",
     "ProductionInspectionResult",
     "ProductionPipeline",
     "Reason",
     "TechnicalStatus",
+    "TraditionalSkipReason",
     "ViMoFinding",
     "aggregate",
     "assign_vimo_findings",
     "extract_vimo_findings",
+    "measure_occupancy",
 ]

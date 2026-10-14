@@ -22,7 +22,7 @@ unimplemented. A standalone FINS/UDP subset and localhost simulator exist separa
 | Configuration | Strict Model, Recipe, MachineLayout and camera-source definitions; atomic file persistence, pure resolution and separate artifact verification. Saved MachineLayout owns ROI geometry. |
 | Inference | Typed synchronous ViMo on validated uint8 BGR arrays, serial ownership, preserved geometry/raw mask IDs and owned outputs without vendor objects. |
 | Collection and runtime | Explicit frame/cycle identity, ordered collection, bounded admission and READY inspection backlog, terminal results/errors and observable shutdown. |
-| Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, selective Size/Color checks, and independent technical status and product judgment. |
+| Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, always-on scalar Occupancy with explicit EMPTY traditional skips, selective Size/Color checks, and independent technical status and product judgment. |
 | Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and factual cycle/channel accounting. |
 | Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
@@ -117,7 +117,7 @@ Local Folder replay or explicit fixed image inputs
     -> ProductionApplication admission
     -> RuntimeCoordinator / CycleCollector
     -> READY CollectedCycle -> configured serial inspection
-         -> enabled per-channel Size/Color processing
+         -> per-channel Occupancy -> enabled Size/Color except confirmed EMPTY
          -> enabled full-camera ViMo: InferenceWorker -> engine -> ImageResult
          -> configured channel evidence / technical and product judgments
     -> InspectionCycleResult + ProductionInspectionResult + timing
@@ -130,7 +130,8 @@ Identified source Frames
 ```
 
 The collector remains responsive during serial inspection in configured camera
-order. Size/Color runs only where enabled; ViMo runs at most once per full camera
+order. Occupancy evaluates every valid channel; Size/Color runs where enabled and
+not confirmed EMPTY. ViMo runs at most once per full camera
 frame when needed, then channel policy/ROI assignment consumes its evidence.
 Incomplete collection finalizes technically without running algorithms.
 

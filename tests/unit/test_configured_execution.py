@@ -53,11 +53,15 @@ def collected(configuration: ResolvedInspectionConfiguration) -> CollectedCycle:
     collector.begin(CycleId(1))
     cycle = None
     for index, camera in enumerate(configuration.layout.cameras):
+        # PRESENT input lets policy tests exercise traditional success/error;
+        # the corner pixel remains the independent camera invocation marker.
+        pixels = np.full((20, 60, 3), 30, dtype=np.uint8)
+        pixels[0, 0] = index
         cycle = collector.accept(
             Frame(
                 FrameId(CycleId(1), camera.camera_id, 0),
                 0,
-                np.full((20, 60, 3), index, dtype=np.uint8),
+                pixels,
             )
         )
     assert cycle is not None

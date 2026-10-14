@@ -28,11 +28,15 @@ from vimo_demo.inspection.production import (
     CheckPolicy,
     CheckResult,
     FindingSource,
+    OccupancyResult,
+    OccupancyState,
     ProductionInspectionResult,
     ProductionPipeline,
     ProductJudgment,
     Reason,
     TechnicalStatus,
+    TraditionalSkipReason,
+    measure_occupancy,
 )
 from vimo_demo.inspection.production.capsule import judge_capsule, measure_capsule
 
@@ -65,12 +69,17 @@ class ConfiguredProductionPipeline:
         self._base = ProductionPipeline(configuration.layout)
 
     def _traditional_check(
-        self, frame: Frame | None, channel: ResolvedChannelConfiguration
+        self,
+        frame: Frame | None,
+        channel: ResolvedChannelConfiguration,
+        occupancy: OccupancyResult,
     ) -> CheckResult:
         capsule = self.configuration.capsule
         policy = CheckPolicy(capsule.enabled, capsule.enabled)
         if not capsule.enabled or frame is None:
             return _unavailable(FindingSource.TRADITIONAL, policy)
+        if occupancy.state is OccupancyState.EMPTY:
+            return _unavailable(FindingSource.TRADITIONAL, CheckPolicy(False, True))
         try:
             return judge_capsule(
                 measure_capsule(frame.image, channel.roi, capsule), capsule
@@ -78,6 +87,20 @@ class ConfiguredProductionPipeline:
         except Exception as exc:
             return _unavailable(
                 FindingSource.TRADITIONAL, policy, "capsule.execution_error", exc
+            )
+
+    def _occupancy(
+        self, frame: Frame | None, channel: ResolvedChannelConfiguration
+    ) -> OccupancyResult:
+        if frame is None:
+            return OccupancyResult(error_code="occupancy.result_unavailable")
+        try:
+            return OccupancyResult(measure_occupancy(frame.image, channel.roi))
+        except Exception as exc:
+            return OccupancyResult(
+                error_code="occupancy.execution_error",
+                exception_type=type(exc).__name__,
+                message=str(exc),
             )
 
     def inspect(
@@ -101,10 +124,16 @@ class ConfiguredProductionPipeline:
                 self.configuration.channels[slot.channel_id - 1]
                 for slot in layout.slots
             )
+            occupancy_start = monotonic()
+            occupancy = tuple(
+                self._occupancy(frame if ready else None, channel)
+                for channel in channels
+            )
+            occupancy_ms = (monotonic() - occupancy_start) * 1000
             traditional_start = monotonic()
             traditional = tuple(
-                self._traditional_check(frame if ready else None, channel)
-                for channel in channels
+                self._traditional_check(frame if ready else None, channel, presence)
+                for channel, presence in zip(channels, occupancy, strict=True)
             )
             traditional_ms = (monotonic() - traditional_start) * 1000
             outcome = None
@@ -147,8 +176,8 @@ class ConfiguredProductionPipeline:
             mapping_started = monotonic()
             camera = self._base.camera_result(layout, outcome, collection_issue=issue)
             rows: list[ChannelInspectionResult] = []
-            for row, channel, traditional_check in zip(
-                camera.channels, channels, traditional, strict=True
+            for row, channel, traditional_check, presence in zip(
+                camera.channels, channels, traditional, occupancy, strict=True
             ):
                 policy = channel.checks.vimo
                 evidence = tuple(
@@ -183,7 +212,14 @@ class ConfiguredProductionPipeline:
                     )
                 rows.append(
                     replace(
-                        row, checks=(traditional_check, vimo), vimo_findings=evidence
+                        row,
+                        checks=(traditional_check, vimo),
+                        vimo_findings=evidence,
+                        occupancy=presence,
+                        traditional_skip=TraditionalSkipReason.CONFIRMED_EMPTY
+                        if self.configuration.capsule.enabled
+                        and presence.state is OccupancyState.EMPTY
+                        else None,
                     )
                 )
             unassigned = tuple(
@@ -201,6 +237,7 @@ class ConfiguredProductionPipeline:
                     timing=replace(
                         camera.timing,
                         traditional_ms=traditional_ms if ready else None,
+                        occupancy_ms=occupancy_ms if ready else None,
                         mapping_ms=(monotonic() - mapping_started) * 1000,
                     ),
                 )

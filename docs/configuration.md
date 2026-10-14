@@ -137,6 +137,9 @@ Optional root `capsule` contains only `size` and `color`. These uniform
 product-level settings apply across all channels, independently of ViMo
 inheritance. There is no capsule `required` control or camera/channel override.
 Enabled capsule checks are required in execution.
+Confirmed EMPTY Occupancy can explicitly skip their execution without changing
+these saved settings; the [inspection contract](inspection.md#always-on-occupancy)
+owns that distinction. Occupancy has no persisted Recipe enable/threshold fields.
 
 | Object / field | Omitted value | Valid supplied value |
 | --- | --- | --- |

@@ -16,6 +16,7 @@ from ..models import (
     timestamp,
 )
 from .layout import CameraLayout, ChannelId, InspectionLayout, valid_rect
+from .occupancy import OccupancyResult, OccupancyState
 
 
 class TechnicalStatus(Enum):
@@ -34,6 +35,10 @@ class FindingSource(Enum):
     VIMO = auto()
     TRADITIONAL = auto()
     COLLECTION = auto()
+
+
+class TraditionalSkipReason(Enum):
+    CONFIRMED_EMPTY = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +227,8 @@ class ChannelInspectionResult:
     slot: int
     checks: tuple[CheckResult, ...]
     vimo_findings: tuple[FindingAssignment, ...] = ()
+    occupancy: OccupancyResult | None = None
+    traditional_skip: TraditionalSkipReason | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "checks", tuple(self.checks))
@@ -242,10 +249,35 @@ class ChannelInspectionResult:
         )
         if self.vimo_findings and vimo.assessment.judgment is not ProductJudgment.NG:
             raise ValueError("Assigned ViMo defects require NG evidence")
+        if self.traditional_skip is not None:
+            traditional = next(
+                check
+                for check in self.checks
+                if check.source is FindingSource.TRADITIONAL
+            )
+            if (
+                self.traditional_skip is not TraditionalSkipReason.CONFIRMED_EMPTY
+                or self.occupancy is None
+                or self.occupancy.state is not OccupancyState.EMPTY
+                or traditional.assessment.technical_status
+                is not TechnicalStatus.DISABLED
+                or not traditional.required
+            ):
+                raise ValueError(
+                    "EMPTY skip needs confirmed evidence and a neutral check"
+                )
 
     @property
     def assessment(self) -> Assessment:
-        return aggregate(self.checks)
+        assessment = aggregate(self.checks)
+        if self.occupancy is not None and self.occupancy.error_code is not None:
+            return Assessment(
+                TechnicalStatus.ERROR,
+                ProductJudgment.NG
+                if assessment.judgment is ProductJudgment.NG
+                else ProductJudgment.UNKNOWN,
+            )
+        return assessment
 
     @property
     def reasons(self) -> tuple[Reason, ...]:
@@ -257,16 +289,27 @@ class CameraTiming:
     traditional_ms: float | None
     vimo_ms: float | None
     mapping_ms: float
+    occupancy_ms: float | None = None
 
     def __post_init__(self) -> None:
-        for value in (self.traditional_ms, self.vimo_ms, self.mapping_ms):
+        for value in (
+            self.traditional_ms,
+            self.vimo_ms,
+            self.mapping_ms,
+            self.occupancy_ms,
+        ):
             if value is not None:
                 timestamp(value)
 
     @property
     def total_ms(self) -> float:
         """Sum of measured stages, not collection/queue latency."""
-        return (self.traditional_ms or 0) + (self.vimo_ms or 0) + self.mapping_ms
+        return (
+            (self.occupancy_ms or 0)
+            + (self.traditional_ms or 0)
+            + (self.vimo_ms or 0)
+            + self.mapping_ms
+        )
 
 
 @dataclass(frozen=True, slots=True)
