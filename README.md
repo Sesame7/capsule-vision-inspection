@@ -214,7 +214,10 @@ make no automatic leak verdict. The visualizer uses existing Pillow/fonts for
 Chinese where available, otherwise ASCII references with Chinese labels in JSON;
 it installs nothing.
 
-The [FINS/UDP contract and two-terminal demo](docs/communication.md#local-simulator-and-manual-demonstration)
+The [standalone FINS/TCP client](docs/communication.md#standalone-finstcp-client)
+supports automatic node allocation and serial D/W words, with CPU-only loopback
+tests; it has no UI or Production reporting integration. The
+[FINS/UDP contract and two-terminal demo](docs/communication.md#local-simulator-and-manual-demonstration)
 cover the independent communication subset. The
 [first-station protocol](docs/communication.md#first-station-result-projection-and-submission)
 adds explicit 36-channel projection and acknowledged W50–W52 / W49 writes. Optional
@@ -271,7 +274,7 @@ Current contracts and procedures:
 | [UI shell](docs/ui-shell.md) | Bilingual presentation, display identity, feedback, Qt delivery and closing |
 | [UI configuration](docs/ui-configuration.md) | Recipe/Vision drafts, ROI/reference/tuning and Save and apply |
 | [Inspection performance](docs/inspection-performance.md) | Measurement workloads, boundaries, reports and interpretation |
-| [Communication](docs/communication.md) | Standalone FINS/UDP subset, socket ownership/errors, localhost simulator and hardware limitations |
+| [Communication](docs/communication.md) | Standalone FINS UDP/TCP subsets, socket ownership/errors, UDP localhost simulator and hardware limitations |
 
 Frozen **Historical** archives, separate from Current contracts:
 

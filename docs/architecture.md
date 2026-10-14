@@ -16,6 +16,8 @@ Inputs are local; real camera acquisition and commissioned Production PLC integr
 are unimplemented. A FINS/UDP subset and localhost simulator support manual operations
 and opt-in automatic first-station reporting through normal startup's Communication
 page or explicit developer composition. Reporting preferences are memory-only.
+A standalone synchronous FINS/TCP word client supports automatic node negotiation;
+it is not wired to the Communication UI or Production reporting.
 
 ## Current capabilities
 
@@ -29,7 +31,7 @@ page or explicit developer composition. Reporting preferences are memory-only.
 | Local sources | Owned image-set ingress, independent per-camera Folder replay (application-lifetime RAM dataset for saved Loop sources), explicit fixed images, and session-local Pause/Continue/Step for supported Folder sources in normal startup and opt-in developer composition. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and Communication pages, including session-local automatic-reporting controls/observations; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
-| Communication | Qt-independent FINS/UDP DM/WR words, first-station projection/two-write submission, localhost simulator, independent manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
+| Communication | Qt-independent UDP and standalone TCP DM/WR words; TCP auto-node negotiation has no UI/reporting wiring. UDP retains first-station projection/submission, localhost simulation, manual operations/register watches and opt-in bounded local Production reporting; no commissioned hardware. |
 | Web observation | Optional read-only snapshot service, default loopback with explicit assigned IPv4 binding on a trusted test LAN; independent publisher encodes bounded latest-camera JPEGs, serial HTTP serves cached bytes and a minimal responsive observer. No runtime commands, authentication or HTTPS. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
@@ -200,7 +202,7 @@ packages, classes, composition hooks or thread topology retain this arrangement.
 | [`runtime/`](../src/vimo_demo/runtime/) | `InferenceWorker` and `RuntimeCoordinator`; sole collector owner, serial cycle runner and worker engine owner. |
 | [`application/`](../src/vimo_demo/application/) | `ProductionApplication`, `ProductionRuntimeSession`, `ConfiguredProductionPipeline`, `LocalCycleIngress` and `FolderReplay`. |
 | [`ui/`](../src/vimo_demo/ui/) | Shell, bridges, display copies and configuration/preview widgets; [bootstrap](../src/vimo_demo/ui/bootstrap.py) and [local composition](../src/vimo_demo/ui/local_production.py) host Current desktop startup/source wiring. |
-| [`communication/`](../src/vimo_demo/communication/) | Typed FINS/UDP DM/WR client, first-station projection/submission, optional local reporting owner and finite loopback simulator. |
+| [`communication/`](../src/vimo_demo/communication/) | Typed FINS UDP/TCP DM/WR clients, UDP first-station projection/submission, optional local reporting owner and finite UDP loopback simulator. |
 | [`web/`](../src/vimo_demo/web/) | Optional snapshot publisher, serial HTTP cache delivery and read-only browser assets; normal bootstrap owns its process lifetime. |
 | [`tests/`](../tests/) and [`scripts/`](../scripts/) | Maintained verification, optional real regression, CLI tools and fake UI review. |
 
@@ -214,7 +216,7 @@ adapter designs or scheduling structures are selected here.
 | Real cameras/adapters | Hardware/SDK choice, acquisition mode and failure behavior; local inputs do not implement cameras. |
 | Trigger/cycle association | Explicit hardware/frame association, buffer leases, captured/arrival clocks and synchronization. |
 | Hardware capacity/deadlines/overload | Measured limits, deadline events and machine responses; software bounds/pacing do not establish field capacity. |
-| PLC integration and counting | Actual equipment/configuration, output association, delivery acknowledgement and physical-product accounting; the standalone FINS/UDP subset does not implement these or a capsule counter. |
+| PLC integration and counting | Actual equipment/configuration, output association, delivery acknowledgement and physical-product accounting; the standalone FINS transports do not implement these or a capsule counter. |
 | Machine stopping/commissioning | Safety, emergency-stop responsibilities and hardware recovery; graceful software Stop/close is not machine safety. |
 | Calibrated inspection/acceptance | Lighting/geometry, calibration, thresholds, annotations and field acceptance criteria remain unverified. |
 | History/archive/remote deployment | Retention, result/image delivery, authentication/HTTPS and commissioned network access remain unimplemented. Current trusted-test-LAN Web observation is best-effort and provides neither control nor reliable result delivery. |
@@ -247,7 +249,7 @@ original documents remain recoverable at Git checkpoint
 | [UI shell](ui-shell.md) | Presentation, display identity, feedback, Qt delivery, closing and review workflows. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, references, ROI/tuning workflows and distinct Save/Apply/activation stages. |
 | [Inspection performance](inspection-performance.md) | Measurement workloads/boundaries, reports, interpretation, historical results and verification. |
-| [Communication](communication.md) | FINS/UDP subset, socket lifecycle/errors, local reporting/simulation, session-local UI controls/observations, manual workspace and deferred commissioned hardware integration. |
+| [Communication](communication.md) | UDP/TCP subsets and socket lifecycle/errors; UDP local reporting/simulation, session-local UI controls/observations, manual workspace and deferred commissioned hardware integration. |
 
 [README](../README.md) owns setup, usage and verification commands; [AGENTS](../AGENTS.md)
 owns durable engineering safeguards and proportional checks. Temporary migration

@@ -119,6 +119,35 @@ def validate_word_range(
     return area
 
 
+def decode_response(
+    response: bytes,
+    command: bytes,
+    expected_bytes: int,
+    *,
+    source: FinsAddress,
+    destination: FinsAddress,
+    sid: int,
+) -> bytes:
+    """Shared embedded FINS validation (W342); transport owns sender/framing."""
+    if not 14 <= len(response) <= MAX_DATAGRAM:
+        raise FinsProtocolError(f"Invalid FINS response length: {len(response)}")
+    if response[0] & 0xC0 != 0xC0:
+        raise FinsProtocolError("Expected a FINS response header")
+    # W342 says not to check response RSV, GCT or ICF reserved bits.
+    if response[3:6] != source.to_bytes():
+        raise FinsProtocolError("Response destination differs from request source")
+    if response[6:9] != destination.to_bytes():
+        raise FinsProtocolError("Response source differs from request destination")
+    if response[9] != sid or response[10:12] != command:
+        raise FinsProtocolError("Response SID/command does not match request")
+    end_code = int.from_bytes(response[12:14], "big")
+    if end_code:
+        raise FinsPlcError(command, end_code, response[14:])
+    if len(response) != 14 + expected_bytes:
+        raise FinsProtocolError("Response word count/payload length does not match")
+    return response[14:]
+
+
 class FinsUdpClient:
     """Serial, response-required UDP exchanges; no retries, polling, or threads.
 
@@ -259,20 +288,11 @@ class FinsUdpClient:
             self._operation.release()
 
     def _response(self, response: bytes, command: bytes, expected_bytes: int) -> bytes:
-        if not 14 <= len(response) <= MAX_DATAGRAM:
-            raise FinsProtocolError(f"Invalid FINS response length: {len(response)}")
-        if response[0] & 0xC0 != 0xC0:
-            raise FinsProtocolError("Expected a FINS response header")
-        # W342 says not to check response RSV, GCT or ICF reserved bits.
-        if response[3:6] != self._source.to_bytes():
-            raise FinsProtocolError("Response destination differs from request source")
-        if response[6:9] != self._destination.to_bytes():
-            raise FinsProtocolError("Response source differs from request destination")
-        if response[9] != self._sid or response[10:12] != command:
-            raise FinsProtocolError("Response SID/command does not match request")
-        end_code = int.from_bytes(response[12:14], "big")
-        if end_code:
-            raise FinsPlcError(command, end_code, response[14:])
-        if len(response) != 14 + expected_bytes:
-            raise FinsProtocolError("Response word count/payload length does not match")
-        return response[14:]
+        return decode_response(
+            response,
+            command,
+            expected_bytes,
+            source=self._source,
+            destination=self._destination,
+            sid=self._sid,
+        )
