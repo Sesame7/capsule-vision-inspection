@@ -503,6 +503,63 @@ terminal runtime failure still faults the application. Expected Stop-related
 admission errors are suppressed during shutdown; other errors stay observable.
 The source completion Future is notification, not proof of source-thread exit.
 
+## Local replay controls
+
+The explicit `scripts/run_local_production_ui.py` demo enables session-local
+Pause/Continue/Step controls. API composition opts in with `replay_controls=True`;
+normal `app.py`, fake review and other default compositions retain their existing
+Start/Stop behavior. This is local image-source control, not a new application
+PAUSED state or real-camera trigger contract.
+
+`LocalReplayControl` is a Qt-independent Condition/Event gate owned by one source
+session. It adds no thread, image queue, cursor history or inference owner. The
+source claims a whole six-camera group before preparation/admission; this is the
+linearization boundary against Pause. A claimed group finishes through the normal
+formal result/accounting path. Pause during that work reports PAUSING, not PAUSED;
+the source reaches PAUSED only after observing its terminal result and publishing
+the identified display pixels. If no group is claimed, Pause takes effect immediately.
+No subsequent group is claimed while paused. Resource ownership and authoritative
+`ProductionApplication.state == RUNNING` remain unchanged, including editing locks.
+
+The local application exposes:
+
+- `pause_replay()` → Future observing the safe paused boundary.
+- `continue_replay()` → Future observing source-mode change, not cycle completion.
+- `step_replay()` → Future observing exactly one group's formal terminal result.
+  From READY this performs normal startup/readiness and successful candidate
+  activation first. It does not complete merely because warm-up finished.
+- `replay_snapshot()` → current/last session's generation and local state:
+  AUTOMATIC, PAUSING, PAUSED, STEPPING or STOPPED; no changes to the core application
+  snapshot/schema.
+
+These Futures are noncancellable observations; callbacks must remain short and
+must not mutate widgets. Repeated Step while STEPPING shares the same Future and
+does not queue another permit. Invalid transition commands are rejected. Successful
+Step means formal inspection completion, not product OK or FINS acknowledgement.
+Startup/runtime/source/shutdown interruption explicitly settles outstanding
+operations instead of inventing a completed inspection.
+
+Continue/Step preserve replay indices, per-camera wrapping, generation and CycleId
+progression. They do not reload the engine, warm up again or reread the last group.
+Operator waits use a shutdown-interruptible Condition, without polling/spinning.
+Pause also interrupts the B12 pacing wait. Step bypasses automatic FPS waiting;
+Continue discards the pre-pause pacing anchor, then later automatic iterations use
+their actual new start times, with no accumulated debt or catch-up scheduling.
+
+Genuine Stop/Close and internal runtime/reporting-overload cleanup stop the gate,
+settle outstanding operations explicitly and retain existing actual-thread/resource
+release requirements. A later Start creates a fresh gate and source cursor. Non-Loop
+exhaustion has priority over waiting for an operator: after the final valid group,
+the owned cursor identifies exhaustion without extra decoding and requests genuine
+Stop, even when Pause/Step would otherwise wait. No partial next group is admitted.
+
+Each eligible stepped result uses the existing asynchronous H2B handoff. Pause
+does not cancel an active report, and reporting failures do not resume/pause the
+source or change judgment/counters. Reporting overload still requests genuine Stop;
+unsent reports during any shutdown follow the existing explicit-skip policy. See
+[communication](communication.md#local-production-reporting) and the
+[local demo button presentation](ui-shell.md#local-demo-operations).
+
 ## Shutdown
 
 Software Stop is graceful inspection shutdown, **not emergency/safety stopping**.

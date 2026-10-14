@@ -91,6 +91,7 @@ def main() -> int:
             )
             if args.report_first_station
             else None,
+            replay_controls=True,
         )
     except Exception:
         traceback.print_exc()
@@ -100,7 +101,11 @@ def main() -> int:
     qt = QApplication(sys.argv[:1])
     delivery = FutureDelivery()
     try:
-        bridge = QtProductionBridge(composition.application, composition.store)
+        bridge = QtProductionBridge(
+            composition.application,
+            composition.store,
+            local_replay=composition.application,
+        )
         SourceNotifications(bridge, delivery)  # QObject parent retains the receiver.
         window = ProductionWindow(
             bridge,

@@ -55,8 +55,9 @@ geometry. Startup/recovery policy belongs to
 ### Summary and commands
 
 The summary has two compact rows. In the first, application state and Recipe
-information are left, Batch ID/edit action centered, and the single primary
-operation right. Equal flexible side columns center the whole Batch/edit group
+information are left, Batch ID/edit action centered, and the operation group right
+(one primary control normally; two in the explicit local demo). Equal flexible
+side columns center the whole Batch/edit group
 across the row; the operation area stays stable across states. The second row
 shows completed cycles, **CH OK**, **CH NG**, and available latest-inspection elapsed ms.
 CH OK/NG read the application's separate business-occurrence counters, never legacy
@@ -93,6 +94,36 @@ when editing is disabled in RUNNING.
 | STOPPING | Disabled Stopping progress | Disabled |
 | FAULT | Reset only when runtime ownership is released; application still validates safety | Disabled |
 | CLOSED | Disabled Closed | Disabled |
+
+### Local demo operations
+
+Only the explicit local-image launcher wires `QtProductionBridge.local_replay`.
+It presents two compact Qt-drawn Play/Pause/Stop-square/Step-forward operation
+buttons, with localized labels, tooltips and accessibility names:
+
+| Local presentation | Primary | Secondary |
+| --- | --- | --- |
+| READY | Start / 开始 | Step / 单步 |
+| RUNNING automatic source | Pause / 暂停 | End / 结束 |
+| PAUSED source (application still RUNNING) | Continue / 继续 | Step / 单步 |
+| PAUSING / STEPPING | Disabled progress | End / 结束 |
+| STARTING / STOPPING | Disabled progress | Unavailable |
+
+FAULT/Reset and close safeguards remain authoritative. There is no End button
+while PAUSED; Continue followed by End, application Stop or window Close still
+performs genuine shutdown. End invokes the existing application Stop. Pause/Step
+do not release resources, unlock editing, reset counters or imply a PLC ACK.
+The replay-paused state label is page-scoped presentation with explanatory tooltip,
+never `ApplicationState.PAUSED`. Normal/fake shells keep the table above unchanged.
+
+The bridge observes a small replay snapshot separately from the application
+snapshot and delivers operation Futures through the existing queued gate. It
+never owns source scheduling or blocks on unfinished operations. Until a claimed
+cycle's formal result is observed, Pause remains progress and Step is not reusable;
+rapid duplicate commands cannot queue extra permits. Stale action/generation checks
+prevent an old displayed action being reinterpreted after a lifecycle transition.
+See [application replay controls](application.md#local-replay-controls) for timing,
+cursor, source exhaustion and shutdown semantics.
 
 Closing disables operational controls. Commands go through `QtProductionBridge`
 to `ProductionApplication`, with authoritative state validation even if a displayed

@@ -12,6 +12,7 @@ from vimo_demo.application import (
     ProductionApplication,
     ProductionApplicationSnapshot,
 )
+from vimo_demo.application.local_replay import LocalReplayCommands, ReplaySnapshot
 
 from .display_frames import LatestDisplayFrameStore
 from .inference_bridge import FutureDelivery
@@ -26,6 +27,7 @@ class RecipeChoice:
 class QtProductionBridge(QObject):
     snapshot_changed = Signal(object)
     frames_changed = Signal(object)
+    replay_changed = Signal(object)
     command_finished = Signal(str)
     command_failed = Signal(str, object)
     shutdown_finished = Signal()
@@ -38,12 +40,15 @@ class QtProductionBridge(QObject):
         *,
         poll_ms: int = 100,
         close_timeout_ms: int = 30_000,
+        local_replay: LocalReplayCommands | None = None,
     ) -> None:
         super().__init__(parent)
         if min(poll_ms, close_timeout_ms) <= 0:
             raise ValueError("Timer intervals must be positive")
         self.application = application
         self.frames = frames
+        self.local_replay = local_replay
+        self.replay_snapshot: ReplaySnapshot | None = None
         self._snapshot: ProductionApplicationSnapshot | None = None
         self._revision = -1
         self._closing = False
@@ -108,6 +113,21 @@ class QtProductionBridge(QObject):
         self._command("stop", self.application.stop)
 
     @Slot()
+    def pause_replay(self) -> None:
+        if self.local_replay is not None:
+            self._command("replay_pause", self.local_replay.pause_replay)
+
+    @Slot()
+    def continue_replay(self) -> None:
+        if self.local_replay is not None:
+            self._command("replay_continue", self.local_replay.continue_replay)
+
+    @Slot()
+    def step_replay(self) -> None:
+        if self.local_replay is not None:
+            self._command("replay_step", self.local_replay.step_replay)
+
+    @Slot()
     def reset(self) -> None:
         self._immediate("reset", self.application.reset_fault)
 
@@ -145,9 +165,14 @@ class QtProductionBridge(QObject):
     def refresh(self) -> None:
         self._check_thread()
         snapshot = self.application.snapshot()
+        replay = self.local_replay.replay_snapshot() if self.local_replay else None
+        replay_changed = replay != self.replay_snapshot
+        self.replay_snapshot = replay
         if snapshot != self._snapshot:
             self._snapshot = snapshot
             self.snapshot_changed.emit(snapshot)
+        if replay_changed:
+            self.replay_changed.emit(replay)
         display = self.frames.snapshot()
         revision = display.revision
         if revision != self._revision:

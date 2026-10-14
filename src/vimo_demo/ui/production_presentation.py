@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from vimo_demo.application import ApplicationState, ProductionApplicationSnapshot
+from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import (
     Assessment,
@@ -47,6 +48,27 @@ def primary_action(state: ApplicationState) -> str:
     if state is ApplicationState.CLOSED:
         return "CLOSED"
     return "start"
+
+
+def replay_actions(
+    state: ApplicationState, replay: ReplayState | None
+) -> tuple[str, str | None]:
+    """Local-only source controls; never add an ApplicationState.PAUSED."""
+    if state is ApplicationState.READY:
+        return "start", "replay_step"
+    if state is ApplicationState.STARTING:
+        return "STARTING", None
+    if state is ApplicationState.RUNNING:
+        if replay is ReplayState.PAUSED:
+            return "replay_continue", "replay_step"
+        if replay is ReplayState.AUTOMATIC:
+            return "replay_pause", "replay_end"
+        if replay is ReplayState.PAUSING:
+            return "replay_pausing", "replay_end"
+        if replay is ReplayState.STEPPING:
+            return "replay_stepping", "replay_end"
+        return "STOPPING", None
+    return primary_action(state), None
 
 
 class Indicator(Enum):

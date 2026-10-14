@@ -33,6 +33,7 @@ from vimo_demo.application.folder_replay import (
     FolderSourceError,
     start_interval_wait,
 )
+from vimo_demo.application.local_replay import LocalReplayControl, ReplaySnapshot
 from vimo_demo.application.session import EngineFactory, ProductionCycle
 from vimo_demo.communication.reporting import (
     FirstStationReport,
@@ -118,6 +119,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         sources: CameraSources | None = None,
         source_base: Path = Path("."),
         reporting: FirstStationReportingWorker | None = None,
+        replay_control: LocalReplayControl | None = None,
     ) -> None:
         def warmup(config: PreparedConfiguration) -> Sequence[NDArray[np.generic]]:
             for camera, image in zip(
@@ -139,6 +141,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         self._layout = prepared.configuration.layout
         self._replay, self._sources, self._source_base = replay, sources, source_base
         self._source_stop = Event()
+        self.replay_control = replay_control
         self.reporting = reporting
         self._reporting_overload: RuntimeError | None = None
         self.source_done: Future[None] = Future()
@@ -158,6 +161,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
 
     def request_stop(self) -> None:
         self._source_stop.set()
+        if self.replay_control is not None:
+            self.replay_control.stop()
         if self.reporting is not None:
             self.reporting.request_stop()
         super().request_stop()
@@ -253,7 +258,18 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             first = True
             while not self._source_stop.is_set():
                 fps = self._sources.target_fps if self._sources else 8.0
-                if started is not None and _wait_for_source_interval(
+                control = self.replay_control
+                if control is not None:
+                    if not control.wait_for_turn():
+                        return
+                    previous = control.pacing_start(started)
+                    if previous is not None and _wait_for_source_interval(
+                        control.changed, previous, fps
+                    ):
+                        continue  # Pause/Continue/Step/Stop: recheck the gate.
+                    if not control.claim():
+                        continue
+                elif started is not None and _wait_for_source_interval(
                     self._source_stop, started, fps
                 ):
                     return
@@ -285,6 +301,22 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                             else None,
                         )
                 del result  # Keep no cycle/result history.
+                if control is not None:
+                    control.complete_cycle()
+                    if (
+                        self._replay is not None
+                        and not self._replay.sources.loop
+                        and any(
+                            index >= len(paths)
+                            for index, paths in zip(
+                                self._replay.indices, self._replay.paths, strict=True
+                            )
+                        )
+                    ):
+                        # End-of-source wins over operator waiting. Inspecting the
+                        # owned cursor needs no extra decode or look-ahead group.
+                        self._application.stop()
+                        return
         except BaseException as exc:
             if not (
                 (
@@ -305,6 +337,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                     self.source_done.set_exception(reporting_error)
                 else:
                     self.source_done.set_result(None)
+            if self.replay_control is not None:
+                self.replay_control.stop(self.source_done.exception())
 
 
 class _LocalApplication(ProductionApplication):
@@ -314,11 +348,71 @@ class _LocalApplication(ProductionApplication):
         self,
         factory: Callable[[PreparedConfiguration, int], LocalRuntimeSession],
         cache: FolderReplayCache,
+        *,
+        replay_controls: bool = False,
     ) -> None:
         self.replay_cache = cache
         self._reporting_lock = Lock()
         self._reporting_worker: FirstStationReportingWorker | None = None
+        self._replay_lock = Lock()
+        self.replay_controls = replay_controls
+        self._replay_control: LocalReplayControl | None = None
         super().__init__(factory)
+
+    def start(self) -> Future[None]:
+        return self._start_replay(single_step=False)
+
+    def _start_replay(self, *, single_step: bool) -> Future[None]:
+        if not self.replay_controls:
+            if single_step:
+                raise ApplicationStateError("Local replay controls are not enabled")
+            return super().start()
+        with self._replay_lock:
+            generation = self.snapshot().generation + 1
+            control = LocalReplayControl(generation, single_step=single_step)
+            step = control.step() if single_step else None
+            startup = super().start()  # Authoritative readiness/activation unchanged.
+            self._replay_control = control
+
+        def ready(future: Future[None]) -> None:
+            error = future.exception()
+            if error is not None:
+                control.stop(error)
+
+        startup.add_done_callback(ready)
+        return step if step is not None else startup
+
+    def replay_control_for(self, generation: int) -> LocalReplayControl | None:
+        with self._replay_lock:
+            control = self._replay_control
+        return (
+            control
+            if control is not None and control.generation == generation
+            else None
+        )
+
+    def replay_snapshot(self) -> ReplaySnapshot | None:
+        with self._replay_lock:
+            control = self._replay_control
+        return control.snapshot() if control is not None else None
+
+    def _running_replay(self) -> LocalReplayControl:
+        snapshot = self.snapshot()
+        control = self.replay_control_for(snapshot.generation)
+        if snapshot.state is not ApplicationState.RUNNING or control is None:
+            raise ApplicationStateError("Replay operation requires its RUNNING session")
+        return control
+
+    def pause_replay(self) -> Future[None]:
+        return self._running_replay().pause()
+
+    def continue_replay(self) -> Future[None]:
+        return self._running_replay().resume()
+
+    def step_replay(self) -> Future[None]:
+        if self.snapshot().state is ApplicationState.READY:
+            return self._start_replay(single_step=True)
+        return self._running_replay().step()
 
     def set_reporting_owner(self, worker: FirstStationReportingWorker | None) -> None:
         with self._reporting_lock:
@@ -376,6 +470,7 @@ def compose(
     sources_file: Path | None = None,
     observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
     reporting: LocalReportingSettings | None = None,
+    replay_controls: bool = False,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
@@ -427,6 +522,7 @@ def compose(
         observe_source=observe_source,
         observe_cache=observe_cache,
         reporting=reporting,
+        replay_controls=replay_controls,
     )
     app.configure(prepared)
     return LocalComposition(
@@ -442,6 +538,7 @@ def local_application(
     observe_source: Callable[[Future[None]], None] = lambda _: None,
     observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
     reporting: LocalReportingSettings | None = None,
+    replay_controls: bool = False,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != 6:
@@ -525,12 +622,13 @@ def local_application(
             sources=snapshot,
             source_base=sources_file.parent,
             reporting=report_worker,
+            replay_control=app.replay_control_for(generation),
         )
         app.set_reporting_owner(report_worker)
         observe_source(session.source_done)
         return session
 
-    app = _LocalApplication(factory, cache)
+    app = _LocalApplication(factory, cache, replay_controls=replay_controls)
     return app, store
 
 
