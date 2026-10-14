@@ -244,6 +244,8 @@ def test_validation_remote_read_and_localhost_only_write(
     try:
         assert not calls and page.status.text() == text("comm_idle", language)
         assert page.protocol.count() == 1 and page.protocol.isEnabled()
+        page.settings_button.click()
+        assert page.settings_dialog.isVisible() and not calls
         assert not page.advanced.isVisible()
         page.advanced_button.click()
         assert page.advanced.isVisible()
@@ -380,8 +382,11 @@ def test_navigation_busy_snapshot_and_production_isolation(
         QTimer.singleShot(0, tick.set)
         until(tick.is_set)
         page.host.setText("192.0.2.99")  # Programmatic edit cannot redirect snapshot.
+        page.settings_button.click()
+        assert page.settings_dialog.isVisible() and page.busy
         window.navigate(3)
         assert window.pages.currentIndex() == 3 and page.busy
+        assert not page.settings_dialog.isVisible()
         assert window.bridge.application.snapshot() == baseline
     finally:
         release.set()
@@ -424,10 +429,13 @@ def test_close_waits_for_actual_exit_not_future_notification(
         until(returned.is_set)
         QApplication.processEvents()
         assert page.busy and page.last_response is None
+        page.settings_button.click()
+        assert page.settings_dialog.isVisible()
         window.close()
         window.close()
         until(lambda: window.bridge.closed)
         assert window.isVisible() and not page.closed
+        assert not page.settings_dialog.isVisible()
         assert not page.dispatch(RequestKind.READ)
         with pytest.raises(RuntimeError, match="active"):
             page.dispose()
@@ -593,7 +601,9 @@ def test_communication_layout_screenshot(
     window.set_language(language)
     window.resize(*size)
     window.navigate(2)
+    window.communication.settings_button.click()
     window.communication.advanced_button.click()
+    window.communication.watch_editor_button.click()
     window.communication.manual_button.click()
     window.communication.add_watch_group(
         RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "提交 / Commit")
@@ -649,6 +659,10 @@ def test_communication_layout_screenshot(
     assert window.grab().save(
         str(tmp_path / f"communication-{language}-{size[0]}x{size[1]}.png")
     )
+    assert page.settings_dialog.grab().save(
+        str(tmp_path / f"communication-settings-{language}-{size[0]}x{size[1]}.png")
+    )
+    page.settings_dialog.reject()
 
 
 def test_failed_thread_start_leaves_no_owner_or_disabled_controls(
@@ -694,6 +708,95 @@ def watch_cell(page: CommunicationPage, row: int, column: int) -> str:
     item = page.watch_table.item(row, column)
     assert item is not None
     return item.text()
+
+
+def test_compact_empty_and_bounded_populated_watch(
+    page: CommunicationPage, qapp: QApplication
+) -> None:
+    assert page.watch_table.isHidden() and page.values_table.isHidden()
+    assert page.watch_empty.isVisible()
+    assert (
+        page.watch_editor.isHidden()
+        and page.manual_body.isHidden()
+        and page.log.isHidden()
+    )
+    assert not page.settings_dialog.isVisible()
+    assert page.settings_button.toolTip() and page.settings_button.accessibleName()
+    page.watch_editor_button.click()
+    assert page.watch_editor.isVisible()
+    assert page.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "A long watch-group name")
+    )
+    qapp.processEvents()
+    short_height = page.watch_table.height()
+    assert page.watch_table.isVisible() and not page.watch_empty.isVisible()
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100, 20, "Other"))
+    qapp.processEvents()
+    assert page.watch_table.height() > short_height
+    height = page.watch_table.height()
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 200, 20))
+    qapp.processEvents()
+    assert page.watch_table.height() == height
+    assert page.watch_table.verticalScrollBar().maximum() > 0
+    assert page.watch_table.columnWidth(0) == 160
+    for column, label in ((2, "DEC"), (3, "HEX")):
+        header = page.watch_table.horizontalHeaderItem(column)
+        assert header is not None and header.text() == label
+    item = page.watch_table.item(0, 0)
+    assert item is not None and "A long watch-group name" in item.toolTip()
+    while page.watch_groups:
+        assert page.remove_watch_group(0)
+    assert page.watch_table.isHidden() and page.watch_empty.isVisible()
+
+
+def test_settings_and_disclosure_do_not_dispatch_or_change_active_watch(
+    page: CommunicationPage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[CommunicationRequest] = []
+    entered, release = Event(), Event()
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        requests.append(request)
+        entered.set()
+        assert release.wait(3)
+        return response(request)
+
+    monkeypatch.setattr(page, "_execute", execute)
+    page.settings_button.click()
+    page.port.setValue(19600)
+    page.source[1].setValue(4)
+    page.advanced_button.click()
+    page.settings_dialog.reject()
+    assert not requests and page.port.value() == 19600
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4))
+    assert page.start_monitoring()
+    until(entered.is_set)
+    try:
+        page.settings_button.click()
+        assert page.settings_dialog.isVisible() and not page.port.isEnabled()
+        page.manual_button.click()
+        page.log_button.click()
+        page.watch_editor_button.click()
+        assert page.manual_body.isVisible() and page.log.isVisible()
+        assert not page.watch_add.isEnabled() and not page.write_button.isEnabled()
+        page.set_language("en")
+        assert page.settings_dialog.windowTitle() == text("comm_settings", "en")
+        page.settings_dialog.reject()
+        page.manual_button.click()
+        page.log_button.click()
+        assert page.auto_refresh and page.busy and len(requests) == 1
+        assert requests[0].port == 19600 and requests[0].source.node == 4
+    finally:
+        page.stop_monitoring()
+        release.set()
+        until(lambda: not page.busy)
+    assert (
+        not page.auto_refresh
+        and not page.manual_body.isVisible()
+        and not page.log.isVisible()
+    )
+    page.log_button.click()
+    assert page.log.isVisible() and not requests[0].values
 
 
 def test_watch_editor_validation_and_identity(page: CommunicationPage) -> None:

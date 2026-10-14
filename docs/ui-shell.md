@@ -31,10 +31,15 @@ documents; this page covers their interaction with the shell, not their controls
 are implementation routes, not extra Settings/Diagnostics features. Communication
 provides explicit manual reads, localhost-only writes and optional one-second register
 watch refresh, without persistent online state. Normal startup also presents a
-compact automatic-reporting panel: enablement/connection preferences are editable
-only in READY/UNCONFIGURED; the existing bridge polls bounded H2B observations for
+compact automatic-reporting bar with endpoint, enablement, ACK/counts and last-error
+details. Low-frequency automatic/manual connection editors are in one nonmodal
+settings dialog, with independent advanced addressing. The page emphasizes register
+watches; their editor, manual operations and logs start collapsed. Empty tables are
+hidden; useful rows grow to bounded viewports before internal scrolling. These
+presentation choices retain observations and do not initiate/cancel requests.
+Reporting preferences are editable only in READY/UNCONFIGURED; the existing bridge polls bounded H2B observations for
 display, without driving reporting or accounting. Ordinary reporting errors stay
-in that panel rather than changing shared event priorities or application FAULT.
+in that bar rather than changing shared event priorities or application FAULT.
 The [Communication contract](communication.md#normal-application-reporting-controls)
 owns activation, status meanings and reserved manual-write protection. Leaving the
 page stops future refresh/unstarted reads while preserving the active owner until
