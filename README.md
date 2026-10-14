@@ -154,7 +154,7 @@ not mandatory daily validation:
 | [benchmark_production.py](scripts/benchmark_production.py) | Fixed six-image configured Production cycles, including ingress copies/admission/result delivery; `outputs/inspection_performance/` |
 | [stress_inference.py](scripts/stress_inference.py) | One engine, six calls per round, semantic/latency/resource observations; `outputs/stress/` |
 | [visualize_inference.py](scripts/visualize_inference.py) | Raw-mask/contour/bbox overlays and label legend; `outputs/visualization/` |
-| [run_fins_simulator.py](scripts/run_fins_simulator.py) / [fins_local_demo.py](scripts/fins_local_demo.py) | Standalone localhost FINS/UDP DM-word simulator and read/write/error demo; no Qt/GPU or Production integration |
+| [run_fins_simulator.py](scripts/run_fins_simulator.py) / [fins_local_demo.py](scripts/fins_local_demo.py) | Standalone localhost FINS/UDP DM/WR-word simulator and D read/write/error demo; no Qt/GPU or Production integration |
 
 Replace `images/example.png` with an existing image. Benchmark and stress commands
 below intentionally execute GPU work; run them only for a scoped investigation.
@@ -176,6 +176,9 @@ it installs nothing.
 
 The [FINS/UDP contract and two-terminal demo](docs/communication.md#local-simulator-and-manual-demonstration)
 cover the independent communication subset. The
+[first-station protocol](docs/communication.md#first-station-result-projection-and-submission)
+adds explicit 36-channel projection and acknowledged W50–W52 / W49 writes without
+automatic Production reporting. The
 [Communication workspace](docs/communication.md#communication-workspace) uses it
 outside the GUI thread; writes remain localhost-only. Real Production PLC integration
 and hardware commissioning remain unimplemented.

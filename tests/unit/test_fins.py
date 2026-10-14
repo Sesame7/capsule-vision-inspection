@@ -20,6 +20,7 @@ import pytest
 
 from vimo_demo.communication import (
     FinsAddress,
+    FinsMemoryArea,
     FinsPlcError,
     FinsProtocolError,
     FinsTimeoutError,
@@ -42,6 +43,13 @@ THREE_WORDS = bytes.fromhex(
 )
 WRITE_THREE = bytes.fromhex(
     "80 00 02 00 02 00 00 01 00 01 01 02 82 01 23 00 00 03 00 00 FF FF 12 34"
+)
+READ_W49 = bytes.fromhex("80 00 02 00 02 00 00 01 00 01 01 01 B1 00 31 00 00 04")
+W49_WORDS = bytes.fromhex(
+    "C0 00 02 00 01 00 00 02 00 01 01 01 00 00 FF FF 00 01 80 00 00 0F"
+)
+WRITE_W50 = bytes.fromhex(
+    "80 00 02 00 02 00 00 01 00 01 01 02 B1 00 32 00 00 03 00 01 80 00 00 0F"
 )
 
 
@@ -125,6 +133,18 @@ WIRE_CASES: list[tuple[Callable[[FinsUdpClient], object], bytes, bytes, object]]
         lambda c: c.write_words(0x123, (0, 65535, 0x1234)),
         WRITE_ACK,
         WRITE_THREE,
+        None,
+    ),
+    (
+        lambda c: c.read_words(49, 4, area=FinsMemoryArea.W),
+        W49_WORDS,
+        READ_W49,
+        (65535, 1, 32768, 15),
+    ),
+    (
+        lambda c: c.write_words(50, (1, 32768, 15), area=FinsMemoryArea.W),
+        WRITE_ACK,
+        WRITE_W50,
         None,
     ),
 ]
@@ -229,6 +249,19 @@ INVALID_OPERATIONS: list[Callable[[FinsUdpClient], object]] = [
     lambda c: c.write_words(100, (cast(int, "1234"),)),
     lambda c: c.write_words(100, [0] * 998),
     lambda c: c.write_words(32767, (1, 2)),
+    lambda c: c.read_words(-1, area=FinsMemoryArea.W),
+    lambda c: c.read_words(512, area=FinsMemoryArea.W),
+    lambda c: c.read_words(511, 2, area=FinsMemoryArea.W),
+    lambda c: c.read_words(0, 0, area=FinsMemoryArea.W),
+    lambda c: c.read_words(0, 1000, area=FinsMemoryArea.W),
+    lambda c: c.read_words(True, area=FinsMemoryArea.W),
+    lambda c: c.write_words(50, (), area=FinsMemoryArea.W),
+    lambda c: c.write_words(50, (65536,), area=FinsMemoryArea.W),
+    lambda c: c.write_words(50, (True,), area=FinsMemoryArea.W),
+    lambda c: c.write_words(511, (1, 2), area=FinsMemoryArea.W),
+    lambda c: c.write_words(0, [0] * 998, area=FinsMemoryArea.W),
+    lambda c: c.read_words(0, area=cast(FinsMemoryArea, 0xB1)),
+    lambda c: c.write_words(0, (1,), area=cast(FinsMemoryArea, "W")),
 ]
 
 
@@ -331,6 +364,47 @@ def test_real_udp_repeated_requests_and_limits(simulator: FinsUdpSimulator) -> N
         connection.write_words(1000, values)
         assert connection.read_words(1000, 999) == values + (0, 0)
     assert connection.closed
+
+
+def test_w_map_is_separate_and_full_range_is_accessible(
+    simulator: FinsUdpSimulator,
+) -> None:
+    with client(simulator.port) as connection:
+        assert connection.read_words(100, area=FinsMemoryArea.W) == (0,)
+        connection.write_words(100, (65535,), area=FinsMemoryArea.W)
+        assert connection.read_words(100) == (1234,)
+        connection.write_words(100, (9,))
+        assert connection.read_words(100, area=FinsMemoryArea.W) == (65535,)
+        values = tuple(range(512))
+        connection.write_words(0, values, area=FinsMemoryArea.W)
+        assert connection.read_words(0, 512, area=FinsMemoryArea.W) == values
+        connection.write_words(511, (65535,), area=FinsMemoryArea.W)
+        assert connection.read_words(511, area=FinsMemoryArea.W) == (65535,)
+
+
+@pytest.mark.parametrize(
+    ("packet", "end_code"),
+    [
+        (READ_W49[:15] + b"\x01" + READ_W49[16:], 0x1103),
+        (READ_W49[:13] + bytes.fromhex("02 00 00 00 01"), 0x1103),
+        (READ_W49[:13] + bytes.fromhex("01 FF 00 00 02"), 0x1104),
+        (WRITE_W50[:-1], 0x1003),
+        (WRITE_W50[:13] + bytes.fromhex("01 FF") + WRITE_W50[15:], 0x1104),
+        (WRITE_W50 + bytes(2012), 0x1001),
+    ],
+)
+def test_w_invalid_writes_are_atomic(packet: bytes, end_code: int) -> None:
+    with FinsUdpSimulator(port=0) as server:
+        assert server.handle_datagram(WRITE_W50) == WRITE_ACK
+        expected_header = bytes.fromhex("C0 00 02 00 01 00 00 02 00 01")
+        assert server.handle_datagram(packet) == (
+            expected_header + packet[10:12] + end_code.to_bytes(2, "big")
+        )
+        assert server.handle_datagram(READ_W49) == W49_WORDS[:14] + bytes.fromhex(
+            "00 00 00 01 80 00 00 0F"
+        )
+        assert server.handle_datagram(READ_W49[:16] + b"\x00\x00") == W49_WORDS[:14]
+        assert server.handle_datagram(WRITE_W50[:16] + b"\x00\x00") == WRITE_ACK
 
 
 @pytest.mark.parametrize(

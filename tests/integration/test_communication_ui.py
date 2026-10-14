@@ -17,6 +17,7 @@ from tests.qt_support import ensure_test_fonts, until
 from vimo_demo.application import ApplicationState
 from vimo_demo.communication import (
     FinsAddress,
+    FinsMemoryArea,
     FinsPlcError,
     FinsProtocolError,
     FinsTimeoutError,
@@ -128,13 +129,27 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
             )
             clients.append(self)
 
-        def read_words(self, start: int, count: int = 1) -> tuple[int, ...]:
+        def read_words(
+            self,
+            start: int,
+            count: int = 1,
+            *,
+            area: FinsMemoryArea = FinsMemoryArea.DM,
+        ) -> tuple[int, ...]:
             identities.append(("read", get_ident()))
-            return super().read_words(start, count)
+            assert area is FinsMemoryArea.DM  # H1B manual UI remains D-only.
+            return super().read_words(start, count, area=area)
 
-        def write_words(self, start: int, values: Sequence[int]) -> None:
+        def write_words(
+            self,
+            start: int,
+            values: Sequence[int],
+            *,
+            area: FinsMemoryArea = FinsMemoryArea.DM,
+        ) -> None:
             identities.append(("write", get_ident()))
-            super().write_words(start, values)
+            assert area is FinsMemoryArea.DM
+            super().write_words(start, values, area=area)
 
         def close(self) -> None:
             identities.append(("close", get_ident()))

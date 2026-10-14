@@ -1,4 +1,4 @@
-"""Small synchronous FINS/UDP DM-word subset (W596 / W342).
+"""Small synchronous FINS/UDP DM/WR-word subset (W596 / W342).
 
 One caller owns each client. Overlapping operations/close fail explicitly, rather
 than creating a request queue. Socket creation does not establish PLC readiness.
@@ -9,6 +9,7 @@ import socket
 import struct
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from ipaddress import IPv4Address
 from threading import Lock
 from time import monotonic
@@ -17,11 +18,28 @@ from types import TracebackType
 DEFAULT_PORT = 9600
 MAX_DATAGRAM = 2012
 DM_WORDS = 32768
+W_WORDS = 512
 MAX_READ_WORDS = 999
 MAX_WRITE_WORDS = 997
 DM_WORD_AREA = 0x82
+W_WORD_AREA = 0xB1
 READ_COMMAND = b"\x01\x01"
 WRITE_COMMAND = b"\x01\x02"
+
+
+class FinsMemoryArea(Enum):
+    """Word access only; WR range follows W342 section 5-2-2."""
+
+    DM = DM_WORD_AREA
+    W = W_WORD_AREA
+
+    @property
+    def word_count(self) -> int:
+        return DM_WORDS if self is FinsMemoryArea.DM else W_WORDS
+
+    @property
+    def prefix(self) -> str:
+        return "D" if self is FinsMemoryArea.DM else "W"
 
 
 class FinsError(Exception):
@@ -86,11 +104,16 @@ def validate_address(value: object) -> FinsAddress:
     return value
 
 
-def _word_range(start: int, count: int, maximum: int) -> None:
-    validate_integer("start", start, 0, DM_WORDS - 1)
+def _word_range(start: int, count: int, maximum: int, area: object) -> FinsMemoryArea:
+    if not isinstance(area, FinsMemoryArea):
+        raise ValueError("area must be a FinsMemoryArea instance")
+    validate_integer("start", start, 0, area.word_count - 1)
     validate_integer("count", count, 1, maximum)
-    if start + count > DM_WORDS:
-        raise ValueError("DM word range exceeds D32767")
+    if start + count > area.word_count:
+        raise ValueError(
+            f"{area.name} word range exceeds {area.prefix}{area.word_count - 1}"
+        )
+    return area
 
 
 class FinsUdpClient:
@@ -162,21 +185,29 @@ class FinsUdpClient:
         finally:
             self._operation.release()
 
-    def read_words(self, start: int, count: int = 1) -> tuple[int, ...]:
-        """Read D[start:start+count], returning unsigned words in address order."""
-        _word_range(start, count, MAX_READ_WORDS)
-        body = struct.pack("!BHBH", DM_WORD_AREA, start, 0, count)
+    def read_words(
+        self, start: int, count: int = 1, *, area: FinsMemoryArea = FinsMemoryArea.DM
+    ) -> tuple[int, ...]:
+        """Read consecutive unsigned words; existing calls default to D/DM."""
+        area = _word_range(start, count, MAX_READ_WORDS, area)
+        body = struct.pack("!BHBH", area.value, start, 0, count)
         data = self._exchange(READ_COMMAND, body, count * 2)
         return struct.unpack(f"!{count}H", data)
 
-    def write_words(self, start: int, values: Sequence[int]) -> None:
+    def write_words(
+        self,
+        start: int,
+        values: Sequence[int],
+        *,
+        area: FinsMemoryArea = FinsMemoryArea.DM,
+    ) -> None:
         """Write consecutive unsigned words; timeout never triggers a retry."""
-        _word_range(start, len(values), MAX_WRITE_WORDS)
+        area = _word_range(start, len(values), MAX_WRITE_WORDS, area)
         words = tuple(values)
-        _word_range(start, len(words), MAX_WRITE_WORDS)
+        _word_range(start, len(words), MAX_WRITE_WORDS, area)
         for value in words:
             validate_integer("word", value, 0, 65535)
-        body = struct.pack("!BHBH", DM_WORD_AREA, start, 0, len(words))
+        body = struct.pack("!BHBH", area.value, start, 0, len(words))
         body += struct.pack(f"!{len(words)}H", *words)
         self._exchange(WRITE_COMMAND, body, 0)
 

@@ -1,4 +1,4 @@
-"""Independent loopback FINS/UDP DM simulator; Ctrl+C stops and closes it."""
+"""Independent loopback FINS/UDP DM/WR simulator; Ctrl+C stops and closes it."""
 
 import argparse
 from threading import Event
@@ -17,7 +17,7 @@ def main() -> int:
         with FinsUdpSimulator(port=args.port) as simulator:
             print(
                 f"FINS simulator 127.0.0.1:{simulator.port}; "
-                "address=0/2/0; D100=1234; Ctrl+C to stop",
+                "address=0/2/0; D100=1234; W0..W511=0; Ctrl+C to stop",
                 flush=True,
             )
             try:
