@@ -248,7 +248,8 @@ successful ViMo check without accepted defects can still yield SUCCESS/OK throug
 the existing aggregation. **Occupancy=EMPTY and ProductJudgment=NG may coexist**:
 accepted assigned ViMo findings/reasons survive unchanged. Full-camera inference,
 disabled-label filtering, assignment and unassigned camera-level NG are untouched.
-No new business classification, counter, UI indicator or PLC mapping is defined.
+These original judgments stay separate from the [business interpretation](#channel-business-status)
+below. Occupancy is not a ViMo filter or PLC mapping.
 
 This center-region rule is approved only for the current normally centered capsule,
 same-capsule upper/lower views and dark-background demonstration. The E1 1% EMPTY
@@ -314,6 +315,37 @@ label/rectangle/exception type, not localized operator prose. Typical codes are
 `capsule.execution_error`, `cycle_timed_out` and `cycle_shutdown`.
 Malformed identity/layout/result contracts may raise; ordinary check errors are
 represented as above. There is no retry/recovery policy here.
+
+## Channel business status
+
+`ChannelInspectionResult.business_status` derives the Qt-independent
+`ChannelBusinessStatus` without mutating Occupancy, checks, reasons, findings or
+the original assessment. It is additional scalar interpretation, not a replacement
+for technical/product judgment or industrial accuracy certification.
+
+Apply these rules in order:
+
+| Priority | Existing channel evidence | Business status |
+| --- | --- | --- |
+| 1 | Channel ProductJudgment=NG, including technical ERROR or unavailable Occupancy | NG |
+| 2 | No NG and valid Occupancy evidence=EMPTY | EMPTY |
+| 3 | Valid Occupancy=PRESENT and channel SUCCESS/OK | OK |
+| 4 | All other cases | UNKNOWN |
+
+EMPTY+NG and UNKNOWN+NG remain NG. Valid EMPTY with a failed/unavailable ViMo
+check may be business EMPTY **and** technically ERROR; the error remains visible.
+Failed/unavailable Occupancy has no valid evidence and can never qualify EMPTY
+or OK. UNKNOWN Occupancy with original SUCCESS/OK is business UNKNOWN. A disabled
+or mapping-only channel without Occupancy is UNKNOWN, not a fabricated business OK.
+Unassigned camera-level findings never create channel NG: the camera/cycle may
+be NG while channel business states remain OK/EMPTY/UNKNOWN.
+
+The derived property is available through the existing compact result and application
+snapshot; it owns no pixels/history and performs no inspection. Occurrence accounting
+belongs to [application](application.md#factual-accounting), and its icons/details
+belong to [UI presentation](ui-shell.md#production). Neither domain repeats these rules.
+This adds no physical capsule identity, rotation-based deduplication, reject policy
+or PLC result mapping.
 
 ## Capsule screening
 

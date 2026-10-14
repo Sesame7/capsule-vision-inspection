@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QPoint, QSize, QTimer, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QWidget
 from tests.application_support import FakeSession, prepared, production
+from tests.business_support import channel, mixed_result
 from tests.production_support import source_frame
 from tests.qt_support import ensure_test_fonts, until
 
@@ -24,16 +25,20 @@ from vimo_demo.inspection import CameraId, CycleId
 from vimo_demo.inspection.production import (
     Assessment,
     FindingSource,
+    OccupancyResult,
+    OccupancyState,
     ProductJudgment,
     Reason,
     TechnicalStatus,
 )
 from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
+from vimo_demo.ui.production_presentation import Indicator
 from vimo_demo.ui.production_style import (
     Language,
     Style,
     camera_icon,
+    indicator_icon,
     navigation_icon,
     production_icon,
     text,
@@ -452,7 +457,7 @@ def test_single_stable_operation_area(
     assert window.buttons["batch"].isEnabled() == (state is ApplicationState.READY)
     page = window.pages.widget(0)
     assert page is not None and not page.findChildren(QComboBox)
-    assert set(window.metrics) == {"cycles", "channel_ng", "processing"}
+    assert set(window.metrics) == {"cycles", "channel_ok", "channel_ng", "processing"}
     if state is ApplicationState.FAULT:
         window.bridge.snapshot_changed.emit(
             replace(window.snapshot, runtime_owned=True)
@@ -808,7 +813,169 @@ def test_summary_groups_center_batch_and_keep_actions_in_bounds(
         assert window.summary.rect().contains(
             position + QPoint(widget.width() - 1, widget.height() - 1)
         )
-    assert len(window.metrics) == 3 and "channel_ok" not in window.metrics
+    assert len(window.metrics) == 4 and "channel_ok" in window.metrics
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (880, 720)])
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_business_indicators_summary_and_bilingual_layout(
+    screen: tuple[ProductionWindow, FakeSession],
+    qapp: QApplication,
+    tmp_path: Path,
+    size: tuple[int, int],
+    language: Language,
+) -> None:
+    from run_production_ui import demo_images
+
+    from vimo_demo.inspection import Frame
+
+    window, session = screen
+    window.set_language(language)
+    window.resize(*size)
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    result = mixed_result()
+    # Existing fake pixels, independent owned display copies and matching FrameIds.
+    images = demo_images()
+    for image in images:
+        # Test-specific EMPTY/EMPTY+NG pixels, before Frame ownership transfer.
+        for slot in (1, 3):
+            image[:, slot * image.shape[1] // 6 : (slot + 1) * image.shape[1] // 6] = 0
+    result = replace(
+        result,
+        cameras=tuple(
+            replace(camera, image_shape=(image.shape[0], image.shape[1], 3))
+            for camera, image in zip(result.cameras, images, strict=True)
+        ),
+    )
+    for camera, image in zip(result.cameras, images, strict=True):
+        assert camera.frame_id is not None
+        window.bridge.frames.publish(Frame(camera.frame_id, 0, image), generation=1)
+    receipt = window.bridge.application.begin_cycle(CycleId(1))
+    session.cycles[0].accepted.set_result(None)
+    session.cycles[0].result.set_result(result)
+    until(
+        lambda: (
+            receipt.result.done()
+            and all(card.result is not None for card in window.cards)
+        )
+    )
+    assert (
+        window.snapshot.counters.channel_ok == 18
+    )  # Original judgments, including EMPTY/UNKNOWN.
+    assert window.metrics["channel_ok"][0].text() == "6"  # Business OK only.
+    assert window.metrics["channel_ng"][0].text() == "12"
+    assert window.metrics["channel_ok"][1].text() == "CH OK"
+    assert window.metrics["channel_ng"][1].text() == "CH NG"
+    assert set(window.metrics) == {"cycles", "channel_ok", "channel_ng", "processing"}
+    expected = (
+        Indicator.OK,
+        Indicator.EMPTY,
+        Indicator.UNKNOWN,
+        Indicator.ERROR_NG,
+        Indicator.ERROR,
+        Indicator.NG,
+    )
+    for camera, card in zip(result.cameras, window.cards, strict=True):
+        for row, button, state in zip(
+            camera.channels, card.indicators, expected, strict=True
+        ):
+            assert (
+                f"{text('channel', language)} {row.channel_id} ·"
+                in button.accessibleName()
+            )
+            assert (
+                button.icon().pixmap(18, 18).toImage()
+                == indicator_icon(state).pixmap(18, 18).toImage()
+            )
+            assert button.toolTip() == button.accessibleName()
+            assert text("business_status", language) in button.toolTip()
+            assert text("occupancy", language) in button.toolTip()
+            assert text("product_judgment", language) in button.toolTip()
+            assert text("technical_status", language) in button.toolTip()
+            assert button.size() == QSize(Style.touch, Style.touch)
+            if size != Style.minimum:
+                assert card.indicator_group.rect().contains(button.geometry())
+        empty, conflict = card.indicators[1], card.indicators[3]
+        assert text("traditional_skip_empty", language) in empty.toolTip()
+        assert text("occupancy_empty", language) in conflict.toolTip()
+        assert text("error_ng", language) in conflict.toolTip()
+        assert "execution_error" in conflict.toolTip()
+        assert Style.warning in conflict.styleSheet()
+    neutral = indicator_icon(Indicator.EMPTY).pixmap(18, 18).toImage()
+    assert neutral != indicator_icon(Indicator.DISABLED).pixmap(18, 18).toImage()
+    assert neutral != indicator_icon(Indicator.PENDING).pixmap(18, 18).toImage()
+    qapp.processEvents()
+    for value, caption in window.metrics.values():
+        for widget in (value, caption):
+            assert widget.width() >= widget.fontMetrics().horizontalAdvance(
+                widget.text()
+            )
+            position = widget.mapTo(window.summary, QPoint())
+            assert window.summary.rect().contains(position)
+            assert window.summary.rect().contains(
+                position + QPoint(widget.width() - 1, widget.height() - 1)
+            )
+    counts = window.snapshot.counters
+    for _ in range(3):
+        window.bridge.refresh()
+    assert window.snapshot.counters == counts
+    assert window.grab().save(
+        str(tmp_path / f"e2-production-{language}-{size[0]}x{size[1]}.png")
+    )
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_empty_technical_error_and_failed_occupancy_remain_visible(
+    screen: tuple[ProductionWindow, FakeSession],
+    failure: bool,
+) -> None:
+    window, _ = screen
+    window.bridge.frames.publish(source_frame(), generation=1)
+    result = production()
+    camera = result.cameras[0]
+    first = channel(
+        camera.channels[0],
+        OccupancyState.EMPTY,
+        TechnicalStatus.ERROR,
+        ProductJudgment.UNKNOWN,
+    )
+    if failure:
+        first = replace(
+            first,
+            traditional_skip=None,
+            occupancy=OccupancyResult(
+                error_code="occupancy.execution_error",
+                exception_type="RuntimeError",
+                message="C:/private/sdk.dll",
+            ),
+        )
+    camera = replace(camera, channels=(first, *camera.channels[1:]))
+    window.bridge.snapshot_changed.emit(
+        replace(
+            window.snapshot,
+            state=ApplicationState.RUNNING,
+            generation=1,
+            latest_production_result=replace(
+                result, cameras=(camera, *result.cameras[1:])
+            ),
+        )
+    )
+    window.bridge.frames_changed.emit(window.bridge.frames.snapshot())
+    button = window.cards[0].indicators[0]
+    state = Indicator.ERROR if failure else Indicator.EMPTY
+    assert (
+        button.icon().pixmap(18, 18).toImage()
+        == indicator_icon(state).pixmap(18, 18).toImage()
+    )
+    assert Style.warning in button.styleSheet()
+    assert text("technical_error", window.language) in button.toolTip()
+    assert "execution_error" in button.toolTip()
+    assert (
+        "private" not in button.toolTip() and "sdk.dll" not in button.accessibleName()
+    )
+    assert bool(button.text().endswith("!")) is not failure
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])

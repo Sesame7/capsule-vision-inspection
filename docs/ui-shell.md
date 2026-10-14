@@ -56,8 +56,10 @@ The summary has two compact rows. In the first, application state and Recipe
 information are left, Batch ID/edit action centered, and the single primary
 operation right. Equal flexible side columns center the whole Batch/edit group
 across the row; the operation area stays stable across states. The second row
-shows completed cycles, **CH NG**, and available latest-inspection elapsed ms.
-CH OK remains a backend counter rather than a permanent displayed metric.
+shows completed cycles, **CH OK**, **CH NG**, and available latest-inspection elapsed ms.
+CH OK/NG read the application's separate business-occurrence counters, never legacy
+judgment totals. Aggregate EMPTY/UNKNOWN counts are not displayed. Compact metric
+width allocation gives the longer cycle/time captions more room at narrow widths.
 
 Recipe presentation uses the Recipe navigation icon followed by a read-only name:
 
@@ -101,8 +103,9 @@ in [application](application.md#preparation-and-availability).
 Only READY permits the compact Batch dialog. Explicit confirmation calls the
 application Batch operation and resets its counters/latest result; Cancel changes
 nothing. The warning says previous statistics are **not archived**. Start/Stop,
-Recipe changes and fault recovery do not reset counters. CH NG counts channel
-judgment occurrences, **not physical capsules/products**; detailed factual meanings
+Recipe changes and fault recovery do not reset counters. CH OK/NG count channel
+business detection occurrences, **not physical capsules/products**; repeated
+observations count again. Detailed factual meanings
 are in [application counters](application.md#counters).
 
 Summary timing uses the latest result's inspection-start to result-ready interval,
@@ -120,14 +123,22 @@ available timing right. Abnormal/expanded IDs do not shift indicator slots.
 | Channel presentation | Treatment |
 | --- | --- |
 | No matching result | Pending outline circle |
-| OK | Restrained green check |
-| NG | Red cross |
-| Technical ERROR or UNKNOWN | Amber warning |
+| Business OK | Restrained green check |
+| Business NG | Red cross |
+| Business EMPTY | Neutral gray outlined empty slot, distinct from pending dot/disabled dash |
+| Business UNKNOWN | Amber warning |
 | ERROR + NG | Red NG treatment with amber border and `!`; both meanings retained |
-| DISABLED | Neutral dash |
+| ERROR + EMPTY | Gray EMPTY treatment with amber border and `!`; valid Occupancy and technical failure coexist |
 
 Abnormal channels show ChannelId; clicking an indicator toggles its ID display.
-Localized tooltips/accessibility names describe the full channel state. A camera
+The primary state comes from the [domain classification](inspection.md#channel-business-status),
+not a widget-specific judgment rule. DISABLED remains an original technical status
+in details; without valid EMPTY or NG it presents as business UNKNOWN. The old
+assessment-only indicators used outside Production retain their disabled dash.
+Localized tooltips/accessibility names include business status, original Occupancy/
+view ratios, ProductJudgment, technical status, stable reason codes/types and
+confirmed-EMPTY traditional skip provenance. Raw SDK exception messages/paths are
+not exposed. A camera
 technical error has amber header/border treatment; application FAULT has distinct
 text/color. Neither creates invented product NG evidence. The image area avoids
 generic technical-error text; headers/indicators and specific shared feedback retain
@@ -149,6 +160,12 @@ Qt layouts/DPI handle logical coordinates. Icons have common DPR variants and
 do not depend on font glyphs; text uses installed Microsoft YaHei UI / Segoe UI
 fallbacks. No font is copied or installed. These sizes preserve the current baseline
 until deliberately revised; they do not establish physical-screen ergonomics.
+
+The minimum 880×720 opens with the existing three-column grid, but those narrow
+card headers do not guarantee room for all six fixed 44px targets; overlap/clipping
+also exists in the pre-business-status layout. Summary metrics fit that baseline.
+The reviewed full channel-header baselines are 1080×1920 and 1920×1080. No camera
+placement, touch-size or grid redesign is implied by this known minimum-width limit.
 
 ## Display identity
 

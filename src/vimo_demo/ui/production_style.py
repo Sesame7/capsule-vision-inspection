@@ -225,9 +225,10 @@ STRINGS: dict[str, tuple[str, str]] = {
     "pending_recipe": ("待启动激活", "Pending Start"),
     "pending_badge": ("待激活", "Pending"),
     "production_ng": ("CH NG", "CH NG"),
+    "production_ok": ("CH OK", "CH OK"),
     "channel_count_help": (
-        "通道判断次数，不是实际胶囊或产品数量。",
-        "Channel judgment occurrences, not physical capsule or product counts.",
+        "通道业务检测次数；同一胶囊重复观察会重复计数，不是实际胶囊或产品数量。",
+        "Channel business detection occurrences; repeated observations count again, not physical capsules or products.",
     ),
     "configure_first": (
         "请在配方页保存并应用有效配方，再开始检测。",
@@ -280,6 +281,25 @@ STRINGS: dict[str, tuple[str, str]] = {
     "error_ng": ("NG + 技术异常", "NG + technical error"),
     "unknown": ("未知", "Unknown"),
     "disabled": ("禁用", "Disabled"),
+    "empty": ("空位", "EMPTY"),
+    "business_status": ("业务状态", "Business status"),
+    "occupancy": ("占位检测", "Occupancy"),
+    "occupancy_empty": ("空位", "EMPTY"),
+    "occupancy_present": ("有料", "PRESENT"),
+    "occupancy_unknown": ("未知", "UNKNOWN"),
+    "occupancy_unavailable": ("无可用证据", "Unavailable"),
+    "upper_view": ("上视图", "Upper"),
+    "lower_view": ("下视图", "Lower"),
+    "product_judgment": ("原始产品判断", "Original product judgment"),
+    "technical_status": ("技术状态", "Technical status"),
+    "technical_success": ("执行成功", "SUCCESS"),
+    "technical_error": ("技术异常", "ERROR"),
+    "technical_disabled": ("未执行", "DISABLED"),
+    "traditional_skip_empty": (
+        "尺寸/颜色未执行：确认空位",
+        "Size/Color skipped: confirmed EMPTY",
+    ),
+    "reasons": ("原因", "Reasons"),
     "placeholder": ("此页面尚未实现。", "This page is not implemented yet."),
     "parameters_note": (
         "后续提供配方与检测参数设置。",
@@ -618,6 +638,7 @@ def indicator_icon(state: Indicator) -> QIcon:
         Indicator.UNKNOWN: Style.warning,
         Indicator.PENDING: Style.secondary,
         Indicator.DISABLED: "#727985",
+        Indicator.EMPTY: Style.secondary,
     }[state]
     icon = QIcon()
     for dpr in (1.0, 1.25, 1.5, 2.0):
@@ -631,6 +652,9 @@ def indicator_icon(state: Indicator) -> QIcon:
             painter.drawEllipse(QRectF(6, 6, 6, 6))
         elif state is Indicator.DISABLED:
             painter.drawLine(QPointF(4, 9), QPointF(14, 9))
+        elif state is Indicator.EMPTY:
+            # An empty outlined slot, distinct from pending dot and disabled dash.
+            painter.drawRoundedRect(QRectF(2, 3, 14, 12), 2, 2)
         elif state in (Indicator.ERROR, Indicator.UNKNOWN):
             for a, b in (
                 (QPointF(9, 2), QPointF(17, 16)),

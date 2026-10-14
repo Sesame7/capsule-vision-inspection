@@ -31,6 +31,13 @@ class ProductJudgment(Enum):
     UNKNOWN = auto()
 
 
+class ChannelBusinessStatus(Enum):
+    OK = auto()
+    NG = auto()
+    EMPTY = auto()
+    UNKNOWN = auto()
+
+
 class FindingSource(Enum):
     VIMO = auto()
     TRADITIONAL = auto()
@@ -278,6 +285,23 @@ class ChannelInspectionResult:
                 else ProductJudgment.UNKNOWN,
             )
         return assessment
+
+    @property
+    def business_status(self) -> ChannelBusinessStatus:
+        """Additional interpretation; never replaces technical/product evidence."""
+        assessment = self.assessment
+        if assessment.judgment is ProductJudgment.NG:
+            return ChannelBusinessStatus.NG
+        if self.occupancy is not None and self.occupancy.evidence is not None:
+            if self.occupancy.state is OccupancyState.EMPTY:
+                return ChannelBusinessStatus.EMPTY
+            if (
+                self.occupancy.state is OccupancyState.PRESENT
+                and assessment
+                == Assessment(TechnicalStatus.SUCCESS, ProductJudgment.OK)
+            ):
+                return ChannelBusinessStatus.OK
+        return ChannelBusinessStatus.UNKNOWN
 
     @property
     def reasons(self) -> tuple[Reason, ...]:

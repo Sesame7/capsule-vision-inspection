@@ -23,7 +23,7 @@ unimplemented. A standalone FINS/UDP subset and localhost simulator exist separa
 | Inference | Typed synchronous ViMo on validated uint8 BGR arrays, serial ownership, preserved geometry/raw mask IDs and owned outputs without vendor objects. |
 | Collection and runtime | Explicit frame/cycle identity, ordered collection, bounded admission and READY inspection backlog, terminal results/errors and observable shutdown. |
 | Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, always-on scalar Occupancy with explicit EMPTY traditional skips, selective Size/Color checks, and independent technical status and product judgment. |
-| Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and factual cycle/channel accounting. |
+| Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and separate factual judgment/business-occurrence accounting. |
 | Local sources | Owned local image-set ingress, independent per-camera Folder replay (application-lifetime decoded RAM dataset for saved Loop sources) and explicit fixed-image developer inputs. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and manual Communication pages; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
@@ -87,6 +87,8 @@ The following distinctions remain architectural constraints for Current changes:
 - **Failures:** frame/check technical errors, product NG/UNKNOWN and application FAULT
   are independent; ERROR + NG is valid. Ordinary failed checks can complete normally
   in RUNNING, unlike infrastructure/invariant failures.
+  Derived channel business status uses NG → valid EMPTY → PRESENT/SUCCESS/OK →
+  UNKNOWN without replacing those axes; it does not define PLC/reject behavior.
 - **Display:** rendering does not complete inspection/accounting. Raw results may own
   masks; compact production results retain no images/masks/contour arrays. Separate
   bounded latest-per-camera copies require generation, cycle, full FrameId and

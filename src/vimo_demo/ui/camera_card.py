@@ -18,15 +18,17 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import (
     CameraInspectionResult,
     CameraLayout,
+    ChannelInspectionResult,
     ProductJudgment,
     TechnicalStatus,
+    TraditionalSkipReason,
 )
 
 from .display_frames import DisplayFrame
 from .production_presentation import (
     Indicator,
+    channel_indicator,
     image_transform,
-    indicator,
     matching_camera,
 )
 from .production_style import Language, Style, camera_icon, indicator_icon, text
@@ -183,14 +185,19 @@ class CameraCard(QFrame):
             Indicator.ERROR: Style.warning,
             Indicator.ERROR_NG: Style.ng,
             Indicator.UNKNOWN: Style.warning,
+            Indicator.EMPTY: Style.secondary,
         }
         # A retained result belongs to its own layout, not a newly selected Recipe.
         layout = self.result.layout if self.result else self.camera_layout
         for index, (slot, button) in enumerate(
             zip(layout.slots, self.indicators, strict=True)
         ):
-            assessment = self.result.channels[index].assessment if self.result else None
-            state = indicator(assessment)
+            channel = self.result.channels[index] if self.result else None
+            state = channel_indicator(channel)
+            error = (
+                channel is not None
+                and channel.assessment.technical_status is TechnicalStatus.ERROR
+            )
             show_id = (
                 state
                 in (
@@ -199,19 +206,22 @@ class CameraCard(QFrame):
                     Indicator.ERROR_NG,
                     Indicator.UNKNOWN,
                 )
+                or error
                 or index in self._expanded
             )
             button.setIcon(indicator_icon(state))
             button.setIconSize(QSize(18, 18))
             button.setText(
-                f"{slot.channel_id}{'!' if state is Indicator.ERROR_NG else ''}"
+                f"{slot.channel_id}{'!' if error and state in (Indicator.ERROR_NG, Indicator.EMPTY) else ''}"
                 if show_id
                 else ""
             )
             description = f"{text('channel', self.language)} {slot.channel_id} · {text(state.value, self.language)}"
+            if channel is not None:
+                description += "\n" + self._details(channel)
             button.setToolTip(description)
             button.setAccessibleName(description)
-            border = Style.warning if state is Indicator.ERROR_NG else "transparent"
+            border = Style.warning if error else "transparent"
             button.setStyleSheet(
                 f"color: {colors[state]}; border: 1px solid {border}; padding: 0px; background: {Style.surface}; font-size: 13px;"
             )
@@ -270,3 +280,46 @@ class CameraCard(QFrame):
             else ""
         )
         self.viewport.update()
+
+    def _details(self, channel: ChannelInspectionResult) -> str:
+        """Localized original evidence, without exposing raw SDK exception text."""
+        language = self.language
+        assessment = channel.assessment
+        lines = [
+            f"{text('business_status', language)}: {text(channel.business_status.name.lower(), language)}",
+            f"{text('product_judgment', language)}: {assessment.judgment.name}",
+            f"{text('technical_status', language)}: {text('technical_' + assessment.technical_status.name.lower(), language)}",
+        ]
+        occupancy = channel.occupancy
+        if occupancy is None:
+            lines.append(
+                f"{text('occupancy', language)}: {text('occupancy_unavailable', language)}"
+            )
+        else:
+            lines.append(
+                f"{text('occupancy', language)}: {text('occupancy_' + occupancy.state.name.lower(), language)}"
+            )
+            if occupancy.evidence is not None:
+                evidence = occupancy.evidence
+                lines.append(
+                    f"{text('upper_view', language)} {evidence.upper.ratio:.4%} · "
+                    f"{text('lower_view', language)} {evidence.lower.ratio:.4%}"
+                )
+            else:
+                lines.append(
+                    f"{text('reasons', language)}: {occupancy.error_code}"
+                    + (
+                        f" · {occupancy.exception_type}"
+                        if occupancy.exception_type
+                        else ""
+                    )
+                )
+        if channel.traditional_skip is TraditionalSkipReason.CONFIRMED_EMPTY:
+            lines.append(text("traditional_skip_empty", language))
+        for reason in channel.reasons:
+            lines.append(
+                f"{text('reasons', language)}: {reason.source.name} · {reason.code}"
+                + (f" · {reason.label}" if reason.label else "")
+                + (f" · {reason.exception_type}" if reason.exception_type else "")
+            )
+        return "\n".join(lines)

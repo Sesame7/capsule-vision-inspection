@@ -9,6 +9,8 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import (
     Assessment,
     CameraInspectionResult,
+    ChannelBusinessStatus,
+    ChannelInspectionResult,
     ProductJudgment,
     TechnicalStatus,
 )
@@ -55,6 +57,7 @@ class Indicator(Enum):
     ERROR_NG = "error_ng"
     UNKNOWN = "unknown"
     DISABLED = "disabled"
+    EMPTY = "empty"
 
 
 def indicator(assessment: Assessment | None) -> Indicator:
@@ -73,6 +76,21 @@ def indicator(assessment: Assessment | None) -> Indicator:
         ProductJudgment.NG: Indicator.NG,
         ProductJudgment.UNKNOWN: Indicator.UNKNOWN,
     }[assessment.judgment]
+
+
+def channel_indicator(result: ChannelInspectionResult | None) -> Indicator:
+    """Present domain classification; keep independent technical error treatment."""
+    if result is None:
+        return Indicator.PENDING
+    status = result.business_status
+    error = result.assessment.technical_status is TechnicalStatus.ERROR
+    if status is ChannelBusinessStatus.NG:
+        return Indicator.ERROR_NG if error else Indicator.NG
+    if status is ChannelBusinessStatus.EMPTY:
+        return Indicator.EMPTY
+    if status is ChannelBusinessStatus.OK:
+        return Indicator.OK
+    return Indicator.ERROR if error else Indicator.UNKNOWN
 
 
 def grid_columns(width: int, height: int) -> int:

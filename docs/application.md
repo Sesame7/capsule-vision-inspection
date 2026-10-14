@@ -275,6 +275,7 @@ lifecycle failure, never silently lost.
 | `channel_disabled` | Completed channels with technical DISABLED, counted before judgment |
 | `production_ng_cycles` | Completed result's product judgment is NG |
 | `technical_error_cycles` | Completed result's technical status is ERROR |
+| `business_ok`, `business_ng`, `business_empty`, `business_unknown` | Completed channel business-classification occurrences, a separate partition |
 
 For one channel, SUCCESS + OK increments `channel_ok`; SUCCESS + NG increments
 `channel_ng`; ERROR + UNKNOWN increments `channel_unknown`; ERROR + NG increments
@@ -282,6 +283,22 @@ For one channel, SUCCESS + OK increments `channel_ok`; SUCCESS + NG increments
 channel counters partition the result's configured channels (36 in the current
 layout). Cycle NG and technical ERROR counters can both increment. Unassigned
 NG evidence can make a cycle NG without inventing a channel NG occurrence.
+
+The four `business_*` fields independently partition every formally accounted
+channel using [domain business status](inspection.md#channel-business-status).
+They increment at the same exactly-once completed-result boundary, not in Qt,
+and remain in the existing frozen `ProductionCounters` snapshot. Each occurrence
+belongs to exactly one business classification, including channels whose original
+technical status is DISABLED. No duplicate-result or physical-product history is added.
+
+Business OK requires PRESENT and SUCCESS/OK. Confirmed EMPTY with original OK
+increments legacy `channel_ok` **and** `business_empty`, not `business_ok`.
+EMPTY+NG increments `business_ng`; technical ERROR remains independently accounted.
+Unassigned camera-level NG can increment `production_ng_cycles` without a business
+channel NG. Never derive business counts from the legacy judgment counters.
+Production displays only business OK/NG occurrences; EMPTY/UNKNOWN totals remain
+internal factual fields. Repeated observations of the same capsule count again;
+there is no rotation factor, physical identity or inferred deduplication.
 
 Formal TIMED_OUT/SHUTDOWN results count as completed; exceptional runtime outcomes
 do not. Started and completed can legitimately differ after overload/Stop.
@@ -295,6 +312,9 @@ product, camera-trigger or valid PLC-trigger counts. Only explicit
 Batch ID is None until supplied; no timestamp invents it. Start/Stop, fault Reset,
 Recipe/model/layout changes preserve counters. Start alone clears latest result,
 so latest-result clearing must not be confused with counter reset.
+These retention/reset rules apply to both legacy and business partitions. Formal
+TIMED_OUT/SHUTDOWN results also contribute business UNKNOWN/NG according to actual
+evidence; readiness warm-up and exceptional unfinished work add no business counts.
 
 `ProductionApplicationSnapshot` is frozen and contains state/generation,
 candidate/active Recipe/Model/hash identities, optional Batch ID, frozen counters,

@@ -7,6 +7,7 @@ from weakref import ref
 import numpy as np
 import pytest
 from tests.application_support import production
+from tests.business_support import channel
 from tests.production_support import source_frame
 
 from vimo_demo.application import (
@@ -16,10 +17,16 @@ from vimo_demo.application import (
 )
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
-from vimo_demo.inspection.production import Assessment, ProductJudgment, TechnicalStatus
+from vimo_demo.inspection.production import (
+    Assessment,
+    OccupancyState,
+    ProductJudgment,
+    TechnicalStatus,
+)
 from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 from vimo_demo.ui.production_presentation import (
     Indicator,
+    channel_indicator,
     controls,
     grid_columns,
     image_transform,
@@ -195,6 +202,64 @@ def test_indicator_distinguishes_pending_disabled_error_and_ng() -> None:
         indicator(Assessment(TechnicalStatus.SUCCESS, ProductJudgment.OK))
         is Indicator.OK
     )
+
+
+@pytest.mark.parametrize(
+    "occupancy,technical,judgment,expected",
+    [
+        (
+            OccupancyState.PRESENT,
+            TechnicalStatus.SUCCESS,
+            ProductJudgment.OK,
+            Indicator.OK,
+        ),
+        (
+            OccupancyState.EMPTY,
+            TechnicalStatus.SUCCESS,
+            ProductJudgment.OK,
+            Indicator.EMPTY,
+        ),
+        (
+            OccupancyState.EMPTY,
+            TechnicalStatus.ERROR,
+            ProductJudgment.UNKNOWN,
+            Indicator.EMPTY,
+        ),
+        (
+            OccupancyState.EMPTY,
+            TechnicalStatus.ERROR,
+            ProductJudgment.NG,
+            Indicator.ERROR_NG,
+        ),
+        (
+            OccupancyState.UNKNOWN,
+            TechnicalStatus.SUCCESS,
+            ProductJudgment.OK,
+            Indicator.UNKNOWN,
+        ),
+        (
+            OccupancyState.UNKNOWN,
+            TechnicalStatus.SUCCESS,
+            ProductJudgment.NG,
+            Indicator.NG,
+        ),
+        (None, TechnicalStatus.DISABLED, ProductJudgment.UNKNOWN, Indicator.UNKNOWN),
+        (None, TechnicalStatus.ERROR, ProductJudgment.UNKNOWN, Indicator.ERROR),
+    ],
+)
+def test_channel_indicators_use_business_status_and_preserve_errors(
+    occupancy: OccupancyState | None,
+    technical: TechnicalStatus,
+    judgment: ProductJudgment,
+    expected: Indicator,
+) -> None:
+    assert (
+        channel_indicator(
+            channel(production().channels[0], occupancy, technical, judgment)
+        )
+        is expected
+    )
+    assert channel_indicator(None) is Indicator.PENDING
 
 
 def test_result_frame_identity_includes_session_and_sequence() -> None:

@@ -203,7 +203,7 @@ class ProductionWindow(QMainWindow):
         summary_layout.addLayout(header)
         metric_row = QHBoxLayout()
         self.metrics: dict[str, tuple[QLabel, QLabel]] = {}
-        for key in ("cycles", "channel_ng", "processing"):
+        for key in ("cycles", "channel_ok", "channel_ng", "processing"):
             metric = QHBoxLayout()
             metric.setSpacing(Style.small)
             caption = QLabel()
@@ -213,7 +213,7 @@ class ProductionWindow(QMainWindow):
             metric.addWidget(caption)
             metric.addWidget(value)
             metric.addStretch()
-            metric_row.addLayout(metric, 1)
+            metric_row.addLayout(metric, 3 if key in ("cycles", "processing") else 2)
             self.metrics[key] = (value, caption)
         summary_layout.addLayout(metric_row)
         page.addWidget(summary)
@@ -355,10 +355,16 @@ class ProductionWindow(QMainWindow):
         self.buttons["batch"].setAccessibleName(text("batch", language))
         for key, (_, caption) in self.metrics.items():
             caption.setText(
-                text("production_ng" if key == "channel_ng" else key, language)
+                text(
+                    {"channel_ok": "production_ok", "channel_ng": "production_ng"}.get(
+                        key, key
+                    ),
+                    language,
+                )
             )
-        self.metrics["channel_ng"][0].setToolTip(text("channel_count_help", language))
-        self.metrics["channel_ng"][1].setToolTip(text("channel_count_help", language))
+        for key in ("channel_ok", "channel_ng"):
+            for label in self.metrics[key]:
+                label.setToolTip(text("channel_count_help", language))
         for key, label in self.placeholders.items():
             label.setText(
                 f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
@@ -615,9 +621,13 @@ class ProductionWindow(QMainWindow):
         counts = snapshot.counters
         for key, count in (
             ("cycles", counts.cycles_completed),
-            ("channel_ng", counts.channel_ng),
+            ("channel_ok", counts.business_ok),
+            ("channel_ng", counts.business_ng),
         ):
             self.metrics[key][0].setText(f"{count:,}")
+            self.metrics[key][0].setAccessibleName(
+                f"{self.metrics[key][1].text()}: {count:,}"
+            )
         result = snapshot.latest_production_result
         duration = (
             "--"
