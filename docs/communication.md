@@ -323,8 +323,11 @@ geometry, a runtime or an engine. It still cannot Start without valid configurat
 Stop retains preferences; the next Start creates a new report owner/sequence epoch.
 The explicit developer launcher retains fixed CLI settings and replay controls.
 
-The compact panel shows disabled/enabled-for-next-Start/starting/session-active,
-last acknowledged sequence, successful/failed counts and the latest report error.
+The compact reporting bar keeps enablement, target endpoint and the settings icon
+on its header. It shows disabled/enabled-for-next-Start/starting/session-active,
+last acknowledged sequence and successful/ERR counts. The latest failed outcome
+of a live owner is presented as reporting failure; a subsequent ACK restores the
+active presentation without erasing the separately identified last error.
 Tooltips preserve generation/CycleId/stage/sequence and bounded exception details;
 counts belong to the displayed reporting generation. After Stop the last generation
 remains observable; a later new owner starts with fresh counts. A failure remains
@@ -371,7 +374,7 @@ uv run --no-sync python app.py
 5. Optionally stop the simulator during RUNNING to observe bounded report failures
    while inspection continues. No failed report is retried. Stop/Close normally;
    relaunch `app.py` and confirm automatic reporting is disabled again. End the
-   simulator with Ctrl+C. Full Communication redesign remains deferred to H2C-2.
+   simulator with Ctrl+C. Settings and diagnostic details are disclosed on demand.
 
 ### Local manual verification
 
@@ -501,14 +504,27 @@ UNCONFIGURED shell. Opening/navigating to the page sends **no** request. Host/po
 timeout, D/W area, start address, count, write values and watch groups are session-local, never persisted
 into `data/`, Recipes, Model, MachineLayout or source definitions.
 
-The existing four vertically stacked, scrollable manual sections use the shared Chinese/English
-style catalog: connection settings, watch groups/current values, collapsible manual
-register operations and concise communication feedback. Manual operations start
-collapsed; advanced FINS addressing also starts collapsed.
-Normal startup adds the compact automatic-reporting panel above these sections,
-without sharing manual endpoint settings or adding another network owner.
-Common fields are immediately accessible; advanced destination/source network,
-node and unit controls are collapsible. Only FINS/UDP is available. Numeric IPv4
+The Chinese/English workspace is monitoring-first: normal startup's compact PLC
+reporting bar, register-watch toolbar/table, collapsed manual operations and latest
+operation feedback with collapsed details. Generic/developer shells retain their
+existing reporting capabilities; the settings icon is in the watch header when no
+editable reporting bar exists. Manual endpoint summary remains separate from the
+automatic target. Empty tables are hidden rather than reserving large blank panels.
+
+The settings icon opens one retained, nonmodal **Communication settings** dialog.
+It contains the same automatic-reporting editors and independent manual diagnostic
+connection editors, with advanced destination/source addressing collapsed separately
+within each group. There is no second settings draft, owner, persistence or Apply
+step: accepted edits retain their existing memory-only/next-Start semantics. Close
+hides the dialog without undoing edits. Opening/dismissing it sends no request;
+only the explicitly labeled **Test read** in manual connection settings dispatches
+its diagnostic request. Reporting editors retain the Production lifecycle locks;
+manual connection editors retain request/monitoring locks. The dialog can be opened
+for inspection while controls are locked. Language changes and disclosure toggles
+do not stop/restart requests. Navigation and approved application close hide it,
+while retaining the existing page/request shutdown rules below.
+
+Only FINS/UDP is available. Numeric IPv4
 defaults to `127.0.0.1`, port to 9600 and timeout to one second (UI range **0.05–30
 seconds**). FINS nodes remain explicit when the host changes.
 
@@ -538,6 +554,9 @@ is a frozen, Qt-independent consecutive-read definition. It validates the same
 area/address/count limits as the transport; names contain at most 64 characters.
 The operator adds/removes groups using a compact form and group selector. The list
 starts empty, accepts at most **16 groups / 2048 total words**, and is never saved.
+**Add group** discloses the area/address/count/name form; it starts collapsed.
+Remove, Read once and Auto refresh remain on the main toolbar. Secondary limit and
+protocol explanations live in tooltips rather than persistent rows.
 Equal or disjoint ranges remain independent groups, including within one area;
 there is no speculative merging or mandatory W49/D100 setup. Display numbering
 distinguishes even groups with identical names/ranges.
@@ -546,6 +565,11 @@ Each word has its group, actual D/W address, unsigned decimal, four-digit hexade
 and observation time/status in one read-only table. No bit editing or writes are
 available there. Unread entries show `--`. Only one latest successful observation
 is retained per group; rows/response retention are bounded by the configured limits.
+Compact headers use **Group, Address, DEC, HEX, Observed/status** with full tooltip
+descriptions. Group names have a modest resizable column and full tooltip text;
+address/DEC/HEX share available width, with centered values and a content-sized
+observation column. The viewport grows to the first **12 rows**, then scrolls
+internally; all configured rows remain available. Empty state prompts adding a group.
 Failed/unstarted groups retain their old values and **original** observation time,
 marked **Previous / 历史** rather than newly read. Groups successfully read earlier
 in a partially failed pass remain marked **Latest pass / 本批成功**. The status also
@@ -604,6 +628,12 @@ refresh; no unsafe thread is dropped.
 
 Feedback identifies the current request/pass, latest successful response with
 endpoint/address/time/elapsed duration, and at most **100** compact log entries.
+**Operation details** discloses those logs and starts collapsed. The current operation
+and compact last-response summary stay outside it; tooltips preserve operation type
+and the distinction from persistent connectivity. Manual operations also start
+collapsed and contain the separately timestamped last-read table, whose viewport
+grows to **8 rows** before scrolling. Disclosure never discards observations/logs
+or changes active requests; full exception details remain in tooltips and logs.
 Only the latest manual read and per-group observations are retained; no result/exception history is unbounded.
 Localized timeout/transport/protocol/PLC messages retain raw diagnostic details in
 tooltips/logs and preserve PLC end codes. A timed-out write states that its outcome
@@ -624,11 +654,14 @@ uv run --no-sync python app.py
 Do not start Production for this check; all operations below target localhost.
 
 1. Open **Communication / 通信**, leaving `127.0.0.1:9600`. The watch list is empty
-   and no request is sent. Expand **Manual register operations**. Select D/D100:
-   Test read returns 1234 on a fresh simulator. Write 4321, observe ACK-only feedback,
+   and no request is sent. Use the settings icon for connection/routing parameters;
+   opening or closing it sends nothing. Expand **Manual register operations** and
+   select D/D100. **Test read** in manual connection settings returns 1234 on a fresh
+   simulator. Close settings, write 4321, observe ACK-only feedback,
    then explicitly Read to verify. Repeat with W/W50 and `0, 65535, 4321`, read count
    3: addresses W50–W52, decimal values and `0000 / FFFF / 10E1` should agree.
-2. Add named watch groups W49/count 4 and D100/count 1. Click **Read once**; verify
+2. Use **Add group** to add named watch groups W49/count 4 and D100/count 1; collapse
+   the editor when finished. Click **Read once**; verify
    actual addresses, values and per-group times. These addresses are examples only,
    not preloaded mandatory settings. Add/remove another valid group.
 3. Start **Auto refresh · 1 s**. Inputs/manual operations lock; successful updates
@@ -702,7 +735,7 @@ uv run --no-sync pytest tests/unit/test_communication_operations.py tests/integr
 ```
 
 Remote-read forwarding is verified with a controlled client, **not actual equipment**.
-H1C/hardware supervision, persistent profiles, H2C-2 Communication simplification and
+H1C/hardware supervision, persistent profiles and
 consumption handshakes remain deferred; this workspace does not select their implementation.
 
 Automatic local reporting tests use fake Production and actual loopback peers,

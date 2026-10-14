@@ -8,11 +8,12 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from threading import Event, Thread
 
-from PySide6.QtCore import Qt, QThread, QTimer, Slot
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QHideEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -53,7 +55,7 @@ from vimo_demo.communication.reporting import (
 )
 
 from .inference_bridge import FutureDelivery
-from .production_style import Language, Style, text
+from .production_style import Language, Style, navigation_icon, text
 from .reporting_panel import ReportingPanel
 
 
@@ -82,7 +84,7 @@ class CommunicationPage(QWidget):
     Navigation leaves this owner alive. request_close() disables admission, waits
     nonblockingly for actual exit and calls its callback. Final disposal detaches
     delivery; an application-close failure can resume admission on the live page.
-    No application/worker/session reference is needed by this workspace.
+    The optional reporting boundary only commands/presents the existing owner.
     """
 
     def __init__(
@@ -166,7 +168,29 @@ class CommunicationPage(QWidget):
         if reporting is not None and reporting.reporting_editable:
             self.reporting_panel = ReportingPanel(reporting)
             layout.addWidget(self.reporting_panel)
-        settings = self._panel(layout, "comm_settings")
+        self.settings_button = (
+            self.reporting_panel.settings_button
+            if self.reporting_panel
+            else QPushButton()
+        )
+        self.settings_button.setIcon(navigation_icon(1))
+        self.settings_button.setIconSize(QSize(Style.icon, Style.icon))
+        self.settings_button.setFixedSize(Style.touch, Style.touch)
+        self.settings_button.clicked.connect(self.open_settings)
+        self.settings_dialog = QDialog(self)
+        self.settings_dialog.resize(820, 700)
+        dialog_layout = QVBoxLayout(self.settings_dialog)
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        settings_body = QWidget()
+        settings_body.setObjectName("commBody")
+        settings_layout = QVBoxLayout(settings_body)
+        if self.reporting_panel is not None:
+            settings_layout.addWidget(self.reporting_panel.settings_body)
+        settings_scroll.setWidget(settings_body)
+        dialog_layout.addWidget(settings_scroll)
+        settings = self._panel(settings_layout, "comm_manual_connection")
         common = QGridLayout()
         common.setHorizontalSpacing(Style.space)
         self.protocol = QComboBox()
@@ -198,7 +222,7 @@ class CommunicationPage(QWidget):
             "comm_test", lambda: self.dispatch(RequestKind.TEST)
         )
         test_row.addWidget(self.test_button)
-        test_row.addWidget(self._caption("comm_test_hint"), 1)
+        test_row.addStretch()
         self.advanced_button = self._button("comm_advanced", self._toggle_advanced)
         self.advanced_button.setCheckable(True)
         test_row.addWidget(self.advanced_button)
@@ -229,9 +253,30 @@ class CommunicationPage(QWidget):
                 routing.addWidget(field, row, column)
         settings.addWidget(self.advanced)
         self.advanced.hide()
+        settings_layout.addStretch()
+        self.settings_close = QPushButton()
+        self.settings_close.setMinimumHeight(Style.touch)
+        self.settings_close.clicked.connect(self.settings_dialog.reject)
+        dialog_layout.addWidget(self.settings_close, 0, Qt.AlignmentFlag.AlignRight)
 
-        watch = self._panel(layout, "comm_watch", stretch=1)
-        group_fields = QGridLayout()
+        watch_header = QWidget()
+        watch_heading = QHBoxLayout(watch_header)
+        watch_heading.setContentsMargins(0, 0, 0, 0)
+        watch_heading.addWidget(self._caption("comm_watch"))
+        self.manual_endpoint = QLabel()
+        watch_heading.addStretch()
+        watch_heading.addWidget(self.manual_endpoint)
+        if self.reporting_panel is None:
+            watch_heading.addWidget(self.settings_button)
+        watch = self._panel(layout, "comm_watch", header=watch_header)
+        self.watch_editor_button = self._button(
+            "comm_watch_edit", self._toggle_watch_editor
+        )
+        self.watch_editor_button.setCheckable(True)
+        self.watch_editor_button.setIcon(navigation_icon(0))
+        self.watch_editor = QWidget()
+        group_fields = QGridLayout(self.watch_editor)
+        group_fields.setContentsMargins(0, 0, 0, 0)
         group_fields.setHorizontalSpacing(Style.space)
         self.watch_area = self._area_selector()
         self.watch_address = self._spin(0, 32767, 0)
@@ -251,7 +296,6 @@ class CommunicationPage(QWidget):
             group_fields.setColumnStretch(column, 2 if column == 3 else 1)
         self.watch_add = self._button("comm_watch_add", self._add_watch)
         group_fields.addWidget(self.watch_add, 1, 4)
-        watch.addLayout(group_fields)
         actions = QHBoxLayout()
         self.watch_selector = QComboBox()
         self.watch_selector.setMinimumHeight(Style.touch)
@@ -262,6 +306,7 @@ class CommunicationPage(QWidget):
         self.watch_selector.currentIndexChanged.connect(self._refresh)
         self._inputs.append(self.watch_selector)
         actions.addWidget(self.watch_selector, 1)
+        actions.addWidget(self.watch_editor_button)
         self.watch_remove = self._button("comm_watch_remove", self._remove_watch)
         self.watch_once = self._button("comm_watch_once", self.read_watch_once)
         self.watch_auto = self._button("comm_watch_auto", self._toggle_auto)
@@ -269,6 +314,8 @@ class CommunicationPage(QWidget):
         for button in (self.watch_remove, self.watch_once, self.watch_auto):
             actions.addWidget(button)
         watch.addLayout(actions)
+        watch.addWidget(self.watch_editor)
+        self.watch_editor.hide()
         self.watch_status = QLabel()
         self.watch_status.setWordWrap(True)
         self.watch_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -279,17 +326,26 @@ class CommunicationPage(QWidget):
         self.watch_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
+        self.watch_table.horizontalHeader().setMinimumSectionSize(90)
         self.watch_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
+            0, QHeaderView.ResizeMode.Interactive
         )
-        self.watch_table.setMinimumSize(200, 200)
-        watch.addWidget(self.watch_table, 1)
-        watch.addWidget(self._caption("comm_watch_limit"))
+        self.watch_table.setColumnWidth(0, 160)
+        for column in (1, 2, 3):
+            self.watch_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.Stretch
+            )
+        self.watch_table.setMinimumWidth(200)
+        self.watch_table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        watch.addWidget(self.watch_table)
+        self.watch_empty = self._caption("comm_watch_empty")
+        watch.addWidget(self.watch_empty)
         self.watch_area.currentIndexChanged.connect(self._watch_area_changed)
         self._watch_area_changed()
 
         self.manual_button = self._button("comm_registers", self._toggle_manual)
         self.manual_button.setCheckable(True)
+        self.manual_button.setIcon(navigation_icon(2))
         operations = self._panel(layout, "comm_registers", header=self.manual_button)
         self.manual_body = QWidget()
         manual = QVBoxLayout(self.manual_body)
@@ -332,6 +388,19 @@ class CommunicationPage(QWidget):
         self.area.currentIndexChanged.connect(self._manual_area_changed)
         self._manual_area_changed()
 
+        self.read_caption = QLabel()
+        self.read_caption.setWordWrap(True)
+        self.read_caption.setTextFormat(Qt.TextFormat.PlainText)
+        manual.addWidget(self.read_caption)
+        self.values_table = QTableWidget(0, 3)
+        self.values_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.values_table.verticalHeader().hide()
+        self.values_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self.values_table.setMinimumWidth(200)
+        manual.addWidget(self.values_table)
+
         feedback = self._panel(layout, "comm_feedback")
         self.status = QLabel()
         self.status.setWordWrap(True)
@@ -341,32 +410,20 @@ class CommunicationPage(QWidget):
         self.success.setWordWrap(True)
         self.success.setTextFormat(Qt.TextFormat.PlainText)
         feedback.addWidget(self.success)
-        feedback.addWidget(self._caption("comm_observation"))
-        results = QHBoxLayout()
-        read_column = QVBoxLayout()
-        self.read_caption = QLabel()
-        self.read_caption.setWordWrap(True)
-        self.read_caption.setTextFormat(Qt.TextFormat.PlainText)
-        read_column.addWidget(self.read_caption)
-        self.values_table = QTableWidget(0, 3)
-        self.values_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.values_table.verticalHeader().hide()
-        self.values_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.values_table.setMinimumSize(200, 160)
-        read_column.addWidget(self.values_table, 1)
-        results.addLayout(read_column, 2)
-        log_column = QVBoxLayout()
-        log_column.addWidget(self._caption("comm_log"))
+        self.log_button = self._button("comm_details", self._toggle_log)
+        self.log_button.setCheckable(True)
+        self.log_button.setIcon(navigation_icon(3))
+        feedback.addWidget(self.log_button)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(100)
-        self.log.setMinimumSize(260, 160)
-        log_column.addWidget(self.log, 1)
-        results.addLayout(log_column, 3)
-        feedback.addLayout(results, 1)
+        self.log.setMinimumHeight(100)
+        self.log.setMaximumHeight(240)
+        feedback.addWidget(self.log)
+        self.log.hide()
+        layout.addStretch(1)
         self.host.textChanged.connect(self._refresh)
+        self.port.valueChanged.connect(self._refresh)
         self.set_language("zh")
 
     def _panel(
@@ -379,6 +436,7 @@ class CommunicationPage(QWidget):
     ) -> QVBoxLayout:
         frame = QFrame()
         frame.setObjectName("commPanel")
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         parent.addWidget(frame, stretch)
         contents = QVBoxLayout(frame)
         contents.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
@@ -419,6 +477,22 @@ class CommunicationPage(QWidget):
     @Slot()
     def _toggle_manual(self) -> None:
         self.manual_body.setVisible(self.manual_button.isChecked())
+
+    @Slot()
+    def _toggle_watch_editor(self) -> None:
+        self.watch_editor.setVisible(self.watch_editor_button.isChecked())
+
+    @Slot()
+    def _toggle_log(self) -> None:
+        self.log.setVisible(self.log_button.isChecked())
+
+    @Slot()
+    def open_settings(self) -> None:
+        if self._closing or self._disposed:
+            return
+        self.settings_dialog.show()  # Nonblocking; opening does not dispatch I/O.
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
 
     def _field(
         self, layout: QGridLayout, key: str, widget: QWidget, row: int, column: int
@@ -462,6 +536,11 @@ class CommunicationPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        self.settings_dialog.setWindowTitle(text("comm_settings", language))
+        self.settings_button.setToolTip(text("comm_settings", language))
+        self.settings_button.setAccessibleName(text("comm_settings", language))
+        self.settings_close.setText(text("comm_settings_close", language))
+        self.settings_close.setAccessibleName(self.settings_close.text())
         if self.reporting_panel is not None:
             self.reporting_panel.set_language(language)
         for key, caption in self._captions:
@@ -496,25 +575,49 @@ class CommunicationPage(QWidget):
                 )
         self.write_values.setPlaceholderText(text("comm_values_hint", language))
         self.write_values.setAccessibleName(text("comm_values", language))
+        self.test_button.setToolTip(text("comm_test_hint", language))
+        self.watch_editor_button.setToolTip(
+            text("comm_watch_edit", language)
+            + "\n"
+            + text("comm_watch_limit", language)
+        )
+        self.log_button.setToolTip(text("comm_log", language))
+        self.log_button.setAccessibleName(text("comm_log", language))
         self.values_table.setHorizontalHeaderLabels(
             (
                 text("comm_word_address", language),
-                text("comm_word", language),
-                text("comm_hex", language),
+                "DEC",
+                "HEX",
             )
         )
         self.watch_table.setHorizontalHeaderLabels(
             tuple(
                 text(key, language)
                 for key in (
-                    "comm_watch_group",
+                    "comm_table_group",
                     "comm_word_address",
-                    "comm_word",
-                    "comm_hex",
-                    "comm_observed",
+                    "comm_dec",
+                    "comm_table_hex",
+                    "comm_table_observed",
                 )
             )
         )
+        for column, key in enumerate(
+            (
+                "comm_watch_group",
+                "comm_word_address",
+                "comm_word",
+                "comm_hex",
+                "comm_observed",
+            )
+        ):
+            item = self.watch_table.horizontalHeaderItem(column)
+            assert item is not None
+            item.setToolTip(text(key, language))
+        for column, key in enumerate(("comm_word_address", "comm_word", "comm_hex")):
+            item = self.values_table.horizontalHeaderItem(column)
+            assert item is not None
+            item.setToolTip(text(key, language))
         self._render_watch()
         self._refresh()
 
@@ -653,10 +756,15 @@ class CommunicationPage(QWidget):
                 )
                 for column, content in enumerate(cells):
                     item = QTableWidgetItem(content)
+                    if column in (1, 2, 3):
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setToolTip(
-                        self._response_description(observation) + " · " + observed
+                        f"{name} · {address}\n"
+                        + self._response_description(observation)
+                        + " · "
+                        + observed
                         if observation
-                        else observed
+                        else f"{name} · {address}\n{observed}"
                     )
                     self.watch_table.setItem(row, column, item)
                 row += 1
@@ -664,6 +772,19 @@ class CommunicationPage(QWidget):
             min(max(0, selected), len(self._watch_groups) - 1)
         )
         self.watch_selector.blockSignals(blocked)
+        self.watch_empty.setVisible(not self._watch_groups)
+        self._size_table(self.watch_table, 12)
+
+    @staticmethod
+    def _size_table(table: QTableWidget, visible_rows: int) -> None:
+        """Size to useful rows, with a bounded viewport and internal scrolling."""
+        rows = min(table.rowCount(), visible_rows)
+        table.setVisible(rows > 0)
+        table.setFixedHeight(
+            table.horizontalHeader().sizeHint().height()
+            + sum(table.rowHeight(row) for row in range(rows))
+            + 2 * table.frameWidth()
+        )
 
     def read_watch_once(self) -> bool:
         if self._auto_refresh:
@@ -988,6 +1109,17 @@ class CommunicationPage(QWidget):
             widget.setEnabled(editable)
         for button in self._buttons.values():
             button.setEnabled(editable)
+        for button in (
+            self.settings_button,
+            self.watch_editor_button,
+            self.manual_button,
+            self.log_button,
+        ):
+            button.setEnabled(not (self._closing or self._disposed))
+        self.manual_endpoint.setText(
+            f"FINS/UDP · {self.host.text().strip()}:{self.port.value()}"
+        )
+        self.manual_endpoint.setToolTip(text("comm_manual_connection", self.language))
         self.watch_remove.setEnabled(editable and bool(self._watch_groups))
         self.watch_once.setEnabled(editable and bool(self._watch_groups))
         self.watch_auto.setEnabled(
@@ -1025,16 +1157,25 @@ class CommunicationPage(QWidget):
             f"color: {Style.warning if self._detail else Style.accent};"
         )
         self.success.setText(
-            text("comm_last_success", self.language)
-            + " · "
-            + text(
-                "comm_" + self.last_response.request.kind.value + "_ok", self.language
-            )
-            + " · "
-            + self._response_description(self.last_response)
+            self._response_description(self.last_response)
             if self.last_response
             else text("comm_no_success", self.language)
         )
+        self.success.setToolTip(
+            text("comm_observation", self.language)
+            + (
+                "\n"
+                + text(
+                    "comm_" + self.last_response.request.kind.value + "_ok",
+                    self.language,
+                )
+                + " · "
+                + self._response_description(self.last_response)
+                if self.last_response
+                else ""
+            )
+        )
+        self.success.setVisible(self.last_response is not None)
         self.read_caption.setText(
             text("comm_last_read", self.language)
             + (
@@ -1043,6 +1184,7 @@ class CommunicationPage(QWidget):
                 else ""
             )
         )
+        self._size_table(self.values_table, 8)
         self.watch_status.setText(
             text(self._watch_state, self.language)
             + (
@@ -1056,6 +1198,7 @@ class CommunicationPage(QWidget):
             if self._watch_state == "comm_watch_failed"
             else text("comm_watch_limit", self.language)
         )
+        self.watch_status.setVisible(bool(self._watch_groups))
         self.watch_status.setStyleSheet(
             f"color: {Style.warning if self._watch_state == 'comm_watch_failed' else Style.accent};"
         )
@@ -1077,6 +1220,7 @@ class CommunicationPage(QWidget):
             return
         if self._closing:
             return
+        self.settings_dialog.hide()
         self.stop_monitoring()
         self._closing = True
         self._after_close = after
@@ -1106,5 +1250,6 @@ class CommunicationPage(QWidget):
             self._delivery.detach()
 
     def hideEvent(self, event: QHideEvent) -> None:
+        self.settings_dialog.hide()
         self.stop_monitoring()
         super().hideEvent(event)

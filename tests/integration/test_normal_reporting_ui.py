@@ -231,6 +231,12 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         with pytest.raises(ApplicationStateError):
             panel.controller.set_reporting_selection(ReportingSelection())
         assert panel.controller.reporting_selection() is selected
+        window.communication.settings_button.click()
+        assert not panel.port.isEnabled() and window.communication.host.isEnabled()
+        window.communication.host.setText("192.0.2.10")
+        assert panel.endpoint.text() == f"127.0.0.1:{peer.port}"
+        window.communication.host.setText("127.0.0.1")
+        window.communication.settings_dialog.reject()
 
         page = window.communication
         page.port.setValue(peer.port)
@@ -341,6 +347,7 @@ def test_reporting_failure_feedback_does_not_fault_production(
         window.navigate(2)
         assert "ACK --" in panel.status.text() and panel.error.isVisible()
         assert "initialization" in panel.error.text()
+        assert text("plc_report_failed", window.language) in panel.status.text()
         assert (
             "generation=1" in panel.error.toolTip()
             and "FinsPlcError" in panel.error.toolTip()
@@ -502,25 +509,68 @@ def test_fault_and_closed_keep_preferences_locked(
 
 
 @pytest.mark.parametrize(
-    "language,width,height", [("zh", 1080, 1920), ("en", 1920, 1080)]
+    "language,width,height",
+    [("zh", 1080, 1920), ("zh", 1920, 1080), ("en", 1080, 1920), ("en", 1920, 1080)],
 )
 def test_reporting_panel_localized_layout(
     qapp: QApplication, tmp_path: Path, language: Language, width: int, height: int
 ) -> None:
     ensure_test_fonts()
-    with normal_window(tmp_path) as (_, window, panel):
+    with server() as peer, normal_window(tmp_path) as (_, window, panel):
         window.set_language(language)
         window.resize(width, height)
         window.navigate(2)
+        qapp.processEvents()
+        assert (
+            window.communication.body.width()
+            <= window.communication.scroll_area.viewport().width()
+        )
+        assert not window.communication.settings_dialog.isVisible()
+        assert window.grab().save(
+            str(tmp_path / f"communication-empty-{language}-{width}x{height}.png")
+        )
+        panel.settings_button.click()
         panel.advanced_button.click()
+        window.communication.advanced_button.click()
         qapp.processEvents()
         assert panel.title.text() == text("plc_reporting", language)
         assert panel.enabled.accessibleName() == text("plc_enable", language)
         assert panel.port.accessibleName() == text("comm_port", language)
         assert panel.host.text() == "127.0.0.1" and panel.advanced.isVisible()
         assert panel.geometry().width() <= width
+        assert panel.height() < 120
         for widget in (panel.enabled, panel.port, panel.timeout, panel.advanced_button):
             assert widget.width() >= widget.minimumSizeHint().width()
-        assert window.grab().save(
+        assert window.communication.settings_dialog.width() <= width
+        for widget in (
+            panel.port,
+            panel.timeout,
+            panel.advanced_button,
+            window.communication.host,
+            window.communication.port,
+            window.communication.timeout,
+            window.communication.advanced_button,
+        ):
+            parent = widget.parentWidget()
+            assert parent is not None and parent.rect().contains(widget.geometry())
+        assert window.communication.settings_dialog.grab().save(
             str(tmp_path / f"normal-reporting-{language}-{width}x{height}.png")
+        )
+        window.communication.port.setValue(peer.port)
+        window.communication.settings_dialog.reject()
+        assert window.communication.add_watch_group(
+            RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "首工位 / First station")
+        )
+        assert window.communication.add_watch_group(
+            RegisterWatchGroup(FinsMemoryArea.DM, 100, 1, "诊断 / Diagnostic")
+        )
+        assert window.communication.read_watch_once()
+        until(lambda: not window.communication.busy)
+        qapp.processEvents()
+        assert (
+            window.communication.watch_table.columnWidth(0)
+            < window.communication.watch_table.width() / 4
+        )
+        assert window.grab().save(
+            str(tmp_path / f"communication-populated-{language}-{width}x{height}.png")
         )

@@ -1,6 +1,6 @@
 """Compact presentation of session-local preferences and the existing H2B owner."""
 
-from PySide6.QtCore import QSize, Slot
+from PySide6.QtCore import QSize, Qt, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -20,6 +21,7 @@ from vimo_demo.communication.reporting import (
     LocalReportingSettings,
     ProductionReportingCommands,
     ReportingSelection,
+    ReportOutcome,
 )
 
 from .production_style import Language, Style, navigation_icon, text
@@ -33,6 +35,7 @@ class ReportingPanel(QFrame):
         self.state = ApplicationState.UNCONFIGURED
         self._syncing = False
         self.setObjectName("commPanel")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root = QVBoxLayout(self)
         root.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
         root.setSpacing(Style.small)
@@ -43,11 +46,29 @@ class ReportingPanel(QFrame):
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 18px; font-weight: 600;")
         header.addWidget(self.title)
-        header.addStretch()
         self.enabled = QCheckBox()
         self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.enabled)
+        self.endpoint = QLabel()
+        header.addWidget(self.endpoint)
+        header.addStretch()
+        self.settings_button = QPushButton()
+        self.settings_button.setIcon(navigation_icon(1))
+        self.settings_button.setIconSize(QSize(Style.icon, Style.icon))
+        self.settings_button.setFixedSize(Style.touch, Style.touch)
+        header.addWidget(self.settings_button)
         root.addLayout(header)
+        # These same editors are reparented into the page's retained settings
+        # dialog. There is no duplicate draft or reporting-state owner.
+        self.settings_body = QFrame()
+        self.settings_body.setObjectName("commPanel")
+        settings = QVBoxLayout(self.settings_body)
+        settings.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
+        self._captions: list[tuple[str, QLabel]] = []
+        caption = QLabel()
+        caption.setStyleSheet("font-size: 18px; font-weight: 600;")
+        self._captions.append(("plc_reporting", caption))
+        settings.addWidget(caption)
         self.host = QLabel("127.0.0.1")  # No editable automatic target.
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
@@ -60,20 +81,23 @@ class ReportingPanel(QFrame):
         self.advanced_button.setMinimumHeight(Style.touch)
         self.advanced_button.setIcon(navigation_icon(2))
         self.advanced_button.setIconSize(QSize(Style.icon, Style.icon))
-        self._captions: list[tuple[str, QLabel]] = []
-        common = QHBoxLayout()
-        for key, widget in (
-            ("comm_host", self.host),
-            ("comm_port", self.port),
-            ("comm_timeout", self.timeout),
+        common = QGridLayout()
+        for column, (key, widget) in enumerate(
+            (
+                ("comm_host", self.host),
+                ("comm_port", self.port),
+                ("comm_timeout", self.timeout),
+            )
         ):
             caption = QLabel()
+            caption.setWordWrap(True)
             self._captions.append((key, caption))
-            common.addWidget(caption)
+            common.addWidget(caption, 0, column)
             widget.setMinimumHeight(Style.touch)
-            common.addWidget(widget, 1)
-        common.addWidget(self.advanced_button)
-        root.addLayout(common)
+            common.addWidget(widget, 1, column)
+            common.setColumnStretch(column, 1)
+        common.addWidget(self.advanced_button, 2, 0, 1, 3, Qt.AlignmentFlag.AlignRight)
+        settings.addLayout(common)
         self.advanced = QWidget()
         grid = QGridLayout(self.advanced)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -91,15 +115,17 @@ class ReportingPanel(QFrame):
             grid.addWidget(caption, row, 0)
             for column, field in enumerate(fields, 1):
                 grid.addWidget(field, row, column)
-        root.addWidget(self.advanced)
+        settings.addWidget(self.advanced)
         self.advanced.hide()
         self.advanced_button.toggled.connect(self.advanced.setVisible)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.error = QLabel()
         self.error.setWordWrap(True)
-        root.addWidget(self.status)
-        root.addWidget(self.error)
+        status_row = QHBoxLayout()
+        status_row.addWidget(self.status, 1)
+        status_row.addWidget(self.error)
+        root.addLayout(status_row)
         self._fields = (self.port, self.timeout, *self.destination, *self.source)
         for field in self._fields:
             field.valueChanged.connect(self._changed)
@@ -163,6 +189,8 @@ class ReportingPanel(QFrame):
         self.enabled.setText(text("plc_enable", language))
         self.enabled.setAccessibleName(self.enabled.text())
         self.enabled.setToolTip(text("plc_session_only", language))
+        self.settings_button.setToolTip(text("comm_settings", language))
+        self.settings_button.setAccessibleName(text("comm_settings", language))
         self.advanced_button.setText(text("comm_advanced", language))
         self.advanced_button.setAccessibleName(self.advanced_button.text())
         self.host.setAccessibleName(f"{text('comm_host', language)} 127.0.0.1")
@@ -193,6 +221,8 @@ class ReportingPanel(QFrame):
         for widget in (self.enabled, *self._fields):
             widget.setEnabled(editable)
         selected = self.controller.reporting_selection()
+        self.endpoint.setText(f"127.0.0.1:{selected.settings.port}")
+        self.endpoint.setToolTip(text("plc_session_only", self.language))
         snapshot = self.controller.reporting_snapshot()
         key = "plc_disabled" if not selected.enabled else "plc_enabled"
         if snapshot is not None and snapshot.thread_alive:
@@ -201,11 +231,19 @@ class ReportingPanel(QFrame):
                 if self.state is ApplicationState.STARTING
                 else "plc_active"
             )
+            if (
+                snapshot.last_outcome
+                and snapshot.last_outcome.outcome is ReportOutcome.FAILED
+            ):
+                key = "plc_report_failed"
         ack = snapshot.last_acknowledged if snapshot else None
         self.status.setText(
             f"{text(key, self.language)} · ACK {ack.sequence if ack else '--'} · "
             f"{text('plc_success', self.language)} {snapshot.acknowledged_count if snapshot else 0} · "
-            f"{text('plc_failed', self.language)} {snapshot.failed_count if snapshot else 0}"
+            f"ERR {snapshot.failed_count if snapshot else 0}"
+        )
+        self.status.setStyleSheet(
+            f"color: {Style.warning if key == 'plc_report_failed' else Style.accent};"
         )
         detail = text("plc_ack_hint", self.language)
         if snapshot:
@@ -213,12 +251,13 @@ class ReportingPanel(QFrame):
             if ack:
                 detail += f"\nACK cycle={ack.identity.cycle_id}; sequence={ack.sequence}; words={ack.reject_words}"
         self.status.setToolTip(detail)
+        self.status.setAccessibleDescription(detail)
         failure = snapshot.last_failed if snapshot else None
         issue = failure.issue if failure else None
         self.error.setVisible(issue is not None)
         self.error.setStyleSheet(f"color: {Style.warning};")
         self.error.setText(
-            f"{text('plc_last_error', self.language)} · {failure.stage.value if failure and failure.stage else '--'} · {issue.exception_type if issue else ''}"
+            f"{text('plc_last_error', self.language)} · {failure.stage.value if failure and failure.stage else '--'}"
         )
         self.error.setToolTip(
             f"generation={failure.identity.generation}; cycle={failure.identity.cycle_id}; sequence={failure.sequence}\n{issue.exception_type}: {issue.message}"
@@ -230,3 +269,4 @@ class ReportingPanel(QFrame):
             if failure and issue
             else ""
         )
+        self.error.setAccessibleDescription(self.error.toolTip())
