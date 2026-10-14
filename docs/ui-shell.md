@@ -382,12 +382,28 @@ is forcibly cancelled. The window's close notification alone is not process/Web 
 
 The self-contained observer uses three/two/one columns as the viewport narrows,
 preserves image orientation/aspect ratio with contained images, and follows
-configured camera order. It presents each frame's generation, CycleId, sequence
-and original dimensions, plus existing matching channel business/technical statuses.
-It creates no camera/cycle acceptance judgment and adds no overlays. With no valid
-configuration/images it remains an explicit empty/unavailable view. Browser language
-selects Chinese/English explanatory text; authoritative state/status names remain
-visible, including ERROR separately from business NG.
+configured camera order. Its normal header contains only the compact Observer
+identity and an observation dot. Camera cards contain the CameraId, JPEG and six
+compact SVG indicators in the returned configured channel order, without numerical
+sorting. Generation, CycleId, FrameId, dimensions, timestamps and diagnostic status
+strings remain in JSON rather than permanent page text. No details panel, desktop
+summary, camera/cycle acceptance judgment or overlay is added.
+
+Channel symbols are a green check for OK, red cross for NG, neutral outlined square
+for EMPTY and amber warning triangle for UNKNOWN. A separate amber border and `!`
+mark technical ERROR without replacing the business symbol, including ERROR + NG
+and ERROR + UNKNOWN. Pending uses a neutral dashed circle; unavailable uses a dash.
+Known ChannelIds and full business/technical descriptions remain in tooltips and
+accessible names. If matching channel metadata is absent, the six neutral slots
+are described by CameraId/slot position; no ChannelId mapping is invented.
+
+Missing images use neutral placeholders. Retained images have a subtle pause mark;
+stale observations have a clock mark and neutral channel indicators. Chinese/English
+concise feedback appears for disconnection, stale/unavailable observations and empty
+configuration. Application FAULT is shown separately from connection failure,
+using the authoritative last observed state; after loss/staleness it is explicitly
+marked as last observed. Neither HTTP connectivity nor an individual channel ERROR
+is interpreted as Production health or Application FAULT.
 
 One poll starts approximately every two seconds, after the preceding work settles;
 there are no overlapping polls or catch-up requests. JPEGs are fetched sequentially,
@@ -396,13 +412,15 @@ image replacement: publisher ID, generation, CycleId, complete FrameId, display-
 revision and original shape. A new publication revision alone does not redownload
 an unchanged displayed image; matching status can still update from fresh metadata.
 Every changed/hidden frame loses its previous pixels/status before any download.
-Only successfully decoded matching bytes receive that observation's channel badges.
+Only successfully decoded matching bytes receive that observation's business/technical
+indicators; otherwise the six slots remain neutral.
 
 Exact returned JPEG URLs are used once per poll. A 410 is an ordinary publication
 race: the camera waits for fresh metadata, without an immediate retry loop. Other
-missing JPEGs remain unavailable; connection failures clear current channel badges
-and mark retained pixels as last observations. A five-second poll deadline aborts
-network/decoding work; invalidated late responses cannot replace newer observations.
+missing JPEGs remain unavailable; connection failures replace current channel evidence
+with neutral indicators and mark retained pixels as last observations. A five-second
+poll deadline aborts network/decoding work; invalidated late responses cannot replace
+newer observations.
 Temporary failures recover on later polls. Older revisions of the same publisher
 cannot overwrite newer metadata; a new publisher ID permits process restart safely.
 At most six cards/object URLs and one in-progress decode exist; replaced/disposed
@@ -411,11 +429,12 @@ resume observation.
 
 Connection status and publication freshness are separate from the last observed
 Application state. A publication older than six seconds is labeled stale and its
-current channel badges suppressed; this is a browser observation indicator, not a
-Production deadline or acceptance limit. The age indicator uses the client's wall
-clock; significant clock skew can produce a stale warning. Fresh HTTP/publication timestamps do not
-prove that new camera frames are arriving. Local replay pause remains RUNNING; the
-observer invents no PAUSED application state. The six cards need not be one cycle.
+current channel evidence replaced with neutral indicators; this is a browser
+observation indicator, not a Production deadline or acceptance limit. The age indicator
+uses the client's wall clock; significant clock skew can produce a stale warning.
+Fresh HTTP/publication timestamps do not prove that new camera frames are arriving.
+Local replay pause remains RUNNING; the observer invents no PAUSED application state.
+The six cards need not be one cycle.
 
 The serial HTTP model is unchanged. CPU tests exercise three concurrent clients
 with 420 successful JSON/JPEG requests while encoding only the initial six JPEGs;
@@ -455,8 +474,9 @@ LAN verification, without changing persistent configuration:
    administered access restrictions; do not use a wildcard or guess an address.
 2. Launch `uv run --no-sync python app.py --web-snapshots --web-host <LAN-IP> --web-port 8765`.
    Open `http://<LAN-IP>:8765/` on one computer and one phone on that network.
-3. Use Start/Step in Qt; confirm six camera identities/order, aspect/color, frame
-   metadata and matching channel badges. Observe up to three browser clients and
+3. Use Start/Step in Qt; confirm six camera identities/order, aspect/color and six
+   matching channel indicators, including separate technical ERROR marks. Inspect
+   detailed identity in JSON when needed. Observe up to three browser clients and
    check that Production remains responsive. This does not measure zero impact.
 4. Temporarily disconnect/reconnect a client. Its connection warning must remain
    separate from Application state; images/status should recover without reload.
@@ -471,7 +491,9 @@ deterministic tests of the actual browser JavaScript through an existing Node.js
 if Node is absent those checks skip explicitly, with no automatic installation.
 Run them directly with `node --test tests/web_observer_checks.cjs`. They cover
 source-image reuse, identity/revision changes, empty/pending/stale data, 410,
-connection recovery, deadline cancellation and delayed decode disposal. Browser
+connection recovery, deadline cancellation and delayed decode disposal, plus the
+minimal presentation, configured indicator order, combined ERROR/business symbols,
+localized accessibility and separate Application FAULT feedback. Browser
 viewport inspection complements these tests but is not physical phone/LAN evidence.
 Real ViMo/PLC/camera performance, authenticated deployment and hardware commissioning
 remain unqualified.
