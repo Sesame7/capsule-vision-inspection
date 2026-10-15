@@ -392,6 +392,44 @@ This experiment cannot establish physical 10 Hz capacity, reliable hardware cycl
 association, a result deadline or PLC consumption behavior. Measurements and the
 S1-E2 recommendation belong to the dated run evidence, not a performance promise.
 
+### Isolated S1-E2A field experiment
+
+[`experiment_field_continuous.py`](../scripts/experiment_field_continuous.py) is a
+separate, explicitly authorized field diagnostic, not a Production entry point.
+`--help` is safe; `--execute-field` enables actual W10.7 photo/flash writes to the
+fixed field endpoint. Fresh stopped/manual/released checks and exclusive camera
+access are required. The helper uses bit access only, one persistent TCP owner per
+trial, bounded pulse counts, and release-only recovery after uncertain exchanges;
+it never retries activation or writes reject registers. Normal localhost write
+restrictions remain unchanged.
+
+Six cameras are armed once per finite trial with the existing settings and three
+SDK buffers each. Retrieval/conversion/owned-copy/release uses the existing SDK
+boundary; converter timing is a transparent observer. The already owned readonly
+BGR array transfers directly into Frame without another full-image copy. One
+serial engine overlaps inspection with the acquisition owner. A/B replays reuse
+bounded captured pixels and their actual host-observed arrival trace on the field
+GPU; they are replay measurements, separately from live B capture-plus-inspection.
+
+Only one capture window may remain unresolved: all six prior frames plus an empty
+SDK sweep are required before another pulse. Missing/duplicate/extra frames,
+status changes, overload and ambiguous communication stop further activation.
+This controlled-window rule is not a hardware trigger tag or proof of association
+under an independently running PLC source. Reports deliberately mark all results
+experimental/unaccepted for business output. The default 100 ms diagnostic result
+deadline does not establish PLC consumption or physical reject timing.
+
+The runner records raw command/ACK and camera observations, per-camera stage
+timings, bounded backlog, sampled process memory, input-pool hashes and cleanup.
+Post-run ownership probes time an optional extra copy on identical captured
+arrays; these isolated costs are not claimed as end-to-end gains. New runs save
+their Python bundle beside the report. Dated measurements belong to ignored field
+evidence, not a general throughput promise. CPU-only checks:
+
+```powershell
+uv run --no-sync pytest tests/unit/test_field_experiment.py tests/unit/test_basler_acquisition.py tests/unit/test_fins_tcp.py tests/unit/test_scheduling_experiment.py --tb=short
+```
+
 ## Historical results
 
 **Historical evidence, not Current performance promises.** The accepted
