@@ -68,7 +68,7 @@ def unavailable(config: pytest.Config, reason: str) -> NoReturn:
 def engine(
     reference: Reference, pytestconfig: pytest.Config
 ) -> Iterator[VimoSegmentationEngine]:
-    model = ROOT / "models/model_trt_fp16.vimosln"
+    model = ROOT / "data/models/model_trt_fp16.vimosln"
     if not model.is_file() or not (ROOT / "images").is_dir():
         unavailable(pytestconfig, "Local reference model/images unavailable")
     if sha256(model) != reference["model_sha256"]:

@@ -7,7 +7,7 @@ PySide6 desktop UI, with optional FINS/UDP or FINS/TCP communication/reporting a
 read-only Web observation. Manual UI and Production reporting writes remain
 restricted to localhost.
 
-Real-camera acquisition, commissioned PLC integration and physical sorting remain
+Real-camera Production integration, commissioned PLC integration and physical sorting remain
 unimplemented. Size/Color screening is an uncalibrated demonstration; SDK
 regression does not certify model accuracy or industrial acceptance.
 
@@ -118,6 +118,11 @@ Run from the repository root in the existing environment:
 | [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit-path **real** Production developer launcher |
 | [run_production_ui.py](scripts/run_production_ui.py) | Equipment-free Production review with a **fake engine** |
 | [python -m vimo_demo.ui.app](src/vimo_demo/ui/app.py) | Separate **real one-image** inference/worker/Qt diagnostic |
+| [acquire_basler_group.py](scripts/acquire_basler_group.py) | Isolated one-window six-camera Basler acquisition, using externally provisioned pypylon; no Production or automatic trigger |
+
+[Basler acquisition](docs/application.md#isolated-basler-acquisition) documents
+operator coordination, owned images, failure/cleanup guarantees and independent
+field staging. Normal startup and Folder workflows do not require pypylon.
 
 ```powershell
 uv run --no-sync python app.py
