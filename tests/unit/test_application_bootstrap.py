@@ -428,3 +428,55 @@ def test_recipe_defaults_only_for_omitted_optional_fields(
         assert path.read_bytes() == before
     finally:
         close(startup)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_source_restore_keeps_file_bytes_and_does_not_load_optional_sdk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: bool
+) -> None:
+    import sys
+
+    from vimo_demo.configuration import load_camera_sources
+
+    data = saved_data(tmp_path)
+    if legacy:
+        value = json.loads(data.sources.read_text(encoding="utf-8"))
+        value["schema_version"] = 1
+        del value["mode"]
+        for row in value["cameras"]:
+            del row["basler_serial"]
+            row["source_type"] = "folder"
+        data.sources.write_text(json.dumps(value, indent=3), encoding="utf-8")
+    else:
+        source = load_camera_sources(data.sources)
+        save_camera_sources(
+            data.sources,
+            replace(
+                source,
+                mode="basler",
+                cameras=tuple(
+                    replace(c, basler_serial=f"100{i}")
+                    for i, c in enumerate(source.cameras, 1)
+                ),
+            ),
+        )
+    original = data.sources.read_bytes()
+    monkeypatch.setitem(sys.modules, "pypylon", None)
+    startup = load_startup(data)
+    try:
+        assert startup.application.snapshot().state is ApplicationState.READY
+        assert not startup.issues and startup.editor is not None
+        assert startup.editor.camera_sources is not None
+        assert startup.editor.camera_sources.saved.mode == (
+            "folder" if legacy else "basler"
+        )
+        assert (
+            startup.local_replay is not None
+            and startup.local_replay.replay_available == legacy
+        )
+        assert data.sources.read_bytes() == original
+        assert "pypylon.pylon" not in sys.modules
+        assert startup.application.snapshot().counters == ProductionCounters()
+    finally:
+        close(startup)
+    assert data.sources.read_bytes() == original

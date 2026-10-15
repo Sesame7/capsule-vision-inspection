@@ -5,7 +5,7 @@ import sys
 import traceback
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
@@ -111,7 +111,7 @@ def _wait_for_source_interval(stop: Event, started: float, fps: float) -> bool:
     return True
 
 
-def _basler_notice(observation: ArmedAcquisition | AcquisitionReport) -> None:
+def basler_notice(observation: ArmedAcquisition | AcquisitionReport) -> None:
     """Source-thread console evidence; no widgets or PLC operations."""
     if isinstance(observation, ArmedAcquisition):
         print(json.dumps({"event": "ARMED", **asdict(observation)}), flush=True)
@@ -161,7 +161,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         basler_source: BaslerAcquisitionSource | None = None,
         observe_acquisition: Callable[
             [ArmedAcquisition | AcquisitionReport], None
-        ] = _basler_notice,
+        ] = basler_notice,
     ) -> None:
         if basler_source is not None and (
             replay_control is not None or reporting is not None
@@ -440,7 +440,15 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         for camera, image in zip(result.cameras, images, strict=True):
             if camera.frame_id is not None:
                 self._store.publish_pixels(
-                    camera.frame_id, captured, image, generation=self.generation
+                    camera.frame_id,
+                    captured,
+                    image,
+                    generation=self.generation,
+                    source_key=self._sources.source_key(
+                        camera.camera_id, self._source_base
+                    )
+                    if self._sources
+                    else None,
                 )
         # Existing accounting has observed the terminal Future before Stop/READY.
         self._application.stop()
@@ -457,6 +465,7 @@ class _LocalApplication(ProductionApplication):
         replay_controls: bool = False,
         reporting: LocalReportingSettings | None = None,
         reporting_editable: bool = False,
+        source_draft: CameraSourceDraft | None = None,
     ) -> None:
         self.replay_cache = cache
         self._reporting_lock = Lock()
@@ -469,6 +478,7 @@ class _LocalApplication(ProductionApplication):
         self._session_reporting: LocalReportingSettings | None = None
         self._replay_lock = Lock()
         self.replay_controls = replay_controls
+        self._source_draft = source_draft
         self._replay_control: LocalReplayControl | None = None
         super().__init__(factory)
 
@@ -476,7 +486,7 @@ class _LocalApplication(ProductionApplication):
         return self._start_replay(single_step=False)
 
     def _start_replay(self, *, single_step: bool) -> Future[None]:
-        if not self.replay_controls:
+        if not self.replay_available:
             if single_step:
                 raise ApplicationStateError("Local replay controls are not enabled")
             return self._start_reporting_session()
@@ -563,7 +573,15 @@ class _LocalApplication(ProductionApplication):
             else None
         )
 
+    @property
+    def replay_available(self) -> bool:
+        return self.replay_controls and (
+            self._source_draft is None or self._source_draft.saved.mode == "folder"
+        )
+
     def replay_snapshot(self) -> ReplaySnapshot | None:
+        if not self.replay_available:
+            return None
         with self._replay_lock:
             control = self._replay_control
         return control.snapshot() if control is not None else None
@@ -571,7 +589,11 @@ class _LocalApplication(ProductionApplication):
     def _running_replay(self) -> LocalReplayControl:
         snapshot = self.snapshot()
         control = self.replay_control_for(snapshot.generation)
-        if snapshot.state is not ApplicationState.RUNNING or control is None:
+        if (
+            not self.replay_available
+            or snapshot.state is not ApplicationState.RUNNING
+            or control is None
+        ):
             raise ApplicationStateError("Replay operation requires its RUNNING session")
         return control
 
@@ -648,7 +670,7 @@ def compose(
     basler_timeout: float = 30.0,
     observe_acquisition: Callable[
         [ArmedAcquisition | AcquisitionReport], None
-    ] = _basler_notice,
+    ] = basler_notice,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
@@ -726,7 +748,7 @@ def local_application(
     basler_timeout: float = 30.0,
     observe_acquisition: Callable[
         [ArmedAcquisition | AcquisitionReport], None
-    ] = _basler_notice,
+    ] = basler_notice,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != 6:
@@ -740,8 +762,9 @@ def local_application(
         ).serials
     if editor.camera_sources is None:
         raise ValueError("Local production requires camera sources")
-    sources_file = editor.camera_sources.path
-    sources = editor.camera_sources.saved
+    source_draft = editor.camera_sources
+    sources_file = source_draft.path
+    sources = source_draft.saved
     images = tuple(_cli_image(path) for path in paths)
     store = LatestDisplayFrameStore(editor.machine.layout.camera_ids)
     cache = FolderReplayCache(notify=observe_cache)
@@ -768,6 +791,14 @@ def local_application(
         try:
             saved_sources = load_camera_sources(sources_file) if not paths else sources
             saved_sources.validate_cameras(config.configuration.layout.camera_ids)
+            if (
+                not paths
+                and basler_serials is None
+                and saved_sources.mode != source_draft.saved.mode
+            ):
+                raise ConfigurationError(
+                    "Source mode changed on disk; apply in Vision or restart"
+                )
         except ConfigurationError as exc:
             cache.clear()
             raise FolderSourceError(f"Camera sources {sources_file}: {exc}") from exc
@@ -784,13 +815,30 @@ def local_application(
             )
         )
         snapshot.validate_cameras(config.configuration.layout.camera_ids)
+        if basler_serials is not None:
+            serial_map = dict(
+                zip(config.configuration.layout.camera_ids, basler_serials, strict=True)
+            )
+            snapshot = replace(
+                snapshot,
+                mode="basler",
+                cameras=tuple(
+                    replace(c, basler_serial=serial_map[c.camera_id])
+                    for c in snapshot.cameras
+                ),
+            )
+        serials = (
+            snapshot.basler_serials(config.configuration.layout.camera_ids)
+            if snapshot.mode == "basler"
+            else None
+        )
         replay = (
             None
             if paths
             else FolderReplay(
                 config.configuration.layout, snapshot, sources_file.parent
             )
-            if basler_serials is not None
+            if serials is not None
             else cache.replay(
                 config.configuration.layout,
                 snapshot,
@@ -809,6 +857,10 @@ def local_application(
         if group is None:
             raise ValueError("No complete image group")
         session_reporting = app.reporting_for_generation(generation)
+        if serials is not None and session_reporting is not None:
+            raise ApplicationStateError(
+                "Basler single-cycle mode cannot report to PLC; disable automatic reporting before Start"
+            )
         report_worker = (
             FirstStationReportingWorker(generation, session_reporting)
             if session_reporting is not None
@@ -826,10 +878,8 @@ def local_application(
             source_base=sources_file.parent,
             reporting=report_worker,
             replay_control=app.replay_control_for(generation),
-            basler_source=BaslerAcquisitionSource(
-                basler_serials, timeout=basler_timeout
-            )
-            if basler_serials is not None
+            basler_source=BaslerAcquisitionSource(serials, timeout=basler_timeout)
+            if serials is not None
             else None,
             observe_acquisition=observe_acquisition,
         )
@@ -843,6 +893,7 @@ def local_application(
         replay_controls=replay_controls,
         reporting=reporting,
         reporting_editable=reporting_editable,
+        source_draft=source_draft if not paths and basler_serials is None else None,
     )
     return app, store
 
@@ -869,8 +920,37 @@ class SourceNotifications(QObject):
         )
         self.destroyed.connect(delivery.detach, Qt.ConnectionType.DirectConnection)
 
+    @staticmethod
+    def watch_acquisition(
+        delivery: FutureDelivery,
+        generation: int,
+        observation: ArmedAcquisition | AcquisitionReport,
+    ) -> None:
+        """Source-thread notification through the existing queued delivery gate."""
+        basler_notice(observation)
+        if isinstance(observation, AcquisitionReport) and (
+            observation.issues
+            or observation.missing_serials
+            or observation.extra_serials
+            or not observation.cleanup_safe
+        ):
+            return  # The source Future reports failure; never announce successful capture.
+        notice: Future[str] = Future()
+        notice.set_result(
+            "basler_armed"
+            if isinstance(observation, ArmedAcquisition)
+            else "basler_processing"
+        )
+        delivery.watch(f"basler_source:{generation}", notice)
+
     @Slot(str, object, object)
     def completed(self, name: str, _value: object, error: object) -> None:
+        if name.startswith("basler_source:") and _value in (
+            "basler_armed",
+            "basler_processing",
+        ):
+            self._bridge.source_progress_changed.emit(int(name.split(":")[1]), _value)
+            return
         if isinstance(error, BaseException):
             traceback.print_exception(error)
             self._bridge.command_failed.emit(name, error)

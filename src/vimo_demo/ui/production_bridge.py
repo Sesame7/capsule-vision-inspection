@@ -32,6 +32,7 @@ class QtProductionBridge(QObject):
     snapshot_changed = Signal(object)
     frames_changed = Signal(object)
     replay_changed = Signal(object)
+    source_progress_changed = Signal(int, str)
     reporting_changed = Signal(object)
     command_finished = Signal(str)
     command_failed = Signal(str, object)
@@ -59,6 +60,7 @@ class QtProductionBridge(QObject):
         )
         self.reporting_snapshot: ReportingSnapshot | None = None
         self.local_replay = local_replay
+        self._replay_enabled = self.replay_enabled
         self.replay_snapshot: ReplaySnapshot | None = None
         self._snapshot: ProductionApplicationSnapshot | None = None
         self._revision = -1
@@ -81,6 +83,10 @@ class QtProductionBridge(QObject):
         self.timer.setInterval(poll_ms)
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
+
+    @property
+    def replay_enabled(self) -> bool:
+        return self.local_replay is not None and self.local_replay.replay_available
 
     @property
     def closed(self) -> bool:
@@ -177,7 +183,11 @@ class QtProductionBridge(QObject):
         self._check_thread()
         snapshot = self.application.snapshot()
         replay = self.local_replay.replay_snapshot() if self.local_replay else None
-        replay_changed = replay != self.replay_snapshot
+        replay_changed = (
+            replay != self.replay_snapshot
+            or self._replay_enabled != self.replay_enabled
+        )
+        self._replay_enabled = self.replay_enabled
         self.replay_snapshot = replay
         if snapshot != self._snapshot:
             self._snapshot = snapshot

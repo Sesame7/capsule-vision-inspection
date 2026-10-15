@@ -11,7 +11,8 @@ Operator workflows remain in [Recipe editing](ui-configuration.md#recipes) and
 
 ## Definitions
 
-All four persisted families require an integer `schema_version` equal to **1**.
+Model, Recipe and MachineLayout require integer `schema_version: 1`.
+CameraSources writes **v2** and also reads strict v1 Folder files as described below.
 The field lists below describe JSON requirements, which can be stricter than
 Python constructor defaults. Unknown fields are rejected at every structural level.
 
@@ -20,7 +21,7 @@ Python constructor defaults. Unknown fields are rejected at every structural lev
 | `ModelDefinition` | `model_id`, `display_name`, `model_path`, `expected_sha256`, `module_id` | None |
 | `RecipeDefinition` | `recipe_id`, `display_name`, `defaults` | `product_code`, `model_override_id`, `camera_overrides`, `channel_overrides`, `capsule` |
 | `MachineLayoutDefinition` | `cameras` | None |
-| `CameraSources` | `cameras`, `loop`, `target_fps` | None |
+| `CameraSources` | `mode`, `cameras`, `loop`, `target_fps` | None |
 
 IDs, labels and nonempty metadata text fields are exact, case-sensitive strings without
 control characters. Validation does not trim or case-fold them; surrounding
@@ -75,10 +76,14 @@ or an implicit parser/resolver default. See [machine editing](ui-configuration.m
 
 ### Camera sources
 
-`CameraSources.cameras` is a nonempty array of unique
-`{camera_id, source_type, folder}` entries, all three fields required. Currently
-`source_type` must be exactly `"folder"`; `folder` is a string and may be empty
-for an unconfigured draft. Persisted entry order is preserved, but
+CameraSources **v2** requires `schema_version: 2`, global `mode` (`"folder"` or
+`"basler"`), `cameras`, `loop` and `target_fps`. Each camera entry requires exactly
+`{camera_id, folder, basler_serial}`. Folder paths are strings; serials are empty
+or ASCII decimal strings, never numbers or inferred enumeration positions.
+Basler persistence requires exactly six nonempty, distinct serials. Folder mode
+permits unconfigured serials. Incomplete mappings can exist in an editing draft,
+but cannot be loaded/saved as Basler configuration or admitted for execution.
+Both paths and serials survive switching modes. Persisted entry order is preserved, but
 `validate_cameras(layout.camera_ids)` checks an exact **identity set**, not positional
 wiring. Frame/camera execution order comes from MachineLayout.
 
@@ -86,12 +91,22 @@ wiring. Frame/camera execution order comes from MachineLayout.
 The Python constructor defaults are `loop=True`, `target_fps=8.0`; **both must
 still be supplied in JSON**. Pacing is a local replay setting, not a guaranteed
 hardware throughput. Parsing does not prove folders exist or contain usable
-images. Source availability/readiness belongs to application/replay handling.
+images. Loop/FPS affect Folder replay only; Basler still uses Folder images for
+reference and readiness warm-up. Source availability/readiness belongs to application.
+
+Strict v1 `{camera_id, source_type: "folder", folder}` files remain readable as
+Folder mode with empty serials. Loading, startup, browsing and Recipe Apply never
+migrate them on disk. An explicit Vision source Save writes deterministic v2 using
+the existing atomic replacement. Other configuration schemas remain v1; source
+mode is not Recipe or MachineLayout data. Unsupported versions, unknown fields,
+per-camera mode fields and malformed combinations are rejected.
 
 Sources are separate from model metadata, Recipe and ROI geometry. Relative
 folders use the source JSON's directory as their base. Source comparison keys
 are lexical normalized paths, without filesystem traversal; they are not content
 hashes or a guarantee that two differently spelled paths identify different files.
+Live Basler display identity instead uses `basler:<saved serial>`, alongside
+CameraId/generation/FrameId; a Folder reference retains its lexical Folder key.
 
 ## Resolution
 

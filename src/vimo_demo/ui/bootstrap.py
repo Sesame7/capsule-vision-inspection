@@ -16,6 +16,7 @@ from vimo_demo.application import (
     ProductionApplication,
     prepare_configuration,
 )
+from vimo_demo.application.basler import AcquisitionReport, ArmedAcquisition
 from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
 from vimo_demo.application.local_replay import LocalReplayCommands
 from vimo_demo.application.preferences import (
@@ -43,6 +44,7 @@ from .display_frames import LatestDisplayFrameStore
 from .inference_bridge import FutureDelivery
 from .local_production import (
     SourceNotifications,
+    basler_notice,
     local_application,
     real_engine,
     unconfigured_application,
@@ -130,6 +132,9 @@ def load_startup(
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
+    observe_acquisition: Callable[
+        [ArmedAcquisition | AcquisitionReport], None
+    ] = basler_notice,
 ) -> Startup:
     """Blocking startup IO only, called before QApplication is constructed.
 
@@ -291,11 +296,11 @@ def load_startup(
             editor,
             engine_factory=engine_factory,
             observe_source=observe_source,
+            observe_acquisition=observe_acquisition,
             reporting_editable=True,
             replay_controls=True,
         )
-        # This branch has validated Folder-only sources and no CLI image override.
-        # Carry its actual capability, not an entry-point-specific UI mode.
+        # Availability selects Folder-only controls across saved mode changes.
         local_replay = application
     choice = None
     if prepared is not None:
@@ -425,6 +430,9 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
     startup = load_startup(
         ApplicationData.at_entry(entry_directory),
         observe_source=lambda future: delivery.watch("folder_source", future),
+        observe_acquisition=lambda observation: SourceNotifications.watch_acquisition(
+            delivery, startup.application.snapshot().generation, observation
+        ),
     )
     for issue in startup.issues:
         print(issue.detail, file=sys.stderr)

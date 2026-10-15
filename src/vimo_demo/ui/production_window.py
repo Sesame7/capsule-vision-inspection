@@ -101,6 +101,7 @@ class ProductionWindow(QMainWindow):
         self._command_detail = ""
         self._active_choice: RecipeChoice | None = None
         self._source_issue: tuple[str | None, str] | None = None
+        self._acquisition_progress: tuple[int, str] | None = None
         self._closing = False
         self._presenting_identity = False
         self.setMinimumSize(*Style.minimum)
@@ -315,6 +316,7 @@ class ProductionWindow(QMainWindow):
         self.parameters.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
         bridge.replay_changed.connect(self._replay_changed)
+        bridge.source_progress_changed.connect(self._source_progress_changed)
         bridge.frames_changed.connect(self._frames_changed)
         bridge.command_failed.connect(self._command_failed)
         bridge.command_finished.connect(self._command_finished)
@@ -412,16 +414,16 @@ class ProductionWindow(QMainWindow):
         current = self.bridge.application.snapshot()
         current_action = (
             self._current_actions()[0]
-            if self.bridge.local_replay is not None
+            if self.bridge.replay_enabled
             else primary_action(current.state)
         )
         if action != current_action or (
-            self.bridge.local_replay is not None
+            self.bridge.replay_enabled
             and current.generation != self.snapshot.generation
         ):
             # A completed replay may reach READY before the next UI poll. Never
             # reinterpret a still-visible Stop/Reset click as a new Start.
-            if self.bridge.local_replay is not None:
+            if self.bridge.replay_enabled:
                 self.bridge.refresh()
             self._snapshot_changed(current)
             return
@@ -440,7 +442,7 @@ class ProductionWindow(QMainWindow):
         replay = self.bridge.replay_snapshot
         return (
             replay_actions(self.snapshot.state, replay.state if replay else None)
-            if self.bridge.local_replay is not None
+            if self.bridge.replay_enabled
             else (primary_action(self.snapshot.state), None)
         )
 
@@ -448,12 +450,12 @@ class ProductionWindow(QMainWindow):
         current = self.bridge.application.snapshot()
         replay = (
             self.bridge.local_replay.replay_snapshot()
-            if self.bridge.local_replay is not None
+            if self.bridge.local_replay is not None and self.bridge.replay_enabled
             else None
         )
         return (
             replay_actions(current.state, replay.state if replay else None)
-            if self.bridge.local_replay is not None
+            if self.bridge.replay_enabled
             else (primary_action(current.state), None)
         )
 
@@ -476,6 +478,13 @@ class ProductionWindow(QMainWindow):
 
     @Slot(object)
     def _replay_changed(self, _snapshot: object) -> None:
+        self._render()
+
+    @Slot(int, str)
+    def _source_progress_changed(self, generation: int, phase: str) -> None:
+        if generation != self.bridge.application.snapshot().generation:
+            return
+        self._acquisition_progress = (generation, phase)
         self._render()
 
     @Slot(object)
@@ -753,7 +762,7 @@ class ProductionWindow(QMainWindow):
         )
         self.state_label.setToolTip(
             text(state, language) + "\n" + text("replay_help", language)
-            if self.bridge.local_replay is not None
+            if self.bridge.replay_enabled
             else text(state, language) + "\n" + text("simulation", language)
             if self.simulation
             else text(state, language)
@@ -841,6 +850,29 @@ class ProductionWindow(QMainWindow):
                     f"{text('configure_first', language)} · {self.configuration_issue}"
                 )
             )
+        if not message and snapshot.state in (
+            ApplicationState.STARTING,
+            ApplicationState.RUNNING,
+        ):
+            sources = (
+                self.parameters.session.camera_sources
+                if self.parameters.session
+                else None
+            )
+            if (
+                sources is not None
+                and sources.saved.mode == "basler"
+                and not (
+                    self.parameters.session and self.parameters.session.cli_sources
+                )
+            ):
+                progress = self._acquisition_progress
+                message = text(
+                    progress[1]
+                    if progress and progress[0] == snapshot.generation
+                    else "basler_preparing",
+                    language,
+                )
         self._event_message = message
         detail = (
             self.configuration_issue
