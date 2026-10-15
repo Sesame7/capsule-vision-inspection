@@ -615,8 +615,9 @@ deferred to H2D-2.
 
 `application.basler.BaslerAcquisitionSource` is a Qt-independent synchronous
 capability. Its standalone use is separate from `ProductionApplication`, runtime
-sessions and Folder replay; both normal saved-source and developer composition
-reuse it. The acquisition capability itself does not persist configuration.
+sessions and Folder replay; the explicit developer single-cycle composition
+reuses it. Normal saved Basler sources use the continuous owner described below.
+The acquisition capability itself does not persist configuration.
 Only `application/_basler_sdk.py` accesses pypylon; imports/CLI help and Folder
 startup do not require it. The externally provisioned field pypylon/NumPy/pylon
 environment is a prerequisite for hardware use, not a new locked dependency.
@@ -687,8 +688,8 @@ retain their full-window behavior.
 Six frames are only a candidate image group under an independently maintained
 single-trigger condition, not proof of one electrical pulse, simultaneous exposure
 or PLC consumption. Raw SDK counters/timestamps are not shared cycle identity.
-Physical synchronization and continuous hardware-source composition remain
-**Target / unimplemented**.
+Physical synchronization and arbitrary independent PLC-trigger association remain
+**Target / unimplemented**. The continuous path below passively receives external triggers.
 
 Developer verification (in an already provisioned field environment; do not install
 into the application environment). First coordinate the operator, then run:
@@ -767,8 +768,8 @@ policy or retry SDK cleanup from another thread.
 Replay Pause/Continue/Step and automatic first-station reporting are unavailable
 in this mode; combining it with `--report-first-station` is rejected. Existing
 Folder/reporting paths and localhost-only manual write protection are unchanged.
-Normal `app.py` now selects this single-cycle path from saved CameraSources v2;
-the CLI mapping above remains process-only and never writes persistent identities.
+The explicit CLI mapping above remains process-only. Saved Basler selection uses
+the continuous path below, rather than this manual single-cycle override.
 
 Hardware verification requires the updated developer code and an **owner-approved,
 separately provisioned pypylon 26.8/pylon runtime** in the Production environment.
@@ -791,80 +792,85 @@ release; a finite observer timeout is not proof of exit. Deterministic verificat
 uv run --no-sync pytest tests/unit/test_basler_acquisition.py tests/integration/test_basler_production.py tests/integration/test_local_production_ui.py --tb=short
 ```
 
-### Persistent Basler single cycle
+### Persistent Basler continuous inspection
 
-Normal `app.py` restores the saved global CameraSources mode into a stopped
-candidate. Vision owns its source draft and explicit Save/apply; mode/mapping are
-not Recipe or MachineLayout fields. v1 is still Folder mode without disk migration;
-explicit source Save writes [v2](configuration.md#camera-sources). Startup and Save
-never enumerate/open cameras or load pypylon. Basler requires the separately
-provisioned optional pypylon/pylon environment at actual acquisition time; there
-is no dependency synchronization, auto-install or Folder fallback.
+Normal `app.py` restores saved CameraSources v2 Basler selection into a stopped
+candidate. Vision Save/apply still owns mode/serial drafts; Recipe and saved
+MachineLayout/ROIs are unchanged. Serial assignments resolve in **MachineLayout
+camera order**, never enumeration order. v1 remains Folder without disk migration.
+Startup/Save do not load pypylon or contact equipment. Actual acquisition requires
+the existing optional pypylon/pylon and ViMo/runtime/license installation.
 
-Start reloads saved sources and resolves serials in **MachineLayout camera order**.
-Both modes require valid Folder data/bounds. Basler decodes only the first reference
-group for worker-owned ViMo warm-up, without preloading/using the replay dataset.
-Warm-up creates no display frames, cycles or counters. Changing the saved source
-mode externally while the shell is open requires Vision Apply or restart, rather
-than silently running a source inconsistent with the displayed selection.
+Start uses the first valid Folder reference group only for worker-owned readiness
+warm-up, without production data, images or counters. Successful activation/RUNNING
+precedes actual **ARMED**. The source opens/arms all six cameras once, then waits
+passively for external hardware triggers. `ContinuousArmedAcquisition` carries
+readiness and host armed time, with no fictitious session deadline. No PLC client,
+periodic photo owner or W10.7 write is created by Production, including Stop/Close.
+Saved Folder Loop/FPS do not pace Basler. An idle armed session creates no cycles,
+NG results or timeout rejects, regardless of how long it waits.
 
-The existing successful Start/activation boundary precedes hardware ARMED: RUNNING
-alone is not permission to trigger. The source then prepares/arms all six and
-observes the full **30-second** window. After one complete, unambiguous group it
-uses the same single-cycle path described above, including 36-channel inspection,
-identity-matched display publication, accounting, automatic Stop and READY after
-actual source/worker termination. Live display keys are `basler:<serial>`, never
-Folder keys. Application CycleId/FrameId remain local explicit identities.
+The first valid owned BGR frame starts an observed cycle. The current practical
+association uses each camera's SDK ImageNumber (starting at 1 per acquisition
+session) as session-local CycleId and FrameId.sequence. Valid BlockID/ImageNumber
+metadata must advance consecutively per camera; serials map to configured CameraIds.
+The next ordinal cannot begin until the previous capture group is complete.
+This does not delay eligible inspection: each accepted frame immediately enters
+the existing early serial worker path, before its peers arrive. SDK-owned pixels
+are already copied before Release and transfer to Frame without another inference
+copy. Original global channel IDs, configured Occupancy/Size/Color/ViMo semantics
+and one worker-owned engine remain unchanged.
 
-Loop/FPS remain saved Folder settings with no Basler pacing effect. Normal replay
-capability remains available for later saved-mode changes, but Basler presents
-Start/Stop and rejects Pause/Continue/Step. Existing automatic first-station
-reporting remains Folder-only: an enabled reporting selection rejects Basler Start
-before engine/camera construction; disable reporting first. Manual Communication
-and its localhost-only write protection are unchanged.
+The provisional result deadline is **100 ms from first valid frame admission**,
+not an exposure timestamp, internal photo command or SDK-call timeout. Finished
+cameras survive. Missing/unfinished camera inspections receive explicit COLLECTION
+reasons and forced ERROR/NG on their six channels, without fabricated model findings.
+Late native results are discarded. Observed duplicate/gap/late/unsupported metadata,
+or a next ordinal before the preceding group completes, stops the source and requests
+normal Stop. No shifted reassociation or software-trigger fallback is attempted.
 
-Missing SDK/cameras, ambiguity and acquisition failure remain source failures, not
-replacement configurations or model NG. They are delivered through the existing
-source Future/queued UI error path and request Stop; safe cleanup returns READY,
-unsafe cleanup retains ownership/FAULT. Active native work is never force-cancelled.
-The bottom strip adds neutral preparation/ARMED/processing notices with generation
-checks; technical failures/FAULT/closing keep precedence. Notices disappear outside
-the relevant STARTING/RUNNING session. This is no new application state or result.
+**Identity limit:** ImageNumber and BlockID count acquired/retrieved images, not
+independent PLC mechanical triggers. Under the field-verified no-loss common-trigger
+condition, matching ordinals provides practical ordered groups. An electrical
+trigger missed without an observable counter discontinuity can be undetectable;
+arrival deadlines cannot prove physical membership. In particular, a delayed or
+next-trigger frame with a still-expected ordinal inside the window may be ambiguous.
+This implementation does not claim exact hardware identity or certify arbitrary
+missing-trigger recovery. Shared trigger metadata/handshake and physical reject
+consumption remain commissioning decisions before S1-E2C business output.
 
-Controlled field smoke (requires separately authorized deployment and one external
-trigger; this procedure does not itself issue PLC writes):
+Terminal results update existing accounting exactly once independently of painting.
+Bounded latest-camera display copies carry matching generation, CycleId, complete
+FrameId, dimensions and `basler:<serial>` keys. The UI shows waiting-for-external-trigger
+while armed and updates latest results/images; it need not paint every cycle.
+Results/counters remain after Stop; only explicit Batch resets counters. Folder
+Replay and its Pause/Step behavior are unchanged. Automatic first-station reporting
+remains Folder-only; Basler never writes W49–W52 or relaxes manual write protection.
 
-1. Verify authorized model/Recipe, saved geometry, all six physical serial-to-CameraId
-   assignments, reference folders and provisioned SDK/license. Release other camera
-   owners and arrange one controlled external trigger with no competing writer.
-2. From the field checkout run `uv run --no-sync python app.py` in its interactive
-   Windows desktop. Vision: open **Camera source settings**, select Basler, explicitly
-   refresh devices and assign serials in configured camera order, then Confirm.
-   Retain/verify all Folder references and press **Save and apply**. Existing
-   machine/source save and separate preference outcomes apply; do not recalibrate
-   or generate replacement geometry as part of this wiring check.
-3. Close normally and relaunch with the same command to check persistent restoration.
-   Disable automatic reporting. Start and verify warm-up has zero production side
-   effects; wait for the explicit **ARMED** strip/console notice, not RUNNING alone.
-4. Within the observation window execute exactly one separately controlled external
-   flash/photo action. Do not repeat on uncertainty. Wait for the complete window,
-   then inspect the six actual images, CAM1..CAM6/CH01..CH36 correlations, one terminal
-   cycle and factual counters. Product NG/EMPTY is separate from technical ERROR.
-5. Confirm automatic READY, camera release, then normal Close and process exit.
-   If cancellation, missing/extra frames or unsafe cleanup occur, retain diagnostics
-   and stop; do not force native cleanup or automatically trigger again.
+Stop/Close stops admission/acquisition, finalizes pending early cycles with preserved
+completed cameras and explicit unfinished rejections, and drains the claimed native
+camera call naturally. No queued camera job starts after runtime stop. Actual
+source, coordinator/inspector and worker exit plus safe SDK cleanup are required
+before READY/release. Unsafe cleanup retains ownership/FAULT. Safe source errors
+use the existing source-Future/UI feedback and Stop; native calls are not forced.
 
-Local deterministic tests validate restoration, UI switching, source-key separation,
-warm-up, missing SDK/group and Stop/Close through fake engines/hardware. The earlier
-developer field run is historical wiring evidence, not acceptance of this new
-persistent route. Real normal-entry field acceptance remains a separate step.
+Field verification runs normal `app.py` on the interactive desktop: Start, observe
+ARMED and zero counters while idle, supply independent external hardware triggers,
+inspect six-camera images/36-channel results and counters, then Stop/Close and verify
+actual process/camera release. A separately authorized bounded W10.7 diagnostic may
+stimulate photo pulses on stopped/manual equipment, with no competing writer and
+explicit release/readback. That runner is a different process, not Production or
+a mechanical-cycle commissioning test. Preserve configuration, model/images and
+dated evidence; never use the retired automatic-trigger observer to test this path.
 
 ## Shutdown
 
 Software Stop is graceful inspection shutdown, **not emergency/safety stopping**.
-It immediately revokes production admission. The current coordinator policy
-finishes the already claimed whole cycle, finalizes incomplete collection as
-SHUTDOWN (or already due TIMED_OUT), and rejects queued READY work not begun.
+It immediately revokes production admission. The full-group coordinator finishes
+the already claimed whole cycle, finalizes incomplete collection as SHUTDOWN
+(or already due TIMED_OUT), and rejects queued READY work not begun. The controlled
+Basler early path instead preserves completed cameras, explicitly rejects unfinished
+cameras and drains only the claimed camera/native lease; no pending camera job starts.
 It cannot force-cancel an active native call; see
 [runtime shutdown](inference-runtime.md#shutdown) for lower-layer details.
 

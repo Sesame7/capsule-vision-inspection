@@ -31,6 +31,7 @@ class RecipeChoice:
 class QtProductionBridge(QObject):
     snapshot_changed = Signal(object)
     frames_changed = Signal(object)
+    presentation_ready = Signal()
     replay_changed = Signal(object)
     source_progress_changed = Signal(int, str)
     reporting_changed = Signal(object)
@@ -64,6 +65,7 @@ class QtProductionBridge(QObject):
         self.replay_snapshot: ReplaySnapshot | None = None
         self._snapshot: ProductionApplicationSnapshot | None = None
         self._revision = -1
+        self._refreshing = False
         self._closing = False
         self._closed = False
         self._close_succeeded = False
@@ -91,6 +93,11 @@ class QtProductionBridge(QObject):
     @property
     def closed(self) -> bool:
         return self._closed
+
+    @property
+    def refreshing(self) -> bool:
+        """Batch snapshot/pixel notifications into one synchronous card presentation."""
+        return self._refreshing
 
     @property
     def closing(self) -> bool:
@@ -181,40 +188,54 @@ class QtProductionBridge(QObject):
     @Slot()
     def refresh(self) -> None:
         self._check_thread()
-        snapshot = self.application.snapshot()
-        replay = self.local_replay.replay_snapshot() if self.local_replay else None
-        replay_changed = (
-            replay != self.replay_snapshot
-            or self._replay_enabled != self.replay_enabled
-        )
-        self._replay_enabled = self.replay_enabled
-        self.replay_snapshot = replay
-        if snapshot != self._snapshot:
-            self._snapshot = snapshot
-            self.snapshot_changed.emit(snapshot)
-        if replay_changed:
-            self.replay_changed.emit(replay)
-        reporting = (
-            self.reporting.reporting_snapshot() if self.reporting is not None else None
-        )
-        if reporting != self.reporting_snapshot:
-            self.reporting_snapshot = reporting
-            self.reporting_changed.emit(reporting)
-        display = self.frames.snapshot()
-        revision = display.revision
-        if revision != self._revision:
-            self._revision = revision
-            self.frames_changed.emit(display)
-        if self._closing:
-            if self._close_succeeded and self.application.join(0):
-                self._closed = True
-                self.timer.stop()
-                self.shutdown_finished.emit()
-            elif not self._timeout_reported and monotonic() >= self._deadline:
-                self._timeout_reported = True
-                self.command_failed.emit(
-                    "close", TimeoutError("Still waiting for owned runtime")
-                )
+        if self._refreshing:
+            return
+        self._refreshing = True
+        changed = False
+        try:
+            snapshot = self.application.snapshot()
+            replay = self.local_replay.replay_snapshot() if self.local_replay else None
+            replay_changed = (
+                replay != self.replay_snapshot
+                or self._replay_enabled != self.replay_enabled
+            )
+            self._replay_enabled = self.replay_enabled
+            self.replay_snapshot = replay
+            changed = snapshot != self._snapshot
+            if changed:
+                self._snapshot = snapshot
+                self.snapshot_changed.emit(snapshot)
+            if replay_changed:
+                self.replay_changed.emit(replay)
+            reporting = (
+                self.reporting.reporting_snapshot()
+                if self.reporting is not None
+                else None
+            )
+            if reporting != self.reporting_snapshot:
+                self.reporting_snapshot = reporting
+                self.reporting_changed.emit(reporting)
+            display = self.frames.snapshot()
+            revision = display.revision
+            changed = changed or revision != self._revision
+            if revision != self._revision:
+                self._revision = revision
+                self.frames_changed.emit(display)
+            if self._closing:
+                if self._close_succeeded and self.application.join(0):
+                    self._closed = True
+                    self.timer.stop()
+                    self.shutdown_finished.emit()
+                elif not self._timeout_reported and monotonic() >= self._deadline:
+                    self._timeout_reported = True
+                    self.command_failed.emit(
+                        "close", TimeoutError("Still waiting for owned runtime")
+                    )
+
+        finally:
+            self._refreshing = False
+            if changed:
+                self.presentation_ready.emit()
 
     def detach(self) -> None:
         if not self._detached:

@@ -31,6 +31,10 @@ from vimo_demo.application.basler import (
     BaslerAcquisitionError,
     BaslerAcquisitionSource,
 )
+from vimo_demo.application.continuous_basler import (
+    ContinuousArmedAcquisition,
+    ContinuousBaslerSource,
+)
 from vimo_demo.application.folder_cache import (
     CacheState,
     FolderCacheStatus,
@@ -111,12 +115,14 @@ def _wait_for_source_interval(stop: Event, started: float, fps: float) -> bool:
     return True
 
 
-def basler_notice(observation: ArmedAcquisition | AcquisitionReport) -> None:
+def basler_notice(
+    observation: ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport,
+) -> None:
     """Source-thread console evidence; no widgets or PLC operations."""
-    if isinstance(observation, ArmedAcquisition):
+    if isinstance(observation, (ArmedAcquisition, ContinuousArmedAcquisition)):
         print(json.dumps({"event": "ARMED", **asdict(observation)}), flush=True)
         print(
-            "Perform ONE manual flash+photo press-and-release; do not press again.",
+            "Camera acquisition is ARMED; waiting for external hardware triggers.",
             flush=True,
         )
     else:
@@ -159,14 +165,15 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         reporting: FirstStationReportingWorker | None = None,
         replay_control: LocalReplayControl | None = None,
         basler_source: BaslerAcquisitionSource | None = None,
+        continuous_source: ContinuousBaslerSource | None = None,
         observe_acquisition: Callable[
-            [ArmedAcquisition | AcquisitionReport], None
+            [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
         ] = basler_notice,
     ) -> None:
-        if basler_source is not None and (
+        if (basler_source is not None or continuous_source is not None) and (
             replay_control is not None or reporting is not None
         ):
-            raise ValueError("Basler single-cycle mode cannot replay or report to PLC")
+            raise ValueError("Basler acquisition cannot replay or report to PLC")
 
         def warmup(config: PreparedConfiguration) -> Sequence[NDArray[np.generic]]:
             for camera, image in zip(
@@ -183,6 +190,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             cycle_timeout=30,
             max_collecting=1,
             max_ready=1,
+            early_camera=continuous_source is not None,
         )
         self._application, self._images, self._store = application, images, store
         self._layout = prepared.configuration.layout
@@ -191,6 +199,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             basler_source,
             observe_acquisition,
         )
+        self._continuous_source = continuous_source
         self._source_stop = Event()
         self.replay_control = replay_control
         self.reporting = reporting
@@ -284,6 +293,9 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             super().cleanup_safe
             and (self.reporting is None or self.reporting.cleanup_safe)
             and (self._basler_source is None or self._basler_source.cleanup_safe)
+            and (
+                self._continuous_source is None or self._continuous_source.cleanup_safe
+            )
         )
 
     @property
@@ -305,6 +317,9 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                 if self._source_stop.wait(0.05):
                     return
             if self._source_stop.is_set():
+                return
+            if self._continuous_source is not None:
+                self._produce_continuous()
                 return
             ingress = LocalCycleIngress(self._application, self._layout)
             if self._basler_source is not None:
@@ -401,6 +416,32 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                     self.source_done.set_result(None)
             if self.replay_control is not None:
                 self.replay_control.stop(self.source_done.exception())
+
+    def _produce_continuous(self) -> None:
+        source = self._continuous_source
+        assert source is not None
+
+        def begin(cycle_id: CycleId) -> None:
+            self._application.begin_cycle(cycle_id).accepted.result()
+
+        def submit(frame: Frame) -> None:
+            self._application.submit_frame(frame).result()
+            self._store.publish(
+                frame,
+                generation=self.generation,
+                source_key=self._sources.source_key(
+                    frame.id.camera_id, self._source_base
+                )
+                if self._sources
+                else None,
+            )
+
+        source.run(
+            self._source_stop,
+            begin=begin,
+            submit=submit,
+            on_armed=self._observe_acquisition,
+        )
 
     def _produce_basler(self, ingress: LocalCycleIngress) -> None:
         source = self._basler_source
@@ -669,7 +710,7 @@ def compose(
     basler_serials: Sequence[str] | None = None,
     basler_timeout: float = 30.0,
     observe_acquisition: Callable[
-        [ArmedAcquisition | AcquisitionReport], None
+        [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
     ] = basler_notice,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
@@ -747,7 +788,7 @@ def local_application(
     basler_serials: Sequence[str] | None = None,
     basler_timeout: float = 30.0,
     observe_acquisition: Callable[
-        [ArmedAcquisition | AcquisitionReport], None
+        [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
     ] = basler_notice,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
@@ -755,7 +796,7 @@ def local_application(
         raise ValueError("Exactly six local image paths are required")
     if basler_serials is not None:
         if replay_controls or reporting is not None or reporting_editable:
-            raise ValueError("Basler single-cycle mode cannot replay or report to PLC")
+            raise ValueError("Basler acquisition cannot replay or report to PLC")
         # Validate without SDK access; create a fresh source for each generation.
         basler_serials = BaslerAcquisitionSource(
             basler_serials, timeout=basler_timeout
@@ -859,13 +900,14 @@ def local_application(
         session_reporting = app.reporting_for_generation(generation)
         if serials is not None and session_reporting is not None:
             raise ApplicationStateError(
-                "Basler single-cycle mode cannot report to PLC; disable automatic reporting before Start"
+                "Basler acquisition cannot report to PLC; disable automatic reporting before Start"
             )
         report_worker = (
             FirstStationReportingWorker(generation, session_reporting)
             if session_reporting is not None
             else None
         )
+        continuous = serials is not None and basler_serials is None and not paths
         session = LocalRuntimeSession(
             config,
             generation,
@@ -879,7 +921,12 @@ def local_application(
             reporting=report_worker,
             replay_control=app.replay_control_for(generation),
             basler_source=BaslerAcquisitionSource(serials, timeout=basler_timeout)
-            if serials is not None
+            if serials is not None and not continuous
+            else None,
+            continuous_source=ContinuousBaslerSource(
+                config.configuration.layout.camera_ids, serials
+            )
+            if continuous and serials is not None
             else None,
             observe_acquisition=observe_acquisition,
         )
@@ -924,7 +971,7 @@ class SourceNotifications(QObject):
     def watch_acquisition(
         delivery: FutureDelivery,
         generation: int,
-        observation: ArmedAcquisition | AcquisitionReport,
+        observation: ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport,
     ) -> None:
         """Source-thread notification through the existing queued delivery gate."""
         basler_notice(observation)
@@ -938,7 +985,7 @@ class SourceNotifications(QObject):
         notice: Future[str] = Future()
         notice.set_result(
             "basler_armed"
-            if isinstance(observation, ArmedAcquisition)
+            if isinstance(observation, (ArmedAcquisition, ContinuousArmedAcquisition))
             else "basler_processing"
         )
         delivery.watch(f"basler_source:{generation}", notice)

@@ -16,7 +16,9 @@ explicit developer composition can opt into
 to exactly `127.0.0.1`; both default to disabled. The Qt Communication
 workspace uses separate clients for manual D/W operations and explicitly enabled
 register monitoring. There is no PLC configuration persistence, equipment wiring,
-triggering/consumption handshake or hardware commissioning.
+triggering/consumption handshake or hardware commissioning. Passive Basler
+Production does not create a PLC photo owner or write W10.7. Separately authorized
+field diagnostic photo stimuli remain outside the Production process.
 Transport/protocol errors are not inspection outcomes or product judgments.
 
 The protocol authority is Omron's [NX FINS manual W596-E1-06](https://www.omron-ap.com/data_pdf/mnu/w596-e1-06_nx701_nx502_nx102.pdf?id=3900).

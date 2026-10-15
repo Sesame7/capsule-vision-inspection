@@ -1,4 +1,4 @@
-"""Opt-in single-cycle composition, using controlled fake hardware/engine owners."""
+"""Developer single-cycle and saved passive sources, using controlled fake owners."""
 
 import subprocess
 import sys
@@ -40,6 +40,10 @@ from vimo_demo.application.basler import (
     CameraCleanup,
     CameraReadiness,
 )
+from vimo_demo.application.continuous_basler import (
+    ContinuousArmedAcquisition,
+    ContinuousBaslerSource,
+)
 from vimo_demo.communication.reporting import LocalReportingSettings
 from vimo_demo.configuration import (
     CameraFolder,
@@ -50,7 +54,7 @@ from vimo_demo.configuration import (
 )
 from vimo_demo.inference import ImageResult
 from vimo_demo.inference._validation import uint8_array
-from vimo_demo.inspection import CameraId, CycleId
+from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.ui import local_production
 from vimo_demo.ui.bootstrap import create_window, load_startup
 from vimo_demo.ui.inference_bridge import FutureDelivery
@@ -218,7 +222,9 @@ def test_one_cycle_warmup_mapping_accounting_and_matching_display(
     engine = Engine()
     sources: list[Future[None]] = []
     original = {t.ident for t in threads()}
-    notices: list[ArmedAcquisition | AcquisitionReport] = []
+    notices: list[
+        ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport
+    ] = []
     model, machine, recipe, paths = input_files(tmp_path)
     if saved_folders:
         save_camera_sources(
@@ -384,7 +390,9 @@ def test_stop_after_acquisition_cleanup_before_admission_drops_group(
     engine = Engine()
     engine.release_warm.set()
 
-    def observation(row: ArmedAcquisition | AcquisitionReport) -> None:
+    def observation(
+        row: ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport,
+    ) -> None:
         if isinstance(row, AcquisitionReport):
             composition.application.stop()
 
@@ -615,11 +623,79 @@ def save_basler(path: Path) -> None:
     )
 
 
+class ContinuousAcquisition(ContinuousBaslerSource):
+    def __init__(self, cameras: tuple[CameraId, ...], serials: tuple[str, ...]):
+        super().__init__(cameras, serials)
+        self.entered, self.release, self.cleaned = Event(), Event(), Event()
+        self.problem = ""
+        self.ignore_cancel = False
+
+    def run(
+        self,
+        stop: Event,
+        *,
+        begin: Callable[[CycleId], None],
+        submit: Callable[[Frame], None],
+        on_armed: Callable[[ContinuousArmedAcquisition], None],
+        on_frame: Callable[[CycleId, AcquisitionMetadata], None] = lambda _c, _m: None,
+    ) -> None:
+        self.cleanup_safe = False
+        now = perf_counter()
+        try:
+            on_armed(
+                ContinuousArmedAcquisition(
+                    self.serials,
+                    now,
+                    tuple(CameraReadiness(s, True, True, now) for s in self.serials),
+                )
+            )
+            self.entered.set()
+            assert self.release.wait(WAIT)
+            if stop.is_set():
+                return
+            if self.problem:
+                raise RuntimeError(self.problem)
+            cycle = CycleId(1)
+            begin(cycle)
+            for index, camera in enumerate(self.cameras):
+                submit(
+                    Frame(
+                        FrameId(cycle, camera, 10 + index),
+                        perf_counter(),
+                        np.full((20, 60, 3), 100 + index, np.uint8),
+                    )
+                )
+            assert stop.wait(WAIT)
+        finally:
+            self.cleanup_safe = True
+            self.cleaned.set()
+
+
+@pytest.fixture
+def continuous_acquisitions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[ContinuousAcquisition]:
+    sources: list[ContinuousAcquisition] = []
+
+    def factory(
+        cameras: tuple[CameraId, ...], serials: tuple[str, ...]
+    ) -> ContinuousAcquisition:
+        source = ContinuousAcquisition(cameras, serials)
+        sources.append(source)
+        return source
+
+    monkeypatch.setattr(local_production, "ContinuousBaslerSource", factory)
+    return sources
+
+
 @pytest.mark.parametrize(
     "problem", ["", "missing", "unexpected extra frame", "ambiguous trigger"]
 )
 def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition], problem: str
+    qapp: QApplication,
+    tmp_path: Path,
+    continuous_acquisitions: list[ContinuousAcquisition],
+    problem: str,
 ) -> None:
     data = saved_data(tmp_path)
     save_basler(data.sources)
@@ -651,7 +727,7 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
     window.bridge.source_progress_changed.connect(record_progress)
     before = {t.ident for t in threads()}
     try:
-        assert not startup.issues and not acquisitions and not engine.calls
+        assert not startup.issues and not continuous_acquisitions and not engine.calls
         assert data.sources.read_bytes() == original
         assert not window.bridge.replay_enabled
         assert not window.buttons["secondary"].isVisible()
@@ -660,12 +736,17 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
         assert window.snapshot.state is ApplicationState.STARTING
         assert "Basler" in window.event_label.accessibleName()
         assert (
-            not any(source.called for source in acquisitions)
+            not any(source.entered.is_set() for source in continuous_acquisitions)
             and startup.application.snapshot().counters == ProductionCounters()
         )
         engine.release_warm.set()
-        until(lambda: bool(acquisitions) and acquisitions[-1].entered.is_set())
-        source = acquisitions[-1]
+        until(
+            lambda: (
+                bool(continuous_acquisitions)
+                and continuous_acquisitions[-1].entered.is_set()
+            )
+        )
+        source = continuous_acquisitions[-1]
         until(lambda: window.event_label.accessibleName().startswith("ARMED"))
         assert source.serials == SERIALS
         assert startup.application.snapshot().counters == ProductionCounters()
@@ -680,14 +761,16 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
             startup.local_replay.step_replay()
         source.problem = problem
         source.release.set()
+        if not problem:
+            until(lambda: startup.application.snapshot().counters.cycles_completed == 1)
+            assert startup.application.snapshot().state is ApplicationState.RUNNING
+            startup.application.stop().result(WAIT)
         until(lambda: startup.application.snapshot().state is ApplicationState.READY)
         window.bridge.refresh()
         if problem:
             assert startup.application.snapshot().counters == ProductionCounters()
             assert not startup.frames.snapshot().frames
-            until(
-                lambda: "BaslerAcquisitionError" in window.event_label.accessibleName()
-            )
+            until(lambda: "RuntimeError" in window.event_label.accessibleName())
             assert progress == ["basler_armed"]
         else:
             snapshot = startup.application.snapshot()
@@ -708,13 +791,17 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
             assert (
                 not window.event_label.accessibleName()
             )  # ARMED is not stale after Stop.
-            assert progress == ["basler_armed", "basler_processing"]
-        assert source.cleaned.is_set() and engine.closed and len(acquisitions) == 1
+            assert progress == ["basler_armed"]
+        assert (
+            source.cleaned.is_set()
+            and engine.closed
+            and len(continuous_acquisitions) == 1
+        )
         assert data.sources.read_bytes() == original
     finally:
         engine.release_warm.set()
         engine.release_active.set()
-        for source in acquisitions:
+        for source in continuous_acquisitions:
             source.release.set()
         window.close()
         until(lambda: window.bridge.closed)
@@ -725,7 +812,10 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
 
 @pytest.mark.parametrize("close", [False, True])
 def test_normal_basler_stop_close_waits_for_source_and_drops_late_group(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition], close: bool
+    qapp: QApplication,
+    tmp_path: Path,
+    continuous_acquisitions: list[ContinuousAcquisition],
+    close: bool,
 ) -> None:
     data = saved_data(tmp_path)
     save_basler(data.sources)
@@ -734,8 +824,13 @@ def test_normal_basler_stop_close_waits_for_source_and_drops_late_group(
     startup = load_startup(data, engine_factory=lambda _: engine)
     try:
         startup.application.start().result(WAIT)
-        until(lambda: bool(acquisitions) and acquisitions[-1].entered.is_set())
-        source = acquisitions[-1]
+        until(
+            lambda: (
+                bool(continuous_acquisitions)
+                and continuous_acquisitions[-1].entered.is_set()
+            )
+        )
+        source = continuous_acquisitions[-1]
         source.ignore_cancel = True
         stopped = startup.application.close() if close else startup.application.stop()
         until(lambda: startup.application.snapshot().state is ApplicationState.STOPPING)
@@ -749,7 +844,7 @@ def test_normal_basler_stop_close_waits_for_source_and_drops_late_group(
         assert not startup.frames.snapshot().frames and source.cleaned.is_set()
         assert engine.closed
     finally:
-        for source in acquisitions:
+        for source in continuous_acquisitions:
             source.release.set()
         startup.application.close().result(WAIT)
         assert startup.application.join(WAIT)
@@ -781,6 +876,52 @@ def test_normal_basler_requires_folder_warmup_before_engine_or_hardware(
     finally:
         startup.application.close().result(WAIT)
         assert startup.application.join(WAIT)
+
+
+def test_normal_continuous_stop_start_keeps_counters_and_replaces_owners(
+    qapp: QApplication,
+    tmp_path: Path,
+    continuous_acquisitions: list[ContinuousAcquisition],
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    original = data.sources.read_bytes()
+    engines: list[Engine] = []
+
+    def factory(_: object) -> Engine:
+        engine = Engine()
+        engine.release_warm.set()
+        engines.append(engine)
+        return engine
+
+    startup = load_startup(data, engine_factory=factory)
+    app = startup.application
+    try:
+        for generation in (1, 2):
+            app.start().result(WAIT)
+            until(lambda: continuous_acquisitions[-1].entered.is_set())
+            assert app.snapshot().counters.cycles_completed == generation - 1
+            continuous_acquisitions[-1].release.set()
+            until(
+                lambda expected=generation: (
+                    app.snapshot().counters.cycles_completed == expected
+                )
+            )
+            assert app.snapshot().state is ApplicationState.RUNNING
+            assert all(
+                f.generation == generation for f in startup.frames.snapshot().frames
+            )
+            assert app.snapshot().latest_production_result is not None
+            app.stop().result(WAIT)
+            assert app.snapshot().state is ApplicationState.READY
+            assert continuous_acquisitions[-1].cleaned.is_set() and engines[-1].closed
+        assert len(engines) == len(continuous_acquisitions) == 2
+        assert data.sources.read_bytes() == original
+    finally:
+        for source in continuous_acquisitions:
+            source.release.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
 
 
 def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
@@ -838,15 +979,15 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
 def test_normal_basler_optional_sdk_failure_is_source_error_without_folder_fallback(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from vimo_demo.application import basler
+    from vimo_demo.application import _basler_sdk
 
     data = saved_data(tmp_path)
     save_basler(data.sources)
 
-    def missing() -> Never:
+    def missing(*, continuous: bool = False) -> Never:
         raise ModuleNotFoundError("pypylon deliberately unavailable")
 
-    monkeypatch.setattr(basler, "_load_backend", missing)
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", missing)
     engine = Engine()
     engine.release_warm.set()
     completions: list[Future[None]] = []
@@ -859,7 +1000,7 @@ def test_normal_basler_optional_sdk_failure_is_source_error_without_folder_fallb
         until(lambda: startup.application.snapshot().state is ApplicationState.READY)
         assert startup.application.snapshot().counters == ProductionCounters()
         assert not startup.frames.snapshot().frames and len(engine.calls) == 2
-        assert isinstance(completions[0].exception(), BaslerAcquisitionError)
+        assert isinstance(completions[0].exception(), ModuleNotFoundError)
         assert engine.closed
     finally:
         startup.application.close().result(WAIT)

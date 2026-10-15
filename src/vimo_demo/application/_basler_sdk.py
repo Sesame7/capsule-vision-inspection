@@ -123,7 +123,7 @@ class _Device:
 
 
 class PylonBackend:
-    def __init__(self) -> None:
+    def __init__(self, *, continuous: bool = False) -> None:
         # No pypylon import during package import, Folder startup or CLI --help.
         self.pylon = import_module("pypylon.pylon")
         self.genicam = import_module("pypylon.genicam")
@@ -131,6 +131,7 @@ class PylonBackend:
         self.devices: list[_Device] = []
         self.infos: dict[str, object] = {}
         self.converter: object | None = None
+        self.continuous = continuous
 
     def inventory(self, serials: tuple[str, ...]) -> None:
         infos = _items(_call(self.factory, "EnumerateDevices"))
@@ -255,8 +256,8 @@ class PylonBackend:
             _set_attr(_attr(device.camera, "MaxNumBuffer"), "Value", 3)
             _call(
                 device.camera,
-                "StartGrabbingMax",
-                3,
+                "StartGrabbing" if self.continuous else "StartGrabbingMax",
+                *((3,) if not self.continuous else ()),
                 _attr(self.pylon, "GrabStrategy_OneByOne"),
                 _attr(self.pylon, "GrabLoop_ProvidedByUser"),
             )

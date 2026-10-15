@@ -516,9 +516,12 @@ Navigation or message changes never resize the workspace or clear backend eviden
 Normal states and product-only NG leave the strip empty; NG stays in Production
 camera/channel evidence. A latest technical ERROR still appears, including ERROR + NG.
 For saved Basler sources the strip also shows neutral preparation, explicit ARMED
-and single-cycle processing notices during STARTING/RUNNING. They are queued from
+notices during STARTING/RUNNING (the explicit developer override also has single-cycle processing). They are queued from
 source observations, generation-checked, and subordinate to errors/FAULT/closing;
-RUNNING by itself does not prove cameras are armed. No new lifecycle state is added.
+RUNNING by itself does not prove cameras are armed. One bridge refresh batches
+snapshot/pixel notifications before presenting camera cards once; accounting and
+terminal delivery remain independent of rendering. Camera/button styles are applied
+only when changed, avoiding repeated Qt repolishing on unchanged live status. No new lifecycle state is added.
 Historical technical counters alone do not create a current warning.
 
 The current message precedence is:

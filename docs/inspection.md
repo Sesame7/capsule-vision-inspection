@@ -191,13 +191,30 @@ Current `ConfiguredProductionPipeline` composes the
 - Filter assigned ViMo evidence independently per channel by exact disabled labels.
   Retain unassigned findings only if any enabled channel in that camera accepts
   their label. Shared raw evidence and SDK parameters remain unchanged.
-- Incomplete collection executes neither algorithm. Enabled checks are unavailable;
+- In the full-group/Folder path, incomplete collection executes neither algorithm. Enabled checks are unavailable;
   disabled checks stay explicit. Collection reasons and missing cameras survive.
 
 Normal per-frame inference exceptions retain type/message in the configured raw
 outcome (without a formatted traceback), mark raw status FAILED, and permit later
 cameras to run. Normal capsule exceptions yield `capsule.execution_error`. Scheduling,
 engine ownership and candidate activation remain application/runtime responsibilities.
+
+### Controlled continuous-camera results
+
+The normal Basler path may call `ConfiguredProductionPipeline.inspect_frame()`
+before a complete group exists. This uses the same resolved camera/global channel
+policies as full-group execution, without renumbering channels. `CycleCollector`,
+`inspect_cycle()` and Folder full-group semantics remain unchanged.
+
+At its first-observed-frame-relative deadline, the runtime preserves finished camera results.
+For each missing/unfinished camera, `ChannelInspectionResult.forced_reject` records
+an explicit COLLECTION Reason (`basler.missing_camera`,
+`basler.inspection_deadline` or `basler.shutdown_unfinished`). This yields
+ERROR/NG independently of the two unexecuted/unavailable check results. It is not
+model evidence, and no ViMo region is invented. Ordinary check errors continue to
+use the existing independent ERROR/UNKNOWN or ERROR/NG semantics. The owning
+[continuous application contract](application.md#persistent-basler-continuous-inspection)
+defines admission, deadlines and Stop; late results cannot replace a finalized cycle.
 
 ### Always-on Occupancy
 
@@ -228,7 +245,7 @@ counts, derived ratios/view states and fused state. Failure instead carries
 `error_code`, optional `exception_type` and message; its state is UNKNOWN with no
 fabricated zero counts. Codes are `occupancy.result_unavailable` for incomplete/
 missing inputs and `occupancy.execution_error` for ordinary execution exceptions.
-Incomplete cycles execute neither Occupancy nor other algorithms. Occupancy is
+Incomplete full-group/Folder cycles execute neither Occupancy nor other algorithms. Occupancy is
 required independently of Recipe: failure forces channel technical ERROR,
 preserving any definite NG. Raw cycle status still describes full-camera inference/
 collection; an ordinary Occupancy error is a returned result, not application FAULT.

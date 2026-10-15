@@ -403,6 +403,41 @@ rather than discarding the runtime or claiming successful shutdown. Higher-level
 source/session/application termination has its own owner and must also be confirmed
 by the [application](application.md#shutdown) before releasing that ownership.
 
+## Controlled early-camera runtime
+
+`runtime.early_inspection.EarlyInspectionCoordinator` is the current separate
+normal-Basler scheduler. Folder/ordinary `RuntimeCoordinator` remains full-group.
+It uses one deadline/result owner thread, one serial camera inspector and the
+existing worker; no additional engine or parallel GPU calls are introduced.
+Application/source composition owns passive pylon acquisition; neither this runtime
+nor the Basler source opens a PLC connection or generates photo commands.
+
+Admission is synchronized and nonblocking, bounded to four unfinished cycles.
+There is no intermediate unbounded command/event queue: at most 24 queued camera
+Frames plus one claimed Frame can remain, and completed-camera messages are bounded
+by that work. Accepted Frames are immutable; pending jobs are removed on finalization.
+Only compact per-camera results remain in active cycles. Increasing CycleIds and
+one camera per cycle reject duplicate/unknown/late inputs explicitly. Capacity
+rejection never silently drops an admitted cycle. `snapshot()` exposes current/peak
+cycle/job counts, active FrameId and late-result count, not a completed history.
+
+Admission acknowledgements and noncancellable terminal result Futures remain distinct.
+The owner waits on the nearest host deadline, independently of active inference;
+`expire()` wakes deterministic fake-clock checks. Cycle admission occurs only after
+the first valid owned frame, with a provisional 100 ms host-monotonic deadline;
+there is no command timestamp or idle-session deadline. At cutoff, it orders cameras by configured identity,
+preserves finished results and invokes the explicit missing/unfinished rejection
+policy in [Inspection](inspection.md#controlled-continuous-camera-results). Native
+completion after cutoff is discarded. Normal image Exceptions are camera evidence;
+worker-dispatch rejection, fatal worker failure or invariant errors stop the runtime.
+
+Stop prevents new jobs and finalizes outstanding cycles once, without waiting for
+native completion to manufacture result availability. Actual `join()` still waits
+for the claimed camera/native lease, inspector, worker close and owner exit.
+Unclaimed camera jobs never run after Stop. A result Future or `finished` notification
+is not proof of actual thread exit; the application also joins its hardware source.
+This topology is Current implementation, not a permanent concurrency architecture.
+
 ## Verification
 
 Current implementation: [engine adapter](../src/vimo_demo/inference/vimo_adapter.py),

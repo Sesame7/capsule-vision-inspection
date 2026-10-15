@@ -189,7 +189,7 @@ even when a later demo launch uses different image dimensions.
 ### Folder settings versus runtime input
 
 Vision's **Camera source settings** dialog selects one global **Folder replay /
-Basler single cycle** mode and six CameraId-to-serial assignments in configured
+Basler continuous inspection** mode and six CameraId-to-serial assignments in configured
 MachineLayout order. Each non-editable dropdown offers explicitly discovered
 serials/model names, an unconfigured entry and its retained undiscovered assignment.
 Enumeration order never assigns physical camera positions. Basler confirmation
