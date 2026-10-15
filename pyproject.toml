@@ -7,7 +7,7 @@ name = "vimo-demo"
 version = "0.1.0"
 description = "Typed serial inference core for the locally provisioned ViMo SDK"
 readme = "README.md"
-requires-python = "==3.14.7"
+requires-python = ">=3.14.7,<3.15"
 dependencies = ["numpy==2.5.3", "PySide6==6.11.2"]
 
 [dependency-groups]
