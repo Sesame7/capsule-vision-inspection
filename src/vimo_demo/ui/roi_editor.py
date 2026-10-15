@@ -7,19 +7,17 @@ from time import monotonic
 from typing import Literal
 
 import numpy as np
-from PySide6.QtCore import QRegularExpression, QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QIcon,
     QPainter,
     QPen,
     QPixmap,
-    QRegularExpressionValidator,
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QComboBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -43,6 +41,7 @@ from vimo_demo.configuration import ConfigurationError
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, FrameId
 
+from .camera_source_dialog import CameraSourceDialog
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
 from .production_style import Language, Style, camera_icon, text
 from .recipe_editor import RecipeEditorSession
@@ -293,6 +292,7 @@ class MachineRoiWorkspace(QWidget):
         self._preparing = False
         self._save_failed = False
         self._decision: QMessageBox | None = None
+        self.source_dialog: CameraSourceDialog | None = None
         self.buttons: dict[str, QPushButton] = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -322,32 +322,13 @@ class MachineRoiWorkspace(QWidget):
         self.loop.setIconSize(QSize(Style.icon, Style.icon))
         self.source_notice = QLabel()
         self.source_notice.setWordWrap(True)
-        self.source_mode = QComboBox()
-        self.source_mode.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToContents
-        )
-        self.source_mode.setMinimumHeight(Style.touch)
-        self.source_mode.addItem("", "folder")
-        self.source_mode.addItem("", "basler")
-        self.serial_label = QLabel()
-        self.serial = QLineEdit()
-        self.serial.setMinimumHeight(Style.touch)
-        self.serial.setMinimumWidth(150)
-        self.serial.setMaximumWidth(240)
-        self.serial.setValidator(
-            QRegularExpressionValidator(QRegularExpression("[0-9]*"), self.serial)
-        )
-        source_selection = QHBoxLayout()
-        source_selection.setSpacing(Style.small)
-        source_selection.addWidget(self.source_mode)
-        source_selection.addWidget(self.serial_label)
-        source_selection.addWidget(self.serial)
-        source_selection.addStretch()
+        self.source_settings = self.button("source_settings")
         source_row = QHBoxLayout()
         source_row.setSpacing(Style.small)
         source_row.addWidget(self.folder, 1)
         source_row.addWidget(self.browse)
         source_row.addWidget(self.loop)
+        source_row.addWidget(self.source_settings)
         if self.sources is not None:
             self.folder.setMinimumHeight(Style.touch)
             self.browse.setFixedSize(Style.touch, Style.touch)
@@ -361,17 +342,14 @@ class MachineRoiWorkspace(QWidget):
                 self.browse,
                 self.loop,
                 self.source_notice,
-                self.source_mode,
-                self.serial_label,
-                self.serial,
+                self.source_settings,
             ):
                 widget.hide()  # Fake demo keeps its synthetic source; no real folder execution.
         self.folder.textEdited.connect(self.source_edited)
         self.folder.editingFinished.connect(self.refresh_frame)
         self.browse.clicked.connect(self.browse_folder)
         self.loop.toggled.connect(self.loop_changed)
-        self.source_mode.currentIndexChanged.connect(self.source_mode_changed)
-        self.serial.textEdited.connect(self.serial_changed)
+        self.source_settings.clicked.connect(self.open_source_settings)
         reference_controls = QWidget()
         references = QHBoxLayout(reference_controls)
         references.setContentsMargins(0, 0, 0, 0)
@@ -429,7 +407,6 @@ class MachineRoiWorkspace(QWidget):
         )
         root.addWidget(self.reference_toolbar)
         if self.sources is not None:
-            root.addLayout(source_selection)
             root.addLayout(source_row)
         self.canvas = RoiCanvas(self.editable)
         root.addWidget(self.canvas, 1)
@@ -516,13 +493,8 @@ class MachineRoiWorkspace(QWidget):
         self.language = language
         self.folder.setAccessibleName(text("source_folder", language))
         self.folder.setPlaceholderText(text("source_folder", language))
-        self.source_mode.setAccessibleName(text("source_mode", language))
-        self.source_mode.setToolTip(text("source_mode_tip", language))
-        for index, key in enumerate(("source_folder_mode", "source_basler_mode")):
-            self.source_mode.setItemText(index, text(key, language))
-        self.serial_label.setText(text("source_serial", language))
-        self.serial.setAccessibleName(text("source_serial", language))
-        self.serial.setToolTip(text("source_serial_tip", language))
+        if self.source_dialog is not None:
+            self.source_dialog.set_language(language)
         self.browse.setAccessibleName(text("browse", language))
         self.browse.setToolTip(text("browse", language))
         self.loop.setToolTip(text("source_loop", language))
@@ -573,14 +545,6 @@ class MachineRoiWorkspace(QWidget):
         self.selected_index = 0
         if self.sources is not None:
             self.folder.setText(self.sources.definition.camera(self.camera).folder)
-            self.serial.setText(
-                self.sources.definition.camera(self.camera).basler_serial
-            )
-            self.source_mode.blockSignals(True)
-            self.source_mode.setCurrentIndex(
-                1 if self.sources.definition.mode == "basler" else 0
-            )
-            self.source_mode.blockSignals(False)
             self.loop.blockSignals(True)
             self.loop.setChecked(self.sources.definition.loop)
             self.loop.blockSignals(False)
@@ -622,23 +586,25 @@ class MachineRoiWorkspace(QWidget):
             self.sources.set_loop(enabled)
             self._changed()
 
-    def source_mode_changed(self) -> None:
-        if not self._allowed() or self._preparing or self.sources is None:
+    def open_source_settings(self) -> None:
+        if (
+            not self._allowed()
+            or self._preparing
+            or self.sources is None
+            or self._run_io is None
+        ):
             return
-        self.sources.set_mode(
-            "basler" if self.source_mode.currentIndex() == 1 else "folder"
-        )
-        self._source_identity_changed()
-
-    def serial_changed(self, serial: str) -> None:
-        if not self._allowed() or self._preparing or self.sources is None:
-            return
-        try:
-            self.sources.set_serial(self.camera, serial)
-        except ConfigurationError as exc:
-            self._report_error(exc, "source_validation_error")
-        else:
-            self._source_identity_changed()
+        if self.source_dialog is None:
+            self.source_dialog = CameraSourceDialog(
+                self.sources,
+                self.draft.definition.layout.camera_ids,
+                self._allowed,
+                self._run_io,
+                language=self.language,
+                parent=self,
+            )
+            self.source_dialog.accepted.connect(self._source_identity_changed)
+        self.source_dialog.begin()
 
     def _source_identity_changed(self) -> None:
         self._save_failed = False
@@ -852,7 +818,7 @@ class MachineRoiWorkspace(QWidget):
             and not self.session.dirty
             and self.session.entry is not None
         )
-        for control in (self.folder, self.browse, self.source_mode, self.serial):
+        for control in (self.folder, self.browse, self.source_settings):
             control.setEnabled(self._allowed() and not self._preparing)
         self.loop.setEnabled(
             self._allowed()

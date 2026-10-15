@@ -39,6 +39,9 @@ class Info:
     def GetSerialNumber(self) -> str:
         return self.serial
 
+    def GetModelName(self) -> str:
+        return "acA-test"
+
 
 @dataclass
 class Entry:
@@ -341,6 +344,27 @@ def sdk(monkeypatch: pytest.MonkeyPatch) -> SDK:
     monkeypatch.setattr(basler, "perf_counter", instance.clock)
     monkeypatch.setattr(sdk_boundary, "perf_counter", instance.clock)
     return instance
+
+
+def test_read_only_device_discovery_never_creates_or_opens_cameras(sdk: SDK) -> None:
+    assert basler.discover_basler_devices() == tuple(
+        basler.BaslerDevice(s, "acA-test") for s in sorted(SERIALS)
+    )
+    assert not sdk.cameras and not sdk.events and not sdk.grabs
+
+
+def test_device_discovery_preserves_optional_sdk_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = ModuleNotFoundError("pypylon unavailable")
+
+    def unavailable(name: str) -> object:
+        raise error
+
+    monkeypatch.setattr(sdk_boundary, "import_module", unavailable)
+    with pytest.raises(ModuleNotFoundError) as observed:
+        basler.discover_basler_devices()
+    assert observed.value is error
 
 
 def assert_closed(sdk: SDK) -> None:

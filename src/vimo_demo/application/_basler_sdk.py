@@ -18,6 +18,7 @@ from numpy.typing import NDArray
 from .basler import (
     AcquisitionIssue,
     AcquisitionMetadata,
+    BaslerDevice,
     CameraCleanup,
     CameraReadiness,
     CameraSettings,
@@ -94,6 +95,18 @@ def _items(value: object) -> tuple[object, ...]:
     if not isinstance(value, (list, tuple)):
         raise TypeError("Expected SDK sequence")
     return tuple(cast(list[object] | tuple[object, ...], value))
+
+
+def enumerate_devices() -> tuple[BaslerDevice, ...]:
+    """Read only transport-layer metadata; never create/open a camera device."""
+    pylon = import_module("pypylon.pylon")
+    factory = _call(_attr(pylon, "TlFactory"), "GetInstance")
+    return tuple(
+        BaslerDevice(
+            _str(_call(info, "GetSerialNumber")), _str(_call(info, "GetModelName"))
+        )
+        for info in _items(_call(factory, "EnumerateDevices"))
+    )
 
 
 @dataclass(slots=True)
