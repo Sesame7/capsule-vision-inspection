@@ -1,4 +1,4 @@
-"""Shared image I/O, statistics and reporting for the four maintained tools."""
+"""Shared image I/O, statistics and reporting helpers for maintained engineering tools."""
 
 import argparse
 import json

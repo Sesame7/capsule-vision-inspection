@@ -41,12 +41,11 @@ The first three locations are ignored by Git. Preserve persistent calibration/
 configuration, models, images and deliberately retained evidence. Historical
 outputs, manual snapshots and prototypes can be retired after explicit scoped
 approval; ignored/generated status alone does **not** authorize cleanup.
-The approved cleanup retired the old browser prototype, pre-bootstrap manual
-snapshots and Phase 1A generated reports, retaining 25 original evidence files
-under `outputs/retained-evidence/`. The golden fixture remains independent of
-those reports. Engine callers can supply
-arbitrary model paths. Root `models/` and normal startup's `data/models/` serve
-different workflows; do not substitute one for the other.
+Historical validation and retained-evidence provenance are documented in
+[validation evidence](docs/archive/validation-evidence.md). The golden fixture
+remains independent of historical raw reports. Engine callers can supply arbitrary
+model paths. Root `models/` and normal startup's `data/models/` serve different
+workflows; do not substitute one for the other.
 
 Normal startup uses explicit default-Model and last-applied-Recipe IDs in
 `data/app.json`. Relative model artifacts are anchored to their Model JSON;
@@ -118,10 +117,12 @@ must restrict access externally. The application does not configure either.
 
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
 **History / 历史** and **Vision / 视觉**. Communication provides session-local manual
-FINS/UDP D/W reads, localhost-only writes and optional register-watch refresh;
-normal startup also provides opt-in localhost automatic first-station reporting.
-Its Communication-page enablement/settings are memory-only, initially disabled
-and captured on Start; closing/relaunching disables it again.
+D/W reads, localhost-only writes and optional register-watch refresh. Manual
+Communication and optional localhost Production reporting independently support
+UDP/TCP, defaulting to UDP. Reporting enablement/settings are memory-only, initially
+disabled and captured on Start; closing/relaunching disables reporting again. The
+maintained localhost simulator CLI remains UDP-only; commissioned real-PLC
+integration is unimplemented. See [communication](docs/communication.md).
 History remains a placeholder.
 Recipe and Vision use **Save and apply**: persistence, candidate preparation/
 installation and successful-Start activation are distinct outcomes. Only successful
