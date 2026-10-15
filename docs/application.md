@@ -2,7 +2,8 @@
 
 This document owns the **Current** application contract: persistent startup,
 candidate activation, disposable runtime sessions, production accounting, and
-local source execution. `ProductionApplication` is Qt independent. The normal
+source execution, including the isolated Basler capability below.
+`ProductionApplication` is Qt independent. The normal
 entry currently composes it through `ui/bootstrap.py` and `ui/local_production.py`;
 these implementation locations and thread names are descriptive, not permanent
 Target architecture requirements.
@@ -609,6 +610,93 @@ uv run --no-sync python app.py
 These controls operate on local images only. They do not imply real-camera pause,
 hardware triggering or a new application state; Production visual redesign is
 deferred to H2D-2.
+
+## Isolated Basler acquisition
+
+`application.basler.BaslerAcquisitionSource` is a Qt-independent synchronous
+capability, separate from `ProductionApplication`, runtime sessions and Folder
+replay. It does not change `CameraSources`, normal startup or saved configuration.
+Only `application/_basler_sdk.py` accesses pypylon; imports/CLI help and Folder
+startup do not require it. The externally provisioned field pypylon/NumPy/pylon
+environment is a prerequisite for hardware use, not a new locked dependency.
+
+```python
+from vimo_demo.application.basler import BaslerAcquisitionSource
+
+# Caller-supplied serials, NOT an enumeration-order CAM1..CAM6 mapping.
+source = BaslerAcquisitionSource(
+    ("25334173", "25334174", "25334178", "25334180", "25334184", "25334188"),
+    timeout=10.0,
+)
+# Arrange one controlled external action only AFTER this notification.
+group = source.acquire(on_armed=lambda armed: print("ARMED", armed.serials, flush=True))
+```
+
+One non-GUI serial owner calls the source; there are no acquisition threads,
+queues between domains, automatic retries or trigger writes. Each attempt:
+
+- Requires exactly six unique explicit serials, each enumerated once and control
+  accessible before any camera opens; unrelated devices are left alone.
+- Removes default configuration handlers before Attach/Open. Requires existing
+  Continuous acquisition, FrameStart On/Line1/RisingEdge and other available
+  triggers Off; mismatches fail without repairing/saving device parameters.
+- Opens/prepares all six before starting, limits each SDK buffer pool to three,
+  checks supported frame-trigger readiness and rejects queued pre-ARMED results.
+  Unsupported readiness is explicitly `supported=False, ready=None`.
+- Observes the full finite window after ARMED (positive timeout, at most 120 s),
+  even after six frames arrive; an extra frame is an ambiguous failed attempt.
+  A final nonblocking sweep rejects pending boundary observations. Missing,
+  unsuccessful, skipped, invalid or wrongly shaped results never form a successful
+  partial group. Notification must return promptly and consumes that same window.
+- Copies conversion output before releasing each SDK result, yielding readonly,
+  owned, C-contiguous uint8 BGR arrays in requested serial order. No resize or
+  additional orientation/color transform is applied. Black pixels are valid.
+- Stops all cameras before selector restoration, restores/readbacks selector
+  cursors and host buffer limits, verifies preserved settings, closes and detaches
+  every device. Other camera parameters are not written, even to silently repair
+  an unexpected change. Auto-exposure/gain measurements are not compared when auto
+  control is enabled.
+
+`AcquisitionGroup.images` holds `AcquiredImage` records (actual serial, pixels,
+`AcquisitionMetadata`). `group.report` holds host `perf_counter` milestones,
+readiness/settings snapshots, raw SDK observations and per-camera cleanup evidence.
+Metadata contains SDK success/error, dimensions/pixel type/payload, and available
+BlockID, ImageNumber, raw timestamp and skipped count. No vendor objects escape.
+Keep all pixel aliases immutable while consumers retain them; there is no buffer
+lease/return protocol and no automatic CameraId, CycleId or FrameId construction.
+
+`BaslerAcquisitionError.report` preserves partial observations, missing/extra
+serials, stage/serial/error diagnostics and cleanup state; ordinary primary SDK
+exceptions remain chained. A failed release is retried during cleanup, not
+inference/acquisition. Unsafe cleanup retains the backend in the source and blocks
+reuse. Explicit `close()` may retry cleanup; failed parameter verification may
+require human assistance. It never certifies release just because time elapsed.
+SDK waits are finite, but Open/Stop/Close and other native calls cannot be forcibly
+preempted; an unresolved native call remains an unresolved owning call. Process
+control exceptions propagate after attempted cleanup with cleanup diagnostics.
+
+Six frames are only a candidate image group under an independently maintained
+single-trigger condition, not proof of one electrical pulse, simultaneous exposure
+or PLC consumption. Raw SDK counters/timestamps are not shared cycle identity.
+Cross-camera physical association and Production/hardware-source composition are
+**Target / unimplemented**.
+
+Developer verification (in an already provisioned field environment; do not install
+into the application environment). First coordinate the operator, then run:
+
+```powershell
+python -B scripts/acquire_basler_group.py --serials 25334173 25334174 25334178 25334180 25334184 25334188 --timeout 90 --operator-confirmed
+```
+
+Only after `ARMED`, manually press/release the HMI flash+photo control once. Do not
+repeat within that window. The flag records prior readiness, not actual action
+count. Inspect the report/owned-image checksums, exit code, six cleanup records
+and actual process exit. This entry saves no images and never issues PLC requests.
+For isolated field staging, copy only `basler.py`, `_basler_sdk.py` and this CLI
+into a separate diagnostic package with empty package initializers; no remote
+repository deployment, application import chain or dependency installation is
+needed. Ordinary deterministic verification uses
+`uv run --no-sync pytest tests/unit/test_basler_acquisition.py tests/unit/test_folder_replay.py --tb=short`.
 
 ## Shutdown
 
