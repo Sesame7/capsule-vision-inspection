@@ -7,7 +7,7 @@ PySide6 desktop UI, with optional FINS/UDP or FINS/TCP communication/reporting a
 read-only Web observation. Manual UI and Production reporting writes remain
 restricted to localhost.
 
-Real-camera Production integration, commissioned PLC integration and physical sorting remain
+Normal-startup real-camera integration, commissioned PLC integration and physical sorting remain
 unimplemented. Size/Color screening is an uncalibrated demonstration; SDK
 regression does not certify model accuracy or industrial acceptance.
 
@@ -115,7 +115,7 @@ Run from the repository root in the existing environment:
 | Entry | Purpose |
 | --- | --- |
 | [app.py](app.py) | Normal persistent **real-inference** Production application |
-| [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit-path **real** Production developer launcher |
+| [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit-path **real** Production developer launcher; Folder/fixed inputs or opt-in one-cycle Basler |
 | [run_production_ui.py](scripts/run_production_ui.py) | Equipment-free Production review with a **fake engine** |
 | [python -m vimo_demo.ui.app](src/vimo_demo/ui/app.py) | Separate **real one-image** inference/worker/Qt diagnostic |
 | [acquire_basler_group.py](scripts/acquire_basler_group.py) | Isolated one-window six-camera Basler acquisition, using externally provisioned pypylon; no Production or automatic trigger |
@@ -123,6 +123,10 @@ Run from the repository root in the existing environment:
 [Basler acquisition](docs/application.md#isolated-basler-acquisition) documents
 operator coordination, owned images, failure/cleanup guarantees and independent
 field staging. Normal startup and Folder workflows do not require pypylon.
+The separate [developer Basler workflow](docs/application.md#developer-basler-single-cycle)
+uses Folder images only for warm-up, requires explicit serial mapping verification,
+and runs at most one hardware group through Production per Start. It requires
+separate owner-approved pypylon provisioning; no dependency is installed automatically.
 
 ```powershell
 uv run --no-sync python app.py

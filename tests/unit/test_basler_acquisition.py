@@ -2,8 +2,10 @@
 
 import subprocess
 import sys
+from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event, Thread
 from typing import Self
 
 import numpy as np
@@ -12,7 +14,12 @@ from numpy.typing import NDArray
 
 from vimo_demo.application import _basler_sdk as sdk_boundary
 from vimo_demo.application import basler
-from vimo_demo.application.basler import BaslerAcquisitionError, BaslerAcquisitionSource
+from vimo_demo.application.basler import (
+    AcquisitionGroup,
+    BaslerAcquisitionCancelled,
+    BaslerAcquisitionError,
+    BaslerAcquisitionSource,
+)
 
 SERIALS = ("25334188", "25334173", "25334184", "25334174", "25334180", "25334178")
 
@@ -593,3 +600,84 @@ def test_missing_optional_sdk_is_a_chained_initialization_error(
     assert isinstance(caught.value.__cause__, ModuleNotFoundError)
     assert caught.value.report.issues[0].stage == "initialization"
     assert caught.value.report.armed is None
+
+
+def test_pre_cancelled_attempt_does_not_open_or_arm(sdk: SDK) -> None:
+    cancel = Event()
+    cancel.set()
+    source = BaslerAcquisitionSource(SERIALS)
+    with pytest.raises(BaslerAcquisitionCancelled) as caught:
+        source.acquire(cancel=cancel)
+    assert not sdk.cameras and caught.value.report.armed is None
+    assert source.cleanup_safe
+
+
+def test_cancel_after_armed_discards_complete_queued_group(sdk: SDK) -> None:
+    cancel = Event()
+
+    def triggered(armed: basler.ArmedAcquisition) -> None:
+        sdk.trigger(armed)
+        cancel.set()
+
+    with pytest.raises(BaslerAcquisitionCancelled):
+        BaslerAcquisitionSource(SERIALS).acquire(on_armed=triggered, cancel=cancel)
+    assert_closed(sdk)
+
+
+def test_cancel_during_cleanup_never_returns_a_late_group(
+    sdk: SDK, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cancel = Event()
+    original = Camera.Close
+
+    def close(camera: Camera) -> None:
+        original(camera)
+        cancel.set()
+
+    monkeypatch.setattr(Camera, "Close", close)
+    with pytest.raises(BaslerAcquisitionCancelled) as caught:
+        BaslerAcquisitionSource(SERIALS, timeout=0.1).acquire(
+            on_armed=sdk.trigger, cancel=cancel
+        )
+    assert len(caught.value.report.observations) == 6
+    assert caught.value.report.cleanup_safe
+    assert_closed(sdk)
+
+
+def test_cancel_cannot_force_a_blocked_sdk_wait(
+    sdk: SDK, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release, cancel = Event(), Event(), Event()
+    original = Camera.Wait
+
+    def wait(camera: Camera, milliseconds: int) -> bool:
+        if milliseconds:
+            entered.set()
+            assert release.wait(5)
+        return original(camera, milliseconds)
+
+    monkeypatch.setattr(Camera, "Wait", wait)
+    source = BaslerAcquisitionSource(SERIALS)
+    result: Future[AcquisitionGroup] = Future()
+
+    def acquire() -> None:
+        try:
+            result.set_result(source.acquire(cancel=cancel))
+        except BaseException as exc:
+            result.set_exception(exc)
+
+    owner = Thread(target=acquire, name="BaslerCancellationTest")
+    owner.start()
+    try:
+        assert entered.wait(5)
+        cancel.set()
+        assert not result.done() and not source.cleanup_safe
+        assert all(camera.opened for camera in sdk.cameras)
+    finally:
+        release.set()
+        owner.join(5)
+    assert not owner.is_alive()
+    with pytest.raises(BaslerAcquisitionCancelled):
+        result.result(1)
+    assert source.cleanup_safe
+    assert_closed(sdk)
