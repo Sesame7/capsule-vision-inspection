@@ -9,7 +9,6 @@ import pytest
 from _tool_helpers import decode
 from PySide6.QtWidgets import QApplication
 from run_local_production_ui import compose
-from tests.integration.test_local_production_ui import input_files
 from tests.integration.test_reference import (
     ROOT,
     short_cases,
@@ -17,6 +16,7 @@ from tests.integration.test_reference import (
     verify_files,
 )
 from tests.integration.test_worker_vimo import MODEL, TIMEOUT, reference_image
+from tests.local_input_support import input_files
 from tests.qt_support import ensure_test_fonts, until
 
 from vimo_demo.application import ApplicationState

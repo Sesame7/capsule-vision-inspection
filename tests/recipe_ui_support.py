@@ -11,7 +11,7 @@ from run_production_ui import DemoComposition
 
 from tests.application_support import FakeSession
 from tests.qt_support import ensure_test_fonts, until
-from tests.unit.test_recipe_editor import editor
+from tests.recipe_support import editor
 from vimo_demo.application import (
     PreparedConfiguration,
     ProductionApplication,

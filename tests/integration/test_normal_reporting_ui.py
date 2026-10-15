@@ -11,13 +11,13 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication
+from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
 from tests.fins_tcp_support import TcpPeer
-from tests.integration.test_application_bootstrap_ui import close_window
-from tests.integration.test_local_production_ui import input_files
-from tests.qt_support import ensure_test_fonts, until
+from tests.local_input_support import input_files
+from tests.qt_support import close_window, ensure_test_fonts, until
 from tests.reporting_support import WAIT, readback, seed, server
-from tests.unit.test_application_bootstrap import close, saved_data
+from tests.unit.test_application_bootstrap import close
 
 from vimo_demo.application import (
     ApplicationError,

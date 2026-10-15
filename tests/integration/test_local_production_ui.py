@@ -12,8 +12,9 @@ import pytest
 from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication
 from run_local_production_ui import SourceNotifications, compose
-from tests.application_support import WAIT, prepared
+from tests.application_support import WAIT
 from tests.cycle_support import image_result
+from tests.local_input_support import input_files
 from tests.qt_support import ensure_test_fonts, until
 from tests.reporting_support import readback, seed, server, settings
 
@@ -28,12 +29,7 @@ from vimo_demo.communication.reporting import ReportingCapacityError, ReportStag
 from vimo_demo.configuration import (
     CameraFolder,
     CameraSources,
-    MachineLayoutDefinition,
-    RecipeDefinition,
     save_camera_sources,
-    save_machine_layout,
-    save_model_definition,
-    save_recipe,
 )
 from vimo_demo.inference import ImageResult
 from vimo_demo.inference._validation import uint8_array
@@ -46,29 +42,6 @@ from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_presentation import matching_camera
 from vimo_demo.ui.production_style import Language, Style, text
 from vimo_demo.ui.production_window import ProductionWindow
-
-
-def input_files(folder: Path) -> tuple[Path, Path, Path, tuple[Path, ...]]:
-    config = prepared(folder).configuration
-    model, machine, recipe = (
-        folder / name for name in ("model.json", "machine.json", "local.recipe.json")
-    )
-    save_model_definition(model, config.model)
-    save_machine_layout(
-        machine,
-        MachineLayoutDefinition(config.layout),
-    )
-    save_recipe(recipe, RecipeDefinition("local", "Local test"))
-    paths: list[Path] = []
-    for index in range(6):
-        path = folder / f"图像-{index}.png"
-        ok, encoded = cv2.imencode(
-            ".png", np.full((20, 60, 3), index + 1, dtype=np.uint8)
-        )
-        assert ok
-        encoded.tofile(path)
-        paths.append(path)
-    return model, machine, recipe, tuple(paths)
 
 
 class ControlledEngine:
