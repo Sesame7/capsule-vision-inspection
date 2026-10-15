@@ -838,8 +838,9 @@ trigger; this procedure does not itself issue PLC writes):
    assignments, reference folders and provisioned SDK/license. Release other camera
    owners and arrange one controlled external trigger with no competing writer.
 2. From the field checkout run `uv run --no-sync python app.py` in its interactive
-   Windows desktop. Vision: select Basler, enter each serial in configured camera
-   order, retain/verify all Folder references and press **Save and apply**. Existing
+   Windows desktop. Vision: open **Camera source settings**, select Basler, explicitly
+   refresh devices and assign serials in configured camera order, then Confirm.
+   Retain/verify all Folder references and press **Save and apply**. Existing
    machine/source save and separate preference outcomes apply; do not recalibrate
    or generate replacement geometry as part of this wiring check.
 3. Close normally and relaunch with the same command to check persistent restoration.

@@ -16,6 +16,24 @@ type FeatureValue = str | int | float | bool
 
 
 @dataclass(frozen=True, slots=True)
+class BaslerDevice:
+    """Enumeration metadata only; no camera handle or physical-position claim."""
+
+    serial: str
+    model: str
+
+
+def discover_basler_devices() -> tuple[BaslerDevice, ...]:
+    """Blocking, read-only discovery; callers own background execution.
+
+    Optional SDK loading occurs only on this explicit request, never at import.
+    """
+    from ._basler_sdk import enumerate_devices
+
+    return enumerate_devices()
+
+
+@dataclass(frozen=True, slots=True)
 class CameraSettings:
     serial: str
     features: Mapping[str, FeatureValue]

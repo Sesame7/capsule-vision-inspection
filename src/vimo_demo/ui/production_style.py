@@ -151,6 +151,32 @@ STRINGS: dict[str, tuple[str, str]] = {
     "setup_failed": ("保存/应用失败", "Save/apply failed"),
     "source_error": ("采集源错误", "Acquisition source error"),
     "source_mode": ("全局采集模式", "Global source mode"),
+    "source_settings": ("相机来源设置…", "Camera source settings…"),
+    "source_confirm": ("确认", "Confirm"),
+    "source_mapping_hint": (
+        "请按实际接线明确分配六台相机。刷新只读取设备信息，不打开相机；确认仅更新草稿。",
+        "Assign all six cameras explicitly by physical wiring. Refresh reads device info only; Confirm updates the draft only.",
+    ),
+    "source_discover": ("刷新设备", "Refresh devices"),
+    "source_discovery_idle": (
+        "尚未刷新；点击刷新设备以读取已连接相机。",
+        "Not refreshed; click Refresh devices to discover connected cameras.",
+    ),
+    "source_discovering": ("正在读取设备信息…", "Reading device information…"),
+    "source_discovered": (
+        "发现 {count} 台设备；请明确选择对应关系。未发现的原序列号保持不变。",
+        "Found {count} devices; select assignments explicitly. Undiscovered assignments are retained.",
+    ),
+    "source_discovery_failed": (
+        "设备读取失败；请检查 pypylon/pylon 安装及相机连接，再刷新。原分配保持不变。",
+        "Discovery failed. Check pypylon/pylon and camera connections, then Refresh. Assignments are retained.",
+    ),
+    "source_unconfigured": ("未配置", "Unconfigured"),
+    "source_not_discovered": ("未发现 / 离线", "Not discovered / offline"),
+    "source_mapping_invalid": (
+        "Basler 模式需要六个非空且互不重复的数字序列号。",
+        "Basler requires six nonempty, distinct numeric serials.",
+    ),
     "source_mode_tip": (
         "六台相机统一使用此模式；文件夹保留为参考和预热输入",
         "One mode for all six cameras; folders remain reference/warm-up inputs",

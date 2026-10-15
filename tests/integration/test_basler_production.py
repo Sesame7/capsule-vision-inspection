@@ -800,7 +800,10 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         until(lambda: not window.parameters.busy)
         for i in range(1, 7):
             workspace.sources.set_serial(CameraId(f"CAM{i}"), SERIALS[i - 1])
-        workspace.source_mode.setCurrentIndex(1)
+        workspace.open_source_settings()
+        assert workspace.source_dialog is not None
+        workspace.source_dialog.mode.setCurrentIndex(1)
+        workspace.source_dialog.accept()
         assert window.bridge.replay_enabled  # Draft is not the saved source selection.
         assert not window.buttons["operation"].isEnabled()
         workspace.save_and_apply()
@@ -810,7 +813,9 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
             not window.bridge.replay_enabled and window.buttons["secondary"].isHidden()
         )
         assert not engine.calls and not acquisitions
-        workspace.source_mode.setCurrentIndex(0)
+        workspace.open_source_settings()
+        workspace.source_dialog.mode.setCurrentIndex(0)
+        workspace.source_dialog.accept()
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
         window.bridge.refresh()

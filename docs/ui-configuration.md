@@ -188,11 +188,32 @@ even when a later demo launch uses different image dimensions.
 
 ### Folder settings versus runtime input
 
-Vision selects one global **Folder replay / Basler single cycle** mode for all six
-cameras. Each selected CameraId has a Folder path/Browse and an explicit numeric
-Basler serial editor. No serial is discovered or assigned automatically. Both
-configurations survive mode switching and Discard; drafts do not change the running
-source. Loop is shared, disabled in Basler mode and preserved for later Folder replay,
+Vision's **Camera source settings** dialog selects one global **Folder replay /
+Basler single cycle** mode and six CameraId-to-serial assignments in configured
+MachineLayout order. Each non-editable dropdown offers explicitly discovered
+serials/model names, an unconfigured entry and its retained undiscovered assignment.
+Enumeration order never assigns physical camera positions. Basler confirmation
+requires six nonempty, distinct numeric serials; Folder permits unconfigured serials.
+
+**Refresh devices** explicitly requests read-only transport-layer enumeration through
+the optional pypylon boundary on the existing single `CameraSetupIO` slot. Opening
+the dialog does not load the SDK. Discovery never opens cameras, creates acquisition
+handles or changes parameters. Missing SDK/devices produces actionable dialog feedback;
+saved and selected serials stay intact, labeled not discovered/offline rather than
+silently replaced. Enumeration is a transient observation, not proof of availability
+for control or physical wiring. Model/serial metadata uses the vendor's
+[enumerated device information](https://docs.baslerweb.com/pylonapi/cpp/class_pylon_1_1_c_device_info).
+
+Confirm updates only mode/serials in the existing source draft; it writes no file.
+Cancel drops only dialog-local edits, preserving earlier Folder/Loop/ROI drafts.
+Workspace Discard and combined Save and apply retain their existing authority.
+Cancel during discovery hides the dialog without cancelling the native call; the
+existing setup owner waits for actual thread exit before workspace/window release.
+
+The main workspace retains the selected CameraId's Folder path/Browse, image
+reference controls and ROI tools, with one compact source-settings entry beside
+the source row. Both source configurations survive mode switching and Discard;
+drafts do not change the running source. Loop is shared, disabled in Basler mode and preserved for later Folder replay,
 not per-camera wrapping for the browser. Folder browsing remains available in Basler
 mode for reference and required warm-up data. This page exposes no replay-rate editor,
 trigger command or continuous capture feature. Source settings

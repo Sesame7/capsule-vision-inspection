@@ -653,7 +653,7 @@ it is not a large-file asynchronous loader or Production acquisition path.
 ### Production shell
 
 The existing workspace guards handle dirty Recipe/machine/source decisions and
-asynchronously wait for active preview/preparation/reference jobs before approving
+asynchronously wait for active preview/preparation/reference/device-discovery jobs before approving
 application close. Cancelled draft decisions leave the window open. Late preparation
 cannot activate a candidate while closing; job delivery is detached after those
 jobs finish. Detailed editing choices remain in the UI configuration documents.
