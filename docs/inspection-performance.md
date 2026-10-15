@@ -346,6 +346,52 @@ Future concurrency, real camera/PLC integration and hardware throughput work are
 thread topology/workload settings describe these tools and may only change
 through a separately approved and verified implementation decision.
 
+## Isolated S1-E1 scheduling experiment
+
+[`experiment_inspection_scheduling.py`](../scripts/experiment_inspection_scheduling.py)
+compares complete-group dispatch (A) with early per-camera dispatch (B), outside
+Production. Both use the same resolved configuration and one `InferenceWorker`.
+B projects each camera through the existing configured pipeline with temporary
+local channel IDs, then restores global IDs; it does not introduce new algorithms.
+
+```powershell
+uv run --no-sync python scripts/experiment_inspection_scheduling.py --model-config data/models/model.json --machine-config data/machine/machine.json --recipe data/recipes/local.recipe.json --frames-dir images --warmup 3 --cycles 30 --repetitions 3
+uv run --no-sync pytest tests/unit/test_scheduling_experiment.py --tb=short
+```
+
+Model artifact paths are relative to the model-definition directory. Inputs are
+the first filename-ordered image in each configured camera's lowercase subfolder
+(`cam1` through `cam6` for the local layout), decoded once. At each simulated
+arrival an independent immutable Frame copy is timed separately. First/last-frame
+latency starts at admission **after** that copy. Full-run completion spacing
+includes copying, dispatch and diagnostic result signatures, but excludes setup,
+decoding, hashing, warm-up and report I/O. At least one untimed A/B equivalence
+probe runs per repetition even with `--warmup 0`.
+
+Near-simultaneous and reversed staggered arrival plans use an open-loop 100 ms
+trigger interval. Actual host release lag is recorded; Windows waiting and CPU/GIL
+scheduling can coalesce nominal arrivals. The back-to-back saturated case estimates
+software capacity on the same fixed workload. Interpret sustained rate from
+`steady_completed_cycles_per_second`, not the shared statistics helper's nested
+reciprocal-duration `calls_per_second` fields. Per-camera wait is derived from
+public inference-start and CPU-check timings, not an exact dispatch trace.
+
+Results under `outputs/s1e1_scheduling/<UTC timestamp>/report.json` contain input/
+configuration hashes, per-camera semantic/area-and-bbox fingerprints, raw cycle
+latencies and bounded-state observations. Masks/contours are not compared bitwise
+or retained in the report. Command/completion queues each have one slot; pending
+state is limited by `--capacity`, with at most six additional active image buffers.
+Real runs use `--deadline-ms` (default 300), an **experimental** deadline with no
+established PLC meaning. Separate virtual-time missing/delayed and overload cases
+use explicit synthetic service times; their timeout-reject channel lists are target
+diagnostics, not changes to Current Inspection or reporting judgments. Claimed
+native work finishes before the two owned threads are joined. No camera access,
+PLC requests, Qt rendering, GPU concurrency or Production scheduling changes occur.
+
+This experiment cannot establish physical 10 Hz capacity, reliable hardware cycle
+association, a result deadline or PLC consumption behavior. Measurements and the
+S1-E2 recommendation belong to the dated run evidence, not a performance promise.
+
 ## Historical results
 
 **Historical evidence, not Current performance promises.** The accepted
