@@ -43,7 +43,7 @@ configuration files and run from the repository root. This is a template; replac
 the three configuration placeholders before running:
 
 ```powershell
-cd C:\Users\Sesame\Projects\vimo-demo
+# Run from the repository root.
 $modelConfig = "<existing benchmark Model JSON>"
 $machineConfig = "<existing MachineLayout JSON>"
 $recipe = "<existing Recipe JSON>"

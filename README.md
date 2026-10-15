@@ -1,32 +1,85 @@
-# ViMo Local Inspection
+# Capsule Vision Inspection
 
-Local industrial-vision application with typed serial ViMo inference, bounded
-multi-frame inspection and a bilingual PySide6 Production shell. The current
-layout has six configured cameras with six channels each. Inputs come from local
-images or per-camera Folder replay; real camera acquisition and PLC integration
-are not implemented. Size/Color screening is an uncalibrated demonstration.
-SDK regression does not certify model accuracy or industrial acceptance.
+Configurable capsule-inspection application with six configured cameras and 36
+inspection channels in the current layout. It combines serial ViMo inference,
+traditional inspection checks and local Folder replay in a Chinese/English
+PySide6 desktop UI, with optional FINS/UDP or FINS/TCP communication/reporting and
+read-only Web observation. Manual UI and Production reporting writes remain
+restricted to localhost.
+
+Real-camera acquisition, commissioned PLC integration and physical sorting remain
+unimplemented. Size/Color screening is an uncalibrated demonstration; SDK
+regression does not certify model accuracy or industrial acceptance.
+
+The public repository name is `capsule-vision-inspection`. The Python distribution
+remains `vimo-demo`, with `vimo_demo` imports; existing checkout directories do not
+need renaming.
 
 ## Environment and setup
 
-Target the verified **Windows 10**, **Python 3.14.7 x64**, **RTX 4060 Ti 16 GB** and
-SmartMore ViMo inference/custom **3.20.0.2** environment. An active ViMo license
-and the externally provisioned CUDA 12/TensorRT runtime are prerequisites.
+The verified development environment uses **Windows 10**, **Python 3.14.7 x64**,
+an **RTX 4060 Ti 16 GB**, and SmartMore ViMo inference/custom **3.20.0.2**.
+An active ViMo license and the externally provisioned CUDA 12/TensorRT runtime
+are prerequisites.
 Obtain proprietary SDK packages, runtime and authorization through SmartMore;
 uv does not provision them. Vendor packages are not public project dependencies.
 
 Public dependency versions are authoritative in [pyproject.toml](pyproject.toml)
 and [uv.lock](uv.lock). Preserve the vendor-provisioned `.venv`; daily commands
-use `uv run --no-sync`. When intentionally synchronizing public dependencies and
-the editable package, retain external vendor packages:
+use `uv run --no-sync`. Intentional public setup/resynchronization uses the
+`uv sync --locked --inexact --no-python-downloads` command below: an exact sync
+can remove externally installed vendor packages. Public synchronization does not
+install or change GPU/runtime components. The current application setup uses the
+default development dependency group, including OpenCV; the inference core accepts
+already decoded arrays.
 
-```powershell
-uv sync --locked --inexact --no-python-downloads
-```
+### First deployment on another Windows PC
 
-An exact sync can remove externally installed packages. This command does not
-install or change GPU/runtime components. OpenCV is included in the default
-development group; the inference core accepts already decoded arrays.
+1. Check the target Windows/GPU/driver compatibility with the vendor's SDK/runtime
+   requirements; the development hardware above is a verified baseline, not a
+   minimum specification or a compatibility claim for another PC. Prepare Git, uv
+   and **Python 3.14.7 x64**, then clone and install the locked public environment:
+
+   ```powershell
+   $repositoryUrl = "<published GitHub clone URL for capsule-vision-inspection>"
+   git clone "$repositoryUrl" capsule-vision-inspection
+   Set-Location capsule-vision-inspection
+   uv sync --locked --inexact --no-python-downloads
+   ```
+
+   Replace the URL placeholder with the actual repository URL after publication.
+   `.venv` is machine-local: create it on this PC, never copy it between PCs.
+   Use the same inexact sync when a vendor-provisioned environment already exists.
+
+2. Separately provision SmartMore ViMo inference/custom **3.20.0.2** into this
+   `.venv`, the compatible CUDA 12/TensorRT runtime, and valid inference
+   authorization through the vendor-approved procedure. Neither the clone nor uv
+   supplies those proprietary prerequisites. Do not assume they are public PyPI
+   dependencies or copy another PC's runtime/license installation.
+
+3. Transfer only authorized local model, configuration and Folder image assets.
+   Normal startup needs a valid entry-relative `data/` tree with explicit Model/
+   Recipe IDs, model artifact identity, saved MachineLayout and camera-source
+   definitions. Check target paths and Folder availability against
+   [configuration](docs/configuration.md#artifact-paths) and
+   [startup/recovery](docs/application.md#startup-recovery); preserve saved geometry
+   rather than inventing replacement ROIs. CLI/reference `models/` and `images/`
+   remain separate inputs. These assets are not supplied by the public repository.
+
+4. From the repository root, launch normal startup:
+
+   ```powershell
+   uv run --no-sync python app.py
+   ```
+
+   With valid inputs it opens stopped in READY. Explicitly Start or Step the saved
+   Folder sources, verify real six-camera/36-channel results without technical
+   ERROR/FAULT, then End/Stop, wait for READY and close normally; confirm the
+   process exits. Follow the existing
+   [local replay verification](docs/application.md#normal-entry-manual-verification)
+   for Pause/Continue/Step details. A successful clone or Qt startup alone does
+   **not** establish ViMo inference readiness. This local software check is not
+   camera/PLC commissioning or industrial acceptance.
 
 ## Local assets and persistent configuration
 
@@ -293,3 +346,10 @@ Historical regressions/measurements do not establish current hardware acceptance
 The domain documents own Current contracts; the archives own dated evidence.
 Git checkpoint `8fad326aaaf5e0e981224963607a7e000eb95604` preserves the original
 documents and exploration narrative.
+
+## License
+
+Project source is licensed under the [MIT License](LICENSE), copyright 2026 Sesame.
+Proprietary SmartMore SDK/runtime components, models and other protected local
+assets are not included or licensed by this repository's MIT license; obtain any
+required rights and authorization separately.
