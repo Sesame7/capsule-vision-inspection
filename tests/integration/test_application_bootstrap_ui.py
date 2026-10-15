@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 from tests.application_support import WAIT
-from tests.qt_support import until
-from tests.unit.test_application_bootstrap import close, saved_data
+from tests.bootstrap_support import saved_data
+from tests.qt_support import close_window, until
+from tests.unit.test_application_bootstrap import close
 
 from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters
 from vimo_demo.application.folder_replay import FolderSourceError
@@ -26,14 +27,6 @@ from vimo_demo.configuration import (
 from vimo_demo.inspection import CameraId
 from vimo_demo.ui.bootstrap import ApplicationData, create_window, load_startup
 from vimo_demo.ui.inference_bridge import FutureDelivery
-from vimo_demo.ui.production_window import ProductionWindow
-
-
-def close_window(window: ProductionWindow) -> None:
-    window.close()
-    until(lambda: window.bridge.closed)
-    assert window.bridge.application.join(1)
-    window.deleteLater()
 
 
 def test_absent_data_opens_five_page_unconfigured_shell(

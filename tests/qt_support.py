@@ -3,11 +3,15 @@
 from collections.abc import Callable
 from pathlib import Path
 from threading import get_ident
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEventLoop, QObject, QTimer, Slot
 from PySide6.QtGui import QFontDatabase
 
 from vimo_demo.inference import ImageResult
+
+if TYPE_CHECKING:
+    from vimo_demo.ui.production_window import ProductionWindow
 
 
 def ensure_test_fonts() -> None:
@@ -40,6 +44,13 @@ def until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
     poll.stop()
     deadline.stop()
     assert predicate(), "Qt condition timed out"
+
+
+def close_window(window: ProductionWindow) -> None:
+    window.close()
+    until(lambda: window.bridge.closed)
+    assert window.bridge.application.join(1)
+    window.deleteLater()
 
 
 class Receiver(QObject):

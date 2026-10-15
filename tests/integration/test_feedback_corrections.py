@@ -6,13 +6,12 @@ from pathlib import Path
 import pytest
 from PySide6.QtWidgets import QApplication
 from tests.application_support import WAIT
-from tests.integration.test_application_bootstrap_ui import close_window
+from tests.bootstrap_support import saved_data
 from tests.integration.test_camera_setup import camera_screen as camera_screen
 from tests.integration.test_local_production_ui import ControlledEngine
-from tests.qt_support import ensure_test_fonts, until
+from tests.qt_support import close_window, ensure_test_fonts, until
 from tests.recipe_ui_support import Screen, edit
 from tests.recipe_ui_support import configured_screen as configured_screen
-from tests.unit.test_application_bootstrap import saved_data
 
 from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters
 from vimo_demo.application.folder_replay import FolderSourceError

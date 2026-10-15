@@ -16,7 +16,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from run_local_production_ui import SourceNotifications, compose
 from run_production_ui import demo_images
 from tests.application_support import WAIT
-from tests.integration.test_local_production_ui import ControlledEngine, input_files
+from tests.integration.test_local_production_ui import ControlledEngine
+from tests.local_input_support import input_files
 from tests.qt_support import ensure_test_fonts, until
 from tests.unit.test_folder_replay import folders, write_image
 

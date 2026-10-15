@@ -11,11 +11,10 @@ import pytest
 from PySide6.QtCore import QPoint, QSize
 from PySide6.QtWidgets import QApplication
 from tests.application_support import WAIT
-from tests.integration.test_application_bootstrap_ui import close_window
+from tests.bootstrap_support import saved_data
 from tests.integration.test_local_production_ui import ReplayEngine, replay_files
-from tests.qt_support import ensure_test_fonts, until
+from tests.qt_support import close_window, ensure_test_fonts, until
 from tests.reporting_support import readback, seed, server
-from tests.unit.test_application_bootstrap import saved_data
 
 from vimo_demo.application import (
     ApplicationState,

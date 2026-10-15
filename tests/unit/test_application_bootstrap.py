@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from tests.application_support import WAIT
-from tests.integration.test_local_production_ui import input_files
+from tests.bootstrap_support import saved_data
 
 from vimo_demo.application import ApplicationState, ProductionCounters
 from vimo_demo.application.preferences import (
@@ -34,34 +34,6 @@ from vimo_demo.ui.bootstrap import (
     discover_models,
     load_startup,
 )
-
-
-def saved_data(root: Path) -> ApplicationData:
-    data = ApplicationData.at_entry(root)
-    for folder in (data.models, data.recipes, data.machine.parent, data.sources.parent):
-        folder.mkdir(parents=True)
-    frames = root / "frames"
-    frames.mkdir()
-    model_file, machine_file, recipe_file, _ = input_files(frames)
-    model = load_model_definition(model_file)
-    shutil.copyfile(model.model_path, data.models / "general.vimosln")
-    save_model_definition(
-        data.models / "general.json", replace(model, model_path="general.vimosln")
-    )
-    shutil.copyfile(machine_file, data.machine)
-    shutil.copyfile(recipe_file, data.recipes / "local.recipe.json")
-    save_camera_sources(
-        data.sources,
-        CameraSources(
-            tuple(
-                CameraFolder(CameraId(f"CAM{i}"), "../../frames") for i in range(1, 7)
-            ),
-            loop=False,
-            target_fps=3.5,
-        ),
-    )
-    save_preferences(data.preferences, ApplicationPreferences("general", "local", "en"))
-    return data
 
 
 def close(startup: Startup) -> None:

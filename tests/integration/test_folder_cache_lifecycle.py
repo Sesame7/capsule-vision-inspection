@@ -12,7 +12,8 @@ import pytest
 from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication
 from tests.application_support import WAIT
-from tests.integration.test_local_production_ui import ControlledEngine, input_files
+from tests.integration.test_local_production_ui import ControlledEngine
+from tests.local_input_support import input_files
 from tests.production_support import inferred
 from tests.qt_support import until
 from tests.unit.test_folder_replay import folders, write_image

@@ -9,9 +9,9 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 from run_local_production_ui import compose
-from tests.integration.test_local_production_ui import input_files
 from tests.integration.test_reference import ROOT, short_cases, verify_files
 from tests.integration.test_worker_vimo import MODEL, TIMEOUT, reference_image
+from tests.local_input_support import input_files
 from tests.qt_support import until
 
 from vimo_demo.configuration import (
