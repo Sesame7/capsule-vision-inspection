@@ -2,55 +2,24 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from tests.application_support import FIXTURES, prepared
+from tests.recipe_support import editor
 
 from vimo_demo.configuration import (
     CheckConfiguration,
     CheckOverrides,
     ConfigurationError,
     ConfigurationIOError,
-    MachineLayoutDefinition,
     ModelArtifactError,
-    ModelRegistry,
     RecipeDefinition,
     ViMoCheckConfig,
     ViMoOverride,
     load_recipe,
-    save_machine_layout,
     save_recipe,
 )
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ChannelId
 from vimo_demo.ui.recipe_catalog import RecipeCatalog
-from vimo_demo.ui.recipe_editor import RecipeDraft, RecipeEditorSession
-
-
-def editor(tmp_path: Path) -> RecipeEditorSession:
-    config = prepared(tmp_path).configuration
-    folder = tmp_path / "recipes"
-    folder.mkdir()
-    for name in ("defaults", "overrides"):
-        recipe = load_recipe(FIXTURES / f"{name}.json")
-        save_recipe(folder / f"{name}.recipe.json", recipe)
-    registry = ModelRegistry((config.model, replace(config.model, model_id="special")))
-    machine_path = tmp_path / "machine.json"
-    save_machine_layout(machine_path, MachineLayoutDefinition(config.layout))
-    session = RecipeEditorSession(
-        RecipeCatalog(folder),
-        MachineLayoutDefinition(config.layout),
-        registry,
-        config.model.model_id,
-        tmp_path,
-        machine_path=machine_path,
-    )
-    session.load(
-        next(
-            e
-            for e in session.catalog.discover().entries
-            if not e.recipe.channel_overrides
-        )
-    )
-    return session
+from vimo_demo.ui.recipe_editor import RecipeDraft
 
 
 def test_catalog_discovery_errors_and_read_only(tmp_path: Path) -> None:
