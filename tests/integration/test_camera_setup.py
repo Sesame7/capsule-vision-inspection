@@ -775,13 +775,23 @@ def test_selected_xywh_edit_and_atomic_rejection(
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
+@pytest.mark.parametrize("mode", ["folder", "basler"])
 def test_settings_representative_screenshot(
     camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
     language: Language,
     size: tuple[int, int],
+    mode: str,
     tmp_path: Path,
 ) -> None:
     window, workspace, engine = camera_screen
+    sources = workspace.sources
+    assert sources is not None
+    for i in range(1, 7):
+        sources.set_serial(CameraId(f"CAM{i}"), f"100{i}")
+    sources.set_mode("basler" if mode == "basler" else "folder")
+    sources.save()
+    workspace.switch_camera()
+    until(lambda: not window.parameters.busy)
     image = demo_images()[0]
     path = Path(workspace.reference.toolTip())
     ok, encoded = cv2.imencode(".png", image)
@@ -806,9 +816,18 @@ def test_settings_representative_screenshot(
     QApplication.processEvents()
     assert workspace.canvas.height() > workspace.height() * 0.65
     assert len(workspace.canvas.rois) == 6 and workspace.frame is not None
+    assert (
+        workspace.source_mode.width()
+        >= workspace.source_mode.fontMetrics().horizontalAdvance(
+            workspace.source_mode.currentText()
+        )
+        + 2 * Style.small
+    )
     for control in (
         *workspace.coordinates.values(),
         *workspace.reference_modes.values(),
+        workspace.source_mode,
+        workspace.serial,
         workspace.status,
         *workspace.buttons.values(),
     ):
@@ -850,7 +869,7 @@ def test_settings_representative_screenshot(
     )
     assert workspace.canvas.y() > workspace.folder.mapTo(workspace, QPoint()).y()
     assert window.grab().save(
-        str(tmp_path / f"settings-{language}-{size[0]}x{size[1]}.png")
+        str(tmp_path / f"settings-{mode}-{language}-{size[0]}x{size[1]}.png")
     )
     assert not engine.calls and not workspace.draft.dirty
 
@@ -990,3 +1009,95 @@ def test_roi_toolbar_wraps_without_shrinking_fields(
     QApplication.processEvents()
     assert upper.height() <= Style.touch + Style.small
     assert workspace.draft.definition == before and not engine.calls
+
+
+def test_basler_mode_draft_reference_identity_and_explicit_save(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    source = workspace.sources
+    assert source is not None
+    initial = source.path.read_bytes()
+    geometry = workspace.draft.definition
+    folders_before = tuple(c.folder for c in source.definition.cameras)
+    for i in range(1, 7):
+        workspace.camera_tabs.setCurrentIndex(i - 1)
+        until(lambda: not window.parameters.busy)
+        workspace.serial.setText(f"100{i}")
+        workspace.serial_changed(f"100{i}")
+    workspace.camera_tabs.setCurrentIndex(0)
+    until(lambda: not window.parameters.busy)
+    frozen = workspace.frame
+    window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(1), CameraId("CAM1"), 0),
+            1,
+            np.full((20, 60, 3), 99, dtype=np.uint8),
+        ),
+        generation=1,
+        source_key="basler:1001",
+    )
+    window.bridge.refresh()
+    assert not workspace.reference_modes["runtime"].isEnabled()
+    workspace.source_mode.setCurrentIndex(1)
+    assert source.definition.mode == "basler"
+    assert not workspace.loop.isEnabled() and workspace.folder.isEnabled()
+    assert workspace.frame is frozen and not engine.calls
+    assert workspace.reference_modes["runtime"].isEnabled()
+    workspace.set_reference_mode("runtime")
+    assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 99
+    workspace.source_mode.setCurrentIndex(0)
+    until(lambda: not window.parameters.busy)
+    assert source.definition.mode == "folder" and workspace.loop.isEnabled()
+    assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 1
+    assert not workspace.reference_modes["runtime"].isEnabled()
+    workspace.source_mode.setCurrentIndex(1)
+    assert tuple(c.folder for c in source.definition.cameras) == folders_before
+    assert source.path.read_bytes() == initial and source.dirty
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert not source.dirty and load_camera_sources(source.path).mode == "basler"
+    assert source.saved.basler_serials(
+        workspace.draft.definition.layout.camera_ids
+    ) == tuple(f"100{i}" for i in range(1, 7))
+    assert workspace.draft.definition == geometry
+    assert (
+        not engine.calls
+        and window.bridge.application.snapshot().counters == ProductionCounters()
+    )
+    # Discard restores both configurations, not just the current source mode.
+    workspace.serial_changed("9999")
+    workspace.source_mode.setCurrentIndex(0)
+    window.navigate(0)
+    box = workspace.findChildren(QMessageBox)[0]
+    next(
+        b for b in box.buttons() if b.text() == text("discard", window.language)
+    ).click()
+    QApplication.processEvents()
+    assert source.definition == source.saved and source.saved.mode == "basler"
+    assert source.saved.camera(CameraId("CAM1")).basler_serial == "1001"
+
+
+def test_incomplete_basler_mapping_save_rejects_before_machine_or_source_write(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    source = workspace.sources
+    assert source is not None and workspace.draft.path is not None
+    initial_source, initial_machine = (
+        source.path.read_bytes(),
+        workspace.draft.path.read_bytes(),
+    )
+    workspace.source_mode.setCurrentIndex(1)
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert source.path.read_bytes() == initial_source
+    assert workspace.draft.path.read_bytes() == initial_machine
+    assert source.dirty and workspace.status.text() == text(
+        "setup_failed", window.language
+    )
+    assert "six distinct" in workspace.message.toolTip()
+    assert (
+        not engine.calls
+        and window.bridge.application.snapshot().counters == ProductionCounters()
+    )

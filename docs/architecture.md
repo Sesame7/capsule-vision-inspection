@@ -12,10 +12,10 @@ performance, accuracy or machine-safety guarantee.
 
 Current Production uses six ordered cameras with six channels each (36 channels).
 Their identities/geometry are configuration, not an immutable hardware architecture.
-Normal Production startup uses local inputs; persistent/continuous real-camera
-composition and commissioned Production PLC integration are unimplemented.
-The developer launcher separately supports one externally triggered Basler group
-per Start, reusing the bounded acquisition capability. A FINS/UDP subset and
+Normal startup restores global Folder replay or one externally triggered Basler
+group per Start from saved CameraSources; continuous real-camera composition and
+commissioned Production PLC integration are unimplemented. The developer launcher
+also retains process-only Basler overrides, reusing the same bounded capability. A FINS/UDP subset and
 localhost simulator support manual operations
 and opt-in automatic first-station reporting through normal startup's Communication
 page or explicit developer composition. Reporting preferences are memory-only.
@@ -32,7 +32,7 @@ defaulting to UDP; TCP negotiation remains on their existing serial network owne
 | Inspection | Full-camera ViMo evidence assigned to configured channel ROIs, always-on scalar Occupancy with explicit EMPTY traditional skips, selective Size/Color checks, and independent technical status and product judgment. |
 | Application | Stopped candidate preparation, successful-Start activation, readiness warm-up, disposable runtime sessions, bounded observations and separate factual judgment/business-occurrence accounting. |
 | Local sources | Owned image-set ingress, independent per-camera Folder replay (application-lifetime RAM dataset for saved Loop sources), explicit fixed images, and session-local Pause/Continue/Step for supported Folder sources in normal startup and opt-in developer composition. |
-| Camera acquisition | Optional Qt-independent Basler six-serial hardware-trigger attempt with owned ordered BGR images and cleanup diagnostics; explicit developer-only one-cycle Production composition, without persistent source mapping or hardware-derived cycle identities. |
+| Camera acquisition | Optional Qt-independent Basler six-serial hardware-trigger attempt with owned ordered BGR images and cleanup diagnostics; saved global source mode/mapping in normal startup or explicit developer overrides, one cycle per Start without hardware-derived cycle identities. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and Communication pages, including session-local automatic-reporting controls/observations; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
 | Communication | Qt-independent UDP/TCP DM/WR words with independent manual/reporting selection, default UDP; TCP automatic nodes, shared first-station projection/submission, manual operations/register watches and opt-in bounded local Production reporting. UDP simulator; no commissioned hardware. |
@@ -167,12 +167,12 @@ admitted cycles/channel judgments, not capsules; only explicit Batch resets it,
 not Stop/Start or Recipe changes. The local source waits for RUNNING and each cycle
 before advancing. Overlapping-collection support is not physical-throughput evidence.
 
-Normal startup carries the validated Folder composition's optional replay command
-capability in `Startup.local_replay` and passes it to the existing Qt bridge. The
-developer launcher opts into the same source gate. Control presentation follows
-that capability, not the entry-point name; missing/unsupported sources and generic
-compositions retain generic operations. No additional controller or runtime is
-created by this wiring.
+Normal startup carries the optional replay command capability in
+`Startup.local_replay` and passes it to the existing Qt bridge. Availability follows
+the saved Folder mode; Basler uses ordinary Start/Stop. The developer launcher opts
+into the same source gate. Control presentation follows source availability, not
+the entry-point name; missing/unsupported sources and generic compositions retain
+generic operations. No additional controller or runtime is created by this wiring.
 
 These local sources can gate subsequent groups with Pause/Continue/Step while the
 application remains RUNNING. This creates no general Production PAUSED
@@ -217,7 +217,7 @@ adapter designs or scheduling structures are selected here.
 
 | Direction | Unresolved design or validation boundary |
 | --- | --- |
-| Normal real-camera composition | Continuous acquisition, persistent source/configuration mapping and normal-startup camera lifecycle integration; the bounded developer workflow does not implement these. |
+| Continuous real-camera acquisition | Persistent Basler selection supports one controlled group per Start; continuous acquisition and commissioned machine operation remain unimplemented. |
 | Trigger/cycle association | Explicit hardware/frame association, buffer leases, captured/arrival clocks and synchronization. |
 | Hardware capacity/deadlines/overload | Measured limits, deadline events and machine responses; software bounds/pacing do not establish field capacity. |
 | PLC integration and counting | Actual equipment/configuration, output association, delivery acknowledgement and physical-product accounting; the standalone FINS transports do not implement these or a capsule counter. |

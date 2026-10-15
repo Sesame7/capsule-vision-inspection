@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 from vimo_demo.configuration import CameraSources, save_camera_sources
 from vimo_demo.inspection import CameraId
@@ -27,6 +28,18 @@ class CameraSourceDraft:
 
     def set_loop(self, enabled: bool) -> None:
         self.definition = replace(self.definition, loop=enabled)
+
+    def set_mode(self, mode: Literal["folder", "basler"]) -> None:
+        self.definition = replace(self.definition, mode=mode)
+
+    def set_serial(self, camera: CameraId, serial: str) -> None:
+        self.definition = replace(
+            self.definition,
+            cameras=tuple(
+                replace(c, basler_serial=serial) if c.camera_id == camera else c
+                for c in self.definition.cameras
+            ),
+        )
 
     def save(self) -> None:
         save_camera_sources(self.path, self.definition)

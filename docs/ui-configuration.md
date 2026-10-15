@@ -188,9 +188,14 @@ even when a later demo launch uses different image dimensions.
 
 ### Folder settings versus runtime input
 
-Folder is the only operational source type. The selected camera has a folder path
-and Browse; Loop is a shared source setting, not per-camera wrapping for the browser.
-This page exposes no replay-rate editor or hardware capture feature. Source settings
+Vision selects one global **Folder replay / Basler single cycle** mode for all six
+cameras. Each selected CameraId has a Folder path/Browse and an explicit numeric
+Basler serial editor. No serial is discovered or assigned automatically. Both
+configurations survive mode switching and Discard; drafts do not change the running
+source. Loop is shared, disabled in Basler mode and preserved for later Folder replay,
+not per-camera wrapping for the browser. Folder browsing remains available in Basler
+mode for reference and required warm-up data. This page exposes no replay-rate editor,
+trigger command or continuous capture feature. Source settings
 have their own draft/file, independent of Recipe and MachineLayout. Paths and schema
 rules are owned by [camera sources](configuration.md#camera-sources).
 
@@ -203,7 +208,8 @@ precedence belong to [application](application.md#folder-replay), not this brows
 ### Frozen Folder / Runtime references
 
 On camera entry the initial reference prefers the latest same-camera display frame
-whose source key matches the configured folder. Otherwise it uses that folder's
+whose source key matches the configured source (Folder path or Basler serial).
+Otherwise it uses that camera's reference folder's
 first supported file. Without a source draft, available same-camera display frames
 provide the reference. Explicit Folder/Runtime controls then select the source;
 Runtime is disabled without an eligible frame, and a missing explicit reference
@@ -229,6 +235,9 @@ Only the selected file is decoded; there is no folder-wide image cache.
   discarded on leaving. They do not persist or advance runtime replay positions.
 - Changing a folder invalidates that camera's old reference/bounds/list/position;
   its next load starts from the new folder. ROI geometry is retained.
+- Changing mode/serial rechecks Runtime eligibility. An ineligible frozen Runtime
+  reference is replaced by its Folder reference; unchanged Folder pixels and browser
+  positions remain frozen. Live Basler pixels never qualify as Folder replay pixels.
 
 Index/count and dimensions are visible; the selected filename/path is in the
 tooltip. Folder reads use the existing single setup/preparation slot off Qt:
@@ -358,14 +367,18 @@ Queued completion is observed after thread exit; `ProductionApplication.configur
 rechecks state before candidate installation. Saved-source requirements remain
 part of preparation; Recipe Apply does not prove Folder availability.
 
-Vision first requires a saved clean Recipe. With Folder sources it checks each
+Vision first requires a saved clean Recipe. With either saved source mode it checks each
 configured camera's first naturally sorted image and all ROI bounds off Qt through
-the single setup slot. Only successful preflight permits machine save followed
+the single setup slot, plus complete/unique serial mapping for Basler. No camera SDK
+or hardware availability probe runs during Save. Only successful preflight permits machine save followed
 by source save. It then prepares that Recipe against the saved layout and installs
 the candidate. Fake/no-source setup uses its available reference bounds instead
 of Folder preflight. Saved-data capture and atomic file writes retain their current
 GUI-dispatch contexts; heavy hashing and image IO are background, not a blanket
 promise that all configuration work is asynchronous.
+Explicit source Save emits v2, including when the saved baseline was v1; opening,
+browsing or Recipe Apply does not rewrite the old file. Folder-only Production
+controls follow the saved mode after Save/apply, not an unsaved mode selection.
 
 Successful configuration removes cached Recipe choices with obsolete layouts;
 other Recipes need selection/preparation against the new saved layout. It does

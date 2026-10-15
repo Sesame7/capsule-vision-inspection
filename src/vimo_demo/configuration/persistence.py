@@ -1,4 +1,4 @@
-"""Explicit strict JSON v1 codecs and same-directory atomic file replacement."""
+"""Explicit strict JSON codecs and same-directory atomic file replacement."""
 
 import json
 import os
@@ -361,18 +361,41 @@ def save_recipe(path: Path, recipe: RecipeDefinition) -> None:
 
 
 def _sources(value: object) -> CameraSources:
-    data = _schema(value, "cameras loop target_fps", "cameras loop target_fps")
+    data = _object(
+        value,
+        "schema_version mode cameras loop target_fps",
+        "schema_version cameras loop target_fps",
+    )
+    schema = data["schema_version"]
+    if type(schema) is not int or schema not in (1, 2):
+        raise ConfigurationError("Unsupported camera-source schema")
+    if schema == 1:
+        _object(value, "schema_version cameras loop target_fps")
+        mode = "folder"
+    else:
+        mode = data.get("mode")
+        if mode not in ("folder", "basler"):
+            raise ConfigurationError("Expected global folder/basler mode")
     rows: list[CameraFolder] = []
     for value in _array(data["cameras"]):
-        row = _object(
-            value, "camera_id source_type folder", "camera_id source_type folder"
+        fields = (
+            "camera_id source_type folder"
+            if schema == 1
+            else "camera_id folder basler_serial"
         )
+        row = _object(value, fields, fields)
         folder = row["folder"]
         if not isinstance(folder, str):
             raise ConfigurationError("Folder path must be text")
+        serial = row["basler_serial"] if schema == 2 else ""
+        if not isinstance(serial, str):
+            raise ConfigurationError("Basler serial must be text")
         rows.append(
             CameraFolder(
-                CameraId(_str(row["camera_id"])), folder, _str(row["source_type"])
+                CameraId(_str(row["camera_id"])),
+                folder,
+                _str(row["source_type"]) if schema == 1 else "folder",
+                serial,
             )
         )
     loop, fps = data["loop"], data["target_fps"]
@@ -382,7 +405,11 @@ def _sources(value: object) -> CameraSources:
         or isinstance(fps, bool)
     ):
         raise ConfigurationError("Invalid replay settings")
-    return CameraSources(tuple(rows), loop, float(fps))
+    sources = CameraSources(
+        tuple(rows), loop, float(fps), mode="basler" if mode == "basler" else "folder"
+    )
+    sources.validate_mapping()
+    return sources
 
 
 def load_camera_sources(path: Path) -> CameraSources:
@@ -390,4 +417,21 @@ def load_camera_sources(path: Path) -> CameraSources:
 
 
 def save_camera_sources(path: Path, sources: CameraSources) -> None:
-    _save(path, asdict(sources))
+    sources.validate_mapping()
+    _save(
+        path,
+        {
+            "schema_version": 2,
+            "mode": sources.mode,
+            "cameras": [
+                {
+                    "camera_id": c.camera_id,
+                    "folder": c.folder,
+                    "basler_serial": c.basler_serial,
+                }
+                for c in sources.cameras
+            ],
+            "loop": sources.loop,
+            "target_fps": sources.target_fps,
+        },
+    )

@@ -136,6 +136,11 @@ capability determines presentation; generic/fake modes without it retain the tab
 above. It presents two compact Qt-drawn Play/Pause/Stop-square/Step-forward operation
 buttons, with localized labels, tooltips and accessibility names:
 
+In normal startup this capability survives saved Folder/Basler mode changes, while
+`replay_enabled` follows the saved mode. Basler hides Step/Pause/Continue and uses
+ordinary Start/Stop; the existing operation-group allocation remains stable for
+switching back to Folder. An unsaved Vision mode selection cannot change execution.
+
 Both replay targets are 132 x 44 logical pixels, with equal icon sizes/strokes.
 Their positions remain stable across Start/Pause/Continue/Step/End and disabled
 progress; an unavailable secondary action is hidden but retains its layout space.
@@ -510,6 +515,10 @@ available in tooltip/accessibility text. Severity icon/color and padding are sha
 Navigation or message changes never resize the workspace or clear backend evidence.
 Normal states and product-only NG leave the strip empty; NG stays in Production
 camera/channel evidence. A latest technical ERROR still appears, including ERROR + NG.
+For saved Basler sources the strip also shows neutral preparation, explicit ARMED
+and single-cycle processing notices during STARTING/RUNNING. They are queued from
+source observations, generation-checked, and subordinate to errors/FAULT/closing;
+RUNNING by itself does not prove cameras are armed. No new lifecycle state is added.
 Historical technical counters alone do not create a current warning.
 
 The current message precedence is:

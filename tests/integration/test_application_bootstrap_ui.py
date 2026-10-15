@@ -345,3 +345,38 @@ def test_preferences_write_error_is_visible_and_retains_selection(
     finally:
         close_window(window)
         delivery.detach()
+
+
+def test_v1_sources_browsing_and_recipe_apply_do_not_migrate(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    data = saved_data(tmp_path)
+    value = json.loads(data.sources.read_text(encoding="utf-8"))
+    value["schema_version"] = 1
+    del value["mode"]
+    for row in value["cameras"]:
+        del row["basler_serial"]
+        row["source_type"] = "folder"
+    original = json.dumps(value, indent=3).encode()
+    data.sources.write_bytes(original)
+    startup = load_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    try:
+        window.navigate(4)
+        until(lambda: not window.parameters.busy)
+        workspace = window.parameters.roi_workspace
+        assert workspace is not None and workspace.frame is not None
+        workspace.buttons["reference_next"].click()
+        until(lambda: not window.parameters.busy)
+        assert data.sources.read_bytes() == original
+        window.navigate(1)
+        window.parameters.save_and_apply()
+        until(lambda: not window.parameters.busy)
+        assert data.sources.read_bytes() == original
+        assert startup.application.snapshot().counters == ProductionCounters()
+        assert startup.application.snapshot().active is None
+    finally:
+        close_window(window)
+        delivery.detach()

@@ -149,7 +149,31 @@ STRINGS: dict[str, tuple[str, str]] = {
     "roi_set_rect": ("应用", "Apply"),
     "setup_saving": ("保存中", "Saving"),
     "setup_failed": ("保存/应用失败", "Save/apply failed"),
-    "source_error": ("回放源错误", "Replay source error"),
+    "source_error": ("采集源错误", "Acquisition source error"),
+    "source_mode": ("全局采集模式", "Global source mode"),
+    "source_mode_tip": (
+        "六台相机统一使用此模式；文件夹保留为参考和预热输入",
+        "One mode for all six cameras; folders remain reference/warm-up inputs",
+    ),
+    "source_folder_mode": ("文件夹回放", "Folder replay"),
+    "source_basler_mode": ("Basler 单周期", "Basler single cycle"),
+    "source_serial": ("相机序列号", "Camera serial"),
+    "source_serial_tip": (
+        "显式对应当前相机；Basler 模式需要六个不同的数字序列号",
+        "Explicit identity for this camera; Basler requires six distinct numeric serials",
+    ),
+    "basler_preparing": (
+        "Basler 准备中；尚未就绪，请勿触发",
+        "Preparing Basler; not ARMED, do not trigger",
+    ),
+    "basler_armed": (
+        "ARMED · 六相机就绪，等待一次外部拍照触发",
+        "ARMED · Six cameras ready; awaiting one external trigger",
+    ),
+    "basler_processing": (
+        "Basler 采集完成，正在处理单周期",
+        "Basler acquisition finished; processing one cycle",
+    ),
     "camera_setup": ("相机设置", "Camera setup"),
     "camera_number": ("相机 {number}", "Camera {number}"),
     "source_folder": ("图片文件夹", "Image folder"),
