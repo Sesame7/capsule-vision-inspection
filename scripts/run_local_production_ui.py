@@ -1,6 +1,7 @@
-"""Real ViMo Production UI: saved per-camera folders or explicit CLI images."""
+"""Real ViMo developer UI: Folder/fixed inputs or opt-in one-cycle Basler."""
 
 import argparse
+import json
 import sys
 import traceback
 from pathlib import Path
@@ -35,6 +36,22 @@ def main() -> int:
     )
     selection.add_argument(
         "--images", nargs=6, type=Path, help="Six paths in configured camera order"
+    )
+    parser.add_argument(
+        "--basler-serials",
+        nargs=6,
+        help="Opt-in one hardware group per Start; serials in MachineLayout camera order. Folder inputs become warm-up only",
+    )
+    parser.add_argument(
+        "--basler-timeout",
+        type=float,
+        default=30.0,
+        help="Full hardware observation window after ARMED, seconds (0,120]",
+    )
+    parser.add_argument(
+        "--basler-mapping-confirmed",
+        action="store_true",
+        help="Developer confirms the displayed serial-to-layout mapping; not persistent calibration",
     )
     parser.add_argument("--language", choices=("zh", "en"), default="zh")
     parser.add_argument("--size", default="1080x1920")
@@ -72,6 +89,14 @@ def main() -> int:
         metavar=("NETWORK", "NODE", "UNIT"),
     )
     args = parser.parse_args()
+    if args.basler_serials is not None and not args.basler_mapping_confirmed:
+        parser.error(
+            "Verify serial-to-MachineLayout mapping and pass --basler-mapping-confirmed"
+        )
+    if args.basler_mapping_confirmed and args.basler_serials is None:
+        parser.error("--basler-mapping-confirmed requires --basler-serials")
+    if args.basler_serials is not None and args.report_first_station:
+        parser.error("Basler single-cycle mode cannot perform PLC reporting")
     try:
         width, height = (int(n) for n in args.size.lower().split("x"))
         if width < 880 or height < 720:
@@ -98,11 +123,26 @@ def main() -> int:
             )
             if args.report_first_station
             else None,
-            replay_controls=True,
+            replay_controls=args.basler_serials is None,
+            basler_serials=args.basler_serials,
+            basler_timeout=args.basler_timeout,
         )
     except Exception:
         traceback.print_exc()
         return 1
+    if args.basler_serials is not None:
+        print(
+            json.dumps(
+                {
+                    "event": "developer_basler_mapping",
+                    "mapping": dict(
+                        zip(composition.store.cameras, args.basler_serials, strict=True)
+                    ),
+                    "note": "Provisional: verify physical camera identities before Start. Folder pixels are warm-up only.",
+                }
+            ),
+            flush=True,
+        )
     # Start cannot be requested until the gate/window exist. Initial artifact IO
     # above precedes Qt creation, and subsequent preparation uses the existing UI.
     qt = QApplication(sys.argv[:1])
@@ -111,7 +151,9 @@ def main() -> int:
         bridge = QtProductionBridge(
             composition.application,
             composition.store,
-            local_replay=composition.application,
+            local_replay=composition.application
+            if args.basler_serials is None
+            else None,
         )
         SourceNotifications(bridge, delivery)  # QObject parent retains the receiver.
         window = ProductionWindow(
@@ -121,7 +163,9 @@ def main() -> int:
             recipe_editor=composition.editor,
         )
         window.setWindowTitle(
-            "ViMo · Local files / real inference · 本地图片 / 真实推理"
+            "ViMo · Basler single cycle / real inference · 单周期硬触发"
+            if args.basler_serials is not None
+            else "ViMo · Local files / real inference · 本地图片 / 真实推理"
         )
         window.resize(width, height)
         window.show()

@@ -614,8 +614,9 @@ deferred to H2D-2.
 ## Isolated Basler acquisition
 
 `application.basler.BaslerAcquisitionSource` is a Qt-independent synchronous
-capability, separate from `ProductionApplication`, runtime sessions and Folder
-replay. It does not change `CameraSources`, normal startup or saved configuration.
+capability. Its standalone use is separate from `ProductionApplication`, runtime
+sessions and Folder replay; the explicit developer composition below reuses it.
+It does not change `CameraSources`, normal startup or saved configuration.
 Only `application/_basler_sdk.py` accesses pypylon; imports/CLI help and Folder
 startup do not require it. The externally provisioned field pypylon/NumPy/pylon
 environment is a prerequisite for hardware use, not a new locked dependency.
@@ -675,11 +676,19 @@ SDK waits are finite, but Open/Stop/Close and other native calls cannot be forci
 preempted; an unresolved native call remains an unresolved owning call. Process
 control exceptions propagate after attempted cleanup with cleanup diagnostics.
 
+Optional `acquire(cancel=Event())` observes an owner Stop between preparation/
+arming stages, individual acquisition waits, and after cleanup. It raises
+`BaslerAcquisitionCancelled` with the same report/cleanup guarantees, even if six
+frames had arrived. It never returns a partial group or ends a successful window
+early. `cleanup_safe` is inspected after the owning call/thread ends, not as a
+native cancellation mechanism. Default standalone calls without cancellation
+retain their full-window behavior.
+
 Six frames are only a candidate image group under an independently maintained
 single-trigger condition, not proof of one electrical pulse, simultaneous exposure
 or PLC consumption. Raw SDK counters/timestamps are not shared cycle identity.
-Cross-camera physical association and Production/hardware-source composition are
-**Target / unimplemented**.
+Cross-camera physical association and normal-startup/continuous hardware-source
+composition are **Target / unimplemented**.
 
 Developer verification (in an already provisioned field environment; do not install
 into the application environment). First coordinate the operator, then run:
@@ -697,6 +706,90 @@ into a separate diagnostic package with empty package initializers; no remote
 repository deployment, application import chain or dependency installation is
 needed. Ordinary deterministic verification uses
 `uv run --no-sync pytest tests/unit/test_basler_acquisition.py tests/unit/test_folder_replay.py --tb=short`.
+
+### Developer Basler single cycle
+
+`scripts/run_local_production_ui.py --basler-serials <six serials>` opts into one
+Basler group per explicit Start. Supply serials in the **configured MachineLayout
+camera order**, not SDK enumeration order. There is no default serial mapping.
+`--basler-mapping-confirmed` records the developer's explicit verification; it
+does not persist a mapping or certify physical calibration. The provisional field
+mapping to verify manually is:
+
+| Configured camera | Provisional serial |
+| --- | --- |
+| CAM1 | 25334173 |
+| CAM2 | 25334174 |
+| CAM3 | 25334178 |
+| CAM4 | 25334180 |
+| CAM5 | 25334188 |
+| CAM6 | 25334184 |
+
+The CLI and each running generation print the actual mapping. In particular,
+CAM5/CAM6 here do **not** follow sorted serial order. Before field acceptance,
+verify the physical camera identity/location for every row. This phase does not
+calibrate cameras, change ROIs or save this provisional association.
+
+The existing local session/serial source thread owns acquisition; Qt only sends
+application commands. Each Start still verifies the artifact and warms the one
+worker-owned ViMo engine. Saved Folder inputs or explicit `--frames-dir`/`--images`
+provide a valid layout-checked warm-up group. In Basler mode these pixels create
+no production cycles, display publications, judgments or counters, and are never
+reused as the first production input. A failed warm-up does not open cameras.
+
+Only after successful RUNNING does the source acquire and announce `ARMED`.
+Arrange one external manual press/release after that notification, never an
+automatic software/PLC trigger. `--basler-timeout` defaults to 30 seconds and
+keeps the complete S1-D1 observation window (up to 120 s); this can deliberately
+delay result delivery. There is no throughput/real-time claim.
+
+A complete group must match the requested serial tuple and saved camera bounds.
+Its BGR pixels pass through `LocalCycleIngress`, which supplies application-local
+CycleId(1), configured CameraIds and sequence 0, and copies into owned Frames.
+The normal serial worker/pipeline produces the 36-channel result and accounting.
+SDK metadata is printed as technical evidence, never used to construct identities.
+Display copies use the actual terminal result's FrameIds, matching pixels and
+generation. After that terminal result, the source requests normal Stop; READY
+requires source and runtime exit. The latest result/images remain observable.
+No next attempt starts automatically. Another explicit Start creates a fresh
+generation/source; counters still reset only through explicit Batch.
+
+Stop/Close sets the source Event. Cancellation or a group completing after Stop
+cannot admit a new late cycle. Already admitted inspection follows existing
+active-cycle shutdown semantics. Safe cancellation is normal source completion;
+other acquisition errors remain actionable source-Future/queued Qt feedback and
+request Stop. Missing/extra/ambiguous groups create no cycle or product NG.
+Stop waits for actual source exit and verified SDK cleanup; it cannot force a
+blocked native call. Unsafe SDK ownership remains in the retained session and
+causes existing cleanup FAULT semantics. This mode does not add a hardware-recovery
+policy or retry SDK cleanup from another thread.
+
+Replay Pause/Continue/Step and automatic first-station reporting are unavailable
+in this mode; combining it with `--report-first-station` is rejected. Existing
+Folder/reporting paths and localhost-only manual write protection are unchanged.
+Normal `app.py`, persistent CameraSources and operator source-selection UI remain
+Folder-based and do not import pypylon.
+
+Hardware verification requires the updated developer code and an **owner-approved,
+separately provisioned pypylon 26.8/pylon runtime** in the Production environment.
+The isolated `basler-probe` environment is not a substitute for that application's
+ViMo environment. Do not install, copy packages, alter PATH or share site-packages
+to bypass this prerequisite. With approved existing field assets and verified
+physical mapping, from the deployed repository root:
+
+```powershell
+uv run --no-sync python scripts/run_local_production_ui.py --model-config data/models/model.json --machine-config data/machine/machine.json --recipe data/recipes/local.recipe.json --sources-config data/sources/camera_sources.json --basler-serials 25334173 25334174 25334178 25334180 25334188 25334184 --basler-mapping-confirmed --basler-timeout 90 --language zh --size 1920x1080
+```
+
+Coordinate the operator before Start, verify zero warm-up production effects,
+wait for ARMED, then press/release once. Verify six **actual** camera images,
+36-channel terminal results, one admitted/completed cycle, automatic Stop/READY
+and preserved result presentation. Close normally and confirm process/device
+release; a finite observer timeout is not proof of exit. Deterministic verification:
+
+```powershell
+uv run --no-sync pytest tests/unit/test_basler_acquisition.py tests/integration/test_basler_production.py tests/integration/test_local_production_ui.py --tb=short
+```
 
 ## Shutdown
 

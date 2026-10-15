@@ -2,8 +2,10 @@
 
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import CancelledError
 from dataclasses import dataclass
 from math import isfinite
+from threading import Event
 from time import perf_counter
 from typing import Protocol
 
@@ -130,6 +132,10 @@ class BaslerAcquisitionError(RuntimeError):
         )
 
 
+class BaslerAcquisitionCancelled(BaslerAcquisitionError):
+    """Owner Stop observed; no successful group, even if six frames had arrived."""
+
+
 class _Backend(Protocol):
     """Private test seam, not an application camera/source abstraction."""
 
@@ -186,8 +192,16 @@ class BaslerAcquisitionSource:
             self._backend = None
         return rows
 
+    @property
+    def cleanup_safe(self) -> bool:
+        """Inspect after the owning call/thread ends; not a native cancellation API."""
+        return not self._active and self._backend is None
+
     def acquire(
-        self, *, on_armed: Callable[[ArmedAcquisition], None] | None = None
+        self,
+        *,
+        on_armed: Callable[[ArmedAcquisition], None] | None = None,
+        cancel: Event | None = None,
     ) -> AcquisitionGroup:
         if self._active or self._backend is not None:
             raise RuntimeError("Acquisition active or prior SDK cleanup unresolved")
@@ -202,20 +216,25 @@ class BaslerAcquisitionSource:
         cause: BaseException | None = None
         stage, serial = "initialization", None
         try:
+            _check_cancel(cancel)
             backend = self._backend = _load_backend()
             stage = "inventory"
             backend.inventory(self.serials)
             for serial in self.serials:
+                _check_cancel(cancel)
                 stage = "prepare"
                 settings.append(backend.prepare(serial))
             serial = None
             stage = "arming"
+            _check_cancel(cancel)
             readiness = backend.arm()
+            _check_cancel(cancel)
             if tuple(row.serial for row in readiness) != self.serials or any(
                 row.supported and row.ready is not True for row in readiness
             ):
                 raise RuntimeError("Incomplete or unsuccessful readiness observation")
             for serial in self.serials:
+                _check_cancel(cancel)
                 if backend.available(serial, 0):
                     raise RuntimeError(
                         f"Pre-ARMED frame on {serial}; association ambiguous"
@@ -226,10 +245,12 @@ class BaslerAcquisitionSource:
             stage = "armed_notification"
             if on_armed is not None:
                 on_armed(armed)
+            _check_cancel(cancel)
             stage = "acquisition"
             # Observe the entire window, including after the first complete set.
             while perf_counter() < armed.deadline:
                 for serial in self.serials:
+                    _check_cancel(cancel)
                     remaining = armed.deadline - perf_counter()
                     if remaining <= 0:
                         break
@@ -244,6 +265,7 @@ class BaslerAcquisitionSource:
                         self._accept(image, serial, images)
             # One bounded nonblocking sweep catches queued boundary observations.
             for serial in self.serials:
+                _check_cancel(cancel)
                 if backend.available(serial, 0):
                     row, _ = backend.retrieve(serial)
                     observations.append(row)
@@ -275,6 +297,9 @@ class BaslerAcquisitionSource:
                 cause = cause or exc
             finally:
                 self._active = False
+        if cause is None and cancel is not None and cancel.is_set():
+            cause = CancelledError("Basler acquisition cancelled during cleanup")
+            issues.append(acquisition_issue("cancelled", None, cause))
         report = AcquisitionReport(
             self.serials,
             started,
@@ -291,6 +316,8 @@ class BaslerAcquisitionSource:
             )
             raise cause
         if issues:
+            if isinstance(cause, CancelledError):
+                raise BaslerAcquisitionCancelled(report) from cause
             raise BaslerAcquisitionError(report) from cause
         return AcquisitionGroup(tuple(images[s] for s in self.serials), report)
 
@@ -327,3 +354,8 @@ def acquisition_issue(
     return AcquisitionIssue(
         stage, serial, str(exc), f"{type(exc).__module__}.{type(exc).__qualname__}"
     )
+
+
+def _check_cancel(cancel: Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise CancelledError("Basler acquisition cancelled by owner")
