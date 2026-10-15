@@ -249,7 +249,7 @@ original documents remain recoverable at Git checkpoint
 | [UI shell](ui-shell.md) | Presentation, display identity, feedback, Qt delivery, closing and review workflows. |
 | [UI configuration](ui-configuration.md) | Recipe/Vision drafts, references, ROI/tuning workflows and distinct Save/Apply/activation stages. |
 | [Inspection performance](inspection-performance.md) | Measurement workloads/boundaries, reports, interpretation, historical results and verification. |
-| [Communication](communication.md) | UDP/TCP subsets and socket lifecycle/errors; UDP local reporting/simulation, session-local UI controls/observations, manual workspace and deferred commissioned hardware integration. |
+| [Communication](communication.md) | UDP/TCP clients and socket lifecycle/errors; independent transport selection for manual operations and optional Production reporting (default UDP), UDP-only localhost simulator CLI and unimplemented commissioned real-PLC integration. |
 
 [README](../README.md) owns setup, usage and verification commands; [AGENTS](../AGENTS.md)
 owns durable engineering safeguards and proportional checks. Temporary migration
