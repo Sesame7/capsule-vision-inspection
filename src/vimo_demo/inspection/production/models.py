@@ -236,10 +236,16 @@ class ChannelInspectionResult:
     vimo_findings: tuple[FindingAssignment, ...] = ()
     occupancy: OccupancyResult | None = None
     traditional_skip: TraditionalSkipReason | None = None
+    forced_reject: Reason | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "checks", tuple(self.checks))
         object.__setattr__(self, "vimo_findings", tuple(self.vimo_findings))
+        if (
+            self.forced_reject is not None
+            and self.forced_reject.source is not FindingSource.COLLECTION
+        ):
+            raise ValueError("Forced rejection requires explicit COLLECTION evidence")
         if {check.source for check in self.checks} != {
             FindingSource.VIMO,
             FindingSource.TRADITIONAL,
@@ -276,6 +282,8 @@ class ChannelInspectionResult:
 
     @property
     def assessment(self) -> Assessment:
+        if self.forced_reject is not None:
+            return Assessment(TechnicalStatus.ERROR, ProductJudgment.NG)
         assessment = aggregate(self.checks)
         if self.occupancy is not None and self.occupancy.error_code is not None:
             return Assessment(
@@ -305,7 +313,9 @@ class ChannelInspectionResult:
 
     @property
     def reasons(self) -> tuple[Reason, ...]:
-        return tuple(reason for check in self.checks for reason in check.reasons)
+        return tuple(reason for check in self.checks for reason in check.reasons) + (
+            (self.forced_reject,) if self.forced_reject else ()
+        )
 
 
 @dataclass(frozen=True, slots=True)

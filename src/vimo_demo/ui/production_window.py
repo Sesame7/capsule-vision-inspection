@@ -318,6 +318,7 @@ class ProductionWindow(QMainWindow):
         bridge.replay_changed.connect(self._replay_changed)
         bridge.source_progress_changed.connect(self._source_progress_changed)
         bridge.frames_changed.connect(self._frames_changed)
+        bridge.presentation_ready.connect(self._render_cards)
         bridge.command_failed.connect(self._command_failed)
         bridge.command_finished.connect(self._command_finished)
         bridge.shutdown_finished.connect(self._shutdown_finished)
@@ -646,6 +647,8 @@ class ProductionWindow(QMainWindow):
         self._render()
 
     def _render_cards(self) -> None:
+        if self.bridge.refreshing:
+            return  # Snapshot and latest pixels are presented together after refresh.
         identity = (
             self.snapshot.active
             if self.snapshot.state is ApplicationState.RUNNING

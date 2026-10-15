@@ -19,6 +19,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 
 from vimo_demo.application.basler import AcquisitionReport, ArmedAcquisition
+from vimo_demo.application.continuous_basler import ContinuousArmedAcquisition
 from vimo_demo.application.session import EngineFactory
 from vimo_demo.communication.operations import RequestKind
 from vimo_demo.communication.simulator import FinsUdpSimulator
@@ -63,7 +64,7 @@ def install() -> None:
         engine_factory: EngineFactory = real_engine,
         observe_source: Callable[[Future[None]], None] = lambda _: None,
         observe_acquisition: Callable[
-            [ArmedAcquisition | AcquisitionReport], None
+            [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
         ] = basler_notice,
     ) -> Startup:
         # Missing test data gives the real stopped UNCONFIGURED shell, no GPU.

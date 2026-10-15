@@ -234,13 +234,17 @@ class CameraCard(QFrame):
                 if state in (Indicator.NG, Indicator.ERROR_NG)
                 else Style.surface
             )
-            button.setStyleSheet(
+            stylesheet = (
                 f"QPushButton {{ color: {colors[state]}; border: 1px solid {border}; "
                 f"padding: 0px; background: {background}; font-size: 12px; "
                 "border-radius: 8px; outline: none; } "
                 f"QPushButton:hover {{ background: {Style.raised}; border-color: {colors[state]}; }} "
                 f"QPushButton:focus {{ border: 2px solid {Style.accent}; }}"
             )
+            # Reapplying an identical stylesheet repolishes Qt widgets during
+            # every live frame. Keep the existing appearance without that work.
+            if button.styleSheet() != stylesheet:
+                button.setStyleSheet(stylesheet)
         result = self.result
         technical = (
             result is not None
@@ -256,12 +260,14 @@ class CameraCard(QFrame):
             widget.setToolTip(name)
         self.identity.setAccessibleName(name)
         self.identity_group.setAccessibleName(name)
-        self.identity.setStyleSheet(
+        identity_style = (
             f"color: {Style.warning if technical else Style.primary}; font-weight: 600;"
         )
-        self.setStyleSheet(
-            f"QFrame#camera {{ border-color: {Style.warning if technical else Style.border}; }}"
-        )
+        if self.identity.styleSheet() != identity_style:
+            self.identity.setStyleSheet(identity_style)
+        card_style = f"QFrame#camera {{ border-color: {Style.warning if technical else Style.border}; }}"
+        if self.styleSheet() != card_style:
+            self.setStyleSheet(card_style)
         self.timing.setText(
             f"{result.timing.total_ms:.1f} ms"
             if result

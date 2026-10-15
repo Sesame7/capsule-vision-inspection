@@ -20,6 +20,7 @@ from vimo_demo.application import (
     ApplicationState,
     ConfigurationIdentity,
     ProductionApplication,
+    ProductionApplicationSnapshot,
     ProductionCounters,
 )
 from vimo_demo.inspection import CameraId, CycleId
@@ -32,7 +33,8 @@ from vimo_demo.inspection.production import (
     Reason,
     TechnicalStatus,
 )
-from vimo_demo.ui.display_frames import LatestDisplayFrameStore
+from vimo_demo.ui.camera_card import CameraCard
+from vimo_demo.ui.display_frames import DisplayFrame, LatestDisplayFrameStore
 from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
 from vimo_demo.ui.production_presentation import Indicator
 from vimo_demo.ui.production_style import (
@@ -144,6 +146,60 @@ def test_bilingual_geometry_and_navigation(
     window.resize(size[1], size[0])
     qapp.processEvents()
     assert tuple(id(card) for card in window.cards) == identities
+
+
+def test_snapshot_and_pixels_present_cards_once_per_refresh(
+    screen: tuple[ProductionWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, session = screen
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    calls: list[CameraId] = []
+    original = CameraCard.present
+
+    def present(
+        card: CameraCard,
+        frame: DisplayFrame | None,
+        snapshot: ProductionApplicationSnapshot,
+        language: Language,
+    ) -> None:
+        calls.append(card.camera_layout.camera_id)
+        original(card, frame, snapshot, language)
+
+    monkeypatch.setattr(CameraCard, "present", present)
+    app = window.bridge.application
+    receipt = app.begin_cycle(CycleId(1))
+    session.cycles[-1].accepted.set_result(None)
+    session.cycles[-1].result.set_result(production())
+    assert receipt.result.done()
+    for camera in window.bridge.frames.cameras:
+        window.bridge.frames.publish(source_frame(camera), generation=1)
+    window.bridge.refresh()
+    assert calls == list(window.bridge.frames.cameras)
+    assert all(
+        card.result
+        and card.result.frame_id == source_frame(card.camera_layout.camera_id).id
+        for card in window.cards
+    )
+    assert window.snapshot.counters.cycles_completed == 1
+    calls.clear()
+    window.bridge.refresh()
+    assert not calls  # Unchanged observation does no card work.
+    styles: list[QWidget] = []
+    apply_style = QWidget.setStyleSheet
+
+    def stylesheet(widget: QWidget, value: str) -> None:
+        styles.append(widget)
+        apply_style(widget, value)
+
+    monkeypatch.setattr(QWidget, "setStyleSheet", stylesheet)
+    for card, frame in zip(
+        window.cards, window.bridge.frames.snapshot().frames, strict=True
+    ):
+        card.present(frame, window.snapshot, window.language)
+    assert not styles  # Identical live status must not repolish any card/button.
 
 
 class CommandReceiver(QObject):

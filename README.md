@@ -2,7 +2,7 @@
 
 Configurable capsule-inspection application with six configured cameras and 36
 inspection channels in the current layout. It combines serial ViMo inference,
-traditional inspection checks and saved Folder replay or single-cycle Basler acquisition in a Chinese/English
+traditional inspection checks and saved Folder replay or controlled continuous Basler acquisition in a Chinese/English
 PySide6 desktop UI, with optional FINS/UDP or FINS/TCP communication/reporting and
 read-only Web observation. Manual UI and Production reporting writes remain
 restricted to localhost.
@@ -125,9 +125,10 @@ operator coordination, owned images, failure/cleanup guarantees and independent
 field staging. Startup restoration and Folder workflows do not require pypylon;
 actual Basler acquisition requires separately provisioned pypylon/pylon. Vision
 saves one global source mode, six explicit serials and independent Folder reference/
-warm-up paths. See the [normal Basler workflow](docs/application.md#persistent-basler-single-cycle)
-for Start/ARMED, one external trigger and automatic Stop/READY. No trigger is generated
-by the application, and no environment synchronization is needed for this phase.
+warm-up paths. See the [normal Basler workflow](docs/application.md#persistent-basler-continuous-inspection)
+for Start/ARMED, passive external hardware triggering, early serial inspection and
+Stop/READY. Production generates no PLC photo commands. No environment synchronization
+is performed; hardware trigger identity and reject-result commissioning remain limited.
 The separate [developer Basler workflow](docs/application.md#developer-basler-single-cycle)
 uses Folder images only for warm-up, requires explicit serial mapping verification,
 and runs at most one hardware group through Production per Start. It requires

@@ -182,7 +182,7 @@ STRINGS: dict[str, tuple[str, str]] = {
         "One mode for all six cameras; folders remain reference/warm-up inputs",
     ),
     "source_folder_mode": ("文件夹回放", "Folder replay"),
-    "source_basler_mode": ("Basler 单周期", "Basler single cycle"),
+    "source_basler_mode": ("Basler 连续检测", "Basler continuous inspection"),
     "source_serial": ("相机序列号", "Camera serial"),
     "source_serial_tip": (
         "显式对应当前相机；Basler 模式需要六个不同的数字序列号",
@@ -193,8 +193,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Preparing Basler; not ARMED, do not trigger",
     ),
     "basler_armed": (
-        "ARMED · 六相机就绪，等待一次外部拍照触发",
-        "ARMED · Six cameras ready; awaiting one external trigger",
+        "ARMED · 六相机已就绪，等待外部硬件触发",
+        "ARMED · Six cameras ready; waiting for external hardware triggers",
     ),
     "basler_processing": (
         "Basler 采集完成，正在处理单周期",

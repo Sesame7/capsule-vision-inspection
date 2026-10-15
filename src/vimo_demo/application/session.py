@@ -20,6 +20,7 @@ from vimo_demo.runtime import (
     InferenceWorker,
     RuntimeCoordinator,
 )
+from vimo_demo.runtime.early_inspection import EarlyInspectionCoordinator
 
 from .models import ApplicationError, ApplicationStateError, PreparedConfiguration
 from .pipeline import ConfiguredProductionPipeline
@@ -89,6 +90,7 @@ class ProductionRuntimeSession:
         max_collecting: int = 2,
         max_ready: int = 2,
         max_commands: int = 32,
+        early_camera: bool = False,
     ) -> None:
         if type(warmup_iterations) is not int or warmup_iterations < 1:
             raise ValueError("warmup_iterations must be positive")
@@ -141,14 +143,23 @@ class ProductionRuntimeSession:
                 self._results[cycle.cycle_id] = result
             return raw
 
-        self._coordinator = RuntimeCoordinator(
-            InferenceWorker(factory),
-            prepared.configuration.layout.camera_ids,
-            timeout=cycle_timeout,
-            max_collecting=max_collecting,
-            max_ready=max_ready,
-            max_commands=max_commands,
-            cycle_inspector=inspect,
+        self._coordinator = (
+            EarlyInspectionCoordinator(
+                InferenceWorker(factory),
+                prepared.configuration.layout,
+                pipeline.inspect_frame,
+                pipeline.forced_camera,
+            )
+            if early_camera
+            else RuntimeCoordinator(
+                InferenceWorker(factory),
+                prepared.configuration.layout.camera_ids,
+                timeout=cycle_timeout,
+                max_collecting=max_collecting,
+                max_ready=max_ready,
+                max_commands=max_commands,
+                cycle_inspector=inspect,
+            )
         )
 
     def _unsafe_cleanup(self) -> None:
@@ -176,6 +187,9 @@ class ProductionRuntimeSession:
         return self._coordinator.start()
 
     def begin_cycle(self, cycle_id: CycleId) -> ProductionCycle:
+        if isinstance(self._coordinator, EarlyInspectionCoordinator):
+            early = self._coordinator.begin(cycle_id)
+            return ProductionCycle(early.accepted, early.result)
         admission = self._coordinator.admit_cycle(cycle_id)
         result: Future[ProductionInspectionResult] = Future()
         result.set_running_or_notify_cancel()

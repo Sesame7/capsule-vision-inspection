@@ -17,6 +17,7 @@ from vimo_demo.application import (
     prepare_configuration,
 )
 from vimo_demo.application.basler import AcquisitionReport, ArmedAcquisition
+from vimo_demo.application.continuous_basler import ContinuousArmedAcquisition
 from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
 from vimo_demo.application.local_replay import LocalReplayCommands
 from vimo_demo.application.preferences import (
@@ -133,7 +134,7 @@ def load_startup(
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
     observe_acquisition: Callable[
-        [ArmedAcquisition | AcquisitionReport], None
+        [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
     ] = basler_notice,
 ) -> Startup:
     """Blocking startup IO only, called before QApplication is constructed.
