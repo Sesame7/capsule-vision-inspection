@@ -228,7 +228,7 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("area", list(FinsMemoryArea))
-def test_validation_remote_read_and_localhost_only_write(
+def test_validation_remote_read_and_write(
     qapp: QApplication, language: Language, area: FinsMemoryArea
 ) -> None:
     calls: list[CommunicationRequest] = []
@@ -250,17 +250,20 @@ def test_validation_remote_read_and_localhost_only_write(
         page.advanced_button.click()
         assert page.advanced.isVisible()
         page.host.setText("192.0.2.10")
-        assert not page.write_button.isEnabled() and page.read_button.isEnabled()
-        assert text("comm_remote_read", language) == page.permission.text()
-        assert not page.dispatch(RequestKind.WRITE) and not calls
+        assert page.write_button.isEnabled() and page.read_button.isEnabled()
+        assert text("comm_local_write", language) == page.permission.text()
+        page.write_values.setText("4321")
+        assert page.dispatch(RequestKind.WRITE)
+        until(lambda: not page.busy)
+        assert calls[-1].host == "192.0.2.10"
         page.destination[1].setValue(19)
         assert page.dispatch(RequestKind.READ)
         until(lambda: not page.busy)
         assert calls[-1].host == "192.0.2.10" and calls[-1].destination.node == 19
         page.host.setText("127.0.0.2")
-        assert not page.write_button.isEnabled() and not page.dispatch(
-            RequestKind.WRITE
-        )
+        assert page.write_button.isEnabled() and page.dispatch(RequestKind.WRITE)
+        until(lambda: not page.busy)
+        assert calls[-1].host == "127.0.0.2"
         page.host.setText("localhost")
         assert not page.dispatch(RequestKind.READ)
         assert page.status.text() == text("comm_invalid", language)
@@ -271,7 +274,7 @@ def test_validation_remote_read_and_localhost_only_write(
         page.address.setValue(area.word_count - 1)
         page.count.setValue(2)
         assert not page.dispatch(RequestKind.READ)
-        assert len(calls) == 1
+        assert len(calls) == 3
         assert page.write_button.toolTip() == text("comm_local_write", language)
     finally:
         page.request_close(lambda: None)

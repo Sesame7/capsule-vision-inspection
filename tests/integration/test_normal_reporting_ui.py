@@ -503,6 +503,7 @@ def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
             assert local.application.snapshot().state is ApplicationState.RUNNING
             with pytest.raises(ApplicationStateError):
                 local.application.set_reporting_selection(ReportingSelection())
+            window.communication.port.setValue(peer.port)
             window.communication.area.setCurrentIndex(1)
             window.communication.address.setValue(49)
             window.communication.write_values.setText("7")
@@ -538,6 +539,7 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
                 assert observed is not None and observed.thread_alive
                 assert not panel.protocol.isEnabled()
                 page = window.communication
+                page.port.setValue(peer.port)
                 page.area.setCurrentIndex(1)
                 page.address.setValue(49)
                 page.write_values.setText("7")
@@ -737,8 +739,9 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         page.address.setValue(49)
         page.write_values.setText("7")
         manual_before = len(manual.packets)
-        assert not page.dispatch(RequestKind.WRITE)
-        assert len(manual.packets) == manual_before
+        assert page.dispatch(RequestKind.WRITE)
+        until(lambda: not page.busy)
+        assert len(manual.packets) > manual_before
         guarded = CommunicationRequest(
             RequestKind.WRITE,
             "127.0.0.1",
@@ -751,8 +754,11 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
             area=FinsMemoryArea.W,
             transport=manual_transport,
         )
+        panel.controller.validate_manual_request(guarded)  # Independent endpoint.
         with pytest.raises(PermissionError):
-            panel.controller.validate_manual_request(guarded)
+            panel.controller.validate_manual_request(
+                replace(guarded, port=automatic.port)
+            )
         assert page.dispatch(RequestKind.READ)  # Reservation never blocks reads.
         until(lambda: not page.busy)
         assert page.last_response is not None
@@ -796,3 +802,20 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         )
         assert panel.source[1].value() == 3  # Inactive UDP values survive TCP switches.
         assert {p: p.read_bytes() for p in files} == files
+
+
+def test_reporting_host_editor_validates_and_forwards_remote_endpoint(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    with normal_window(tmp_path) as (_, _, panel):
+        panel.host.setText("192.0.2.42")
+        panel.host.editingFinished.emit()
+        assert panel.controller.reporting_selection().settings.host == "192.0.2.42"
+        assert "192.0.2.42" in panel.endpoint.text()
+        panel.host.setText("not-an-ip")
+        panel.host.editingFinished.emit()
+        assert panel.controller.reporting_selection().settings.host == "192.0.2.42"
+        assert panel.host.text() == "192.0.2.42"
+        assert "not-an-ip" in panel.host.toolTip()
+        assert panel.controller.reporting_snapshot() is None

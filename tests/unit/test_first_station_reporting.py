@@ -9,6 +9,7 @@ from tests.business_support import channel, mixed_result
 from tests.reporting_support import WAIT, FaultMode, readback, seed, server, settings
 
 from vimo_demo.communication import (
+    FinsAddress,
     FinsPlcError,
     FinsTimeoutError,
     FinsTransport,
@@ -52,18 +53,25 @@ def test_complete_collection_projects_scalar_business_states(
 
 
 @pytest.mark.parametrize("status", [CycleStatus.TIMED_OUT, CycleStatus.SHUTDOWN])
-def test_incomplete_outcomes_are_ineligible(status: CycleStatus) -> None:
-    with pytest.raises(ValueError, match="Ineligible"):
-        FirstStationReport.from_result(1, replace(production(), cycle_status=status))
-
-
-def test_missing_frame_and_invalid_projection_are_not_reports() -> None:
+def test_partial_outcomes_preserve_completed_and_reject_missing(
+    status: CycleStatus,
+) -> None:
     result = production()
     missing = replace(result.cameras[0], frame_id=None, image_shape=None)
-    with pytest.raises(ValueError, match="complete six-camera"):
-        FirstStationReport.from_result(
-            1, replace(result, cameras=(missing, *result.cameras[1:]))
-        )
+    partial = replace(
+        result, cycle_status=status, cameras=(missing, *result.cameras[1:])
+    )
+    data = FirstStationReport.from_result(1, partial)
+    expected = FirstStationReport.from_result(1, result).reject_words
+    assert data.reject_words == (expected[0] | 0x3F, expected[1], expected[2])
+    assert len(data.statuses) == 36 and data.result_ready_at == partial.result_ready_at
+
+
+def test_unobserved_cycle_and_invalid_projection_are_not_reports() -> None:
+    result = production()
+    cameras = tuple(replace(c, frame_id=None, image_shape=None) for c in result.cameras)
+    with pytest.raises(ValueError, match="observed cycle"):
+        FirstStationReport.from_result(1, replace(result, cameras=cameras))
     data = report(1)
     for statuses in (data.statuses[:-1], data.statuses + data.statuses[:1]):
         with pytest.raises(ValueError):
@@ -115,38 +123,46 @@ def test_unassigned_ng_does_not_spread_to_channel_bits() -> None:
 
 @pytest.mark.parametrize("host", ["192.0.2.1", "127.0.0.2", "localhost"])
 @pytest.mark.parametrize("transport", list(FinsTransport))
-def test_non_localhost_reporting_is_rejected_before_socket(
+def test_reporting_accepts_numeric_remote_endpoints(
     host: str, transport: FinsTransport
 ) -> None:
-    with pytest.raises(PermissionError, match="exactly 127.0.0.1"):
-        LocalReportingSettings(host=host, transport=transport)
+    if host == "localhost":
+        with pytest.raises(ValueError):
+            LocalReportingSettings(host=host, transport=transport)
+    else:
+        assert LocalReportingSettings(host=host, transport=transport).host == host
 
 
 @pytest.mark.parametrize("transport", list(FinsTransport))
-def test_execution_boundary_rejects_nonlocal_target_before_client_creation(
+def test_remote_reporting_forwards_endpoint_without_substitution(
     transport: FinsTransport,
 ) -> None:
-    selected = LocalReportingSettings(transport=transport)
-    # Deliberately bypass frozen-constructor validation to exercise defense in depth.
-    object.__setattr__(selected, "host", "127.0.0.2")
+    with server() as peer:
+        selected = LocalReportingSettings(host="192.0.2.1", transport=transport)
+        received: list[LocalReportingSettings] = []
 
-    def forbidden(_settings: LocalReportingSettings) -> FinsUdpClient:
-        raise AssertionError("Execution validation must precede socket creation")
+        def factory(settings: LocalReportingSettings) -> FinsUdpClient:
+            received.append(settings)
+            return FinsUdpClient(
+                "127.0.0.1",
+                port=peer.port,
+                timeout=0.2,
+                destination=FinsAddress(0, 2, 0),
+                source=FinsAddress(0, 1, 0),
+            )
 
-    worker = FirstStationReportingWorker(7, selected, client_factory=forbidden)
-    worker.start()
-    try:
-        observed = worker.submit(report(100)).result(WAIT)
-        assert observed.outcome is ReportOutcome.FAILED
-        assert observed.stage is ReportStage.INITIALIZATION
-        assert (
-            observed.issue is not None
-            and observed.issue.exception_type == "PermissionError"
-        )
-        assert "exactly 127.0.0.1" in observed.issue.message
-    finally:
-        worker.request_stop()
-        assert worker.join(WAIT) and worker.cleanup_safe
+        worker = FirstStationReportingWorker(7, selected, client_factory=factory)
+        worker.start()
+        try:
+            outcome = worker.submit(report(100)).result(WAIT)
+            assert outcome.outcome is ReportOutcome.ACKNOWLEDGED
+            assert received == [selected] and received[0].host == "192.0.2.1"
+            assert outcome.bitmap_ms is not None and outcome.bitmap_ms >= 0
+            assert outcome.sequence_ms is not None and outcome.sequence_ms >= 0
+            assert outcome.acknowledged_at is not None
+        finally:
+            worker.request_stop()
+            assert worker.join(WAIT) and worker.cleanup_safe
 
 
 def test_initial_read_sequence_progression_rollover_and_identical_bitmap() -> None:

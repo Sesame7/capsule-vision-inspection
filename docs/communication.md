@@ -4,8 +4,8 @@
 
 `vimo_demo.communication` provides a standalone, synchronous, standard-library
 FINS UDP/TCP clients and a UDP loopback simulator. Manual operations/register
-watches and optional Production reporting independently select UDP/TCP, defaulting
-to UDP. These are memory-only preferences; no persistent PLC profile is added.
+watches and optional Production reporting independently select UDP/TCP. Folder
+defaults to localhost/UDP; saved Basler reporting defaults to the field TCP endpoint. These are memory-only preferences; no persistent PLC profile is added.
 The existing first-station projection consumes the Inspection business-status enum,
 without changing inspection evidence,
 judgments or counters. Only projection/reporting requires Inspection types;
@@ -13,7 +13,7 @@ transport/simulator imports and the existing CLI demo still require no image sta
 The transport and reporting owner are Qt/ViMo independent. Normal `app.py` and
 explicit developer composition can opt into
 [automatic first-station reporting](#local-production-reporting)
-to exactly `127.0.0.1`; both default to disabled. The Qt Communication
+to a configured numeric PLC endpoint; both default to disabled. The Qt Communication
 workspace uses separate clients for manual D/W operations and explicitly enabled
 register monitoring. There is no PLC configuration persistence, equipment wiring,
 triggering/consumption handshake or hardware commissioning. Passive Basler
@@ -306,9 +306,10 @@ the default is disabled. `--fins-transport {udp,tcp}` selects its fixed transpor
 (default UDP); source/destination arguments apply only to UDP. Normal startup exposes
 the same owner through
 [memory-only preferences](#normal-application-reporting-controls), not CLI flags.
-No Recipe, persisted PLC schema or recovery data changes. Settings reject every
-host except the exact IPv4 string `127.0.0.1` below the CLI/UI boundary; the
-reporting worker repeats this check before client construction at execution.
+No Recipe, persisted PLC schema or recovery data changes. Settings validate numeric unicast IPv4, port, timeout, word ranges and transport;
+there is no localhost, PLC manual/debug-mode or authorization-address whitelist.
+The UDP simulator still binds only localhost. The application does not bypass PLC
+interlocks, change operating mode or grant unrelated register writes.
 `LocalReportingSettings.transport` uses `FinsTransport.UDP` or `.TCP`. The same
 `FirstStationReporter` and reporting thread serve both; TCP connect/negotiation
 happen on that owner, not inference, completion-callback or Qt threads. A later
@@ -321,12 +322,14 @@ remains with `InferenceWorker`; manual Communication requests/watches use their
 own clients and lifecycle. Neither painting nor application snapshot polling
 drives report submission.
 
-A terminal Production task callback projects a COMPLETE or FAILED result only
-when all six cameras have collected frames and the 36 channel statuses are valid.
-TIMED_OUT, SHUTDOWN, exceptional runtime outcomes and incomplete/invalid projections
-are explicitly skipped. Warm-up creates no production reports, counters or network
-requests. The handoff retains only generation, CycleId, immutable channel/status
-pairs and three reject words, never images, masks, contours or full results.
+A terminal Production task callback projects an observed, attributable finalized
+cycle into exactly 36 channel statuses, including TIMED_OUT and SHUTDOWN partials.
+Missing/unfinished camera channels reject; completed camera judgments survive.
+A result without any observed frame, invalid projection, ambiguous attribution or
+exceptional runtime outcome is explicitly skipped. Warm-up creates no production
+reports, counters or network requests. The handoff retains only generation,
+CycleId, immutable channel/status pairs, three reject words and result-ready time,
+never images, masks, contours or full results.
 Only channel business status drives the bitmap; unassigned camera-level ViMo NG
 does not spread reject bits.
 
@@ -381,7 +384,7 @@ through the existing Qt bridge timer; neither polling nor rendering causes repor
 
 ### Stop, restart and Close
 
-Session Stop revokes reporting admission immediately. Unclaimed pending reports
+Folder session Stop revokes reporting admission immediately. Unclaimed pending reports
 are finalized SKIPPED on the reporting thread, with no socket requests. A result
 finishing after Stop is also explicitly skipped. The claimed logical report is
 allowed to finish naturally, including its ordered bitmap/sequence writes and,
@@ -396,20 +399,74 @@ existing nonblocking Qt workflow; a new generation cannot start while the old
 session is retained. Stop/Start creates a fresh report owner and rereads W49 before
 its first new report; no old-generation queue survives into it.
 
-This remains localhost protocol testing: ACK is not PLC scan consumption, exclusive
+ACK is not PLC scan consumption, exclusive
 writer ownership, restart-safe delivery, capsule counting or mechanical rejection.
 The application manual-dispatch boundary protects W49–W52 while its automatic
 owner is active. Independent external clients/PLC logic are not governed by that
 guard; do not concurrently write those words from outside the application.
 Read-only monitoring uses an independent client and is safe for observation.
 
+### Continuous Basler reporting
+
+Saved Basler mode can opt into the same reporting owner in normal `app.py`.
+Communication settings default to the field TCP endpoint; enabling reporting and
+Start captures that immutable preference. One persistent negotiated TCP connection
+is reused. The source remains passive: no Production W10.7 write or PLC mode change.
+
+The first valid camera frame admits a cycle. Each terminal result, including a
+missing/unfinished-camera deadline, produces one ordered complete 36-channel
+projection. Finished camera judgments remain; missing/unfinished channels reject.
+The application checks the source's attribution fence before handoff and the owner
+checks again before submission and before W49. Observed metadata discontinuities
+revoke the affected/current and subsequent identities; they are not committed as
+ordinary results. A bitmap may already be staged when a final attribution check
+fails; without the W49 commit no success is claimed. An active native write cannot
+be recalled. Acquisition ordinals are still not physical PLC trigger IDs: an
+unobservable missed electrical trigger remains a commissioning limitation described
+in [Application](application.md#persistent-basler-continuous-inspection).
+
+Inspection/callback/Qt threads only enqueue scalar reports into the bounded FIFO.
+The existing increasing-CycleId guard prevents duplicate/out-of-order attempts.
+W50–W52 are written in one request, then W49 only after bitmap ACK; success requires
+W49 ACK. Initial W49 read, next-value reservation and 65535-to-0 rollover are
+unchanged. A failed/unknown outcome is recorded without retransmitting that result;
+a later new cycle may reconnect, retaining the local next-sequence reservation.
+Failure is communication evidence, not an inspection judgment. Capacity rejection
+remains explicit and requests normal Stop, without silent replacement.
+
+For continuous Basler Stop, admission/acquisition cease first. Runtime terminal
+callbacks hand off remaining attributable results, including shutdown partials.
+After runtime/source join the report owner closes admission and drains its bounded
+accepted FIFO, then closes its socket on its own thread. READY/release waits for
+actual reporting termination and safe cleanup. Active exchanges are not cancelled;
+timeouts and skipped/failed outcomes remain observable. Folder retains its existing
+active-report-finish/pending-skip policy.
+
+Successful observations include bitmap-write/ACK and sequence-write/ACK durations,
+total attempt duration, monotonic W49-ACK time and result-ready-to-ACK duration.
+Total attempt includes first-use connect/read if applicable; per-write timings do
+not. Only latest observations/counters are retained. External-trigger-to-ACK timing
+requires independent diagnostic timestamps and is not a Production trigger clock.
+ACK confirms protocol submission, not PLC scan consumption or mechanical rejection.
+
+For field verification: confirm the intended saved model/Recipe/mapping and target;
+enable automatic reporting in Communication; Start normal `app.py` and observe ARMED
+with zero warm-up/idle side effects. Use a separately authorized stopped/manual
+photo-stimulus process, first a small register-readback check, then a bounded 200-cycle
+approximately 10 Hz run. Compare ordered W49 ACKs, actual W49–W52 reads, backlog,
+frame/result identities and latency. Stop/Close and confirm thread/socket/camera
+release. Never add the diagnostic photo trigger to Production or blindly retry an
+uncertain write. Mechanical-cycle identity/PLC consumption commissioning is separate.
+
 ### Normal application reporting controls
 
 Normal startup exposes `ReportingSelection(enabled, settings)` through a small
 composition command boundary. It defaults to disabled with **UDP**, port **9600**, timeout
 **1 s**, destination **0/2/0**, source **0/1/0** and hidden `max_pending=8`. The
-target is fixed to **127.0.0.1**; manual endpoint fields remain independent.
-Automatic protocol, enablement, port/timeout and collapsible UDP addressing are application-memory
+target is editable and defaults to **127.0.0.1** for Folder; saved Basler defaults
+to **192.168.251.1:9600 / TCP**, still disabled until explicitly enabled. Manual
+endpoint fields remain independent.
+Automatic host, protocol, enablement, port/timeout and collapsible UDP addressing are application-memory
 preferences, never written into `data/app.json`, Recipe, MachineLayout or sources.
 Closing/relaunching restores defaults and disables reporting.
 Manual protocol/endpoint settings are separate and never redirect the reporting
@@ -443,8 +500,9 @@ failures do not replace global event priorities or modify judgment/Application F
 While an enabled Start is assembling its session or its report thread is alive,
 new manual **W-area writes whose range intersects W49–W52** are rejected with a
 localized reason. Protection is checked before dispatch and again before executing
-the request, including callers bypassing the button. It conservatively applies
-regardless of the manual port. It remains in effect in PAUSED and during Stop until
+the request, including callers bypassing the button. It applies only to the same configured host/port, across UDP/TCP; independent
+endpoints are not blocked. This is writer-conflict serialization, not permission
+to access a PLC or an address whitelist. It remains in effect in PAUSED and during Stop until
 actual report-owner exit; it does not rely on the latest ACK. Reads/watch groups,
 other W words and D writes retain their existing rules and independent clients.
 Already executing manual exchanges cannot be forcibly cancelled; external writers
@@ -549,14 +607,16 @@ valid local configuration. In Communication's settings dialog:
    UDP address controls become inactive; no request occurs merely by switching.
    Test read D100 (initially 1234), write/read back D100, and add a W49/count-4
    watch. Switching back to UDP restores the original address values. Manual
-   remote reads remain an explicitly configured operation; writes stay localhost-only.
+   remote reads/writes use their explicitly configured endpoint without target substitution.
 2. Independently select automatic **FINS/TCP**, its printed **Reporting TCP** port,
    and enable reporting while READY. Use Production Step/Start. Readiness has zero
    reports; the first successful submission has sequence 11 and ordered bitmap then
    W49 writes. Observe ACK/counts in the existing reporting bar. PAUSED remains
    RUNNING with automatic preferences locked; manual settings remain independent.
-3. A manual W49–W52 write is blocked while reporting owns the generation, for either
-   manual transport. Reads remain permitted. This narrow peer serves one connection
+3. On the independent Manual TCP endpoint, W49–W52 writes are allowed. Setting
+   its port to the active automatic endpoint blocks conflicting W49–W52 writes,
+   for either transport, without sending a request. Restore the Manual TCP port
+   for reads. This narrow peer serves one connection
    at a time per port, so the separate Manual TCP port allows concurrent observation;
    it is not a general multi-client PLC simulator or a PLC-consumption model.
 4. End/Stop and wait for READY before changing automatic settings or starting a
@@ -709,13 +769,12 @@ read-only, scrollable table (at most 999 rows, further limited by the selected a
 `FinsMemoryArea.W` is forwarded unchanged to the H2A client. A write ACK is expressly **not readback verification**: no automatic read
 is issued, and the separately timestamped last-read table remains historical.
 
-Reads can target configured numeric unicast IPv4 endpoints. **Writes require the
-exact target `127.0.0.1`**: other targets disable Write with a localized explanation,
-and `CommunicationRequest.validate()` repeats the restriction inside
-`execute_request()` before constructing a socket. Even another loopback address
-such as `127.0.0.2` is rejected. There is no override, target substitution or retry.
-The unrestricted H1A low-level client API is unchanged; this manual-workspace
-execution policy is a separate boundary in `communication/operations.py`.
+Reads and writes can target configured numeric unicast IPv4 endpoints, with the
+same validation before dispatch and at execution. No software manual/debug-mode
+check or localhost-only write gate remains. Ordinary remote operation needs no
+extra interactive authorization. An active automatic reporting owner still excludes
+conflicting manual W49–W52 writes on that same endpoint, preserving submission
+serialization; unrelated addresses/endpoints and reads remain available.
 
 ### Register watches and refresh
 
@@ -848,8 +907,8 @@ Do not start Production for this check; all operations below target localhost.
    scheduling; retained values keep their old times and historical markers. Restart
    the simulator, then explicitly restart monitoring. It must not retry itself.
 6. Stop monitoring, change the host to `192.0.2.10` **without sending** and verify
-   Write is disabled in both D/W modes. Restore localhost. This is a display/policy
-   check, not a remote-device test.
+   Write remains available in both D/W modes. Restore localhost before sending.
+   This checks presentation only; it does not send to that example address.
 7. For active close, use an unused localhost port with a few-second timeout, start
    a watch pass, then close the shell. It stays responsive until actual thread exit;
    unstarted reads are skipped. No communication thread should remain afterward.
@@ -900,8 +959,8 @@ mixed D/W watch passes, group bounds/add/remove, decimal/hex/timestamp display,
 slow-pass deadline delivery without overlap/backlog, automatic failure/restart,
 historical values, input exclusion, stop/leave skipping unstarted groups,
 actual-exit scheduling and absence of automatic-success log flooding,
-worker-only client construction/use/close, malformed/timeout/PLC feedback, guarded
-non-loopback writes, controlled remote-read parameter forwarding, duplicate admission,
+worker-only client construction/use/close, malformed/timeout/PLC feedback, controlled
+remote read/write parameter forwarding, duplicate admission,
 navigation, actual thread/socket exit, application-close failure recovery, bounded
 logs, stale delivery, UNCONFIGURED availability and bilingual layout/screenshots:
 
@@ -933,11 +992,11 @@ reads/watches/unrelated writes, generation restart and actual owner cleanup:
 uv run --no-sync pytest tests/integration/test_normal_reporting_ui.py tests/integration/test_application_bootstrap_ui.py tests/integration/test_communication_ui.py tests/integration/test_local_production_ui.py --tb=short
 ```
 
-**Not yet verified on NX102:** the specific CPU/version, FINS enablement and port
+**Deployment prerequisites:** the specific CPU/version, FINS enablement and port
 settings, IP/node/routing conversion tables, host source-address handling, network
 filtering/write protection and actual allocated CJ-compatible DM/WR memory. W596
 identifies built-in EtherNet/IP **port 2** for FINS and requires configured
 CJ-compatible memory; it also cautions that future products may not support FINS.
-This phase does not configure Sysmac Studio or send to equipment. It establishes
-the local protocol subset and opt-in local Production wiring, not hardware
-compatibility, machine safety or industrial delivery guarantees.
+The application does not configure Sysmac Studio or commission ladder consumption.
+Successful field FINS submissions establish protocol-level memory access, not
+machine safety, physical rejection or industrial delivery guarantees.

@@ -17,10 +17,11 @@ inspection from saved CameraSources. Basler passively receives external hardware
 triggers and uses early serial inspection; commissioned PLC reject consumption remains unimplemented. The developer launcher
 also retains process-only Basler overrides, reusing the same bounded capability. A FINS/UDP subset and
 localhost simulator support manual operations
-and opt-in automatic first-station reporting through normal startup's Communication
+and opt-in automatic first-station reporting to configured PLC endpoints through normal startup's Communication
 page or explicit developer composition. Reporting preferences are memory-only.
 The Communication workspace and optional reporting independently select UDP/TCP,
-defaulting to UDP; TCP negotiation remains on their existing serial network owners.
+using Folder localhost/UDP defaults or saved Basler field-TCP defaults; TCP
+negotiation remains on their existing serial network owners.
 
 ## Current capabilities
 
@@ -35,7 +36,7 @@ defaulting to UDP; TCP negotiation remains on their existing serial network owne
 | Camera acquisition | Optional Qt-independent Basler six-serial hardware-trigger attempt with owned ordered BGR images and cleanup diagnostics; saved normal mode uses persistent passive acquisition and bounded early inspection; explicit developer overrides retain one manual cycle. No hardware-derived shared cycle identities. |
 | Qt shell and editing | Chinese/English Production, Recipe, Vision and Communication pages, including session-local automatic-reporting controls/observations; identity-matched display, saved drafts, isolated tuning/reference preview and nonblocking close. History remains a placeholder. |
 | Engineering verification | Unit and opt-in GPU regression, fake UI review, wrapper/Production measurement and profiling tools, with distinct measurement boundaries. |
-| Communication | Qt-independent UDP/TCP DM/WR words with independent manual/reporting selection, default UDP; TCP automatic nodes, shared first-station projection/submission, manual operations/register watches and opt-in bounded local Production reporting. UDP simulator; no commissioned hardware. |
+| Communication | Qt-independent UDP/TCP DM/WR words with independent manual/reporting selection, default UDP; TCP automatic nodes, shared first-station projection/submission, manual operations/register watches and opt-in bounded local Production reporting. UDP simulator; field TCP submission is distinct from commissioned PLC consumption. |
 | Web observation | Optional read-only snapshot service, default loopback with explicit assigned IPv4 binding on a trusted test LAN; independent publisher encodes bounded latest-camera JPEGs, serial HTTP serves cached bytes and a minimal responsive observer. No runtime commands, authentication or HTTPS. |
 
 Size/Color is uncalibrated. ViMo `has_defects` describes returned regions, separately
@@ -135,9 +136,9 @@ Local Folder replay or explicit fixed image inputs
     -> application terminal result / factual accounting / bounded observations
     -> Qt snapshot and completed-Future notifications -> Production presentation
 
-Eligible terminal Production result (explicit local opt-in only)
+Eligible terminal Production result (explicit reporting opt-in)
     -> scalar generation/CycleId + 36 channel statuses
-    -> bounded serial first-station report owner -> localhost FINS simulator
+    -> bounded serial first-station report owner -> configured FINS PLC / simulator
     -> independent compact ACK/failure/skip/rejection observations
 
 Identified source Frames
@@ -155,7 +156,9 @@ The collector remains responsive during serial inspection in configured camera
 order. Occupancy evaluates every valid channel; Size/Color runs where enabled and
 not confirmed EMPTY. ViMo runs at most once per full camera
 frame when needed, then channel policy/ROI assignment consumes its evidence.
-Incomplete collection finalizes technically without running algorithms.
+Incomplete full-group/Folder collection finalizes technically without running
+algorithms. Basler early inspection preserves finished cameras and reports
+attributable partial-cycle rejection through its bounded serial reporting owner.
 
 Explicit runtime expiration observes host-monotonic deadlines, without autonomous
 coordinator scheduling or captured-timestamp/GUI deadlines. Overload is an explicit

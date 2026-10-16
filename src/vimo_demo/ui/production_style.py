@@ -470,12 +470,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Unsigned 16-bit words, comma or space separated",
     ),
     "comm_local_write": (
-        "仅允许写入 127.0.0.1 模拟器；写入确认不是读回验证。",
-        "Writes are limited to 127.0.0.1; acknowledgement is not readback verification.",
-    ),
-    "comm_remote_read": (
-        "当前目标仅可读取。写入严格限于 127.0.0.1。",
-        "Read-only target. Writes require exactly 127.0.0.1.",
+        "使用配置的 PLC 地址；写入确认不代表读回或 PLC 消费。",
+        "Uses the configured PLC endpoint; ACK is not readback or PLC consumption.",
     ),
     "comm_feedback": ("通信反馈", "Communication feedback"),
     "comm_idle": ("未发起请求", "No request sent"),
@@ -505,8 +501,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Invalid input · check address, count or values",
     ),
     "comm_permission": (
-        "禁止写入 · 目标必须为 127.0.0.1",
-        "Write blocked · target must be 127.0.0.1",
+        "通信权限错误 · 请查看详细信息",
+        "Communication permission error · see details",
     ),
     "comm_timeout_error": ("请求超时", "Request timed out"),
     "comm_write_unknown": (

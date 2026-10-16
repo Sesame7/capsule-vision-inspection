@@ -47,7 +47,7 @@ from vimo_demo.application.folder_replay import (
 )
 from vimo_demo.application.local_replay import LocalReplayControl, ReplaySnapshot
 from vimo_demo.application.session import EngineFactory, ProductionCycle
-from vimo_demo.communication import FinsMemoryArea
+from vimo_demo.communication import FinsMemoryArea, FinsTransport
 from vimo_demo.communication.operations import CommunicationRequest, RequestKind
 from vimo_demo.communication.reporting import (
     FirstStationReport,
@@ -170,10 +170,10 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
         ] = basler_notice,
     ) -> None:
-        if (basler_source is not None or continuous_source is not None) and (
-            replay_control is not None or reporting is not None
-        ):
-            raise ValueError("Basler acquisition cannot replay or report to PLC")
+        if (
+            basler_source is not None or continuous_source is not None
+        ) and replay_control is not None:
+            raise ValueError("Basler acquisition cannot use Folder replay controls")
 
         def warmup(config: PreparedConfiguration) -> Sequence[NDArray[np.generic]]:
             for camera, image in zip(
@@ -223,7 +223,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         self._source_stop.set()
         if self.replay_control is not None:
             self.replay_control.stop()
-        if self.reporting is not None:
+        if self.reporting is not None and self._continuous_source is None:
             self.reporting.request_stop()
         super().request_stop()
 
@@ -245,6 +245,11 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             result = future.result()  # Terminal Future only; no I/O or unfinished wait.
             if result.cycle_id != cycle_id:
                 raise ValueError("Reporting result belongs to another cycle")
+            if (
+                self._continuous_source is not None
+                and not self._continuous_source.attributable(cycle_id)
+            ):
+                raise ValueError("Ambiguous Basler cycle attribution; no report")
             report = FirstStationReport.from_result(self.generation, result)
         except BaseException as exc:
             reporter.note_skipped(
@@ -273,6 +278,10 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             self._source.join(remaining)
         joined = not self._source.is_alive()
         if self.reporting is not None:
+            if joined and self._continuous_source is not None:
+                # Runtime terminal callbacks have now handed off every admitted
+                # cycle, including shutdown partials. Drain them before release.
+                self.reporting.request_stop(drain=True)
             remaining = None if deadline is None else max(0, deadline - monotonic())
             joined = self.reporting.join(remaining) and joined
         if (
@@ -512,7 +521,15 @@ class _LocalApplication(ProductionApplication):
         self._reporting_lock = Lock()
         self._reporting_worker: FirstStationReportingWorker | None = None
         self._reporting_selection = ReportingSelection(
-            reporting is not None, reporting or LocalReportingSettings()
+            reporting is not None,
+            reporting
+            or (
+                LocalReportingSettings(
+                    host="192.168.251.1", transport=FinsTransport.TCP
+                )
+                if source_draft is not None and source_draft.saved.mode == "basler"
+                else LocalReportingSettings()
+            ),
         )
         self._reporting_editable = reporting_editable
         self._reporting_generation = 0
@@ -601,9 +618,20 @@ class _LocalApplication(ProductionApplication):
                 )
                 worker = self._reporting_worker
             if starting or (worker is not None and worker.snapshot().thread_alive):
-                raise ReportingWriteProtectedError(
-                    "Manual W49..W52 writes are reserved while automatic reporting owns the session"
+                settings = (
+                    self._session_reporting
+                    if starting
+                    else worker.settings
+                    if worker is not None
+                    else None
                 )
+                if settings is not None and (request.host, request.port) == (
+                    settings.host,
+                    settings.port,
+                ):
+                    raise ReportingWriteProtectedError(
+                        "Manual W49..W52 writes conflict with the active reporting endpoint"
+                    )
 
     def replay_control_for(self, generation: int) -> LocalReplayControl | None:
         with self._replay_lock:
@@ -898,16 +926,24 @@ def local_application(
         if group is None:
             raise ValueError("No complete image group")
         session_reporting = app.reporting_for_generation(generation)
-        if serials is not None and session_reporting is not None:
-            raise ApplicationStateError(
-                "Basler acquisition cannot report to PLC; disable automatic reporting before Start"
-            )
+        continuous = serials is not None and basler_serials is None and not paths
+        continuous_source = (
+            ContinuousBaslerSource(config.configuration.layout.camera_ids, serials)
+            if continuous and serials is not None
+            else None
+        )
         report_worker = (
-            FirstStationReportingWorker(generation, session_reporting)
+            FirstStationReportingWorker(
+                generation,
+                session_reporting,
+                attributable=lambda identity: (
+                    continuous_source is None
+                    or continuous_source.attributable(identity.cycle_id)
+                ),
+            )
             if session_reporting is not None
             else None
         )
-        continuous = serials is not None and basler_serials is None and not paths
         session = LocalRuntimeSession(
             config,
             generation,
@@ -923,11 +959,7 @@ def local_application(
             basler_source=BaslerAcquisitionSource(serials, timeout=basler_timeout)
             if serials is not None and not continuous
             else None,
-            continuous_source=ContinuousBaslerSource(
-                config.configuration.layout.camera_ids, serials
-            )
-            if continuous and serials is not None
-            else None,
+            continuous_source=continuous_source,
             observe_acquisition=observe_acquisition,
         )
         app.set_reporting_owner(report_worker)

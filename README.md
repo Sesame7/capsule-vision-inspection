@@ -4,11 +4,11 @@ Configurable capsule-inspection application with six configured cameras and 36
 inspection channels in the current layout. It combines serial ViMo inference,
 traditional inspection checks and saved Folder replay or controlled continuous Basler acquisition in a Chinese/English
 PySide6 desktop UI, with optional FINS/UDP or FINS/TCP communication/reporting and
-read-only Web observation. Manual UI and Production reporting writes remain
-restricted to localhost.
+read-only Web observation. Communication and optional Production reporting use
+configured numeric PLC endpoints; the localhost simulator remains UDP-only.
 
-Continuous real-camera acquisition, commissioned PLC integration and physical sorting remain
-unimplemented. Size/Color screening is an uncalibrated demonstration; SDK
+Passive continuous Basler acquisition and opt-in PLC result submission are
+implemented; mechanical-cycle commissioning and physical sorting remain unimplemented. Size/Color screening is an uncalibrated demonstration; SDK
 regression does not certify model accuracy or industrial acceptance.
 
 The public repository name is `capsule-vision-inspection`. The Python distribution
@@ -185,9 +185,9 @@ must restrict access externally. The application does not configure either.
 
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,
 **History / 历史** and **Vision / 视觉**. Communication provides session-local manual
-D/W reads, localhost-only writes and optional register-watch refresh. Manual
-Communication and optional localhost Production reporting independently support
-UDP/TCP, defaulting to UDP. Reporting enablement/settings are memory-only, initially
+D/W reads/writes and optional register-watch refresh on configured endpoints. Manual
+Communication and optional Production reporting independently support UDP/TCP.
+Folder defaults to localhost/UDP; saved Basler reporting defaults to field TCP. Reporting enablement/settings are memory-only, initially
 disabled and captured on Start; closing/relaunching disables reporting again. The
 maintained localhost simulator CLI remains UDP-only; commissioned real-PLC
 integration is unimplemented. See [communication](docs/communication.md).
@@ -285,8 +285,8 @@ it installs nothing.
 
 The [standalone FINS/TCP client](docs/communication.md#standalone-finstcp-client)
 supports automatic node allocation and serial D/W words. Communication manual
-operations/watches and optional reporting independently select UDP/TCP, default UDP.
-The developer launcher adds `--fins-transport tcp`; see the
+operations/watches and optional reporting independently select UDP/TCP.
+The developer launcher accepts `--fins-host` and `--fins-transport tcp`; see the
 [localhost TCP procedure](docs/communication.md#tcp-localhost-verification).
 The existing simulator CLI remains UDP-only. The
 [FINS/UDP contract and two-terminal demo](docs/communication.md#local-simulator-and-manual-demonstration)
@@ -296,12 +296,14 @@ adds explicit 36-channel projection and acknowledged W50–W52 / W49 writes. Opt
 [local automatic reporting](docs/communication.md#local-production-reporting) is
 enabled through normal `app.py`'s Communication page or explicitly by
 `--report-first-station` in `scripts/run_local_production_ui.py`, with a bounded
-serial owner and exact `127.0.0.1` target. The
+serial owner and configurable numeric target. The
 [normal two-terminal procedure](docs/communication.md#normal-application-manual-verification)
 uses the existing simulator. Manual clients remain independent; new manual
-W49–W52 writes are blocked while automatic reporting owns the session, and reads
-remain available. ACKs are protocol observations, not PLC consumption. Real Production PLC integration
-and hardware commissioning remain unimplemented.
+W49–W52 writes on the same endpoint are excluded while its automatic owner is
+alive; reads and independent endpoints remain available. Saved Basler can enable
+[continuous field reporting](docs/communication.md#continuous-basler-reporting),
+including attributable partial-cycle rejections. ACKs are protocol observations;
+PLC consumption and physical commissioning remain unimplemented.
 
 ## Verification
 
