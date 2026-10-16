@@ -428,7 +428,7 @@ def test_port_conflict_and_incomplete_http_request_cleanup() -> None:
         assert service.join(3)
 
 
-def test_web_import_is_qt_free_and_public_bridge_import_is_compatible() -> None:
+def test_web_and_ui_package_imports_do_not_load_qt_or_vendor_sdk() -> None:
     result = subprocess.run(
         [
             sys.executable,
@@ -436,12 +436,8 @@ def test_web_import_is_qt_free_and_public_bridge_import_is_compatible() -> None:
             "import sys\n"
             "from vimo_demo.web import ProductionSnapshotService\n"
             "assert not any(n.startswith(('PySide6', 'smartmore')) for n in sys.modules)\n"
-            "from vimo_demo.ui import QtInferenceBridge\n"
-            "from vimo_demo.ui.inference_bridge import QtInferenceBridge as implementation\n"
-            "assert QtInferenceBridge is implementation\n"
-            "from vimo_demo.ui import *\n"
-            "assert QtInferenceBridge is implementation\n"
-            "assert not any(n.startswith('smartmore') for n in sys.modules)\n",
+            "import vimo_demo.ui\n"
+            "assert not any(n.startswith(('PySide6', 'smartmore')) for n in sys.modules)\n",
         ],
         capture_output=True,
         text=True,

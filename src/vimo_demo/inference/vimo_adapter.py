@@ -139,7 +139,7 @@ class VimoSegmentationEngine:
             if not isinstance(params, vimo.SegmentationParams):  # pyright: ignore[reportUnnecessaryIsInstance]
                 raise TypeError(f"Expected SegmentationParams, got {type(params)}")
             # Preserve the verified settings documented in
-            # docs/inference-runtime.md#engine-setup-and-vendor-boundary:
+            # docs/architecture.md#inference:
             # every threshold, ROI, mask operation, score-map and other default.
             params.with_region_info = True
             flags = vimo.SegRegionInfoFlag

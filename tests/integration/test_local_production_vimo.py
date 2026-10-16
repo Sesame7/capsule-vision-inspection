@@ -9,15 +9,17 @@ import pytest
 from _tool_helpers import decode
 from PySide6.QtWidgets import QApplication
 from run_local_production_ui import compose
-from tests.integration.test_reference import (
+from tests.local_input_support import input_files
+from tests.qt_support import ensure_test_fonts, until
+from tests.vimo_support import (
+    MODEL,
     ROOT,
+    TIMEOUT,
+    load_reference,
     short_cases,
     unavailable,
     verify_files,
 )
-from tests.integration.test_worker_vimo import MODEL, TIMEOUT, reference_image
-from tests.local_input_support import input_files
-from tests.qt_support import ensure_test_fonts, until
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.configuration import (
@@ -39,9 +41,9 @@ from vimo_demo.ui.production_window import ProductionWindow
 def test_real_local_ui(
     qapp: QApplication, pytestconfig: pytest.Config, tmp_path: Path
 ) -> None:
-    reference, _, _ = reference_image(pytestconfig)
+    reference = load_reference(pytestconfig)
     rows = short_cases(reference)[:6]
-    verify_files(rows, pytestconfig, full=False)
+    verify_files(rows, pytestconfig)
     model, machine, recipe, _ = input_files(tmp_path)
     save_model_definition(
         model,

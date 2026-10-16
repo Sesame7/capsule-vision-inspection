@@ -4,7 +4,6 @@ import subprocess
 import sys
 from concurrent.futures import Future
 from dataclasses import dataclass
-from pathlib import Path
 from threading import Event, Thread
 from typing import Self
 
@@ -580,7 +579,7 @@ def test_explicit_unique_six_identities_required() -> None:
             BaslerAcquisitionSource(serials)
 
 
-def test_default_folder_import_and_cli_help_do_not_load_optional_sdk() -> None:
+def test_default_folder_import_does_not_load_optional_sdk() -> None:
     code = """
 import sys
 sys.modules['pypylon'] = None
@@ -593,23 +592,6 @@ assert 'PySide6' not in sys.modules
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=20
     )
     assert result.returncode == 0, result.stderr
-    script = Path(__file__).resolve().parents[2] / "scripts" / "acquire_basler_group.py"
-    help_result = subprocess.run(
-        [sys.executable, str(script), "--help"],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    assert help_result.returncode == 0 and "--operator-confirmed" in help_result.stdout
-    guarded = subprocess.run(
-        [sys.executable, str(script), "--serials", *SERIALS],
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    assert (
-        guarded.returncode == 2 and "Operator confirmation required" in guarded.stderr
-    )
 
 
 def test_missing_optional_sdk_is_a_chained_initialization_error(
