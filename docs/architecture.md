@@ -101,6 +101,28 @@ metadata stop the source; no shifted reassociation or software-trigger fallback.
 These counters are **not independent hardware trigger IDs**: undetectable missed
 electrical triggers remain a commissioning limit.
 
+Normal Basler Pause closes new inspection admission while keeping all six cameras
+grabbing and the same worker/engine alive. The SDK owner continues retrieving,
+validating and releasing paused frames without publishing images, cycles, counters
+or reports. PAUSING becomes PAUSED only after the admitted capture boundary,
+terminal inspection, actual camera-task return and accepted reporting settle.
+Reporting settlement may be ACK or an explicit failure; it is not PLC consumption.
+
+Step and Resume first drain available SDK results and require a complete common
+ImageNumber boundary. Buffered paused groups remain discarded. Step admits one
+subsequent attributable ordinal, including an attributable partial deadline result,
+then returns PAUSED after settlement; Resume restores continuous admission without
+reloading resources. Cycle IDs retain SDK ordinals, so discarded groups create
+intentional gaps, not fabricated production counts. BlockID/ImageNumber continuity
+is still checked for every received frame, including discarded frames.
+
+A partial Step's late same-ordinal peers are discarded. Until its SDK boundary is
+complete, Step/Resume fails explicitly; a newer ordinal before missing peers is
+an ambiguity, never a shifted association. Empty-queue observation is not a shared
+electrical trigger identifier and cannot prove the timing of unobservable in-flight
+exposures or arbitrary trigger loss. Control Futures and diagnostic counts are
+bounded; Stop interrupts idle Step and follows normal native/resource cleanup.
+
 The early result deadline is 100 ms from first valid frame admission. Completed
 camera inspections survive; missing/unfinished cameras get explicit collection
 ERROR/NG on their channels, without invented model findings. Late native results
@@ -164,12 +186,12 @@ availability and current feedback. It reuses bridge refresh/notifications withou
 another timer or network request.
 
 Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
-Folder Replay's middle control becomes Step while paused and returns to paused
-after each formal cycle; Reset is a separate fault-recovery action. Basler Pause
-remains disabled. Empty canvases and routine acquisition waits stay quiet, with
+The middle control becomes Step while paused; Folder and Basler retain distinct
+source-boundary semantics. Reset is a separate fault-recovery action. Basler control
+only affects software admission, never equipment or PLC mode. Empty canvases and routine acquisition waits stay quiet, with
 acquisition progress available in the state tooltip. Read-only channel symbols
-retain full ChannelIds
-and technical evidence in tooltips; only identity-matched results draw defect boxes.
+retain full ChannelIds and technical evidence in tooltips; only identity-matched
+results draw defect boxes.
 
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,

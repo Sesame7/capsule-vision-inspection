@@ -2,11 +2,12 @@
 
 import subprocess
 import sys
+from collections import deque
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
-from threading import Event, get_ident
+from threading import Condition, Event, get_ident
 from threading import enumerate as threads
 from time import perf_counter
 from typing import Never
@@ -20,12 +21,14 @@ from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
 from tests.local_input_support import input_files
 from tests.qt_support import until
+from tests.reporting_support import seed, server
 
 from vimo_demo.application import (
     ApplicationError,
     ApplicationState,
     ApplicationStateError,
     ProductionCounters,
+    _basler_sdk,
 )
 from vimo_demo.application.basler import (
     AcquiredImage,
@@ -40,11 +43,17 @@ from vimo_demo.application.basler import (
     CameraCleanup,
     CameraReadiness,
 )
+from vimo_demo.application.basler_control import BaslerControlSnapshot
 from vimo_demo.application.continuous_basler import (
     ContinuousArmedAcquisition,
     ContinuousBaslerSource,
 )
-from vimo_demo.communication.reporting import LocalReportingSettings
+from vimo_demo.application.local_replay import ReplayState
+from vimo_demo.communication.reporting import (
+    LocalReportingSettings,
+    ReportingSelection,
+    ReportStage,
+)
 from vimo_demo.configuration import (
     CameraFolder,
     CameraSources,
@@ -60,6 +69,7 @@ from vimo_demo.ui.bootstrap import create_window, load_startup
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_presentation import matching_camera
+from vimo_demo.ui.production_style import text
 
 # Provisional field mapping in configured CAM1..CAM6 order; explicitly includes
 # the CAM5/CAM6 order that differs from sorting serials. This is test data only.
@@ -761,9 +771,9 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
             and not window.buttons["secondary"].isVisible()
         )
         assert (
-            window.buttons["stop"].isEnabled()
-            and not window.buttons["pause"].isEnabled()
+            window.buttons["stop"].isEnabled() and window.buttons["pause"].isEnabled()
         )
+        assert window.bridge.controls_enabled
         assert startup.local_replay is not None
         with pytest.raises(ApplicationStateError):
             startup.local_replay.step_replay()
@@ -1199,3 +1209,293 @@ def test_normal_basler_reports_full_and_partial_cycles_and_drains_stop(
                 source.release.set()
             app.close().result(WAIT)
             assert app.join(WAIT)
+
+
+class PassiveBackend:
+    """SDK FIFO fake; exercises the real source/control/session implementation."""
+
+    def __init__(self) -> None:
+        self.condition = Condition()
+        self.queues = {
+            s: deque[tuple[AcquisitionMetadata, NDArray[np.uint8]]]() for s in SERIALS
+        }
+        self.armed = Event()
+        self.closed = False
+        self.prepared: list[str] = []
+
+    def inventory(self, serials: tuple[str, ...]) -> None:
+        assert serials == SERIALS
+
+    def prepare(self, serial: str) -> None:
+        self.prepared.append(serial)
+
+    def arm(self) -> tuple[CameraReadiness, ...]:
+        self.armed.set()
+        return tuple(CameraReadiness(s, True, True, perf_counter()) for s in SERIALS)
+
+    def available(self, serial: str, timeout_ms: int) -> bool:
+        with self.condition:
+            if timeout_ms:
+                self.condition.wait_for(
+                    lambda: bool(self.queues[serial]), timeout_ms / 1000
+                )
+            return bool(self.queues[serial])
+
+    def retrieve(self, serial: str) -> tuple[AcquisitionMetadata, NDArray[np.uint8]]:
+        with self.condition:
+            return self.queues[serial].popleft()
+
+    def expose(self, ordinal: int, cameras: tuple[int, ...] = tuple(range(6))) -> None:
+        with self.condition:
+            for index in cameras:
+                pixels = np.full((20, 60, 3), ordinal * 10 + index, dtype=np.uint8)
+                pixels.setflags(write=False)
+                self.queues[SERIALS[index]].append(
+                    (
+                        AcquisitionMetadata(
+                            SERIALS[index],
+                            perf_counter(),
+                            True,
+                            0,
+                            "",
+                            60,
+                            20,
+                            1,
+                            3600,
+                            ordinal - 1,
+                            ordinal,
+                            ordinal * 1000,
+                            0,
+                        ),
+                        pixels,
+                    )
+                )
+            self.condition.notify_all()
+
+    def cleanup(self) -> tuple[CameraCleanup, ...]:
+        self.closed = True
+        return tuple(CameraCleanup(s, True, True, True, True) for s in self.prepared)
+
+
+def test_normal_basler_player_drains_paused_frames_and_settles_reports(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    backends: list[PassiveBackend] = []
+    engines: list[Engine] = []
+
+    def backend(*, continuous: bool = False) -> PassiveBackend:
+        assert continuous
+        value = PassiveBackend()
+        backends.append(value)
+        return value
+
+    def factory(_prepared: object) -> Engine:
+        value = Engine()
+        value.release_warm.set()
+        engines.append(value)
+        return value
+
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", backend)
+    delivery = FutureDelivery()
+    startup = load_startup(data, engine_factory=factory)
+    window = create_window(startup, delivery)
+    window.show()
+    app = startup.application
+    assert startup.local_replay is not None
+
+    def control() -> BaslerControlSnapshot:
+        value = window.bridge.control_snapshot()
+        assert isinstance(value, BaslerControlSnapshot)
+        return value
+
+    original_threads = {t.ident for t in threads()}
+    with server() as peer:
+        seed(peer, 99)
+        panel = window.communication.reporting_panel
+        assert panel is not None
+        panel.controller.set_reporting_selection(
+            ReportingSelection(True, LocalReportingSettings(port=peer.port, timeout=2))
+        )
+        try:
+            window.buttons["operation"].click()
+            until(lambda: bool(backends) and backends[0].armed.is_set())
+            window.bridge.refresh()
+            middle = window.buttons["pause"]
+            window.buttons["pause"].click()
+            until(lambda: control().state is ReplayState.PAUSED)
+            window.bridge.refresh()
+            position, size = middle.pos(), middle.size()
+            assert (
+                middle.text() == text("replay_step", window.language)
+                and not window.buttons["secondary"].isVisible()
+            )
+            for ordinal in (1, 2, 3):
+                backends[0].expose(ordinal)
+                until(lambda ordinal=ordinal: control().received_frames == ordinal * 6)
+            assert app.snapshot().counters == ProductionCounters()
+            assert len(engines[0].calls) == 2 and not engines[0].closed
+            observed = panel.controller.reporting_snapshot()
+            assert observed is not None and observed.queued_count == 0
+            peer.hold_next(ReportStage.BITMAP)
+            middle.click()
+            until(lambda: control().admission_armed)
+            backends[0].expose(4)
+            until(lambda: app.snapshot().counters.cycles_completed == 1)
+            assert peer.entered.wait(WAIT)
+            assert control().state is ReplayState.STEPPING
+            assert not engines[0].closed and not backends[0].closed
+            backends[0].expose(5)
+            until(lambda: control().received_frames == 30)
+            assert app.snapshot().counters.cycles_completed == 1
+            peer.release.set()
+            until(lambda: control().state is ReplayState.PAUSED)
+            window.bridge.refresh()
+            assert (middle.pos(), middle.size()) == (position, size)
+            observed = panel.controller.reporting_snapshot()
+            assert observed is not None and observed.acknowledged_count == 1
+            result = app.snapshot().latest_production_result
+            assert (
+                result is not None
+                and result.cycle_id == 4
+                and len(result.channels) == 36
+            )
+            assert all(
+                c.frame_id is not None and c.frame_id.sequence == 4
+                for c in result.cameras
+            )
+            middle.click()
+            until(lambda: control().admission_armed)
+            backends[0].expose(6)
+            until(lambda: control().state is ReplayState.PAUSED)
+            assert app.snapshot().counters.cycles_completed == 2
+            window.bridge.refresh()
+            window.buttons["operation"].click()
+            until(lambda: control().state is ReplayState.AUTOMATIC)
+            for ordinal in (7, 8):
+                backends[0].expose(ordinal)
+                until(
+                    lambda ordinal=ordinal: (
+                        app.snapshot().counters.cycles_completed == ordinal - 4
+                    )
+                )
+            backends[0].expose(9, (0,))
+            until(lambda: app.snapshot().counters.cycles_started == 5)
+            window.bridge.refresh()
+            middle.click()
+            assert control().state is ReplayState.PAUSING
+            backends[0].expose(9, (5, 3, 4, 1, 2))
+            until(lambda: control().state is ReplayState.PAUSED)
+            assert app.snapshot().counters.cycles_completed == 5
+            observed = panel.controller.reporting_snapshot()
+            assert observed is not None and observed.acknowledged_count == 5
+            window.bridge.refresh()
+            window.buttons["stop"].click()
+            until(lambda: app.snapshot().state is ApplicationState.READY)
+            assert backends[0].closed and engines[0].closed
+            window.bridge.refresh()
+            window.buttons["operation"].click()
+            until(lambda: len(backends) == 2 and backends[1].armed.is_set())
+            window.bridge.refresh()
+            middle.click()
+            until(lambda: control().state is ReplayState.PAUSED)
+            window.bridge.refresh()
+            middle.click()  # An idle Step needs no fabricated cycle or timeout.
+            until(lambda: control().admission_armed)
+            window.buttons["stop"].click()
+            until(lambda: app.snapshot().state is ApplicationState.READY)
+            assert app.snapshot().counters.cycles_completed == 5
+            assert app.snapshot().last_issue is None
+            assert all(e.closed for e in engines) and all(b.closed for b in backends)
+        finally:
+            peer.release.set()
+            for engine in engines:
+                engine.release_active.set()
+            window.close()
+            until(lambda: window.bridge.closed)
+            assert app.join(WAIT)
+            delivery.detach()
+    assert not any(
+        t.name.startswith(
+            (
+                "EarlyCycleOwner-",
+                "EarlyCameraInspector-",
+                "VimoInferenceWorker-",
+                "LocalProductionSource-",
+                "FirstStationReporting-",
+            )
+        )
+        for t in threads()
+        if t.ident not in original_threads
+    )
+
+
+def test_basler_partial_step_waits_for_late_native_return_before_paused(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    backend = PassiveBackend()
+    engine = Engine()
+    engine.release_warm.set()
+    engine.release_active.clear()
+
+    def sdk(*, continuous: bool = False) -> PassiveBackend:
+        assert continuous
+        return backend
+
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", sdk)
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    app = startup.application
+
+    def state() -> ReplayState:
+        value = window.bridge.control_snapshot()
+        assert isinstance(value, BaslerControlSnapshot)
+        return value.state
+
+    try:
+        window.buttons["operation"].click()
+        until(backend.armed.is_set)
+        window.bridge.refresh()
+        window.buttons["pause"].click()
+        until(lambda: state() is ReplayState.PAUSED)
+        window.bridge.refresh()
+        window.buttons["pause"].click()
+        until(
+            lambda: (
+                (value := window.bridge.control_snapshot()) is not None
+                and isinstance(value, BaslerControlSnapshot)
+                and value.admission_armed
+            )
+        )
+        backend.expose(1, (0,))
+        assert engine.active.wait(WAIT)
+        until(lambda: app.snapshot().counters.cycles_completed == 1)
+        result = app.snapshot().latest_production_result
+        assert result is not None and len(result.channels) == 36
+        assert result.cameras[0].frame_id is not None
+        assert all(c.frame_id is None for c in result.cameras[1:])
+        assert (
+            state() is ReplayState.STEPPING
+        )  # A deadline result is not native return.
+        engine.release_active.set()
+        until(lambda: state() is ReplayState.PAUSED)
+        assert len(engine.calls) == 3 and app.snapshot().counters.cycles_started == 1
+        window.bridge.refresh()
+        window.buttons["stop"].click()
+        until(lambda: app.snapshot().state is ApplicationState.READY)
+        assert (
+            app.snapshot().counters.cycles_completed == 1
+            and engine.closed
+            and backend.closed
+        )
+    finally:
+        engine.release_active.set()
+        window.close()
+        until(lambda: window.bridge.closed)
+        assert app.join(WAIT)
+        delivery.detach()
