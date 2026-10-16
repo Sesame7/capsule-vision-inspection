@@ -36,6 +36,7 @@
   }
   const cards = new Map();
   let latest = null, stopped = false, busy = false, epoch = 0, next = null, controller = null;
+  let refreshIntervalMs = 500;
   const current = token => !stopped && epoch === token;
   const aged = snapshot => !Number.isFinite(Date.parse(snapshot.published_at)) || Date.now() - Date.parse(snapshot.published_at) > 6000;
 
@@ -152,6 +153,9 @@
       throw new Error("Invalid snapshot metadata");
     }
     if (latest && latest.publisher_id === snapshot.publisher_id && snapshot.revision < latest.revision) return;
+    if (Number.isFinite(snapshot.refresh_interval_ms) && snapshot.refresh_interval_ms > 0) {
+      refreshIntervalMs = snapshot.refresh_interval_ms;
+    }
     latest = snapshot;
     const order = snapshot.configured_camera_ids;
     for (const [id, card] of cards) {
@@ -239,7 +243,7 @@
       clearTimeout(deadline);
       if (controller === active) controller = null;
       busy = false;
-      if (!stopped) next = setTimeout(poll, Math.max(0, 2000 - (Date.now() - started)));
+      if (!stopped) next = setTimeout(poll, Math.max(0, refreshIntervalMs - (Date.now() - started)));
     }
   }
   window.addEventListener("pagehide", () => {

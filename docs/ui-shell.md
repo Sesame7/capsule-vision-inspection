@@ -307,9 +307,12 @@ and frozen-reference transforms remain in the machine/source document.
 
 ## Read-only snapshot publication
 
-Normal `app.py --web-snapshots [--web-host 127.0.0.1] [--web-port 8765]` optionally
-starts a process-owned, Qt-independent `ProductionSnapshotService`. It is disabled
-by default, retains `127.0.0.1` as the default host, adds no persistence/Qt controls
+Normal `app.py [--web-host 127.0.0.1] [--web-port 8765]` starts a process-owned,
+Qt-independent `ProductionSnapshotService` by default. `--no-web-snapshots`
+disables this optional service; explicit `--web-snapshots` remains compatible.
+`--web-interval-ms` accepts 500 (default), 1000 or 2000. It controls both server
+publication and browser polling through JSON's `refresh_interval_ms` field.
+Startup retains `127.0.0.1` as the default host, adds no persistence/Qt controls
 and never commands the application or
 participates in inspection completion, counters or PLC reporting. `ui` defers its
 public Qt bridge import so the existing pure display/identity modules and Web
@@ -345,11 +348,12 @@ RUNNING. No brightness/Occupancy heuristics or new judgment/acceptance aggregati
 is introduced. A failed encode removes that camera's published JPEG/status rather
 than substituting old bytes under a new identity.
 
-One non-daemon publisher thread samples nominally every two seconds, using OpenCV
+One non-daemon publisher thread samples at the selected interval, using OpenCV
 BGR directly, preserving orientation/aspect ratio and limiting the largest dimension
 to 640px at JPEG quality 70. Unchanged frame revisions reuse encoded bytes. It holds
 one current observation while building one replacement, never a queued history or
-catch-up workload; the next sample reads the latest store. Encoding/copying runs
+catch-up workload; after each publication it waits the selected interval before
+reading the latest store. Encoding/copying runs
 outside inference callbacks, the inference worker and GUI dispatch. The cached
 publication owns only compact JSON and at most one latest JPEG per configured
 camera: no masks, contour arrays, native inference references or full result history.
@@ -412,7 +416,8 @@ using the authoritative last observed state; after loss/staleness it is explicit
 marked as last observed. Neither HTTP connectivity nor an individual channel ERROR
 is interpreted as Production health or Application FAULT.
 
-One poll starts approximately every two seconds, after the preceding work settles;
+One poll starts at the interval advertised by the server (default 500 ms), after
+the preceding work settles;
 there are no overlapping polls or catch-up requests. JPEGs are fetched sequentially,
 so each observer has at most one active fetch. Only source identity changes trigger
 image replacement: publisher ID, generation, CycleId, complete FrameId, display-frame
@@ -462,7 +467,7 @@ tests cannot establish them.
 
 Manual verification with existing valid persistent `data/` and local Folder sources:
 
-1. Launch `uv run --no-sync python app.py --web-snapshots --web-port 8765` from the
+1. Launch `uv run --no-sync python app.py --web-port 8765` from the
    repository root. The application opens stopped; inspect `/health` and
    `/api/snapshot` using `Invoke-RestMethod http://127.0.0.1:8765/api/snapshot`.
 2. Use Start or Step. After publication, fetch a camera's returned URL with
@@ -472,7 +477,7 @@ Manual verification with existing valid persistent `data/` and local Folder sour
 3. Pause/Stop and inspect retained identity/state; Start again and check the new
    generation. Reusing a superseded URL should return 410, not a newer image.
 4. Close normally. Confirm the command exits and the local port stops accepting
-   connections. Launch without flags to confirm the service stays disabled.
+   connections. Launch with `--no-web-snapshots` to confirm disabled operation.
 
 LAN verification, without changing persistent configuration:
 
@@ -489,12 +494,12 @@ LAN verification, without changing persistent configuration:
    separate from Application state; images/status should recover without reload.
    Pause/Stop/Start retain the existing application/display identity rules.
 5. Close normally and confirm actual command exit. `Test-NetConnection <LAN-IP> -Port 8765`
-   should no longer connect. Repeat without Web flags to confirm default-disabled startup.
+   should no longer connect. Repeat with `--no-web-snapshots` to confirm disabled startup.
 
 CPU/Fake regressions cover matching/mismatching identity, image encoding, bounded
 replacement, IPv4 validation, static/read-only routes, concurrent reads, default/
-opt-in/error normal startup and native process exit. The normal pytest suite runs
-deterministic tests of the actual browser JavaScript through an existing Node.js;
+disabled/error normal startup, coordinated refresh and native process exit. The
+normal pytest suite runs deterministic tests of the actual browser JavaScript through an existing Node.js;
 if Node is absent those checks skip explicitly, with no automatic installation.
 Run them directly with `node --test tests/web_observer_checks.cjs`. They cover
 source-image reuse, identity/revision changes, empty/pending/stale data, 410,
@@ -502,8 +507,9 @@ connection recovery, deadline cancellation and delayed decode disposal, plus the
 minimal presentation, configured indicator order, combined ERROR/business symbols,
 localized accessibility and separate Application FAULT feedback. Browser
 viewport inspection complements these tests but is not physical phone/LAN evidence.
-Real ViMo/PLC/camera performance, authenticated deployment and hardware commissioning
-remain unqualified.
+Field refresh measurements are run-specific evidence, not an inspection-latency or
+machine-capacity guarantee. Authenticated deployment and hardware commissioning
+remain unimplemented.
 
 ## Feedback
 

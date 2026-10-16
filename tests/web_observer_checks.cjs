@@ -27,7 +27,7 @@ function fixture(language = "en") {
   for (const match of html.matchAll(/id="([^"]+)"/g)) h.nodes.set(match[1], new Element("div"));
   const get = id => h.nodes.get(id) ?? null;
   h.snapshot = (revision = 1) => ({
-    publisher_id: "process-one", revision, generation: 1, application_state: "RUNNING", latest_cycle_id: 1,
+    publisher_id: "process-one", revision, generation: 1, application_state: "RUNNING", latest_cycle_id: 1, refresh_interval_ms: 2000,
     published_at: new Date(h.now).toISOString(), configured_camera_ids: ["CAM6", "CAM5", "CAM4", "CAM3", "CAM2", "CAM1"],
     cameras: [6, 5, 4, 3, 2, 1].map(id => ({
       camera_id: `CAM${id}`, image_status: "current", result_status: "matched",
@@ -339,3 +339,18 @@ test("no configured images is concise unavailability, never inferred FAULT", asy
   await h.start(); assert.equal(h.connection(), "Unavailable"); assert.equal(h.node("fault").hidden, true);
   assert.equal(h.node("empty").hidden, false); assert.equal(h.jpegCalls().length, 0); h.stop();
 });
+
+for (const interval of [500, 1000, 2000]) {
+  test(`browser follows server refresh interval ${interval} ms without overlapping requests`, async () => {
+    const h = fixture(); h.value.refresh_interval_ms = interval;
+    await h.start();
+    assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [interval]);
+    h.value = h.snapshot(2); h.value.refresh_interval_ms = interval;
+    h.value.cameras[0].image_identity.frame_revision++;
+    await h.tick();
+    assert.equal(h.jpegCalls().length, 7);
+    assert.equal(h.maxActive, 1);
+    assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [interval]);
+    h.stop(); assert.equal(h.urls.size, 0); assert.equal(h.timers.size, 0);
+  });
+}

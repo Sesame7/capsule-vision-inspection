@@ -168,13 +168,15 @@ class ProductionSnapshotService:
         cameras: tuple[CameraId, ...] | None = None,
         host: str = "127.0.0.1",
         port: int = 8765,
-        interval: float = 2.0,
+        interval: float = 0.5,
     ) -> None:
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError("Invalid Web port")
         if not math.isfinite(interval) or interval <= 0:
             raise ValueError("Publication interval must be finite and positive")
-        self.publisher = SnapshotPublisher(source, frames, cameras)
+        self.publisher = SnapshotPublisher(
+            source, frames, cameras, refresh_interval_ms=interval * 1000
+        )
         self.host = validate_host(host)
         self.assets = {
             route: (
