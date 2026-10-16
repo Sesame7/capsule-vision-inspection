@@ -8,6 +8,7 @@ import pytest
 from vimo_demo.communication import (
     FinsAddress,
     FinsMemoryArea,
+    FinsTcpClient,
     FinsTransport,
     FinsUdpClient,
 )
@@ -81,28 +82,51 @@ def test_invalid_request_rejected_before_socket_creation(
 @pytest.mark.parametrize("host", ["192.0.2.10", "127.0.0.2", "127.1.1.1"])
 @pytest.mark.parametrize("area", list(FinsMemoryArea))
 @pytest.mark.parametrize("transport", list(FinsTransport))
-def test_write_permission_is_enforced_at_execution_boundary(
+def test_remote_write_uses_configured_endpoint(
     host: str,
     area: FinsMemoryArea,
     transport: FinsTransport,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def no_socket(*args: object, **kwargs: object) -> None:
-        pytest.fail("Forbidden write reached socket construction")
+    observed: list[object] = []
 
-    monkeypatch.setattr("vimo_demo.communication.operations.FinsUdpClient", no_socket)
-    monkeypatch.setattr("vimo_demo.communication.operations.FinsTcpClient", no_socket)
-    with pytest.raises(PermissionError, match="127.0.0.1"):
-        execute_request(
-            replace(
-                request(),
-                kind=RequestKind.WRITE,
-                host=host,
-                values=(4321,),
-                area=area,
-                transport=transport,
-            )
-        )
+    def init(
+        self: FinsUdpClient | FinsTcpClient, address: str, **kwargs: object
+    ) -> None:
+        observed.append((address, kwargs))
+
+    def enter(self: FinsUdpClient | FinsTcpClient) -> FinsUdpClient | FinsTcpClient:
+        return self
+
+    def write(
+        self: FinsUdpClient | FinsTcpClient,
+        start: int,
+        values: object,
+        *,
+        area: FinsMemoryArea,
+    ) -> None:
+        observed.append((start, values, area))
+
+    def close(self: FinsUdpClient | FinsTcpClient) -> None:
+        observed.append("closed")
+
+    for cls in (FinsUdpClient, FinsTcpClient):
+        monkeypatch.setattr(cls, "__init__", init)
+        monkeypatch.setattr(cls, "__enter__", enter)
+        monkeypatch.setattr(cls, "write_words", write)
+        monkeypatch.setattr(cls, "close", close)
+    target = replace(
+        request(),
+        kind=RequestKind.WRITE,
+        host=host,
+        values=(4321,),
+        area=area,
+        transport=transport,
+    )
+    response = execute_request(target)
+    assert response.request == target and response.values is None
+    assert isinstance(observed[0], tuple) and observed[0][0] == host
+    assert observed[1:] == [(100, (4321,), area), "closed"]
 
 
 @pytest.mark.parametrize("area", list(FinsMemoryArea))

@@ -79,8 +79,6 @@ class CommunicationRequest:
             self.area,
         )
         if self.kind is RequestKind.WRITE:
-            if self.host != "127.0.0.1":
-                raise PermissionError("Writes require the exact target 127.0.0.1")
             validate_integer("write count", len(self.values), 1, MAX_WRITE_WORDS)
             if self.count != len(self.values):
                 raise ValueError("Write count must equal the number of values")
@@ -105,8 +103,8 @@ class CommunicationResponse:
 def execute_request(request: CommunicationRequest) -> CommunicationResponse:
     """One caller constructs, uses and closes the selected client, without retries.
 
-    Write permission is enforced here, before socket creation, even if callers
-    bypass the UI. A write response is acknowledgement, never implicit readback.
+    Protocol parameters are validated before socket creation. A write response
+    is acknowledgement, never implicit readback or PLC consumption.
     """
     request.validate()
     started = perf_counter()

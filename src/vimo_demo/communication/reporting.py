@@ -1,4 +1,4 @@
-"""Opt-in, localhost-only first-station reporting for one Production generation."""
+"""Opt-in bounded first-station reporting for one Production generation."""
 
 from collections import deque
 from collections.abc import Callable
@@ -9,7 +9,7 @@ from threading import Condition, Thread, current_thread
 from time import perf_counter
 from typing import Protocol, runtime_checkable
 
-from vimo_demo.inspection import CycleId, CycleStatus
+from vimo_demo.inspection import CycleId
 from vimo_demo.inspection.models import nonnegative_integer
 from vimo_demo.inspection.production import (
     ChannelBusinessStatus,
@@ -46,8 +46,6 @@ class LocalReportingSettings:
     transport: FinsTransport = FinsTransport.UDP
 
     def __post_init__(self) -> None:
-        if self.host != "127.0.0.1":
-            raise PermissionError("Automatic reporting requires exactly 127.0.0.1")
         CommunicationRequest(
             RequestKind.READ,
             self.host,
@@ -98,6 +96,7 @@ class FirstStationReport:
     identity: ReportIdentity
     statuses: tuple[tuple[ChannelId, ChannelBusinessStatus], ...]
     reject_words: tuple[int, int, int] = field(init=False)
+    result_ready_at: float | None = None
 
     def __post_init__(self) -> None:
         pairs = tuple((channel, status) for channel, status in self.statuses)
@@ -108,18 +107,25 @@ class FirstStationReport:
     def from_result(
         cls, generation: int, result: ProductionInspectionResult
     ) -> FirstStationReport:
-        if result.cycle_status not in (CycleStatus.COMPLETE, CycleStatus.FAILED):
-            raise ValueError(f"Ineligible collection status {result.cycle_status.name}")
-        if len(result.cameras) != 6 or any(
-            camera.frame_id is None
-            or camera.image_shape is None
-            or camera.collection_issue is not None
-            for camera in result.cameras
-        ):
-            raise ValueError("Reporting requires complete six-camera collection")
+        if len(result.cameras) != 6 or not any(c.frame_id for c in result.cameras):
+            raise ValueError(
+                "Reporting requires an observed cycle and six camera results"
+            )
         return cls(
             ReportIdentity(generation, result.cycle_id),
-            tuple((row.channel_id, row.business_status) for row in result.channels),
+            tuple(
+                (
+                    row.channel_id,
+                    ChannelBusinessStatus.UNKNOWN
+                    if camera.frame_id is None
+                    or camera.image_shape is None
+                    or camera.collection_issue is not None
+                    else row.business_status,
+                )
+                for camera in result.cameras
+                for row in camera.channels
+            ),
+            result_ready_at=result.result_ready_at,
         )
 
 
@@ -171,6 +177,10 @@ class ReportObservation:
     issue: ReportingIssue | None = None
     duration_ms: float | None = None
     error: FinsError | None = None  # Preserve the original FINS exception/cause chain.
+    bitmap_ms: float | None = None
+    sequence_ms: float | None = None
+    acknowledged_at: float | None = None
+    completion_to_ack_ms: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,14 +264,17 @@ class FirstStationReportingWorker:
         client_factory: Callable[
             [LocalReportingSettings], FinsUdpClient | FinsTcpClient
         ] = _client,
+        attributable: Callable[[ReportIdentity], bool] = lambda _: True,
     ) -> None:
         ReportIdentity(generation, CycleId(0))
         self.generation, self.settings = generation, settings
         self._factory = client_factory
+        self._attributable = attributable
         self._condition = Condition()
         self._pending: deque[_PendingReport] = deque()
         self._started = False
         self._stopping = False
+        self._drain = False
         self._active: ReportIdentity | None = None
         self._last_seen: CycleId | None = None
         self._next_sequence: int | None = None
@@ -401,9 +414,10 @@ class FirstStationReportingWorker:
             self._condition.notify_all()
             return completed
 
-    def request_stop(self) -> None:
+    def request_stop(self, *, drain: bool = False) -> None:
         with self._condition:
             self._stopping = True
+            self._drain = self._drain or drain
             self._condition.notify_all()
 
     def join(self, timeout: float | None = None) -> bool:
@@ -418,8 +432,10 @@ class FirstStationReportingWorker:
         sequence: int | None = None
         stage = ReportStage.INITIALIZATION
         try:
-            if self.settings.host != "127.0.0.1":
-                raise PermissionError("Automatic reporting requires exactly 127.0.0.1")
+            if not self._attributable(report.identity):
+                raise ReportingStateError(
+                    "Cycle attribution is ambiguous; no submission"
+                )
             validate_transport(self.settings.transport)
             if self._client is None or self._client.closed:
                 self._client = self._factory(self.settings)
@@ -442,16 +458,26 @@ class FirstStationReportingWorker:
                 )
             stage = ReportStage.BITMAP
             try:
-                commit = self._reporter.submit(report.statuses)
+                commit = self._reporter.submit(
+                    report.statuses,
+                    commit_allowed=lambda: self._attributable(report.identity),
+                )
             finally:
                 with self._condition:
                     self._next_sequence = self._reporter.next_sequence
+            acknowledged_at = perf_counter()
             return ReportObservation(
                 report.identity,
                 ReportOutcome.ACKNOWLEDGED,
                 commit.sequence,
                 commit.reject_words,
                 duration_ms=(perf_counter() - started) * 1000,
+                bitmap_ms=commit.bitmap_ms,
+                sequence_ms=commit.sequence_ms,
+                acknowledged_at=acknowledged_at,
+                completion_to_ack_ms=(acknowledged_at - report.result_ready_at) * 1000
+                if report.result_ready_at is not None
+                else None,
             )
         except Exception as exc:
             if isinstance(exc, FirstStationSubmissionError):
@@ -494,7 +520,7 @@ class FirstStationReportingWorker:
                     if not self._pending:
                         return
                     current = self._pending.popleft()
-                    stopping = self._stopping
+                    stopping = self._stopping and not self._drain
                     if not stopping:
                         self._active = current.report.identity
                         self._attempted += 1

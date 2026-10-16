@@ -628,6 +628,7 @@ class ContinuousAcquisition(ContinuousBaslerSource):
         super().__init__(cameras, serials)
         self.entered, self.release, self.cleaned = Event(), Event(), Event()
         self.problem = ""
+        self.camera_count = 6
         self.ignore_cancel = False
 
     def run(
@@ -657,7 +658,7 @@ class ContinuousAcquisition(ContinuousBaslerSource):
                 raise RuntimeError(self.problem)
             cycle = CycleId(1)
             begin(cycle)
-            for index, camera in enumerate(self.cameras):
+            for index, camera in enumerate(self.cameras[: self.camera_count]):
                 submit(
                     Frame(
                         FrameId(cycle, camera, 10 + index),
@@ -1081,9 +1082,17 @@ def test_developer_fixed_images_override_saved_basler_without_false_status(
         assert composition.application.join(0)
 
 
-def test_normal_basler_keeps_automatic_reporting_unavailable_before_any_owner(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
+@pytest.mark.parametrize("mode", ["complete", "timeout", "shutdown", "ambiguous"])
+def test_normal_basler_reports_full_and_partial_cycles_and_drains_stop(
+    qapp: QApplication,
+    tmp_path: Path,
+    continuous_acquisitions: list[ContinuousAcquisition],
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
 ) -> None:
+    from tests.fins_tcp_support import TcpPeer
+
+    from vimo_demo.communication import FinsTransport, first_station_reject_words
     from vimo_demo.communication.reporting import (
         ProductionReportingCommands,
         ReportingSelection,
@@ -1092,17 +1101,86 @@ def test_normal_basler_keeps_automatic_reporting_unavailable_before_any_owner(
     data = saved_data(tmp_path)
     save_basler(data.sources)
     engine = Engine()
-    startup = load_startup(data, engine_factory=lambda _: engine)
-    try:
-        assert isinstance(startup.application, ProductionReportingCommands)
-        startup.application.set_reporting_selection(
-            ReportingSelection(True, LocalReportingSettings())
-        )
-        with pytest.raises(ApplicationError):
-            startup.application.start().result(WAIT)
-        assert startup.application.snapshot().state is ApplicationState.READY
-        assert not engine.calls and not acquisitions
-        assert startup.application.snapshot().counters == ProductionCounters()
-    finally:
-        startup.application.close().result(WAIT)
-        assert startup.application.join(WAIT)
+    engine.release_warm.set()
+    if mode in ("shutdown", "ambiguous"):
+        engine.release_active.clear()
+    with TcpPeer(65534) as peer:
+        startup = load_startup(data, engine_factory=lambda _: engine)
+        app = startup.application
+        assert isinstance(app, ProductionReportingCommands)
+        try:
+            assert app.reporting_selection().settings.host == "192.168.251.1"
+            assert app.reporting_selection().settings.transport is FinsTransport.TCP
+            assert not app.reporting_selection().enabled
+            app.set_reporting_selection(
+                ReportingSelection(
+                    True,
+                    LocalReportingSettings(port=peer.port, transport=FinsTransport.TCP),
+                )
+            )
+            app.start().result(WAIT)
+            until(
+                lambda: (
+                    bool(continuous_acquisitions)
+                    and continuous_acquisitions[-1].entered.is_set()
+                )
+            )
+            source = continuous_acquisitions[-1]
+            source.camera_count = 6 if mode == "complete" else 1
+            assert not peer.packets and app.snapshot().counters == ProductionCounters()
+            source.release.set()
+            assert engine.active.wait(WAIT)
+            if mode in ("shutdown", "ambiguous"):
+                if mode == "ambiguous":
+
+                    def ambiguous(_cycle: CycleId) -> bool:
+                        return False
+
+                    monkeypatch.setattr(source, "attributable", ambiguous)
+                stopped = app.stop()
+                assert not stopped.done()
+                engine.release_active.set()
+                stopped.result(WAIT)
+            else:
+                until(lambda: app.snapshot().counters.cycles_completed == 1)
+                until(
+                    lambda: (
+                        (r := app.reporting_snapshot()) is not None
+                        and r.acknowledged_count == 1
+                    )
+                )
+                app.stop().result(WAIT)
+            report = app.reporting_snapshot()
+            assert report is not None and not report.thread_alive
+            assert (
+                report.pending == 0
+                and report.failed_count == report.rejected_count == 0
+            )
+            if mode == "ambiguous":
+                assert (
+                    report.skipped_count == 1
+                    and report.acknowledged_count == 0
+                    and not peer.packets
+                )
+            else:
+                assert report.acknowledged_count == 1 and report.skipped_count == 0
+                result = app.snapshot().latest_production_result
+                assert result is not None
+                words = first_station_reject_words(
+                    (c.channel_id, c.business_status) for c in result.channels
+                )
+                assert peer.words(49, 4) == (65535, *words)
+                if mode != "complete":
+                    assert words[0] & 0xFFC0 == 0xFFC0 and words[1:] == (0xFFFF, 15)
+                assert (
+                    report.last_acknowledged is not None
+                    and report.last_acknowledged.completion_to_ack_ms is not None
+                )
+            assert engine.closed and source.cleaned.is_set()
+            assert app.snapshot().state is ApplicationState.READY
+        finally:
+            engine.release_active.set()
+            for source in continuous_acquisitions:
+                source.release.set()
+            app.close().result(WAIT)
+            assert app.join(WAIT)

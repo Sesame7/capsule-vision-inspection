@@ -239,3 +239,67 @@ def test_tcp_owner_thread_bounded_stop_and_queued_skips(
             == snapshot.rejected_count
             == 1
         )
+
+
+def test_stop_with_drain_reports_accepted_fifo_before_socket_close() -> None:
+    with TcpPeer() as peer:
+        peer.hold_next("bitmap")
+        worker = FirstStationReportingWorker(
+            7,
+            LocalReportingSettings(
+                port=peer.port, transport=FinsTransport.TCP, timeout=2
+            ),
+        )
+        worker.start()
+        try:
+            first = worker.submit(report(1))
+            assert peer.entered.wait(WAIT)
+            second = worker.submit(report(2))
+            worker.request_stop(drain=True)
+            assert not worker.join(0)
+            peer.release.set()
+            assert (
+                first.result(WAIT).outcome
+                is second.result(WAIT).outcome
+                is ReportOutcome.ACKNOWLEDGED
+            )
+            assert worker.join(WAIT) and worker.cleanup_safe
+            assert worker.snapshot().acknowledged_count == 2
+            assert peer.connections == 1 and peer.words(49)[0] == 2
+        finally:
+            peer.release.set()
+            stop(worker)
+
+
+def test_attribution_loss_after_bitmap_ack_never_writes_sequence() -> None:
+    from threading import Event
+
+    allowed = Event()
+    allowed.set()
+    with TcpPeer(20) as peer:
+        peer.hold_next("bitmap")
+        worker = FirstStationReportingWorker(
+            7,
+            LocalReportingSettings(
+                port=peer.port, transport=FinsTransport.TCP, timeout=2
+            ),
+            attributable=lambda _: allowed.is_set(),
+        )
+        worker.start()
+        try:
+            future = worker.submit(report(1))
+            assert peer.entered.wait(WAIT)
+            allowed.clear()
+            peer.release.set()
+            outcome = future.result(WAIT)
+            assert (
+                outcome.outcome is ReportOutcome.FAILED
+                and outcome.stage is ReportStage.SEQUENCE
+            )
+            assert outcome.acknowledged_at is None and peer.words(49)[0] == 20
+            assert len(peer.packets) == 2  # Initial read + bitmap, no W49 write.
+            second = worker.submit(report(2)).result(WAIT)
+            assert second.outcome is ReportOutcome.FAILED and len(peer.packets) == 2
+        finally:
+            peer.release.set()
+            stop(worker)
