@@ -41,8 +41,8 @@ def test_stop_restart_and_close_keep_web_independent_of_production(
         try:
             for generation in (1, 2):
                 window.bridge.refresh()
-                assert window.buttons["secondary"].isEnabled()
-                window.buttons["secondary"].click()
+                assert window.buttons["operation"].isEnabled()
+                window.bridge.step_replay()  # Deterministic one-cycle source setup.
                 until(lambda: replay_state(startup) is ReplayState.PAUSED)
                 window.bridge.refresh()
                 assert startup.application.snapshot().state is ApplicationState.RUNNING

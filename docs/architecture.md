@@ -85,7 +85,8 @@ on-demand decoding. Ingress still produces owned Frames. Non-Loop/fixed inputs
 remain on demand. Stop preserves the reusable cache; safe Close releases it.
 Pause/Step gates whole groups: an already claimed group finishes, PAUSING becomes
 PAUSED at the safe boundary, and Step produces one formal result. This is still
-application RUNNING, with editing locks retained. End performs actual Stop.
+application RUNNING, with editing locks retained. The Stop control requests actual
+shutdown.
 
 Saved Basler mode first uses Folder references for worker warm-up, then opens/arms
 six explicitly mapped cameras once. **RUNNING is not ARMED.** An idle armed source
@@ -161,6 +162,14 @@ preference behavior. The fixed bottom strip presents application state, the most
 recent PLC reporting observation (ACK is not connectivity/consumption), Web owner
 availability and current feedback. It reuses bridge refresh/notifications without
 another timer or network request.
+
+Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
+Folder Replay's middle control becomes Step while paused and returns to paused
+after each formal cycle; Reset is a separate fault-recovery action. Basler Pause
+remains disabled. Empty canvases and routine acquisition waits stay quiet, with
+acquisition progress available in the state tooltip. Read-only channel symbols
+retain full ChannelIds
+and technical evidence in tooltips; only identity-matched results draw defect boxes.
 
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,

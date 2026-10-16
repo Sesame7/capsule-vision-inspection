@@ -4,9 +4,14 @@ from threading import Event, Thread
 
 import pytest
 
-from vimo_demo.application import ApplicationState, ApplicationStateError
+from vimo_demo.application import (
+    ApplicationState,
+    ApplicationStateError,
+    ProductionApplicationSnapshot,
+    ProductionCounters,
+)
 from vimo_demo.application.local_replay import LocalReplayControl, ReplayState
-from vimo_demo.ui.production_presentation import replay_actions
+from vimo_demo.ui.production_presentation import production_actions
 
 
 def test_pause_during_claim_waits_for_the_formal_cycle_boundary() -> None:
@@ -104,36 +109,37 @@ def test_shutdown_settles_pending_operation_without_fake_completion(step: bool) 
 
 
 @pytest.mark.parametrize(
-    ("state", "replay", "actions"),
+    "state,replay,expected",
     [
-        (ApplicationState.READY, None, ("start", "replay_step")),
+        (
+            ApplicationState.READY,
+            ReplayState.STOPPED,
+            ("start", None, None, None),
+        ),
         (
             ApplicationState.RUNNING,
             ReplayState.AUTOMATIC,
-            ("replay_pause", "replay_end"),
+            (None, "replay_pause", "stop", None),
         ),
         (
             ApplicationState.RUNNING,
             ReplayState.PAUSED,
-            ("replay_continue", "replay_step"),
+            ("replay_continue", "replay_step", "stop", None),
         ),
-        (
-            ApplicationState.RUNNING,
-            ReplayState.PAUSING,
-            ("replay_pausing", "replay_end"),
-        ),
-        (
-            ApplicationState.RUNNING,
-            ReplayState.STEPPING,
-            ("replay_stepping", "replay_end"),
-        ),
-        (ApplicationState.RUNNING, ReplayState.STOPPED, ("STOPPING", None)),
-        (ApplicationState.STARTING, ReplayState.STEPPING, ("STARTING", None)),
-        (ApplicationState.STOPPING, ReplayState.STOPPED, ("STOPPING", None)),
-        (ApplicationState.FAULT, ReplayState.STOPPED, ("reset", None)),
+        (ApplicationState.RUNNING, ReplayState.PAUSING, (None, None, "stop", None)),
+        (ApplicationState.RUNNING, ReplayState.STEPPING, (None, None, "stop", None)),
+        (ApplicationState.RUNNING, None, (None, None, "stop", None)),
+        (ApplicationState.STARTING, ReplayState.STEPPING, (None, None, "stop", None)),
+        (ApplicationState.STOPPING, ReplayState.STOPPED, (None, None, None, None)),
+        (ApplicationState.FAULT, ReplayState.STOPPED, (None, None, None, "reset")),
     ],
 )
-def test_local_buttons_follow_source_state_without_changing_application_state(
-    state: ApplicationState, replay: ReplayState | None, actions: tuple[str, str | None]
+def test_fixed_player_actions_keep_unsupported_pause_disabled(
+    state: ApplicationState,
+    replay: ReplayState | None,
+    expected: tuple[str | None, ...],
 ) -> None:
-    assert replay_actions(state, replay) == actions
+    snapshot = ProductionApplicationSnapshot(
+        state, 1, None, None, None, ProductionCounters(), None, False, None
+    )
+    assert tuple(production_actions(snapshot, replay).values()) == expected

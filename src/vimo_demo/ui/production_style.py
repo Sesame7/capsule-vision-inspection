@@ -15,6 +15,11 @@ type Theme = Literal["dark", "light"]
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "production_stop": ("停止", "Stop"),
+    "pause_unsupported": (
+        "当前采集模式不支持暂停",
+        "Pause is unavailable for this acquisition mode",
+    ),
     "plc_reporting": ("PLC 自动报告", "PLC automatic reporting"),
     "plc_enable": ("启用", "Enable"),
     "plc_session_only": (
@@ -705,6 +710,9 @@ def stylesheet(theme: Theme = "dark") -> str:
     QFrame#navigation QPushButton:focus {{ border: 1px solid {c.accent}; }}
     QFrame#navigation QPushButton:checked:focus {{ border: none; }}
     QPushButton[iconAlignment="leading"] {{ text-align: left; }}
+    QFrame#batchBadge {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 8px; }}
+    QPushButton#productionBatch {{ background: transparent; border-color: transparent; }}
+    QFrame#productionMetrics {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 8px; }}
     QFrame#navigation QComboBox {{ padding: 5px 8px; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
@@ -848,6 +856,27 @@ def production_icon(kind: str, foreground: str | None = None) -> QIcon:
             painter.drawArc(4, 4, 14, 14, 30 * 16, 290 * 16)
             painter.drawLine(19, 3, 19, 9)
             painter.drawLine(19, 9, 13, 9)
+        elif kind == "tag":
+            path = QPainterPath(QPointF(3, 3))
+            for point in (
+                QPointF(12, 3),
+                QPointF(21, 12),
+                QPointF(12, 21),
+                QPointF(3, 12),
+            ):
+                path.lineTo(point)
+            path.closeSubpath()
+            painter.drawPath(path)
+            painter.drawEllipse(QPointF(7, 7), 1.5, 1.5)
+        elif kind == "cycles":
+            painter.drawRoundedRect(QRectF(4, 3, 14, 17), 2, 2)
+            painter.drawRoundedRect(QRectF(8, 1, 6, 4), 1, 1)
+            for y in (8, 12, 16):
+                painter.drawLine(7, y, 15, y)
+        elif kind == "clock":
+            painter.drawEllipse(QRectF(3, 3, 16, 16))
+            painter.drawLine(11, 6, 11, 11)
+            painter.drawLine(11, 11, 16, 13)
         elif kind == "batch":
             for a, b in (
                 (QPointF(4, 15), QPointF(15, 4)),
@@ -922,7 +951,14 @@ def indicator_icon(state: Indicator, foreground: str | None = None) -> QIcon:
         elif state is Indicator.EMPTY:
             # An empty outlined slot, distinct from pending dot and disabled dash.
             painter.drawRoundedRect(QRectF(2, 3, 14, 12), 2, 2)
-        elif state in (Indicator.ERROR, Indicator.UNKNOWN):
+        elif state is Indicator.UNKNOWN:
+            painter.drawEllipse(QRectF(2, 2, 14, 14))
+            path = QPainterPath(QPointF(6, 6))
+            path.cubicTo(6, 2, 14, 3, 12, 7)
+            path.cubicTo(11, 9, 9, 8, 9, 11)
+            painter.drawPath(path)
+            painter.drawPoint(9, 14)
+        elif state is Indicator.ERROR:
             for a, b in (
                 (QPointF(9, 2), QPointF(17, 16)),
                 (QPointF(17, 16), QPointF(1, 16)),

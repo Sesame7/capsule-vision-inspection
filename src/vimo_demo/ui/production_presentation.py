@@ -37,38 +37,26 @@ def controls(snapshot: ProductionApplicationSnapshot) -> Controls:
     )
 
 
-def primary_action(state: ApplicationState) -> str:
-    """One fixed Production operation area; availability remains in controls()."""
-    if state in (ApplicationState.STARTING, ApplicationState.RUNNING):
-        return "stop"
-    if state is ApplicationState.STOPPING:
-        return "STOPPING"
-    if state is ApplicationState.FAULT:
-        return "reset"
-    if state is ApplicationState.CLOSED:
-        return "CLOSED"
-    return "start"
-
-
-def replay_actions(
-    state: ApplicationState, replay: ReplayState | None
-) -> tuple[str, str | None]:
-    """Local-only source controls; never add an ApplicationState.PAUSED."""
-    if state is ApplicationState.READY:
-        return "start", "replay_step"
-    if state is ApplicationState.STARTING:
-        return "STARTING", None
-    if state is ApplicationState.RUNNING:
-        if replay is ReplayState.PAUSED:
-            return "replay_continue", "replay_step"
-        if replay is ReplayState.AUTOMATIC:
-            return "replay_pause", "replay_end"
-        if replay is ReplayState.PAUSING:
-            return "replay_pausing", "replay_end"
-        if replay is ReplayState.STEPPING:
-            return "replay_stepping", "replay_end"
-        return "STOPPING", None
-    return primary_action(state), None
+def production_actions(
+    snapshot: ProductionApplicationSnapshot, replay: ReplayState | None = None
+) -> dict[str, str | None]:
+    """Fixed player positions; None replay means pause/step are unsupported."""
+    available = controls(snapshot)
+    running = snapshot.state is ApplicationState.RUNNING
+    return {
+        "operation": "start"
+        if available.start
+        else "replay_continue"
+        if running and replay is ReplayState.PAUSED
+        else None,
+        "pause": "replay_pause"
+        if running and replay is ReplayState.AUTOMATIC
+        else "replay_step"
+        if running and replay is ReplayState.PAUSED
+        else None,
+        "stop": "stop" if available.stop else None,
+        "secondary": "reset" if available.reset else None,
+    }
 
 
 class Indicator(Enum):

@@ -32,7 +32,6 @@ from vimo_demo.ui.production_presentation import (
     image_transform,
     indicator,
     matching_camera,
-    primary_action,
 )
 from vimo_demo.ui.production_style import STRINGS, text
 
@@ -162,22 +161,6 @@ def test_controls(
     assert not controls(
         replace(snapshot(ApplicationState.FAULT), runtime_owned=True)
     ).reset
-
-
-@pytest.mark.parametrize(
-    "state, action",
-    [
-        (ApplicationState.UNCONFIGURED, "start"),
-        (ApplicationState.READY, "start"),
-        (ApplicationState.STARTING, "stop"),
-        (ApplicationState.RUNNING, "stop"),
-        (ApplicationState.STOPPING, "STOPPING"),
-        (ApplicationState.FAULT, "reset"),
-        (ApplicationState.CLOSED, "CLOSED"),
-    ],
-)
-def test_primary_action(state: ApplicationState, action: str) -> None:
-    assert primary_action(state) == action
 
 
 def test_indicator_distinguishes_pending_disabled_error_and_ng() -> None:
