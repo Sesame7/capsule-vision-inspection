@@ -13,7 +13,6 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from threading import Event, Thread
-from threading import enumerate as threads
 from time import perf_counter
 from typing import cast
 
@@ -631,58 +630,6 @@ def stdlib_cli_command() -> list[str]:
         )
     )
     return [sys.executable, "-B", "-S", "-u", "-c", bootstrap]
-
-
-def test_cli_demo_in_independent_processes_without_site_packages() -> None:
-    root = Path(__file__).resolve().parents[2]
-    command = stdlib_cli_command()
-    with subprocess.Popen(
-        command
-        + ["scripts/run_fins_simulator.py", "--port", "0", "--max-requests", "3"],
-        cwd=root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    ) as process:
-        assert process.stdout is not None
-        ready = process.stdout.readline()
-        assert "FINS simulator 127.0.0.1:" in ready
-        port = ready.split(":", 1)[1].split(";", 1)[0]
-        try:
-            demo = subprocess.run(
-                command
-                + ["scripts/fins_local_demo.py", "--port", port, "--timeout", "0.05"],
-                cwd=root,
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            output, errors = process.communicate(timeout=5)
-        finally:
-            # A failed client must not leave the independent test server waiting
-            # for its three requests. Empty datagrams finish the finite serve loop.
-            if process.poll() is None:
-                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as cleanup:
-                    for _ in range(3):
-                        cleanup.sendto(b"", ("127.0.0.1", int(port)))
-                try:
-                    process.communicate(timeout=3)
-                except subprocess.TimeoutExpired:
-                    # Only a broken, test-owned stdlib server: do not let Popen's
-                    # context wait forever. This is never successful-stop evidence.
-                    process.kill()
-                    process.communicate(timeout=3)
-                    raise
-        assert process.returncode == 0, errors
-        assert "Simulator socket closed" in output
-        assert demo.returncode == 0, demo.stderr
-        assert "Read D100: 1234" in demo.stdout
-        assert "Wrote D100: 4321 (localhost)" in demo.stdout
-        assert "Read D100: 4321" in demo.stdout
-        assert "Expected timeout:" in demo.stdout
-        assert "Demo sockets closed" in demo.stdout
-    assert not any(t.name.startswith("fins-test-") for t in threads())
 
 
 @pytest.mark.parametrize("enabled", [False, True])

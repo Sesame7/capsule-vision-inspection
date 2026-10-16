@@ -1,14 +1,14 @@
-"""Shared image I/O, statistics and reporting helpers for maintained engineering tools."""
+"""Image I/O and compact reporting helpers for the inference visualizer."""
 
 import argparse
 import json
 import sys
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from datetime import UTC, datetime
 from io import TextIOWrapper
 from pathlib import Path
-from typing import TypedDict, cast
+from typing import cast
 
 import cv2
 import numpy as np
@@ -27,13 +27,6 @@ def positive_int(value: str) -> int:
     return number
 
 
-def nonnegative_int(value: str) -> int:
-    number = int(value)
-    if number < 0:
-        raise argparse.ArgumentTypeError("must be at least 0")
-    return number
-
-
 def image_paths(source: Path) -> list[Path]:
     source = source.resolve(strict=True)
     candidates = [source] if source.is_file() else source.iterdir()
@@ -49,59 +42,6 @@ def decode(path: Path) -> NDArray[np.uint8]:
         raise ValueError(f"Cannot decode uint8 BGR image: {path}")
     # OpenCV's annotations do not narrow the dtype after the runtime check.
     return cast(NDArray[np.uint8], image)
-
-
-def load_pool(directory: Path, size: int) -> list[tuple[Path, NDArray[np.uint8]]]:
-    pool: list[tuple[Path, NDArray[np.uint8]]] = []
-    for path in image_paths(directory):
-        try:
-            pool.append((path, decode(path)))
-        except (OSError, ValueError, cv2.error) as exc:
-            print(f"[WARN] {path.name}: {exc}", file=sys.stderr)
-        if len(pool) == size:
-            return pool
-    raise ValueError(f"Need {size} usable images; found {len(pool)} in {directory}")
-
-
-class Statistics(TypedDict):
-    calls: int
-    mean_ms: float | None
-    p50_ms: float | None
-    p95_ms: float | None
-    p99_ms: float | None
-    min_ms: float | None
-    max_ms: float | None
-    std_ms: float | None
-    calls_per_second: float | None
-
-
-def statistics(values: Sequence[float] | NDArray[np.float64]) -> Statistics:
-    data = np.asarray(values, dtype=np.float64)
-    data = data[np.isfinite(data)]
-    result: Statistics = {
-        "calls": int(data.size),
-        "mean_ms": None,
-        "p50_ms": None,
-        "p95_ms": None,
-        "p99_ms": None,
-        "min_ms": None,
-        "max_ms": None,
-        "std_ms": None,
-        "calls_per_second": None,
-    }
-    if data.size:
-        mean = float(data.mean())
-        result.update(
-            mean_ms=mean,
-            p50_ms=float(np.percentile(data, 50)),
-            p95_ms=float(np.percentile(data, 95)),
-            p99_ms=float(np.percentile(data, 99)),
-            min_ms=float(data.min()),
-            max_ms=float(data.max()),
-            std_ms=float(data.std()),
-            calls_per_second=1000 / mean if mean else None,
-        )
-    return result
 
 
 def semantic_signature(result: ImageResult) -> dict[str, object]:

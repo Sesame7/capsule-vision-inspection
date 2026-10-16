@@ -1,97 +1,61 @@
 # AGENTS.md
 
-## Operating safeguards
+Read [README](README.md), [architecture](docs/architecture.md) and the relevant
+[configuration](docs/configuration.md) or [communication](docs/communication.md)
+contract before changing behavior. Keep changes small and testable. Do not commit,
+tag, push, add features or redesign architecture without authorization.
 
-Read [architecture](docs/architecture.md) and the owning Current domain contract
-before changing behavior. Work within the requested scope; keep changes small,
-readable and independently testable. Do not introduce speculative frameworks,
-future camera/PLC/web functionality or architecture redesign without authorization.
-Do not commit or tag automatically.
+## Environment and assets
 
-- Preserve the verified Windows 10, Python **3.14.7 x64**, RTX 4060 Ti 16 GB and
-  ViMo inference/custom **3.20.0.2** environment. Public dependency versions are
-  authoritative in `pyproject.toml` / `uv.lock`.
-- Preserve the vendor-provisioned `.venv`. Use `uv run --no-sync` daily; intentional
-  public synchronization uses `uv sync --locked --inexact --no-python-downloads`
-  to retain proprietary packages. uv does not provision ViMo/runtime/license.
-- Do not install/upgrade/remove GPU dependencies, CUDA, cuDNN, TensorRT, vendor
-  packages/runtime, change global environment/PATH or modify vendor binaries/model
-  settings without explicit authorization. Keep dependency changes within approved
-  scope; additions need a demonstrated reason.
-- Protect persistent `data/`, local models/images, `tests/reference/phase0.json`
-  and deliberately retained evidence under `outputs/retained-evidence/`.
-  Historical outputs, manual snapshots and prototypes may be retired only through
-  explicit approval of their exact scope and retention requirements. Ignored or
-  generated status alone never authorizes deletion, movement, regeneration or
-  overwriting. Verify retained copies before removing originals; preserve active
-  assets and unapproved groups. Do not commit local assets, caches or evidence.
-  Historical raw reports are not regression inputs; never regenerate the golden
-  fixture merely to make a changed implementation pass.
+- Preserve the vendor-provisioned `.venv`, Windows/Python/vendor environment and
+  locked public dependency versions. Development targets Python 3.14.7 x64 and
+  ViMo inference/custom 3.20.0.2. Preserve an existing field installation as found.
+  Daily commands use `uv run --no-sync`; intentional public synchronization uses
+  `uv sync --locked --inexact --no-python-downloads`.
+- Do not install/change GPU dependencies, CUDA/TensorRT, vendor packages/runtime,
+  licenses, global PATH or model parameters without explicit authorization.
+- Protect `data/`, local models/images, licenses and `tests/reference/phase0.json`.
+  Ignored/generated status alone does not authorize deletion. Verify actual
+  references and the approved scope before cleaning outputs or local assets.
+  Never regenerate the golden fixture merely to make a regression pass.
 
-## Protected Current behavior
+## Implementation rules
 
-These safeguards bind implementation changes until explicitly superseded through
-an approved design change, matching implementation/tests and an updated owning
-contract. Current package/class/thread arrangements describe today's implementation,
-not permanent Target architecture restrictions.
+- Configuration persists/resolves definitions; Inspection owns synchronous
+  identity/evidence/judgment; Runtime owns scheduling/resources; Application owns
+  activation/sessions/accounting; Qt/Web presents those domains. Lower domains
+  remain Qt independent. Keep direct SmartMore imports/vendor objects at the
+  inference adapter; callers use our typed API.
+- Input is nonempty uint8 H x W x 3 **BGR**. Do not infer RGB, resize, reorient,
+  alter thresholds/ROI or invent mask IDs. Only a final singleton mask channel
+  may be squeezed. `label_map` is not region counts; `has_defects` is not acceptance.
+- One serial engine owner constructs, uses and closes the SDK on its worker
+  thread. No unverified thread-safety/concurrency claims. Bound queues/results;
+  borrowed array aliases stay immutable until task completion/cancellation.
+  Frame admission does not return pixel ownership or mean terminal completion.
+- Preserve explicit cycle/camera/full FrameId and configured ordering, exactly-once
+  terminal delivery, observable overload and actual thread termination. Timeout
+  is not successful shutdown; native work cannot be forcibly cancelled.
+- Production is passive to external hardware triggers and never commands W10.7.
+  Preserve early serial inspection, channel identity and W49–W52 reporting.
+  Result/accounting delivery must not depend on UI/Web speed. Display overlays
+  require matching generation, cycle, complete FrameId and image dimensions.
+- Qt never infers or waits on unfinished `Future.result()`/`join()`. Worker
+  callbacks never mutate widgets; use queued delivery. Bound latest display/Web
+  caches and keep artifact hashing outside GUI dispatch.
+- Start warm-up has zero production side effects. Only successful Start promotes
+  a candidate; failed startup preserves active identity. Counters are occurrences,
+  not physical products; explicit Batch resets them. ERROR, NG and FAULT differ.
+- Preserve strict configuration validation, atomic persistence, hidden Recipe
+  settings and Save/preparation/activation separation. Saved MachineLayout is
+  authoritative; opening an editor never repairs or reinitializes geometry.
+  Normal `app.py` uses explicit entry-relative `data/`, with no fake fallback.
 
-- Preserve the responsibility boundaries in [architecture](docs/architecture.md):
-  Configuration persists/resolves definitions; Inspection owns synchronous identity,
-  collection/evidence/judgment; Runtime owns scheduling/resources; Application owns
-  activation/sessions/accounting; UI presents/commands those domains. Lower domains
-  remain Qt independent. Direct SmartMore imports/vendor objects stay only in the
-  inference adapter; callers and maintained tools use our typed API, not old spikes.
-- Input is nonempty **uint8 H × W × 3 BGR ndarray**. Do not infer RGB, resize or
-  change orientation. Preserve verified thresholds/ROI/settings and raw mask IDs/
-  actual mappings. Only the final singleton mask channel may be squeezed;
-  `label_map` is not counts and `has_defects` is not production acceptance.
-- Keep one serial engine owner. In worker/GUI execution, supply an engine factory:
-  `InferenceWorker` creates, uses and closes it on its thread. Workers have one
-  lifecycle and cannot restart. CLI tools may own an engine in one serial context.
-  Do not claim SDK thread safety or select GPU concurrency without measurement.
-- Bound image queues and result retention; document pixel ownership. Every alias
-  of a worker-borrowed array stays immutable until its task Future completes/cancels.
-  Owned Frames remain immutable while snapshots/inspection retain them; frame
-  admission acknowledgement is neither terminal completion nor pixel-buffer return.
-- `RuntimeCoordinator` exclusively owns its collector and worker lifecycle;
-  source threads use its bounded command API. Preserve explicit cycle/frame/camera
-  identities, configured ordering, distinct admission/task/terminal observations,
-  exactly-once terminal delivery and explicit overload, without silent loss/history.
-  Technical failure and product judgment remain separate; ordinary check ERROR is
-  not automatically application FAULT or model NG.
-- The GUI never performs ViMo inference or blocks on unfinished `Future.result()`
-  / `join()`. Future callbacks never mutate widgets; use queued Qt delivery.
-  Result delivery/accounting must not depend on rendering. Separate bounded
-  latest-per-camera display pixels require matching generation, cycle, full FrameId
-  and dimensions for overlays. Keep artifact hashing off GUI dispatch.
-- `ProductionApplication` owns candidate activation and disposable sessions.
-  Readiness warm-up produces no production data/counters. Only successful Start
-  promotes a candidate; failed activation preserves last-known-good active identity.
-  Counters are admitted-cycle/channel-judgment occurrences, not physical products;
-  only explicit Batch resets them. UI lifecycle commands go through the application.
-- Preserve strict configuration resolution and atomic persistence. The operator's
-  combined **Save and apply** still separates persistence, clean saved candidate
-  preparation/installation and successful-Start activation. Preserve hidden Recipe
-  policies and partial-success feedback. Saved MachineLayout is the geometry
-  authority; opening/refreshing an editor never repairs or reinitializes it.
-- Normal `app.py` restores entry-relative persistent `data/` with explicit default
-  Model/last-applied Recipe IDs into a stopped candidate. No first-file selection,
-  fake fallback, invented geometry or automatic inspection. Developer/fake launchers
-  are separate workflows, not normal recovery paths.
-- Shutdown remains observable: stop admission, finalize/reject pending work
-  explicitly, let claimed native work finish and confirm actual owned-thread
-  termination before release. Timeout/notification is not successful termination;
-  retain unsafe ownership. Native SDK calls cannot be forcibly cancelled.
+## Validation
 
-## Typing and validation
-
-Keep strict Pyright for `src tests scripts app.py`. Do not use broad `Any`, global
-ignores or exclusions to silence diagnostics. Narrow at runtime; unavoidable vendor
-typing workarounds must be local, documented and justified at the adapter boundary.
-
-For each implementation step, report what changed, the smallest relevant test/
-check, its exact command and any failure. Run normal gates for source/configuration
-changes, with additional focused checks proportional to the affected contract:
+Keep strict Pyright for maintained source/tests/scripts. No broad `Any`, global
+ignores or weakened diagnostics. Vendor typing workarounds must be local and
+justified at the adapter boundary. Run relevant focused checks, then normal gates:
 
 ```powershell
 uv run --no-sync ruff check src tests scripts app.py
@@ -101,25 +65,8 @@ uv run --no-sync pytest --tb=short
 git diff --check
 ```
 
-Normal tests remain GPU independent; real checks are opt-in. Use relevant short
-GPU checks for inference/lifecycle changes. Do not routinely rerun historical
-full-dataset, stress or benchmark experiments. For Markdown-only changes, verify
-links/anchors/paths, commands against current parsers/configuration, Current versus
-Historical wording, structure and whitespace (including untracked files);
-runtime tests, GPU runs and screenshots are unnecessary.
-
-## Documentation ownership
-
-[README](README.md) owns setup, entry points and tool discovery.
-[Architecture](docs/architecture.md) maps Current responsibilities and deferred
-Target direction. Detailed contracts belong to [configuration](docs/configuration.md),
-[inspection](docs/inspection.md), [inference/runtime](docs/inference-runtime.md),
-[application](docs/application.md), [UI shell](docs/ui-shell.md),
-[UI configuration](docs/ui-configuration.md) and
-[performance methodology](docs/inspection-performance.md).
-
-Use the owning document rather than duplicating contracts. Keep Current, Target/
-unimplemented and Historical claims distinct. The three archives linked from
-[README](README.md#documentation) preserve dated evidence, not new requirements.
-Git preserves retired implementation; do not restore obsolete experiments.
-Temporary migration/audit reports are evidence, not maintained specifications.
+Report commands/results and unexecuted checks honestly. Real GPU/hardware checks
+are opt-in and proportional to changed behavior; do not routinely benchmark,
+stress or run full datasets. For documentation-only changes, check links/anchors,
+commands and whitespace; runtime tests/screenshots are unnecessary. Documentation
+describes current operation; avoid phase narratives or duplicate contract trees.

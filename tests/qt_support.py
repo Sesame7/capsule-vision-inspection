@@ -2,13 +2,10 @@
 
 from collections.abc import Callable
 from pathlib import Path
-from threading import get_ident
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEventLoop, QObject, QTimer, Slot
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtGui import QFontDatabase
-
-from vimo_demo.inference import ImageResult
 
 if TYPE_CHECKING:
     from vimo_demo.ui.production_window import ProductionWindow
@@ -51,35 +48,3 @@ def close_window(window: ProductionWindow) -> None:
     until(lambda: window.bridge.closed)
     assert window.bridge.application.join(1)
     window.deleteLater()
-
-
-class Receiver(QObject):
-    def __init__(self) -> None:
-        super().__init__()
-        self.ready = False
-        self.finished = False
-        self.results: list[ImageResult] = []
-        self.errors: list[BaseException] = []
-        self.thread_ids: list[int] = []
-
-    @Slot()
-    def on_ready(self) -> None:
-        self.thread_ids.append(get_ident())
-        self.ready = True
-
-    @Slot(object)
-    def on_result(self, result: object) -> None:
-        self.thread_ids.append(get_ident())
-        assert isinstance(result, ImageResult)
-        self.results.append(result)
-
-    @Slot(object)
-    def on_error(self, error: object) -> None:
-        self.thread_ids.append(get_ident())
-        assert isinstance(error, BaseException)
-        self.errors.append(error)
-
-    @Slot()
-    def on_finished(self) -> None:
-        self.thread_ids.append(get_ident())
-        self.finished = True

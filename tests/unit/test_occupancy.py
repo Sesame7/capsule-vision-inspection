@@ -1,17 +1,12 @@
-"""Exact E0-R geometry, scalar evidence and conservative presence semantics."""
+"""Center-region geometry, scalar evidence and conservative presence semantics."""
 
-import csv
-import hashlib
 from dataclasses import FrozenInstanceError, asdict
-from pathlib import Path
 
-import cv2
 import numpy as np
 import pytest
 
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection.production import (
-    OccupancyEvidence,
     OccupancyResult,
     OccupancyState,
     OccupancyView,
@@ -20,21 +15,6 @@ from vimo_demo.inspection.production import (
 from vimo_demo.inspection.production.occupancy import occupancy_rect
 
 EMPTY, PRESENT, UNKNOWN = OccupancyState
-ROOT = Path(__file__).resolve().parents[2]
-
-
-def labeled_evidence(row: dict[str, str]) -> OccupancyEvidence:
-    path = Path(row["source_path"])
-    if not path.is_file():
-        pytest.skip("Local E0-R challenge image unavailable")
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == row["image_sha256"]
-    image = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
-    assert image is not None
-    assert hashlib.sha256(image.tobytes()).hexdigest() == row["pixel_sha256"]
-    pixels = np.asarray(image, dtype=np.uint8)
-    pixels.flags.writeable = False
-    roi = BoundingRect(*(int(row[f"roi_{k}"]) for k in ("x", "y", "width", "height")))
-    return measure_occupancy(pixels, roi)
 
 
 @pytest.mark.parametrize("width", [1, 2, 3, 7, 79, 80, 175, 176, 177])
@@ -128,47 +108,3 @@ def test_row_strided_readonly_input_matches_contiguous_input() -> None:
     roi = BoundingRect(1, 2, 77, 7)
     assert measure_occupancy(view, roi) == measure_occupancy(view.copy(), roi)
     np.testing.assert_array_equal(base, before)
-
-
-@pytest.mark.parametrize(
-    "sample_id",
-    [
-        "E0-CAM1-000198-CH05",
-        "E0-CAM6-000082-CH31",
-        "E0-CAM6-000082-CH33",
-        "E0-CAM6-000083-CH31",
-        "E0-CAM6-000083-CH33",
-        "E0-CAM6-000084-CH31",
-        "E0-CAM6-000085-CH31",
-    ],
-)
-def test_available_user_confirmed_neighbor_cases(sample_id: str) -> None:
-    """Optional local challenge evidence, never a generic accuracy oracle."""
-    annotations = ROOT / "outputs/occupancy_e0r/confirmed_annotations.csv"
-    if not annotations.is_file():
-        pytest.skip("Local E0-R external-label evidence unavailable")
-    with annotations.open(encoding="utf-8-sig", newline="") as stream:
-        row = next(r for r in csv.DictReader(stream) if r["sample_id"] == sample_id)
-    assert row["manual_label"] == "EMPTY" and row["reviewer"] == "user"
-    assert row["provenance"] == "Phase E0-R user request, section 3"
-    evidence = labeled_evidence(row)
-    assert evidence.state is EMPTY
-    assert evidence.upper.foreground_pixels == evidence.lower.foreground_pixels == 0
-
-
-def test_available_reviewed_shortlist_without_threshold_fitting() -> None:
-    annotations = ROOT / "outputs/occupancy_e0r/review_shortlist.csv"
-    if not annotations.is_file():
-        pytest.skip("Local E0-R reviewed shortlist unavailable")
-    with annotations.open(encoding="utf-8-sig", newline="") as stream:
-        rows = [
-            row
-            for row in csv.DictReader(stream)
-            if row["manual_label"] in ("EMPTY", "PRESENT")
-        ]
-    if not rows:
-        pytest.skip("Shortlist has no independently entered labels")
-    for row in rows:
-        assert row["split"] in ("selection", "evaluation")
-        evidence = labeled_evidence(row)
-        assert evidence.state.name == row["manual_label"], row["sample_id"]
