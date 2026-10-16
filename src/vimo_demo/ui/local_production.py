@@ -31,6 +31,7 @@ from vimo_demo.application.basler import (
     BaslerAcquisitionError,
     BaslerAcquisitionSource,
 )
+from vimo_demo.application.basler_control import BaslerAdmissionControl
 from vimo_demo.application.continuous_basler import (
     ContinuousArmedAcquisition,
     ContinuousBaslerSource,
@@ -76,6 +77,7 @@ from vimo_demo.inference._validation import uint8_array
 from vimo_demo.inspection import CycleId, Frame, FrameId
 from vimo_demo.inspection.production import ProductionInspectionResult
 from vimo_demo.runtime import CoordinatorStoppedError, InferenceEngine
+from vimo_demo.runtime.early_inspection import EarlyInspectionCoordinator
 from vimo_demo.ui.camera_source_editor import CameraSourceDraft
 from vimo_demo.ui.display_frames import LatestDisplayFrameStore
 from vimo_demo.ui.inference_bridge import FutureDelivery
@@ -166,6 +168,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         replay_control: LocalReplayControl | None = None,
         basler_source: BaslerAcquisitionSource | None = None,
         continuous_source: ContinuousBaslerSource | None = None,
+        basler_control: BaslerAdmissionControl | None = None,
         observe_acquisition: Callable[
             [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
         ] = basler_notice,
@@ -200,6 +203,9 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             observe_acquisition,
         )
         self._continuous_source = continuous_source
+        self.basler_control = basler_control
+        if continuous_source is not None:
+            continuous_source.control = basler_control
         self._source_stop = Event()
         self.replay_control = replay_control
         self.reporting = reporting
@@ -221,6 +227,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
 
     def request_stop(self) -> None:
         self._source_stop.set()
+        if self.basler_control is not None:
+            self.basler_control.stop()
         if self.replay_control is not None:
             self.replay_control.stop()
         if self.reporting is not None and self._continuous_source is None:
@@ -255,9 +263,14 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             reporter.note_skipped(
                 identity, exc
             )  # Scalar diagnostic, no traceback retention.
+            if self.basler_control is not None:
+                self.basler_control.reported(cycle_id)
             return
         try:
-            reporter.submit(report)  # Nonblocking FIFO admission; never socket work.
+            pending = reporter.submit(report)  # Nonblocking; never socket work.
+            control = self.basler_control
+            if control is not None:
+                pending.add_done_callback(lambda _: control.reported(cycle_id))
         except (ReportingCapacityError, ReportingStateError) as exc:
             # Keep a fresh, traceback-free source issue. The completed inspection
             # still reaches accounting; overload is not model NG/application FAULT.
@@ -431,7 +444,23 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         assert source is not None
 
         def begin(cycle_id: CycleId) -> None:
-            self._application.begin_cycle(cycle_id).accepted.result()
+            cycle = self._application.begin_cycle(cycle_id)
+            cycle.accepted.result()
+            control = self.basler_control
+            if control is not None:
+                if self.reporting is None:
+                    control.reported(cycle_id)
+
+                # Public completion follows application accounting, while the
+                # independent report callback may arrive before or after it.
+                def completed(_future: Future[ProductionInspectionResult]) -> None:
+                    coordinator = self._coordinator
+                    assert isinstance(coordinator, EarlyInspectionCoordinator)
+                    coordinator.when_settled(cycle_id).add_done_callback(
+                        lambda _: control.inspected(cycle_id)
+                    )
+
+                cycle.result.add_done_callback(completed)
 
         def submit(frame: Frame) -> None:
             self._application.submit_frame(frame).result()
@@ -538,12 +567,26 @@ class _LocalApplication(ProductionApplication):
         self.replay_controls = replay_controls
         self._source_draft = source_draft
         self._replay_control: LocalReplayControl | None = None
+        self._basler_control: BaslerAdmissionControl | None = None
         super().__init__(factory)
 
     def start(self) -> Future[None]:
         return self._start_replay(single_step=False)
 
     def _start_replay(self, *, single_step: bool) -> Future[None]:
+        if self.basler_available:
+            if single_step:
+                raise ApplicationStateError("Start Basler before requesting Pause/Step")
+            with self._replay_lock:
+                control = BaslerAdmissionControl(self.snapshot().generation + 1)
+                startup = self._start_reporting_session()
+                self._basler_control = control
+            startup.add_done_callback(
+                lambda future: (
+                    control.stop(future.exception()) if future.exception() else None
+                )
+            )
+            return startup
         if not self.replay_available:
             if single_step:
                 raise ApplicationStateError("Local replay controls are not enabled")
@@ -640,6 +683,63 @@ class _LocalApplication(ProductionApplication):
             control
             if control is not None and control.generation == generation
             else None
+        )
+
+    def basler_control_for(self, generation: int) -> BaslerAdmissionControl | None:
+        with self._replay_lock:
+            control = self._basler_control
+        return (
+            control
+            if control is not None and control.generation == generation
+            else None
+        )
+
+    @property
+    def basler_available(self) -> bool:
+        return (
+            self._source_draft is not None and self._source_draft.saved.mode == "basler"
+        )
+
+    @property
+    def control_available(self) -> bool:
+        return self.basler_available or self.replay_available
+
+    def control_snapshot(self) -> ReplaySnapshot | None:
+        if not self.basler_available:
+            return self.replay_snapshot()
+        control = self.basler_control_for(self.snapshot().generation)
+        return control.snapshot() if control is not None else None
+
+    def _running_basler_control(self) -> BaslerAdmissionControl:
+        snapshot = self.snapshot()
+        control = self.basler_control_for(snapshot.generation)
+        if (
+            not self.basler_available
+            or snapshot.state is not ApplicationState.RUNNING
+            or control is None
+        ):
+            raise ApplicationStateError("Basler operation requires its RUNNING session")
+        return control
+
+    def pause_source(self) -> Future[None]:
+        return (
+            self._running_basler_control().pause()
+            if self.basler_available
+            else self.pause_replay()
+        )
+
+    def resume_source(self) -> Future[None]:
+        return (
+            self._running_basler_control().resume()
+            if self.basler_available
+            else self.continue_replay()
+        )
+
+    def step_source(self) -> Future[None]:
+        return (
+            self._running_basler_control().step()
+            if self.basler_available
+            else self.step_replay()
         )
 
     @property
@@ -960,6 +1060,7 @@ def local_application(
             if serials is not None and not continuous
             else None,
             continuous_source=continuous_source,
+            basler_control=app.basler_control_for(generation) if continuous else None,
             observe_acquisition=observe_acquisition,
         )
         app.set_reporting_owner(report_worker)

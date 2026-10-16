@@ -11,13 +11,19 @@ import pytest
 from numpy.typing import NDArray
 from tests.application_support import WAIT
 
-from vimo_demo.application import _basler_sdk
+from vimo_demo.application import (
+    ApplicationCapacityError,
+    ApplicationStateError,
+    _basler_sdk,
+)
 from vimo_demo.application.basler import (
     AcquisitionMetadata,
     CameraCleanup,
     CameraReadiness,
 )
+from vimo_demo.application.basler_control import BaslerAdmissionControl
 from vimo_demo.application.continuous_basler import ContinuousBaslerSource
+from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.communication import FinsTcpClient, FinsUdpClient
 from vimo_demo.inspection import CameraId, CycleId, Frame
 
@@ -116,7 +122,9 @@ class Clock:
 
 
 class Run:
-    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def __init__(
+        self, monkeypatch: pytest.MonkeyPatch, *, controlled: bool = False
+    ) -> None:
         self.backend, self.clock, self.stop, self.armed = (
             Backend(),
             Clock(),
@@ -134,6 +142,18 @@ class Run:
 
         monkeypatch.setattr(_basler_sdk, "PylonBackend", factory)
         self.source = ContinuousBaslerSource(CAMERAS, SERIALS, clock=self.clock)
+        self.control = BaslerAdmissionControl(1) if controlled else None
+        self.source.control = self.control
+        self.raw_received = tuple(Event() for _ in range(36))
+        if self.control is not None:
+            original_received = self.control.received
+
+            def received(*, discarded: bool) -> None:
+                original_received(discarded=discarded)
+                assert self.control is not None
+                self.raw_received[self.control.snapshot().received_frames - 1].set()
+
+            monkeypatch.setattr(self.control, "received", received)
         self.thread = Thread(target=self._run, name="TestPassiveCapture")
 
     def _run(self) -> None:
@@ -141,6 +161,12 @@ class Run:
             assert frame.image.flags.owndata and not frame.image.flags.writeable
             self.frames.append(frame)
             self.received[len(self.frames) - 1].set()
+            if (
+                self.control is not None
+                and sum(f.id.cycle_id == frame.id.cycle_id for f in self.frames) == 6
+            ):
+                self.control.inspected(frame.id.cycle_id)
+                self.control.reported(frame.id.cycle_id)
 
         try:
             self.source.run(
@@ -345,3 +371,127 @@ def test_unsafe_cleanup_remains_visible(monkeypatch: pytest.MonkeyPatch) -> None
     run.start()
     run.close()
     assert not run.source.cleanup_safe
+
+
+def test_pause_drains_frames_step_once_and_resume_preserve_sdk_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = Run(monkeypatch, controlled=True)
+    control = run.control
+    assert control is not None
+    try:
+        run.start()
+        control.pause().result(WAIT)
+        assert control.snapshot().state is ReplayState.PAUSED
+        for ordinal in (1, 2, 3):
+            run.backend.expose(ordinal)
+            assert run.raw_received[ordinal * 6 - 1].wait(WAIT)
+        assert run.source.frames == 0 and not run.starts
+        assert control.snapshot().discarded_frames == 18
+        step = control.step()
+        # Wait for the source's empty-queue fence, not a time-based trigger guess.
+        run.backend.waited.clear()
+        assert run.backend.waited.wait(WAIT)
+        assert control.snapshot().admission_armed
+        run.backend.expose(4)
+        step.result(WAIT)
+        assert run.starts == [4] and [f.id.sequence for f in run.frames] == [4] * 6
+        assert control.snapshot().state is ReplayState.PAUSED
+        run.backend.expose(5)
+        assert run.raw_received[29].wait(WAIT)
+        assert run.starts == [4] and run.source.frames == 6
+        control.resume().result(WAIT)
+        run.backend.expose(6)
+        assert run.received[11].wait(WAIT)
+        assert run.starts == [4, 6]
+        assert run.backend.arms == 1
+    finally:
+        run.close()
+    run.done.result(WAIT)
+
+
+def test_step_discards_already_buffered_capture_before_arming(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = Run(monkeypatch, controlled=True)
+    control = run.control
+    assert control is not None
+    try:
+        run.start()
+        control.pause().result(WAIT)
+        run.backend.release.clear()
+        run.backend.expose(1)
+        assert run.backend.retrieving.wait(WAIT)
+        step = control.step()
+        assert control.step() is step
+        run.backend.release.set()
+        assert run.raw_received[5].wait(WAIT)
+        run.backend.waited.clear()
+        assert run.backend.waited.wait(WAIT)
+        assert not step.done() and run.starts == []
+        run.backend.expose(2)
+        step.result(WAIT)
+        assert run.starts == [2] and len(run.frames) == 6
+    finally:
+        run.close()
+
+
+def test_pause_finishes_admitted_capture_and_step_partial_never_reassigns_peers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = Run(monkeypatch, controlled=True)
+    control = run.control
+    assert control is not None
+    try:
+        run.start()
+        run.backend.expose(1, (0,))
+        assert run.received[0].wait(WAIT)
+        pause = control.pause()
+        assert not pause.done()
+        run.backend.expose(1, (1, 2, 3, 4, 5))
+        pause.result(WAIT)
+        step = control.step()
+        run.backend.waited.clear()
+        assert run.backend.waited.wait(WAIT)
+        run.backend.expose(2, (0,))
+        assert run.received[6].wait(WAIT)
+        run.clock.advance(0.101)
+        control.inspected(CycleId(2))
+        control.reported(CycleId(2))
+        step.result(WAIT)
+        assert control.snapshot().state is ReplayState.PAUSED
+        # The partial result is settled, but its missing SDK peers cannot be
+        # guessed away. A new admission transition is explicitly rejected.
+        with pytest.raises(ApplicationStateError, match="Incomplete SDK"):
+            control.resume().result(WAIT)
+        run.backend.expose(2, (1, 2, 3, 4, 5))
+        assert run.raw_received[11].wait(WAIT)
+        assert len(run.frames) == 7 and run.starts == [1, 2]
+        control.resume().result(WAIT)
+        run.backend.expose(3)
+        assert run.received[12].wait(WAIT)
+        assert run.starts == [1, 2, 3]
+    finally:
+        run.close()
+    run.done.result(WAIT)
+
+
+def test_admission_settlement_is_bounded_and_waits_for_report_and_stop() -> None:
+    control = BaslerAdmissionControl(9, capacity=1)
+    control.boundary(clean=True)
+    assert control.claim(CycleId(1))
+    control.capture_finished(CycleId(1))
+    with pytest.raises(ApplicationCapacityError):
+        control.claim(CycleId(2))
+    paused = control.pause()
+    control.inspected(CycleId(1))
+    assert not paused.done() and control.snapshot().state is ReplayState.PAUSING
+    control.reported(CycleId(1))
+    paused.result(0)
+    step = control.step()
+    assert control.step() is step and not step.cancel()
+    control.stop()
+    with pytest.raises(ApplicationStateError, match="stopped"):
+        step.result(0)
+    control.stop()
+    assert control.snapshot().pending_cycles == 0

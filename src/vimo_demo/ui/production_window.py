@@ -502,20 +502,16 @@ class ProductionWindow(QMainWindow):
         return production_actions(
             self.snapshot,
             (replay.state if replay else ReplayState.STOPPED)
-            if self.bridge.replay_enabled
+            if self.bridge.controls_enabled
             else None,
         )
 
     def _current_actions(self) -> dict[str, str | None]:
-        replay = (
-            self.bridge.local_replay.replay_snapshot()
-            if self.bridge.local_replay and self.bridge.replay_enabled
-            else None
-        )
+        replay = self.bridge.control_snapshot()
         return production_actions(
             self.bridge.application.snapshot(),
             (replay.state if replay else ReplayState.STOPPED)
-            if self.bridge.replay_enabled
+            if self.bridge.controls_enabled
             else None,
         )
 
@@ -523,7 +519,7 @@ class ProductionWindow(QMainWindow):
         actions = self._actions()
         replay = self.bridge.replay_snapshot
         middle_step = bool(
-            self.bridge.replay_enabled
+            self.bridge.controls_enabled
             and replay
             and replay.state in (ReplayState.PAUSED, ReplayState.STEPPING)
         )
@@ -572,7 +568,7 @@ class ProductionWindow(QMainWindow):
                 if key == "operation"
                 and self.snapshot.state is ApplicationState.UNCONFIGURED
                 else text("pause_unsupported", self.language)
-                if key == "pause" and not self.bridge.replay_enabled
+                if key == "pause" and not self.bridge.controls_enabled
                 else text("software_stop", self.language)
                 if key == "stop"
                 else label
@@ -822,9 +818,15 @@ class ProductionWindow(QMainWindow):
             not self._closing
             and snapshot.state is ApplicationState.RUNNING
             and self.bridge.replay_snapshot is not None
-            and self.bridge.replay_snapshot.state is ReplayState.PAUSED
         ):
-            state = "replay_paused"
+            state = {
+                ReplayState.PAUSED: "replay_paused"
+                if self.bridge.replay_enabled
+                else "source_paused",
+                ReplayState.PAUSING: "source_pausing",
+                ReplayState.STEPPING: "source_stepping",
+                ReplayState.RESUMING: "source_resuming",
+            }.get(self.bridge.replay_snapshot.state, state)
         self.state_label.setText(
             text(
                 f"state_{state}"
@@ -834,6 +836,10 @@ class ProductionWindow(QMainWindow):
                     "STARTING",
                     "RUNNING",
                     "replay_paused",
+                    "source_paused",
+                    "source_pausing",
+                    "source_stepping",
+                    "source_resuming",
                     "STOPPING",
                     "FAULT",
                     "closing",
@@ -845,6 +851,8 @@ class ProductionWindow(QMainWindow):
         self.state_label.setToolTip(
             text(state, language) + "\n" + text("replay_help", language)
             if self.bridge.replay_enabled
+            else text(state, language) + "\n" + text("basler_control_help", language)
+            if self.bridge.controls_enabled
             else text(state, language) + "\n" + text("simulation", language)
             if self.simulation
             else text(state, language)
@@ -854,6 +862,10 @@ class ProductionWindow(QMainWindow):
             "STARTING": colors.accent,
             "RUNNING": colors.ok,
             "replay_paused": colors.warning,
+            "source_paused": colors.warning,
+            "source_pausing": colors.warning,
+            "source_stepping": colors.accent,
+            "source_resuming": colors.accent,
             "STOPPING": colors.warning,
             "FAULT": colors.fault,
         }.get(state, colors.secondary)
@@ -974,7 +986,11 @@ class ProductionWindow(QMainWindow):
         )
         self.event_label.setAccessibleName(message)
         self.state_label.setToolTip(
-            acquisition_detail or self.state_label.accessibleName()
+            "\n".join((self.state_label.accessibleName(), acquisition_detail))
+            if acquisition_detail
+            and self.bridge.replay_snapshot is not None
+            and self.bridge.replay_snapshot.state is not ReplayState.AUTOMATIC
+            else acquisition_detail or self.state_label.accessibleName()
         )
         self.event_label.setStyleSheet(
             f"color: {colors.fault if fault else colors.warning if warning else colors.secondary};"
@@ -1241,6 +1257,10 @@ class ProductionWindow(QMainWindow):
                 "state_STARTING",
                 "state_RUNNING",
                 "state_replay_paused",
+                "state_source_paused",
+                "state_source_pausing",
+                "state_source_stepping",
+                "state_source_resuming",
                 "state_STOPPING",
                 "state_FAULT",
                 "state_closing",

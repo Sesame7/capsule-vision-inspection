@@ -92,6 +92,9 @@ active native work finish, then drains already accepted reports in order. Folder
 Stop keeps its existing active-attempt completion and explicit pending skips.
 No new reports start from rejected work. Session release additionally requires
 report-thread exit and safe socket cleanup; notification/timeout alone is not exit.
+Basler Pause/Step keeps the reporting owner alive and waits for accepted reports
+to settle before PAUSED. Discarded paused captures send no report or sequence write.
+These controls do not pause the PLC or mechanical equipment.
 
 Manual clients/watches remain independent. While an automatic owner is starting
 or alive, manual writes overlapping W49–W52 on the same host/port are rejected,

@@ -170,10 +170,14 @@ def test_deadline_preserves_finished_camera_rejects_missing_and_unfinished(
         assert all(not c.vimo_findings for c in result.channels[6:])
         with pytest.raises(ValueError, match="Late"):
             coordinator.submit_frame(frame(1, 3))
+        settled = coordinator.when_settled(CycleId(1))
+        assert not settled.done() and not settled.cancel()
+        assert coordinator.when_settled(CycleId(1)) is settled
         coordinator.request_stop()
         assert not coordinator.join(0) and not engine.closed
         engine.release.set()
         assert coordinator.join(WAIT)
+        settled.result(0)
         assert (
             receipt.result.result() is result
         )  # Late native completion cannot overwrite.

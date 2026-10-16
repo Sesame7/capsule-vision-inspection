@@ -4,7 +4,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import Enum
 from threading import Condition, Event
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from .models import ApplicationStateError
 
@@ -14,6 +14,7 @@ class ReplayState(Enum):
     PAUSING = "pausing"
     PAUSED = "paused"
     STEPPING = "stepping"
+    RESUMING = "resuming"
     STOPPED = "stopped"
 
 
@@ -155,3 +156,15 @@ class LocalReplayCommands(Protocol):
     def pause_replay(self) -> Future[None]: ...
     def continue_replay(self) -> Future[None]: ...
     def step_replay(self) -> Future[None]: ...
+
+
+@runtime_checkable
+class SourceControlCommands(Protocol):
+    """Source admission commands; Folder pacing and Basler draining stay distinct."""
+
+    @property
+    def control_available(self) -> bool: ...
+    def control_snapshot(self) -> ReplaySnapshot | None: ...
+    def pause_source(self) -> Future[None]: ...
+    def resume_source(self) -> Future[None]: ...
+    def step_source(self) -> Future[None]: ...

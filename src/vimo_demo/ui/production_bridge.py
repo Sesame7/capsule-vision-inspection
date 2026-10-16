@@ -12,7 +12,11 @@ from vimo_demo.application import (
     ProductionApplication,
     ProductionApplicationSnapshot,
 )
-from vimo_demo.application.local_replay import LocalReplayCommands, ReplaySnapshot
+from vimo_demo.application.local_replay import (
+    LocalReplayCommands,
+    ReplaySnapshot,
+    SourceControlCommands,
+)
 from vimo_demo.communication.reporting import (
     ProductionReportingCommands,
     ReportingSnapshot,
@@ -61,7 +65,10 @@ class QtProductionBridge(QObject):
         )
         self.reporting_snapshot: ReportingSnapshot | None = None
         self.local_replay = local_replay
-        self._replay_enabled = self.replay_enabled
+        self.source_control = (
+            application if isinstance(application, SourceControlCommands) else None
+        )
+        self._replay_enabled = self.controls_enabled
         self.replay_snapshot: ReplaySnapshot | None = None
         self._snapshot: ProductionApplicationSnapshot | None = None
         self._revision = -1
@@ -89,6 +96,23 @@ class QtProductionBridge(QObject):
     @property
     def replay_enabled(self) -> bool:
         return self.local_replay is not None and self.local_replay.replay_available
+
+    @property
+    def controls_enabled(self) -> bool:
+        return (
+            self.source_control.control_available
+            if self.source_control
+            else self.replay_enabled
+        )
+
+    def control_snapshot(self) -> ReplaySnapshot | None:
+        return (
+            self.source_control.control_snapshot()
+            if self.source_control
+            else self.local_replay.replay_snapshot()
+            if self.local_replay
+            else None
+        )
 
     @property
     def closed(self) -> bool:
@@ -138,17 +162,23 @@ class QtProductionBridge(QObject):
 
     @Slot()
     def pause_replay(self) -> None:
-        if self.local_replay is not None:
+        if self.source_control is not None:
+            self._command("source_pause", self.source_control.pause_source)
+        elif self.local_replay is not None:
             self._command("replay_pause", self.local_replay.pause_replay)
 
     @Slot()
     def continue_replay(self) -> None:
-        if self.local_replay is not None:
+        if self.source_control is not None:
+            self._command("source_resume", self.source_control.resume_source)
+        elif self.local_replay is not None:
             self._command("replay_continue", self.local_replay.continue_replay)
 
     @Slot()
     def step_replay(self) -> None:
-        if self.local_replay is not None:
+        if self.source_control is not None:
+            self._command("source_step", self.source_control.step_source)
+        elif self.local_replay is not None:
             self._command("replay_step", self.local_replay.step_replay)
 
     @Slot()
@@ -194,12 +224,12 @@ class QtProductionBridge(QObject):
         changed = False
         try:
             snapshot = self.application.snapshot()
-            replay = self.local_replay.replay_snapshot() if self.local_replay else None
+            replay = self.control_snapshot()
             replay_changed = (
                 replay != self.replay_snapshot
-                or self._replay_enabled != self.replay_enabled
+                or self._replay_enabled != self.controls_enabled
             )
-            self._replay_enabled = self.replay_enabled
+            self._replay_enabled = self.controls_enabled
             self.replay_snapshot = replay
             changed = snapshot != self._snapshot
             if changed:

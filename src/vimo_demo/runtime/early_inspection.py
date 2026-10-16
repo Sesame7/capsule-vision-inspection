@@ -113,6 +113,7 @@ class EarlyInspectionCoordinator:
         self._last_id = -1
         self._active: FrameId | None = None
         self._failure: BaseException | None = None
+        self._settlement: dict[CycleId, Future[None]] = {}
         self.peak_cycles = self.peak_jobs = self.late_results = 0
         self.finished: Future[None] = promise(Future())
         self._startup: Future[None] = promise(Future())
@@ -200,6 +201,30 @@ class EarlyInspectionCoordinator:
         acknowledged: Future[None] = promise(Future())
         acknowledged.set_result(None)
         return acknowledged
+
+    def when_settled(self, cycle_id: CycleId) -> Future[None]:
+        """Observe terminal delivery AND actual camera-task return, not thread exit.
+
+        A deadline result may precede the native return. No completed history is
+        retained; only existing live cycles or the one active lease need a waiter.
+        """
+        with self._condition:
+            if cycle_id > self._last_id or cycle_id < 1:
+                raise CoordinatorStateError("Unknown early cycle")
+            if self._busy_cycle(cycle_id):
+                if cycle_id not in self._settlement:
+                    self._settlement[cycle_id] = promise(Future())
+                return self._settlement[cycle_id]
+        completed: Future[None] = promise(Future())
+        completed.set_result(None)
+        return completed
+
+    def _busy_cycle(self, cycle_id: CycleId) -> bool:
+        return (
+            cycle_id in self._cycles
+            or (self._active is not None and self._active.cycle_id == cycle_id)
+            or any(frame.id.cycle_id == cycle_id for frame in self._jobs)
+        )
 
     def request_stop(self) -> None:
         with self._condition:
@@ -331,7 +356,12 @@ class EarlyInspectionCoordinator:
                     self._jobs = deque(
                         f for f in self._jobs if f.id.cycle_id in self._cycles
                     )
-                    if not deliver and not self._stop:
+                    settled = [
+                        self._settlement.pop(identity)
+                        for identity in tuple(self._settlement)
+                        if not self._busy_cycle(identity)
+                    ]
+                    if not deliver and not settled and not self._stop:
                         deadline = min(
                             (c.deadline for c in self._cycles.values()), default=None
                         )
@@ -344,6 +374,8 @@ class EarlyInspectionCoordinator:
                     future.set_result(
                         result
                     )  # No admission lock held during callbacks.
+                for completed in settled:
+                    completed.set_result(None)
                 if stop:
                     break
         except BaseException as exc:
@@ -362,8 +394,12 @@ class EarlyInspectionCoordinator:
                 self._cycles.clear()
                 self._jobs.clear()
                 self._completed.clear()
+                settled = tuple(self._settlement.values())
+                self._settlement.clear()
             for cycle in pending:
                 cycle.future.set_exception(
                     self.failure or CoordinatorStateError("Early runtime stopped")
                 )
+            for completed in settled:
+                completed.set_result(None)
             self.finished.set_result(None)

@@ -18,6 +18,7 @@ from .basler import (
     CameraCleanup,
     CameraReadiness,
 )
+from .basler_control import BaslerAdmissionControl
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,8 @@ class ContinuousBaslerSource:
         self.cleanup: tuple[CameraCleanup, ...] = ()
         self.cleanup_safe = True
         self.frames = 0
+        self.received_frames = self.discarded_frames = 0
+        self.control: BaslerAdmissionControl | None = None
         self._backend = None
         self._identity_lock = Lock()
         self._ambiguous_from: int | None = None
@@ -78,6 +81,28 @@ class ContinuousBaslerSource:
         deadline = 0.0
         seen: set[str] = set()
         sequence: dict[str, tuple[int, int]] = {}
+        admitted = False
+
+        def expire_capture() -> None:
+            nonlocal admitted
+            if stop.is_set():
+                return
+            if (
+                admitted
+                and cycle is not None
+                and self._clock() >= deadline
+                and len(seen) != 6
+            ):
+                if self.control is None or not self.control.settling:
+                    raise TimeoutError(
+                        "Missing camera at observed-cycle deadline; restart required"
+                    )
+                # The early runtime owns the attributable partial result/deadline.
+                # Retain the SDK ordinal until all peers arrive, discarding late
+                # pixels; a later ordinal cannot silently fill this missing peer.
+                admitted = False
+                self.control.capture_finished(cycle)
+
         try:
             backend.inventory(self.serials)
             for serial in self.serials:
@@ -144,19 +169,25 @@ class ContinuousBaslerSource:
                         cycle = CycleId(ordinal)
                         # Admission occurs only after actual valid, independently owned
                         # pixels exist. Idle armed time creates no cycles/deadlines.
-                        begin(cycle)
-                        deadline = self._clock() + 0.100
                         seen.clear()
-                    elif self._clock() >= deadline:
-                        raise TimeoutError(
-                            "Late frame after observed-cycle deadline; never reassociate"
-                        )
+                        admitted = self.control is None or self.control.claim(cycle)
+                        if admitted:
+                            begin(cycle)
+                            deadline = self._clock() + 0.100
+                    else:
+                        expire_capture()
                     if serial in seen:
                         raise self._ambiguity(
                             cycle, f"Duplicate camera frame: {serial}"
                         )
                     sequence[serial] = block, ordinal
                     seen.add(serial)
+                    self.received_frames += 1
+                    if self.control is not None:
+                        self.control.received(discarded=not admitted)
+                    if not admitted:
+                        self.discarded_frames += 1
+                        continue
                     frame = Frame(
                         FrameId(cycle, self.cameras[index], ordinal),
                         row.received_at,
@@ -167,15 +198,20 @@ class ContinuousBaslerSource:
                     )  # Eligible camera inspection need not wait for its peers.
                     self.frames += 1
                     on_frame(cycle, row)
-                if cycle is not None and len(seen) != 6 and self._clock() >= deadline:
-                    raise TimeoutError(
-                        "Missing camera at observed-cycle deadline; restart required"
-                    )
+                    if len(seen) == 6 and self.control is not None:
+                        self.control.capture_finished(cycle)
+                expire_capture()
                 if not found:
+                    if self.control is not None:
+                        self.control.boundary(clean=cycle is None or len(seen) == 6)
                     backend.available(self.serials[cursor], 1)
                     cursor = (cursor + 1) % 6
         finally:
-            self.cleanup = backend.cleanup()
-            # Cleanup reports every device the backend actually took ownership
-            # of. Stop may interrupt preparation before all six are opened.
-            self.cleanup_safe = all(row.safe for row in self.cleanup)
+            try:
+                self.cleanup = backend.cleanup()
+                # Cleanup reports every device actually owned, including partial
+                # initialization. Never require six fictional cleanup records.
+                self.cleanup_safe = all(row.safe for row in self.cleanup)
+            finally:
+                if self.control is not None:
+                    self.control.stop()
