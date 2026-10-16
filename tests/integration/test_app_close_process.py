@@ -42,6 +42,7 @@ def assert_process_exited(pid: int) -> None:
     ]
     + [
         ("direct", "unused", None),
+        ("direct", "unused", "off"),
         ("direct", "unused", "127.0.0.1"),
         ("direct", "unused", "0.0.0.0"),
         ("direct", "unused", "192.0.2.99"),
@@ -67,14 +68,15 @@ def test_normal_app_native_close_exits_process_tree(
         command = [uv, "run", "--no-sync", "python", "app.py"]
     else:
         command = [str(ROOT / ".venv/Scripts/python.exe"), "app.py"]
-    web_started = web_host == "127.0.0.1"
-    if web_host is not None:
-        with socket.socket() as available:
-            available.bind(("127.0.0.1", 0))
-            port = available.getsockname()[1]
-        command.extend(
-            ("--web-snapshots", "--web-host", web_host, "--web-port", str(port))
-        )
+    web_started = web_host in (None, "127.0.0.1")
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
+    command.extend(("--web-port", str(port)))
+    if web_host == "off":
+        command.append("--no-web-snapshots")
+    elif web_host is not None:
+        command.extend(("--web-snapshots", "--web-host", web_host))
     with subprocess.Popen(
         command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
@@ -110,7 +112,7 @@ def test_normal_app_native_close_exits_process_tree(
     assert stages.index("last_window_closed") < stages.index("exec_return")
     assert "application_joined" in stages
     assert (b"Read-only Production snapshots" in stderr) == web_started
-    if web_host is not None and not web_started:
+    if web_host not in (None, "off") and not web_started:
         assert b"ValueError" in stderr
     for record in records:
         if record["stage"] == "last_window_closed" or (
@@ -131,3 +133,6 @@ def test_normal_app_native_close_exits_process_tree(
         pid = records[0][key]
         assert isinstance(pid, int)
         assert_process_exited(pid)
+    if web_started:
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0

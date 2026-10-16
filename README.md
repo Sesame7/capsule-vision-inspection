@@ -153,20 +153,24 @@ capability keep generic Start/Stop. See
 [local replay controls](docs/application.md#local-replay-controls) for cursor,
 shutdown and manual verification.
 
-Optional developer-only **read-only snapshots** use the same normal process:
+The **read-only Web observer** starts with the normal process on loopback:
 
 ```powershell
-uv run --no-sync python app.py --web-snapshots --web-port 8765
+uv run --no-sync python app.py
 Invoke-RestMethod http://127.0.0.1:8765/api/snapshot
 Invoke-RestMethod http://127.0.0.1:8765/health
 ```
 
-Open `http://127.0.0.1:8765/` for the responsive read-only observer. Disabled by
-default, with `127.0.0.1` still the default host; no persistent settings or commands.
+Open `http://127.0.0.1:8765/` for the responsive read-only observer. The default is
+`127.0.0.1:8765`, with no persistent settings or commands. Use
+`--no-web-snapshots` to disable it, or `--web-interval-ms 500|1000|2000` to select
+the publication/browser refresh interval (default: 500 ms). Existing explicit
+`--web-snapshots` remains supported. Optional Web startup failure is reported
+without preventing Production from opening.
 Start/Step
 the existing Folder source in the application to obtain Production images. JSON
 contains each camera's exact revision-qualified JPEG URL; request that URL rather
-than guessing a camera/image identity. Publication is nominally every two seconds,
+than guessing a camera/image identity. Publication is nominally every 500 ms,
 at most 640px per dimension, JPEG quality 70. Superseded URLs return unavailable.
 See [snapshot publication](docs/ui-shell.md#read-only-snapshot-publication) for
 identity, lifecycle, API and manual verification.
@@ -178,9 +182,9 @@ uv run --no-sync python app.py --web-snapshots --web-host 192.168.10.100 --web-p
 ```
 
 Replace the illustrative address with this machine's actual LAN IP, then open
-`http://<LAN-IP>:8765/` on the computer/phone. The observer polls about every two
-seconds and reuses unchanged images. No login/HTTPS is provided; a specific bind
-address is not a client-subnet restriction. Network isolation and Windows Firewall
+`http://<LAN-IP>:8765/` on the computer/phone. The observer follows the server's
+selected interval and reuses unchanged images. No login/HTTPS is provided; a
+specific bind address is not a client-subnet restriction. Network isolation and Windows Firewall
 must restrict access externally. The application does not configure either.
 
 The five pages are **Production / 生产**, **Recipe / 配方**, **Communication / 通信**,

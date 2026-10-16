@@ -408,10 +408,25 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Persistent ViMo Production application"
     )
-    parser.add_argument(
+    web = parser.add_mutually_exclusive_group()
+    web.add_argument(
         "--web-snapshots",
         action="store_true",
-        help="Developer-only read-only snapshots (disabled by default)",
+        default=True,
+        help="Enable read-only snapshots (enabled by default)",
+    )
+    web.add_argument(
+        "--no-web-snapshots",
+        dest="web_snapshots",
+        action="store_false",
+        help="Disable the optional read-only observer",
+    )
+    parser.add_argument(
+        "--web-interval-ms",
+        type=int,
+        choices=(500, 1000, 2000),
+        default=500,
+        help="Publication and browser refresh interval (default: 500 ms)",
     )
     parser.add_argument(
         "--web-host",
@@ -451,6 +466,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                     else (),
                     host=args.web_host,
                     port=args.web_port,
+                    interval=args.web_interval_ms / 1000,
                 )
                 service.start()
             except Exception as exc:
