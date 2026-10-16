@@ -217,6 +217,7 @@ def test_missing_frame_times_out_only_after_observed_cycle(
         with pytest.raises(TimeoutError, match="Missing camera"):
             run.done.result(WAIT)
         assert run.starts == [1] and len(run.frames) == 5
+        assert run.source.attributable(CycleId(1))
     finally:
         run.close()
 
@@ -239,6 +240,7 @@ def test_duplicate_new_group_before_missing_peer_and_counter_anomalies_fail_clos
         with pytest.raises(RuntimeError, match="sequence|ordinal|counters"):
             run.done.result(WAIT)
         assert run.starts == [1] and len(run.frames) == 1
+        assert not run.source.attributable(CycleId(1))
     finally:
         run.close()
 

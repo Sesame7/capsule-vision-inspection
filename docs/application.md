@@ -468,7 +468,8 @@ Local composition uses one collecting and one queued READY slot with a 30-second
 collection deadline; these are current demo settings, not hardware requirements.
 
 Normal `app.py` exposes memory-only reporting preferences through Communication;
-they start disabled with UDP on every launch. Manual and automatic UDP/TCP
+they start disabled on every launch. Folder defaults to localhost/UDP; saved Basler
+defaults to the field endpoint `192.168.251.1:9600` over TCP. Manual and automatic UDP/TCP
 preferences are independent. The local application composition owns the
 selection, allows changes only in READY/UNCONFIGURED, and freezes it under the
 same lifecycle lock as each Start request. The disposable generation uses that
@@ -767,7 +768,8 @@ policy or retry SDK cleanup from another thread.
 
 Replay Pause/Continue/Step and automatic first-station reporting are unavailable
 in this mode; combining it with `--report-first-station` is rejected. Existing
-Folder/reporting paths and localhost-only manual write protection are unchanged.
+Folder/reporting paths remain independent; remote write parameters are validated
+without a localhost authorization gate.
 The explicit CLI mapping above remains process-only. Saved Basler selection uses
 the continuous path below, rather than this manual single-cycle override.
 
@@ -844,13 +846,16 @@ Bounded latest-camera display copies carry matching generation, CycleId, complet
 FrameId, dimensions and `basler:<serial>` keys. The UI shows waiting-for-external-trigger
 while armed and updates latest results/images; it need not paint every cycle.
 Results/counters remain after Stop; only explicit Batch resets counters. Folder
-Replay and its Pause/Step behavior are unchanged. Automatic first-station reporting
-remains Folder-only; Basler never writes W49–W52 or relaxes manual write protection.
+Replay and its Pause/Step behavior are unchanged. Optional first-station reporting
+now accepts attributable Basler terminal results, including partial cycles, through
+the existing bounded serial TCP owner. Communication enablement/settings are frozen
+at Start; see [reporting](communication.md#continuous-basler-reporting). Production
+still never writes W10.7.
 
 Stop/Close stops admission/acquisition, finalizes pending early cycles with preserved
 completed cameras and explicit unfinished rejections, and drains the claimed native
 camera call naturally. No queued camera job starts after runtime stop. Actual
-source, coordinator/inspector and worker exit plus safe SDK cleanup are required
+source, coordinator/inspector, worker and reporting exit plus safe SDK cleanup are required
 before READY/release. Unsafe cleanup retains ownership/FAULT. Safe source errors
 use the existing source-Future/UI feedback and Stop; native calls are not forced.
 
@@ -940,10 +945,11 @@ Folder configuration. Artifact paths still resolve relative to model metadata;
 there is no runtime/model substitution. Operator persistence and draft workflows
 remain in the existing UI documents.
 
-For opt-in localhost automatic first-station reporting, add `--report-first-station`.
+For opt-in automatic first-station reporting, add `--report-first-station`.
+`--fins-host` defaults to `127.0.0.1` and accepts a configured numeric PLC address.
 The developer-only options are `--fins-port` (9600), `--fins-timeout` (1 second),
 `--fins-pending` (8 waiting reports), `--fins-destination NETWORK NODE UNIT`
-(0 2 0) and `--fins-source NETWORK NODE UNIT` (0 1 0). There is no target-host option.
+(0 2 0) and `--fins-source NETWORK NODE UNIT` (0 1 0). The target is not an authorization whitelist.
 See the [two-terminal reporting procedure](communication.md#local-manual-verification).
 These CLI settings do not change normal `app.py`'s independent memory-only
 Communication preferences or persist a PLC profile. See the

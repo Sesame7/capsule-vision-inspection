@@ -1,9 +1,10 @@
 """First-station projection and two acknowledged writes; no Production wiring."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from enum import Enum
 from threading import Lock
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 from .fins import (
@@ -63,6 +64,8 @@ class FirstStationCommit:
 
     sequence: int
     reject_words: tuple[int, int, int]
+    bitmap_ms: float = 0.0
+    sequence_ms: float = 0.0
 
 
 class FirstStationSubmissionError(FinsError):
@@ -107,7 +110,10 @@ class FirstStationReporter:
         return self._next_sequence
 
     def submit(
-        self, statuses: Iterable[tuple[ChannelId, ChannelBusinessStatus]]
+        self,
+        statuses: Iterable[tuple[ChannelId, ChannelBusinessStatus]],
+        *,
+        commit_allowed: Callable[[], bool] = lambda: True,
     ) -> FirstStationCommit:
         if not self._operation.acquire(blocking=False):
             raise FinsTransportError("A first-station submission is already active")
@@ -117,11 +123,17 @@ class FirstStationReporter:
             self._next_sequence = (self._next_sequence + 1) & 0xFFFF
             stage = SubmissionStage.BITMAP
             try:
+                started = perf_counter()
                 self._client.write_words(50, words, area=FinsMemoryArea.W)
+                bitmap_ms = (perf_counter() - started) * 1000
                 stage = SubmissionStage.SEQUENCE
+                if not commit_allowed():
+                    raise FinsError("Cycle attribution lost before sequence commit")
+                started = perf_counter()
                 self._client.write_words(49, (sequence,), area=FinsMemoryArea.W)
+                sequence_ms = (perf_counter() - started) * 1000
             except FinsError as exc:
                 raise FirstStationSubmissionError(stage, sequence, words, exc) from exc
-            return FirstStationCommit(sequence, words)
+            return FirstStationCommit(sequence, words, bitmap_ms, sequence_ms)
         finally:
             self._operation.release()

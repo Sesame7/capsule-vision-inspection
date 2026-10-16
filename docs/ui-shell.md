@@ -29,7 +29,7 @@ documents; this page covers their interaction with the shell, not their controls
 
 **Vision** is the visible page name. Legacy `settings`/`diagnostics` identifiers
 are implementation routes, not extra Settings/Diagnostics features. Communication
-provides explicit manual reads, localhost-only writes and optional one-second register
+provides explicit manual reads/writes on configured PLC endpoints and optional one-second register
 watch refresh, without persistent online state. Normal startup also presents a
 compact automatic-reporting bar with endpoint, enablement, ACK/counts and last-error
 details. Low-frequency automatic/manual connection editors are in one nonmodal

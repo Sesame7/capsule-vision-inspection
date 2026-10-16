@@ -58,8 +58,9 @@ def main() -> int:
     parser.add_argument(
         "--report-first-station",
         action="store_true",
-        help="Opt-in automatic W49..W52 reporting to exactly 127.0.0.1",
+        help="Opt-in automatic W49..W52 reporting to the configured endpoint",
     )
+    parser.add_argument("--fins-host", default="127.0.0.1")
     parser.add_argument("--fins-port", type=int, default=9600)
     parser.add_argument(
         "--fins-transport",
@@ -114,6 +115,7 @@ def main() -> int:
             observe_source=lambda future: delivery.watch("folder_source", future),
             sources_file=args.sources_config,
             reporting=LocalReportingSettings(
+                host=args.fins_host,
                 port=args.fins_port,
                 timeout=args.fins_timeout,
                 max_pending=args.fins_pending,

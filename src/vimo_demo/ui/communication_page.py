@@ -1150,14 +1150,9 @@ class CommunicationPage(QWidget):
         )
         self.watch_auto.setToolTip(self.watch_auto.text())
         self.watch_auto.setAccessibleName(self.watch_auto.text())
-        local = self.host.text().strip() == "127.0.0.1"
-        self.write_button.setEnabled(editable and local)
-        self.write_button.setToolTip(
-            text("comm_local_write" if local else "comm_remote_read", self.language)
-        )
-        self.permission.setText(
-            text("comm_local_write" if local else "comm_remote_read", self.language)
-        )
+        self.write_button.setEnabled(editable)
+        self.write_button.setToolTip(text("comm_local_write", self.language))
+        self.permission.setText(text("comm_local_write", self.language))
         key = "comm_closing" if self._closing else self._state_key
         status = text(key, self.language)
         if key == "comm_busy" and self._request is not None:

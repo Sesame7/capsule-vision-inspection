@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -70,7 +71,8 @@ class ReportingPanel(QFrame):
         caption.setStyleSheet("font-size: 18px; font-weight: 600;")
         self._captions.append(("plc_reporting", caption))
         settings.addWidget(caption)
-        self.host = QLabel("127.0.0.1")  # No editable automatic target.
+        self.host = QLineEdit()
+        self.host.setMaxLength(64)
         self.protocol = QComboBox()
         self.protocol.addItems(("FINS/UDP", "FINS/TCP"))
         self.port = QSpinBox()
@@ -135,6 +137,7 @@ class ReportingPanel(QFrame):
             field.valueChanged.connect(self._changed)
         self.enabled.toggled.connect(self._changed)
         self.protocol.currentIndexChanged.connect(self._changed)
+        self.host.editingFinished.connect(self._changed)
         self._load_selection()
         self.set_language("zh")
 
@@ -151,6 +154,7 @@ class ReportingPanel(QFrame):
         self._syncing = True
         try:
             self.enabled.setChecked(selected.enabled)
+            self.host.setText(selected.settings.host)
             self.protocol.setCurrentIndex(
                 1 if selected.settings.transport is FinsTransport.TCP else 0
             )
@@ -177,6 +181,7 @@ class ReportingPanel(QFrame):
                 ReportingSelection(
                     self.enabled.isChecked(),
                     LocalReportingSettings(
+                        host=self.host.text().strip(),
                         port=self.port.value(),
                         timeout=self.timeout.value(),
                         destination=FinsAddress(
@@ -190,8 +195,11 @@ class ReportingPanel(QFrame):
                     ),
                 )
             )
-        except ApplicationStateError:
+        except (ApplicationStateError, ValueError) as exc:
             self._load_selection()  # Includes programmatic edits to disabled widgets.
+            self.host.setToolTip(str(exc))
+        else:
+            self.host.setToolTip(text("plc_session_only", self.language))
         self.refresh()
 
     def set_language(self, language: Language) -> None:
@@ -204,7 +212,7 @@ class ReportingPanel(QFrame):
         self.settings_button.setAccessibleName(text("comm_settings", language))
         self.advanced_button.setText(text("comm_advanced", language))
         self.advanced_button.setAccessibleName(self.advanced_button.text())
-        self.host.setAccessibleName(f"{text('comm_host', language)} 127.0.0.1")
+        self.host.setAccessibleName(text("comm_host", language))
         self.host.setToolTip(text("plc_session_only", language))
         for key, caption in self._captions:
             caption.setText(text(key, language))
@@ -233,7 +241,7 @@ class ReportingPanel(QFrame):
     @Slot()
     def refresh(self) -> None:
         editable = self.state in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
-        for widget in (self.enabled, self.protocol, *self._fields):
+        for widget in (self.enabled, self.host, self.protocol, *self._fields):
             widget.setEnabled(editable)
         selected = self.controller.reporting_selection()
         udp = selected.settings.transport is FinsTransport.UDP
@@ -243,7 +251,7 @@ class ReportingPanel(QFrame):
             text("comm_protocol" if udp else "comm_tcp_nodes", self.language)
         )
         self.endpoint.setText(
-            f"FINS/{selected.settings.transport.name} · 127.0.0.1:{selected.settings.port}"
+            f"FINS/{selected.settings.transport.name} · {selected.settings.host}:{selected.settings.port}"
         )
         self.endpoint.setToolTip(text("plc_session_only", self.language))
         snapshot = self.controller.reporting_snapshot()

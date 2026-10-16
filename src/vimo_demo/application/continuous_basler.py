@@ -7,7 +7,7 @@ hardware trigger IDs. Observed gaps/duplicates/late inputs fail closed.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from threading import Event
+from threading import Event, Lock
 from time import monotonic
 
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
@@ -44,6 +44,18 @@ class ContinuousBaslerSource:
         self.cleanup_safe = True
         self.frames = 0
         self._backend = None
+        self._identity_lock = Lock()
+        self._ambiguous_from: int | None = None
+
+    def attributable(self, cycle_id: CycleId) -> bool:
+        """No observed association anomaly; not proof of a physical trigger ID."""
+        with self._identity_lock:
+            return self._ambiguous_from is None or cycle_id < self._ambiguous_from
+
+    def _ambiguity(self, cycle: CycleId | None, message: str) -> RuntimeError:
+        with self._identity_lock:
+            self._ambiguous_from = int(cycle) if cycle is not None else 1
+        return RuntimeError(message)
 
     def run(
         self,
@@ -102,7 +114,7 @@ class ContinuousBaslerSource:
                         or row.serial != serial
                         or row.skipped_images not in (0, None)
                     ):
-                        raise RuntimeError(f"Invalid camera result: {serial}")
+                        raise self._ambiguity(cycle, f"Invalid camera result: {serial}")
                     ordinal, block = row.image_number, row.block_id
                     if (
                         ordinal is None
@@ -110,19 +122,23 @@ class ContinuousBaslerSource:
                         or block is None
                         or not 0 <= block < 2**64 - 1
                     ):
-                        raise RuntimeError(
-                            f"Required acquisition counters unavailable: {serial}"
+                        raise self._ambiguity(
+                            cycle,
+                            f"Required acquisition counters unavailable: {serial}",
                         )
                     previous = sequence.get(serial)
                     if previous is not None and (block, ordinal) != (
                         previous[0] + 1,
                         previous[1] + 1,
                     ):
-                        raise RuntimeError(f"Camera sequence discontinuity: {serial}")
+                        raise self._ambiguity(
+                            cycle, f"Camera sequence discontinuity: {serial}"
+                        )
                     expected = 1 if cycle is None else int(cycle) + (len(seen) == 6)
                     if ordinal != expected:
-                        raise RuntimeError(
-                            f"Unexpected acquisition ordinal {ordinal}, expected {expected}; association unsafe: {serial}"
+                        raise self._ambiguity(
+                            cycle,
+                            f"Unexpected acquisition ordinal {ordinal}, expected {expected}; association unsafe: {serial}",
                         )
                     if cycle is None or len(seen) == 6:
                         cycle = CycleId(ordinal)
@@ -136,7 +152,9 @@ class ContinuousBaslerSource:
                             "Late frame after observed-cycle deadline; never reassociate"
                         )
                     if serial in seen:
-                        raise RuntimeError(f"Duplicate camera frame: {serial}")
+                        raise self._ambiguity(
+                            cycle, f"Duplicate camera frame: {serial}"
+                        )
                     sequence[serial] = block, ordinal
                     seen.add(serial)
                     frame = Frame(
