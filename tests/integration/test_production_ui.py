@@ -131,7 +131,6 @@ def test_bilingual_geometry_and_navigation(
     for button in (
         *window.navigation,
         *window.buttons.values(),
-        window.language_button,
     ):
         parent = button.parentWidget()
         assert parent is not None and parent.rect().contains(button.geometry())
@@ -1403,7 +1402,7 @@ def test_specific_error_and_long_source_status_are_single_row(
     assert text("technical_note", language) not in window.event_label.text()
     before = tuple(card.geometry() for card in window.cards)
     height = window.event_frame.height()
-    assert height < Style.touch and not window.event_label.wordWrap()
+    assert height <= Style.touch and not window.event_label.wordWrap()
     error = "CAM6: unreadable image at C:/" + "long-folder/" * 30 + "sample.png"
     window.bridge.command_failed.emit("folder_source", ValueError(error))
     QApplication.processEvents()

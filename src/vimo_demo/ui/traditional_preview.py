@@ -48,7 +48,7 @@ from vimo_demo.inspection.production.capsule import (
 )
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
-from .production_style import Language, Style, camera_icon, text
+from .production_style import Language, Style, camera_icon, text, theme_colors
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
 
@@ -218,13 +218,6 @@ class TraditionalPreview(QWidget):
         self.session, self.frames = session, frames
         self.allowed, self.changed, self.leave = allowed, changed, leave
         self.language = language
-        self.setStyleSheet(
-            f"QTabBar::tab {{ padding: 12px 10px; min-height: 20px; color: {Style.primary}; background: {Style.surface}; border: none; }}"
-            f"QTabBar::tab:selected {{ color: {Style.accent}; background: {Style.raised}; }}"
-            f"QSpinBox {{ color: {Style.primary}; background: {Style.raised}; border: 1px solid #424954; padding: 5px; }}"
-            "QSlider::groove:horizontal { height: 6px; background: #424954; border-radius: 3px; }"
-            f"QSlider::handle:horizontal {{ width: 22px; margin: -8px 0; border-radius: 11px; background: {Style.accent}; }}"
-        )
         self.frame: DisplayFrame | None = None
         self.measurements: tuple[PreviewMeasurement, ...] = ()
         self.results: tuple[CheckResult | None, ...] = ()
@@ -360,8 +353,13 @@ class TraditionalPreview(QWidget):
     def tr_pair(self, zh: str, en: str) -> str:
         return zh if self.language == "zh" else en
 
+    def refresh_theme(self) -> None:
+        for index in range(self.camera_tabs.count()):
+            self.camera_tabs.setTabIcon(index, camera_icon(theme_colors(self).primary))
+
     def set_language(self, language: Language) -> None:
         self.language = self.canvas.language = language
+        self.refresh_theme()
         self.back.setText(self.tr_pair("返回配方", "Back to Recipe"))
         self.refresh_button.setText(self.tr_pair("刷新", "Refresh"))
         self.refresh_button.setToolTip(text("roi_refresh", language))

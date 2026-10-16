@@ -1,12 +1,16 @@
 """Small bilingual catalog and logical-pixel visual tokens for the workstation."""
 
+from dataclasses import dataclass
 from functools import cache
 from typing import Literal
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtWidgets import QWidget
 
 from .production_presentation import Indicator
+
+type Theme = Literal["dark", "light"]
 
 type Language = Literal["zh", "en"]
 
@@ -556,21 +560,81 @@ def text(key: str, language: Language) -> str:
     return STRINGS[key][0 if language == "zh" else 1]
 
 
+@dataclass(frozen=True, slots=True)
+class ThemeColors:
+    background: str
+    surface: str
+    raised: str
+    border: str
+    primary: str
+    secondary: str
+    accent: str
+    selected: str
+    ok: str
+    ng: str
+    warning: str
+    fault: str
+    reject: str
+
+
+DARK = ThemeColors(
+    "#10151d",
+    "#19212c",
+    "#242e3c",
+    "#303c4d",
+    "#edf2fa",
+    "#9aa9bf",
+    "#7895ff",
+    "#2c3c61",
+    "#49d6a0",
+    "#ff6e83",
+    "#e6b35c",
+    "#ec839b",
+    "#3b242d",
+)
+LIGHT = ThemeColors(
+    "#edf2fa",
+    "#f9fbff",
+    "#e7edf8",
+    "#d3deee",
+    "#1c2c43",
+    "#536780",
+    "#2d58db",
+    "#dce5ff",
+    "#128360",
+    "#c12e4c",
+    "#936014",
+    "#b53456",
+    "#ffe5eb",
+)
+
+
+def theme_colors(widget: QWidget) -> ThemeColors:
+    owner: QWidget | None = widget
+    while owner is not None:
+        theme = owner.property("theme")
+        if theme in ("dark", "light"):
+            return LIGHT if theme == "light" else DARK
+        owner = owner.parentWidget()
+    return DARK
+
+
 class Style:
-    background = "#151619"
-    surface = "#202227"
-    raised = "#30343d"
-    border = "#363b44"
-    primary = "#f1f2f5"
-    secondary = "#aab2bf"
-    accent = "#b5c8ee"
-    ok = "#789486"
-    ng = "#ff637a"
-    warning = "#e5b967"
-    fault = "#c9adf1"
+    # Dark canvas/legacy drawing tokens; themed controls use their window palette.
+    background = DARK.background
+    surface = DARK.surface
+    raised = DARK.raised
+    border = DARK.border
+    primary = DARK.primary
+    secondary = DARK.secondary
+    accent = DARK.accent
+    ok = DARK.ok
+    ng = DARK.ng
+    warning = DARK.warning
+    fault = DARK.fault
     space = 12
     small = 6
-    radius = 12
+    radius = 10
     touch = 44
     icon = 22
     body = 15
@@ -579,37 +643,88 @@ class Style:
     minimum = (880, 720)
 
 
-def stylesheet() -> str:
+def apply_theme(widget: QWidget, theme: Theme) -> None:
+    colors = LIGHT if theme == "light" else DARK
+    widget.setProperty("theme", theme)
+    palette = QPalette()
+    for role, color in (
+        (QPalette.ColorRole.Window, colors.surface),
+        (QPalette.ColorRole.WindowText, colors.primary),
+        (QPalette.ColorRole.Base, colors.surface),
+        (QPalette.ColorRole.AlternateBase, colors.raised),
+        (QPalette.ColorRole.Text, colors.primary),
+        (QPalette.ColorRole.Button, colors.raised),
+        (QPalette.ColorRole.ButtonText, colors.primary),
+        (QPalette.ColorRole.Highlight, colors.selected),
+        (QPalette.ColorRole.HighlightedText, colors.primary),
+        (QPalette.ColorRole.PlaceholderText, colors.secondary),
+        (QPalette.ColorRole.ToolTipBase, colors.raised),
+        (QPalette.ColorRole.ToolTipText, colors.primary),
+    ):
+        palette.setColor(role, QColor(color))
+    palette.setColor(
+        QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(colors.secondary)
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.ButtonText,
+        QColor(colors.secondary),
+    )
+    widget.setPalette(palette)
+    widget.setStyleSheet(stylesheet(theme))
+
+
+def stylesheet(theme: Theme = "dark") -> str:
+    c = LIGHT if theme == "light" else DARK
     return f"""
-    QWidget {{ color: {Style.primary}; font-size: {Style.body}px; }}
-    QMainWindow, QWidget#shell, QDialog#roiEditor {{ background: {Style.background}; }}
-    QFrame#summary, QFrame#camera, QFrame#event {{ background: {Style.surface}; border: 1px solid {Style.border}; border-radius: {Style.radius}px; }}
+    QWidget {{ color: {c.primary}; font-size: {Style.body}px; }}
+    QMainWindow, QWidget#shell, QWidget#recipeEditor, QDialog {{ background: {c.background}; }}
+    QFrame#summary, QFrame#camera, QFrame#navigation, QFrame#event, QFrame#commPanel {{
+        background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px;
+    }}
     QLabel {{ background: transparent; border: none; }}
-    QLabel[role="secondary"] {{ color: {Style.secondary}; }}
+    QLabel[role="secondary"] {{ color: {c.secondary}; }}
     QLabel[role="number"] {{ font-size: {Style.number}px; font-weight: 600; }}
     QLabel[role="state"] {{ font-size: {Style.title}px; font-weight: 600; }}
-    QPushButton, QToolButton, QComboBox {{ background: {Style.raised}; border: 1px solid {Style.border}; border-radius: 8px; padding: 5px 10px; }}
-    QPushButton:hover, QToolButton:hover {{ border-color: {Style.accent}; }}
-    QPushButton:checked {{ color: {Style.accent}; border-color: {Style.accent}; }}
-    QPushButton:disabled, QComboBox:disabled {{ color: #707681; background: {Style.surface}; }}
-    QPushButton#start {{ background: {Style.accent}; color: #18202c; font-weight: 600; }}
-    QPushButton#start:disabled {{ background: {Style.raised}; color: #707681; }}
-    QWidget#production QPushButton {{ outline: none; }}
-    QWidget#production QPushButton:hover:enabled {{ border-color: {Style.accent}; }}
-    QWidget#production QPushButton:focus:enabled {{ border: 2px solid {Style.accent}; }}
-    QWidget#production QPushButton#start:focus:enabled {{ border-color: {Style.primary}; }}
-    QWidget#production QPushButton:disabled {{ border-color: {Style.border}; }}
-    QLineEdit {{ background: {Style.surface}; padding: 8px; border: 1px solid {Style.border}; }}
-    QDialog {{ background: {Style.background}; }}
-    QComboBox QAbstractItemView {{ background: {Style.raised}; color: {Style.primary}; }}
-    QWidget#recipeEditor {{ background: {Style.background}; }}
-    QWidget#parameters QCheckBox {{ background: transparent; spacing: 8px; }}
-    QWidget#parameters QCheckBox::indicator {{ width: 20px; height: 20px; }}
-    QWidget#parameters QLineEdit:disabled {{ color: {Style.secondary}; }}
-    QWidget#parameters QScrollBar:vertical {{ background: {Style.background}; width: 16px; }}
-    QWidget#parameters QScrollBar::handle:vertical {{ background: {Style.raised}; min-height: 40px; border-radius: 6px; }}
-    QWidget#parameters QScrollBar::add-line:vertical, QWidget#parameters QScrollBar::sub-line:vertical {{ height: 0px; }}
-    QWidget#parameters QScrollBar::add-page:vertical, QWidget#parameters QScrollBar::sub-page:vertical {{ background: none; }}
+    QLabel[role="error"] {{ color: {c.warning}; }}
+    QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
+    QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
+    QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}
+    QPushButton:checked {{ color: {c.accent}; background: {c.selected}; border-color: {c.accent}; }}
+    QPushButton:focus:enabled {{ border: 2px solid {c.accent}; }}
+    QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}
+    QWidget#production QPushButton#start:focus:enabled {{ border-color: {c.primary}; }}
+    QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
+    QPushButton#start {{ background: #5b7ffc; color: #ffffff; font-weight: 600; border-color: #5b7ffc; }}
+    QPushButton#start:hover {{ background: #6d8eff; }}
+    QPushButton#start:pressed {{ background: #4265de; }}
+    QPushButton#start:disabled {{ background: {c.raised}; color: {c.secondary}; border-color: {c.border}; }}
+    QFrame#navigation QPushButton {{ border: none; background: transparent; padding: 6px 10px; }}
+    QFrame#navigation QPushButton:hover {{ background: {c.raised}; }}
+    QFrame#navigation QPushButton:checked {{ color: {c.accent}; background: {c.selected}; }}
+    QFrame#navigation QPushButton:focus {{ border: 1px solid {c.accent}; }}
+    QFrame#navigation QPushButton:checked:focus {{ border: none; }}
+    QPushButton[iconAlignment="leading"] {{ text-align: left; }}
+    QFrame#navigation QComboBox {{ padding: 5px 8px; }}
+    QComboBox::drop-down {{ border: none; width: 22px; }}
+    QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
+    QComboBox QAbstractItemView, QMenu {{ background: {c.surface}; color: {c.primary}; border: 1px solid {c.border}; selection-background-color: {c.selected}; }}
+    QLineEdit, QSpinBox, QDoubleSpinBox {{ background: {c.surface}; color: {c.primary}; padding: 7px; border: 1px solid {c.border}; border-radius: 6px; selection-background-color: {c.selected}; }}
+    QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
+    QScrollArea, QWidget#commBody, QWidget#sourceMappings {{ background: {c.background}; border: none; }}
+    QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
+    QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
+    QCheckBox {{ background: transparent; spacing: 8px; }}
+    QCheckBox::indicator {{ width: 20px; height: 20px; }}
+    QTabBar::tab {{ padding: 12px 10px; min-height: 20px; color: {c.primary}; background: {c.surface}; border: none; }}
+    QTabBar::tab:selected {{ color: {c.accent}; background: {c.selected}; }}
+    QSlider::groove:horizontal {{ height: 6px; background: {c.border}; border-radius: 3px; }}
+    QSlider::handle:horizontal {{ width: 22px; margin: -8px 0; border-radius: 11px; background: {c.accent}; }}
+    QScrollBar:vertical {{ background: {c.background}; width: 14px; }}
+    QScrollBar::handle:vertical {{ background: {c.border}; min-height: 40px; border-radius: 6px; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
+    QToolTip {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; padding: 6px; }}
     """
 
 
@@ -643,10 +758,11 @@ def camera_icon(color: str = Style.primary) -> QIcon:
     return icon
 
 
-def navigation_icon(index: int) -> QIcon:
+@cache
+def navigation_icon(index: int, color: str = Style.secondary) -> QIcon:
     """Internal vector strokes, rendered at common DPRs; no OS icon theme/font."""
     if index == 4:
-        return camera_icon(Style.secondary)
+        return camera_icon(color)
     icon = QIcon()
     for dpr in (1.0, 1.25, 1.5, 2.0):
         pixmap = QPixmap(round(Style.icon * dpr), round(Style.icon * dpr))
@@ -654,7 +770,7 @@ def navigation_icon(index: int) -> QIcon:
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(Style.secondary), 1.6))
+        painter.setPen(QPen(QColor(color), 1.6))
         if index == 0:
             for x in (3, 12):
                 for y in (3, 12):
@@ -687,7 +803,7 @@ def navigation_icon(index: int) -> QIcon:
 
 
 @cache
-def production_icon(kind: str) -> QIcon:
+def production_icon(kind: str, foreground: str | None = None) -> QIcon:
     """Compact state/action strokes using the same DPR-aware Qt icon infrastructure."""
     color = (
         Style.fault
@@ -709,7 +825,7 @@ def production_icon(kind: str) -> QIcon:
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(color), 1.7))
+        painter.setPen(QPen(QColor(foreground or color), 1.7))
         if kind == "RUNNING":
             painter.drawEllipse(QRectF(3, 3, 16, 16))
             painter.setBrush(QColor(color))
@@ -778,7 +894,7 @@ def production_icon(kind: str) -> QIcon:
 
 
 @cache
-def indicator_icon(state: Indicator) -> QIcon:
+def indicator_icon(state: Indicator, foreground: str | None = None) -> QIcon:
     """Semantic shapes, not font-dependent checkmark/warning glyphs."""
     color = {
         Indicator.OK: Style.ok,
@@ -790,6 +906,7 @@ def indicator_icon(state: Indicator) -> QIcon:
         Indicator.DISABLED: "#727985",
         Indicator.EMPTY: Style.secondary,
     }[state]
+    color = foreground or color
     icon = QIcon()
     for dpr in (1.0, 1.25, 1.5, 2.0):
         pixmap = QPixmap(round(18 * dpr), round(18 * dpr))
@@ -827,5 +944,61 @@ def indicator_icon(state: Indicator) -> QIcon:
                 painter.drawLine(QPointF(6, 6), QPointF(12, 12))
                 painter.drawLine(QPointF(6, 12), QPointF(12, 6))
         painter.end()
+        icon.addPixmap(pixmap)
+    return icon
+
+
+@cache
+def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
+    """Shared monochrome shell symbols drawn with Qt, independent of icon fonts."""
+    if kind == "plc":
+        return navigation_icon(2, color)
+    if kind == "state":
+        return production_icon("READY", color)
+    icon = QIcon()
+    for dpr in (1.0, 1.25, 1.5, 2.0):
+        pixmap = QPixmap(round(24 * dpr), round(24 * dpr))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor(color), 1.6))
+        if kind == "brand":
+            p.drawEllipse(QRectF(2, 6, 20, 12))
+            p.setBrush(QColor(color))
+            p.drawEllipse(QRectF(8, 8, 8, 8))
+        elif kind == "sun":
+            p.drawEllipse(QRectF(8, 8, 8, 8))
+            for x, y, dx, dy in (
+                (12, 2, 0, 3),
+                (12, 19, 0, 3),
+                (2, 12, 3, 0),
+                (19, 12, 3, 0),
+                (4, 4, 2, 2),
+                (18, 18, 2, 2),
+                (4, 20, 2, -2),
+                (18, 6, 2, -2),
+            ):
+                p.drawLine(x, y, x + dx, y + dy)
+        elif kind == "moon":
+            path = QPainterPath()
+            path.addEllipse(QRectF(3, 3, 18, 18))
+            cutout = QPainterPath()
+            cutout.addEllipse(QRectF(9, 0, 16, 16))
+            p.fillPath(path.subtracted(cutout), QColor(color))
+        elif kind == "chevron":
+            p.drawLine(6, 9, 12, 15)
+            p.drawLine(12, 15, 18, 9)
+        elif kind == "globe":
+            p.drawEllipse(QRectF(3, 3, 18, 18))
+            p.drawEllipse(QRectF(8, 3, 8, 18))
+            p.drawLine(3, 12, 21, 12)
+            p.drawLine(5, 7, 19, 7)
+            p.drawLine(5, 17, 19, 17)
+        else:
+            p.drawEllipse(QRectF(3, 3, 18, 18))
+            p.drawLine(12, 6, 12, 12)
+            p.drawLine(12, 12, 17, 15)
+        p.end()
         icon.addPixmap(pixmap)
     return icon

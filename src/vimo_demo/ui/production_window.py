@@ -1,5 +1,7 @@
 """Layout-managed bilingual production shell; application snapshots are authoritative."""
 
+from collections.abc import Callable
+
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QFont, QResizeEvent
 from PySide6.QtWidgets import (
@@ -24,6 +26,7 @@ from vimo_demo.application import (
 )
 from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.application.local_replay import ReplayState
+from vimo_demo.communication.reporting import ReportOutcome
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import (
     FindingSource,
@@ -46,15 +49,17 @@ from .production_presentation import (
 from .production_style import (
     Language,
     Style,
+    Theme,
+    apply_theme,
     indicator_icon,
     navigation_icon,
     production_icon,
-    stylesheet,
+    shell_icon,
     text,
+    theme_colors,
 )
 from .recipe_editor import RecipeEditorSession
-
-PAGES = ("production", "parameters", "diagnostics", "history", "settings")
+from .shell import PAGES, NavigationBar, StatusBar
 
 
 class ProductionWindow(QMainWindow):
@@ -89,6 +94,10 @@ class ProductionWindow(QMainWindow):
         bridge.setParent(self)
         self.choices = choices
         self.language: Language = language
+        self.theme: Theme = "dark"
+        self._web_observation: Callable[[], tuple[bool, str]] | None = None
+        self._web_interval_ms = 500
+        self._service_presentation: tuple[object, ...] | None = None
         self.simulation = simulation
         self.configuration_issue = configuration_issue
         self.configuration_messages = configuration_messages
@@ -109,33 +118,21 @@ class ProductionWindow(QMainWindow):
         font = QFont()
         font.setFamilies(["Microsoft YaHei UI", "Segoe UI", "sans-serif"])
         self.setFont(font)
-        self.setStyleSheet(stylesheet())
+        apply_theme(self, self.theme)
         shell = QWidget()
         shell.setObjectName("shell")
         self.setCentralWidget(shell)
         root = QVBoxLayout(shell)
         root.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
         root.setSpacing(Style.space)
-        nav = QHBoxLayout()
-        nav.setSpacing(Style.small)
-        brand = QLabel("ViMo")
-        brand.setProperty("role", "state")
-        nav.addWidget(brand)
-        self.navigation: list[QPushButton] = []
-        for index, _ in enumerate(PAGES):
-            button = QPushButton()
-            button.setIcon(navigation_icon(index))
-            button.setIconSize(QSize(Style.icon, Style.icon))
-            button.setCheckable(True)
-            button.setMinimumHeight(Style.touch)
-            button.clicked.connect(lambda _checked=False, i=index: self.navigate(i))
-            nav.addWidget(button, 1)
-            self.navigation.append(button)
-        self.language_button = QPushButton()
-        self.language_button.setMinimumHeight(Style.touch)
-        self.language_button.clicked.connect(self._switch_language)
-        nav.addWidget(self.language_button)
-        root.addLayout(nav)
+        self.navbar = NavigationBar()
+        self.navigation = self.navbar.buttons
+        self.language_selector = self.navbar.language
+        self.theme_button = self.navbar.theme
+        self.navbar.page_selected.connect(self.navigate)
+        self.navbar.language_selected.connect(self._select_language)
+        self.navbar.theme_requested.connect(self._switch_theme)
+        root.addWidget(self.navbar)
         self.pages = QStackedWidget()
         root.addWidget(self.pages, 1)
         production = QWidget()
@@ -181,7 +178,7 @@ class ProductionWindow(QMainWindow):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         self.pending_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.pending_label.setStyleSheet(f"color: {Style.secondary};")
+        self.pending_label.setProperty("role", "secondary")
         identity_row.addWidget(self.pending_label, 2)
         self.batch_group = QWidget()
         batch_row = QHBoxLayout(self.batch_group)
@@ -203,6 +200,7 @@ class ProductionWindow(QMainWindow):
         batch_row.addWidget(batch)
         operation = QPushButton()
         operation.setObjectName("start")
+        operation.setProperty("iconAlignment", "leading")
         operation.setFixedSize(4 * Style.touch, Style.touch)
         operation.setIconSize(QSize(Style.icon, Style.icon))
         operation.clicked.connect(self._operate)
@@ -216,6 +214,7 @@ class ProductionWindow(QMainWindow):
             operation.setFixedWidth(3 * Style.touch)
             operations.addWidget(operation)
             secondary = QPushButton()
+            secondary.setProperty("iconAlignment", "leading")
             secondary.setFixedSize(3 * Style.touch, Style.touch)
             policy = secondary.sizePolicy()
             policy.setRetainSizeWhenHidden(True)
@@ -295,24 +294,10 @@ class ProductionWindow(QMainWindow):
             container.addWidget(label)
             self.placeholders[name] = label
             self.pages.addWidget(placeholder)
-        event = self.event_frame = QFrame()
-        event.setObjectName("event")
-        self.event_layout = event_layout = QHBoxLayout(event)
-        event_layout.setContentsMargins(Style.space, 3, Style.space, 3)
-        event_layout.setSpacing(Style.small)
-        self.event_icon = QLabel()
-        self.event_icon.setFixedSize(Style.icon, Style.icon)
-        event_layout.addWidget(self.event_icon)
-        self.event_label = QLabel()
-        self.event_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.event_label.setWordWrap(False)
-        self.event_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-        )
-        event_layout.addWidget(self.event_label, 1)
-        # One reserved shell strip; navigation/messages never resize page workspaces.
-        event.setFixedHeight(Style.body + 3 * Style.small)
-        root.addWidget(event)
+        self.event_frame = StatusBar()
+        self.event_icon = self.event_frame.event_icon
+        self.event_label = self.event_frame.event_label
+        root.addWidget(self.event_frame)
         self.parameters.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
         bridge.replay_changed.connect(self._replay_changed)
@@ -322,6 +307,8 @@ class ProductionWindow(QMainWindow):
         bridge.command_failed.connect(self._command_failed)
         bridge.command_finished.connect(self._command_finished)
         bridge.shutdown_finished.connect(self._shutdown_finished)
+        bridge.reporting_changed.connect(self._render_services)
+        bridge.timer.timeout.connect(self._render_services)
         application = QApplication.instance()
         if application is not None:
             application.installEventFilter(self)
@@ -352,6 +339,8 @@ class ProductionWindow(QMainWindow):
         super().resizeEvent(event)
 
     def navigate(self, index: int) -> None:
+        # Keep the actual destination selected while a dirty-draft decision is pending.
+        self.navigation[self.pages.currentIndex()].setChecked(True)
         if (
             self.pages.currentWidget() is self.parameters
             and index != 1
@@ -369,23 +358,45 @@ class ProductionWindow(QMainWindow):
         if index == 4:
             self.parameters.open_roi_editor()
         self.pages.setCurrentIndex(index)
+        self.navigation[index].setFocus(Qt.FocusReason.OtherFocusReason)
+        self._refresh_theme_icons()
         for i, button in enumerate(self.navigation):
             button.setChecked(i == index)
         self._render()
 
+    @Slot(str)
+    def _select_language(self, language: str) -> None:
+        if language in ("zh", "en"):
+            self.set_language("zh" if language == "zh" else "en")
+
     @Slot()
-    def _switch_language(self) -> None:
-        self.set_language("en" if self.language == "zh" else "zh")
+    def _switch_theme(self) -> None:
+        self.set_theme("light" if self.theme == "dark" else "dark")
+
+    def set_theme(self, theme: Theme) -> None:
+        self.theme = theme
+        apply_theme(self, theme)
+        self._refresh_theme_icons()
+        self.communication.set_language(self.language)
+        self._render()
+
+    def _refresh_theme_icons(self) -> None:
+        self.navbar.present(self.language, self.theme, self.pages.currentIndex())
+        workspace = self.parameters.roi_workspace
+        if workspace is not None:
+            workspace.refresh_theme()
+        preview = self.parameters.preview
+        if preview is not None:
+            preview.refresh_theme()
+        self.communication.settings_button.setIcon(
+            navigation_icon(1, theme_colors(self).secondary)
+        )
 
     def set_language(self, language: Language) -> None:
         self.language = language
         self.parameters.set_language(language)
         self.communication.set_language(language)
-        self.language_button.setText("English" if language == "zh" else "中文")
-        for key, button in zip(PAGES, self.navigation, strict=True):
-            button.setText(text(key, language))
-            button.setToolTip(text(key, language))
-            button.setAccessibleName(text(key, language))
+        self.navbar.present(language, self.theme, self.pages.currentIndex())
         self.buttons["batch"].setToolTip(text("batch", language))
         self.buttons["batch"].setAccessibleName(text("batch", language))
         for key, (_, caption) in self.metrics.items():
@@ -674,6 +685,8 @@ class ProductionWindow(QMainWindow):
             )
 
     def _render(self) -> None:
+        colors = theme_colors(self)
+        self.navbar.present(self.language, self.theme, self.pages.currentIndex())
         snapshot, language = self.snapshot, self.language
         self.configuration_placeholder.setText(text("configure_first", language))
         availability = controls(snapshot)
@@ -706,7 +719,7 @@ class ProductionWindow(QMainWindow):
             else action
         )
         operation.setText(text(action_label, language))
-        operation.setIcon(production_icon(action))
+        operation.setIcon(production_icon(action, "#ffffff"))
         operation.setAccessibleName(operation.text())
         operation.setToolTip(
             text("configure_first", language)
@@ -771,13 +784,13 @@ class ProductionWindow(QMainWindow):
             else text(state, language)
         )
         color = {
-            "READY": Style.secondary,
-            "STARTING": Style.accent,
-            "RUNNING": Style.ok,
-            "replay_paused": Style.warning,
-            "STOPPING": Style.warning,
-            "FAULT": Style.fault,
-        }.get(state, Style.secondary)
+            "READY": colors.secondary,
+            "STARTING": colors.accent,
+            "RUNNING": colors.ok,
+            "replay_paused": colors.warning,
+            "STOPPING": colors.warning,
+            "FAULT": colors.fault,
+        }.get(state, colors.secondary)
         self.state_label.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.state_label.setAccessibleName(self.state_label.toolTip())
         self._render_identity()
@@ -802,6 +815,7 @@ class ProductionWindow(QMainWindow):
         self._render_cards()
 
     def _render_status(self) -> None:
+        colors = theme_colors(self)
         snapshot, language = self.snapshot, self.language
         result = snapshot.latest_production_result
         event_key = snapshot.state.name
@@ -893,21 +907,94 @@ class ProductionWindow(QMainWindow):
         )
         self.event_label.setAccessibleName(message)
         self.event_label.setStyleSheet(
-            f"color: {Style.fault if fault else Style.warning if warning else Style.secondary};"
+            f"color: {colors.fault if fault else colors.warning if warning else colors.secondary};"
         )
         self.event_icon.setVisible(bool(message))
         self.event_icon.setToolTip(message)
         self.event_icon.setAccessibleName(message)
         if message:
             icon = (
-                production_icon("FAULT")
+                production_icon("FAULT", colors.fault)
                 if fault
-                else indicator_icon(Indicator.ERROR)
+                else indicator_icon(Indicator.ERROR, colors.warning)
                 if warning
-                else production_icon("STOPPING")
+                else production_icon("STOPPING", colors.secondary)
             )
             self.event_icon.setPixmap(icon.pixmap(Style.icon, Style.icon))
         self._render_status_text()
+        self._render_services()
+
+    def observe_web(
+        self, observation: Callable[[], tuple[bool, str]], *, interval_ms: int
+    ) -> None:
+        """Read existing owner observations on the bridge's existing refresh tick."""
+        self._web_observation = observation
+        self._web_interval_ms = interval_ms
+        self._render_services()
+
+    def _render_services(self) -> None:
+        bar, colors = self.event_frame, theme_colors(self)
+        bar.refresh_icons()
+        selection = (
+            self.bridge.reporting.reporting_selection()
+            if self.bridge.reporting
+            else None
+        )
+        report = self.bridge.reporting_snapshot
+        plc = "未启用" if self.language == "zh" else "Disabled"
+        if selection and selection.enabled:
+            plc = "待启动" if self.language == "zh" else "Next Start"
+        if report:
+            outcome = report.last_outcome
+            if outcome and outcome.outcome is ReportOutcome.ACKNOWLEDGED:
+                plc = f"{'上次 ACK' if self.language == 'zh' else 'Last ACK'} {outcome.sequence}"
+            elif outcome and outcome.outcome in (
+                ReportOutcome.FAILED,
+                ReportOutcome.REJECTED,
+            ):
+                plc = "报告失败" if self.language == "zh" else "Report failed"
+            elif report.thread_alive:
+                plc = "报告中" if self.language == "zh" else "Reporting"
+        available, detail = (
+            self._web_observation() if self._web_observation else (False, "")
+        )
+        web = (
+            f"{self._web_interval_ms} ms"
+            if available
+            else ("不可用" if self.language == "zh" else "Unavailable")
+            if detail
+            else ("未启用" if self.language == "zh" else "Off")
+        )
+        identity = (
+            self.theme,
+            self.language,
+            self.state_label.text(),
+            self.state_label.toolTip(),
+            plc,
+            web,
+            detail,
+        )
+        if identity == self._service_presentation:
+            return
+        self._service_presentation = identity
+        bar.state.setText(self.state_label.text())
+        bar.state.setToolTip(self.state_label.toolTip())
+        state_color = (
+            colors.fault
+            if self.snapshot.state is ApplicationState.FAULT
+            else colors.ok
+            if self.snapshot.state in (ApplicationState.READY, ApplicationState.RUNNING)
+            else colors.secondary
+        )
+        bar.state_icon.setPixmap(shell_icon("state", state_color).pixmap(20, 20))
+        bar.state.setStyleSheet(f"color: {state_color};")
+        bar.plc.setText(f"PLC · {plc}")
+        bar.plc.setToolTip(f"PLC · {plc}\n{text('plc_ack_hint', self.language)}")
+        bar.web.setText(f"Web · {web}")
+        bar.web.setToolTip(f"Web · {web}" + (f"\n{detail}" if detail else ""))
+        bar.web.setStyleSheet(
+            f"color: {colors.secondary if available or not detail else colors.warning};"
+        )
 
     def _status_message(self, event_key: str, fallback: str) -> str:
         """Describe existing technical evidence; never guess a cause or show raw SDK text."""
@@ -1147,6 +1234,14 @@ class ProductionWindow(QMainWindow):
         self.pending_label.setAccessibleName(label)
         self.identity_label.setToolTip(label)
         self.identity_label.setAccessibleName(label)
+        self.recipe_icon.setPixmap(
+            navigation_icon(1, theme_colors(self).secondary).pixmap(
+                Style.icon, Style.icon
+            )
+        )
+        self.buttons["batch"].setIcon(
+            production_icon("batch", theme_colors(self).secondary)
+        )
         self.recipe_icon.setToolTip(label)
         self.recipe_icon.setAccessibleName(text("production_recipe", language))
         self.batch_label.setText(

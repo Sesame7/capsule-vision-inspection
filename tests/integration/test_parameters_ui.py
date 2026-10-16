@@ -526,7 +526,7 @@ def test_full_width_recipe_columns_and_long_text(
     ):
         assert_inside(control, page)
     assert page.model.mapTo(basic, QPoint(page.model.width(), 0)).x() == basic.width()
-    assert window.event_frame.height() == 33
+    assert window.event_frame.height() == 44
     assert (
         window.bridge.application.snapshot() == before
         and not session.dirty
@@ -695,7 +695,7 @@ def test_recipe_page_screenshots(
         assert page.model.width() < page.width() // 2
         assert page.identity.mapTo(page, QPoint(0, 0)).y() > page.height() * 0.8
         assert composition.application.snapshot() == before
-        assert window.event_frame.height() == 33 and not window.event_label.text()
+        assert window.event_frame.height() == 44 and not window.event_label.text()
         assert window.grab().save(
             str(tmp_path / f"recipe-{language}-{size[0]}x{size[1]}-{workspace}.png")
         )

@@ -775,7 +775,7 @@ def test_tuning_preview_screenshots(
             if workspace == "size":
                 assert_inside(spin, preview)
         assert composition.application.snapshot() == before
-        assert window.event_frame.height() == 33 and not window.event_label.text()
+        assert window.event_frame.height() == 44 and not window.event_label.text()
         assert window.grab().save(
             str(tmp_path / f"recipe-{language}-{size[0]}x{size[1]}-{workspace}.png")
         )

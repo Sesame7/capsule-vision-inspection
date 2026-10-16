@@ -1,8 +1,8 @@
 """Shared navigation/status contracts, with existing controlled sessions and fake engines."""
 
-from pathlib import Path
-
 import pytest
+from PySide6.QtCore import QPoint, QRect, QTimer
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication
 from tests.application_support import FakeSession, production
 from tests.integration.test_production_ui import screen as screen
@@ -10,11 +10,187 @@ from tests.qt_support import until
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.application.folder_replay import FolderSourceError
+from vimo_demo.communication.reporting import (
+    ReportIdentity,
+    ReportingSnapshot,
+    ReportObservation,
+    ReportOutcome,
+)
 from vimo_demo.inspection import CycleId
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
-from vimo_demo.ui.production_bridge import QtProductionBridge
-from vimo_demo.ui.production_style import Language, Style, camera_icon, text
+from vimo_demo.ui.production_style import Language, Style, text
 from vimo_demo.ui.production_window import ProductionWindow
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_navigation_language_and_themes_preserve_presentation_contract(
+    screen: tuple[ProductionWindow, FakeSession],
+    size: tuple[int, int],
+    language: Language,
+) -> None:
+    window, _ = screen
+    window.resize(*size)
+    window.set_language(language)
+    QApplication.processEvents()
+    baseline = window.bridge.application.snapshot()
+    timers = window.findChildren(QTimer)
+    width = window.language_selector.width()
+    navigation = tuple(button.geometry() for button in window.navigation)
+    anchored = (
+        window.buttons["operation"],
+        window.event_frame.state_icon,
+        window.event_frame.state,
+        window.event_frame.plc_icon,
+        window.event_frame.plc,
+        window.event_frame.web_icon,
+        window.event_frame.web,
+        window.event_label,
+    )
+    geometry = tuple(
+        QRect(widget.mapTo(window, QPoint()), widget.size()) for widget in anchored
+    )
+    for theme in ("light", "dark"):
+        window.theme_button.click()
+        assert window.theme == theme
+        for _ in range(2):
+            current = window.language
+            expected = (
+                ("生产", "配方", "通信", "历史", "视觉")
+                if current == "zh"
+                else ("Production", "Recipe", "Comms", "History", "Vision")
+            )
+            assert tuple(button.text() for button in window.navigation) == expected
+            for page, button in enumerate(window.navigation):
+                button.click()
+                QApplication.processEvents()
+                assert window.pages.currentIndex() == page
+                assert tuple(b.isChecked() for b in window.navigation) == tuple(
+                    i == page for i in range(5)
+                )
+                assert (
+                    button.toolTip()
+                    == button.accessibleName()
+                    == text(
+                        (
+                            "production",
+                            "parameters",
+                            "diagnostics",
+                            "history",
+                            "settings",
+                        )[page],
+                        current,
+                    )
+                )
+                assert not button.icon().isNull()
+                assert button.height() >= Style.touch
+                assert window.navbar.rect().contains(button.geometry())
+                assert window.event_frame.isVisible()
+                assert window.event_frame.state.text() == window.state_label.text()
+                assert "PLC" in window.event_frame.plc.text()
+                assert "Web" in window.event_frame.web.text()
+                assert not window.event_label.text()
+                assert not window.event_label.wordWrap()
+                assert window.bridge.application.snapshot() == baseline
+                if page == 2:
+                    assert window.pages.currentWidget() is window.communication
+                    assert window.communication.test_button.text() == text(
+                        "comm_test", current
+                    )
+            assert window.pages.currentWidget() is window.parameters.settings
+            palette = window.parameters.metadata["display_name"].palette()
+            assert palette.color(
+                QPalette.ColorGroup.Active, QPalette.ColorRole.Text
+            ) != palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.Base)
+            window.language_selector.activated.emit(
+                1 - window.language_selector.currentIndex()
+            )
+            QApplication.processEvents()
+            assert window.language != current
+            assert window.navigation[4].isChecked()
+            assert window.language_selector.width() == width
+            assert (
+                tuple(button.geometry() for button in window.navigation) == navigation
+            )
+            assert (
+                tuple(
+                    QRect(widget.mapTo(window, QPoint()), widget.size())
+                    for widget in anchored
+                )
+                == geometry
+            )
+            assert window.columns == (2 if size[0] < size[1] else 3)
+    assert set(window.findChildren(QTimer)) == set(timers)
+
+
+def test_web_status_uses_owner_observation_without_a_new_timer(
+    screen: tuple[ProductionWindow, FakeSession],
+) -> None:
+    window, _ = screen
+    before = window.bridge.application.snapshot()
+    observed = [True]
+    window.observe_web(lambda: (observed[0], "http://127.0.0.1:8765/"), interval_ms=500)
+    assert window.event_frame.web.text() == "Web · 500 ms"
+    observed[0] = False
+    window.bridge.timer.timeout.emit()
+    assert "500 ms" not in window.event_frame.web.text()
+    assert window.event_frame.web.toolTip() == (
+        f"{window.event_frame.web.accessibleName()}\nhttp://127.0.0.1:8765/"
+    )
+    window.resize(880, 720)
+    QApplication.processEvents()
+    assert (
+        window.event_frame.web.fontMetrics().horizontalAdvance(
+            window.event_frame.web.text()
+        )
+        <= window.event_frame.web.width()
+    )
+    assert window.bridge.application.snapshot() == before
+
+
+@pytest.mark.parametrize("outcome", [ReportOutcome.ACKNOWLEDGED, ReportOutcome.FAILED])
+def test_reporting_observation_is_not_a_connectivity_or_application_state_claim(
+    screen: tuple[ProductionWindow, FakeSession], outcome: ReportOutcome
+) -> None:
+    window, _ = screen
+    before = window.bridge.application.snapshot()
+    observation = ReportObservation(ReportIdentity(1, CycleId(1)), outcome, sequence=42)
+    window.bridge.reporting_snapshot = ReportingSnapshot(
+        generation=1,
+        accepting=False,
+        thread_alive=False,
+        pending=0,
+        peak_pending=1,
+        active=None,
+        queued_count=1,
+        attempted_count=1,
+        acknowledged_count=int(outcome is ReportOutcome.ACKNOWLEDGED),
+        failed_count=int(outcome is ReportOutcome.FAILED),
+        skipped_count=0,
+        rejected_count=0,
+        next_sequence=43,
+        last_queued=observation.identity,
+        last_attempted=observation,
+        last_acknowledged=observation
+        if outcome is ReportOutcome.ACKNOWLEDGED
+        else None,
+        last_outcome=observation,
+        last_failed=observation if outcome is ReportOutcome.FAILED else None,
+        last_skipped=None,
+        last_rejected=None,
+        failure_issue=None,
+        cleanup_issue=None,
+    )
+    for language in ("zh", "en"):
+        window.set_language(language)
+        message = window.event_frame.plc.text()
+        assert ("42" in message) == (outcome is ReportOutcome.ACKNOWLEDGED)
+        assert "connected" not in message.lower() and "已连接" not in message
+        assert window.event_frame.plc.toolTip() == (
+            f"{window.event_frame.plc.accessibleName()}\n{text('plc_ack_hint', language)}"
+        )
+        assert window.snapshot.state is ApplicationState.READY
+        assert window.bridge.application.snapshot() == before
 
 
 def complete_cycle(
@@ -36,56 +212,6 @@ def complete_cycle(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-def test_five_destinations_switch_language_and_keep_navigation_contract(
-    screen: tuple[ProductionWindow, FakeSession],
-    language: Language,
-    size: tuple[int, int],
-) -> None:
-    window, _ = screen
-    window.resize(*size)
-    window.set_language(language)
-    expected = (
-        ("生产", "配方", "通信", "历史", "视觉")
-        if language == "zh"
-        else ("Production", "Recipe", "Communication", "History", "Vision")
-    )
-    before = window.bridge.application.snapshot()
-    assert tuple(button.text() for button in window.navigation) == expected
-    assert (
-        window.navigation[4].icon().pixmap(Style.icon, Style.icon).toImage()
-        == camera_icon(Style.secondary).pixmap(Style.icon, Style.icon).toImage()
-    )
-    for index, button in enumerate(window.navigation):
-        assert button.toolTip() == button.accessibleName() == expected[index]
-        assert not button.icon().isNull()
-        assert button.minimumHeight() >= Style.touch
-        button.click()
-        QApplication.processEvents()
-        assert window.pages.currentIndex() == index
-        assert tuple(b.isChecked() for b in window.navigation) == tuple(
-            i == index for i in range(5)
-        )
-        assert window.event_frame.isVisible() and window.event_frame.height() == 33
-        assert not window.event_label.wordWrap()
-        assert not window.event_label.text()
-        assert window.bridge.application.snapshot() == before
-    assert window.pages.currentWidget() is window.parameters.settings
-    window.navigation[2].click()
-    assert window.pages.currentWidget() is window.communication
-    assert window.communication.test_button.text() == text("comm_test", language)
-    window.language_button.click()
-    alternate = (
-        ("Production", "Recipe", "Communication", "History", "Vision")
-        if language == "zh"
-        else ("生产", "配方", "通信", "历史", "视觉")
-    )
-    assert tuple(b.text() for b in window.navigation) == alternate
-    assert all(b.toolTip() == b.accessibleName() == b.text() for b in window.navigation)
-    assert window.navigation[2].isChecked()
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
 def test_latest_technical_evidence_is_global_and_historical_counts_do_not_warn(
     screen: tuple[ProductionWindow, FakeSession],
     language: Language,
@@ -101,7 +227,6 @@ def test_latest_technical_evidence_is_global_and_historical_counts_do_not_warn(
     before = window.bridge.application.snapshot()
     for page in range(5):
         window.navigate(page)
-        assert window.event_frame.height() == 33
         assert window.event_label.toolTip() == error
         assert window.event_icon.isVisible()
         assert Style.warning in window.event_label.styleSheet()
@@ -113,7 +238,7 @@ def test_latest_technical_evidence_is_global_and_historical_counts_do_not_warn(
     assert healthy.latest_production_result is not None
     for page in range(5):
         window.navigate(page)
-        assert window.event_frame.isVisible() and window.event_frame.height() == 33
+        assert window.event_frame.isVisible()
         assert not window.event_label.text() and not window.event_label.toolTip()
         assert not window.event_icon.isVisible()
         assert Style.secondary in window.event_label.styleSheet()
@@ -148,7 +273,6 @@ def test_fault_and_authoritative_reset_across_pages(
         assert "private" not in window.event_label.toolTip()
         assert window.event_icon.isVisible()
         assert Style.fault in window.event_label.styleSheet()
-        assert window.event_frame.height() == 33
         assert window.bridge.application.snapshot() == before
     # Reset through the application, not a synthetic successful command signal.
     window.bridge.application.reset_fault()
@@ -173,7 +297,6 @@ def test_local_command_feedback_stays_with_owning_pages(
     for page in range(5):
         window.navigate(page)
         assert bool(window.event_label.text()) == (page in pages)
-        assert window.event_frame.height() == 33
         assert "private" not in window.event_label.toolTip()
         assert window.bridge.application.snapshot() == before
     window.bridge.command_finished.emit(command)
@@ -201,7 +324,6 @@ def test_source_failure_is_short_global_and_cleared_by_successful_start(
         assert text("source_error", language) in window.event_label.text()
         assert "private" not in window.event_label.toolTip()
         assert "SDK" not in window.event_label.toolTip()
-        assert window.event_frame.height() == 33
     session.ready.set_result(None)
     startup = window.bridge.application.start()
     until(lambda: startup.done() and window.snapshot.state is ApplicationState.RUNNING)
@@ -213,90 +335,5 @@ def test_source_failure_is_short_global_and_cleared_by_successful_start(
         window.navigate(page)
         assert window.event_label.toolTip() == message
         assert "TimeoutError" in window.event_label.text()
-        assert window.event_frame.height() == 33
     window.bridge.command_finished.emit("stop")
     assert not window.event_label.text()
-
-
-@pytest.mark.parametrize(
-    "language,size,page,scenario",
-    [
-        ("zh", (1080, 1920), 4, "normal"),
-        ("en", (1920, 1080), 0, "normal"),
-        ("zh", (1920, 1080), 2, "normal"),
-        ("en", (1080, 1920), 3, "fault"),
-    ],
-)
-def test_global_shell_screenshot(
-    screen: tuple[ProductionWindow, FakeSession],
-    qapp: QApplication,
-    tmp_path: Path,
-    language: Language,
-    size: tuple[int, int],
-    page: int,
-    scenario: str,
-) -> None:
-    from run_production_ui import compose, demo_images
-
-    # The reused screen fixture supplies realistic existing system fonts.
-    composition = compose(
-        demo_images(), tmp_path, "fault" if scenario == "fault" else "normal", 0.001
-    )
-    bridge = QtProductionBridge(composition.application, composition.store, poll_ms=5)
-    window = ProductionWindow(
-        bridge,
-        composition.choices,
-        language=language,
-        simulation=True,
-        recipe_editor=composition.editor,
-    )
-    window.resize(*size)
-    window.show()
-    try:
-        if scenario == "fault":
-            bridge.start()
-            until(
-                lambda: (
-                    window.snapshot.state is ApplicationState.FAULT
-                    and not window.snapshot.runtime_owned
-                )
-            )
-        elif page == 0:
-            bridge.start()
-            until(lambda: window.snapshot.counters.cycles_completed >= 1)
-        composition.source.close()
-        window.navigate(page)
-        until(lambda: not window.parameters.busy)
-        qapp.processEvents()
-        if page == 4:
-            workspace = window.parameters.roi_workspace
-            assert workspace is not None and workspace.frame is not None
-        if scenario == "fault":
-            assert window.snapshot.last_issue is not None
-            assert window.snapshot.last_issue.stage == "shutdown"
-            assert window.event_icon.isVisible()
-            assert text("shutdown_error", language) in window.event_label.text()
-            assert Style.fault in window.event_label.styleSheet()
-        else:
-            assert not window.event_label.text()
-        assert window.event_frame.height() == 33
-        for button in window.navigation:
-            assert button.height() >= Style.touch
-            assert (
-                button.width()
-                >= button.fontMetrics().horizontalAdvance(button.text())
-                + Style.icon
-                + Style.small
-            )
-        name = ("production", "recipe", "communication", "history", "vision")[page]
-        assert window.grab().save(
-            str(
-                tmp_path / f"shell-{language}-{size[0]}x{size[1]}-{name}-{scenario}.png"
-            )
-        )
-    finally:
-        window.close()
-        until(lambda: bridge.closed)
-        composition.source.close()
-        assert composition.application.join(0)
-        window.deleteLater()

@@ -35,7 +35,10 @@ def install() -> None:
     root = Path(os.environ["APP_CLOSE_PROBE"])
     scenario = os.environ["APP_CLOSE_SCENARIO"]
     output = (root / "boundaries.jsonl").open("w", encoding="utf-8", buffering=1)
-    faulthandler.enable(output)
+    # Windows may report handled first-chance COM exceptions during maximize.
+    # Preserve stacks separately so diagnostics never corrupt structured boundaries.
+    stacks = (root / "stacks.log").open("w", encoding="utf-8", buffering=1)
+    faulthandler.enable(stacks)
 
     def record(stage: str, **fields: object) -> None:
         output.write(
@@ -127,6 +130,8 @@ def install() -> None:
 
         def exercise() -> None:
             nonlocal peer, simulator
+            assert window.isMaximized()
+            record("window_shown", maximized=window.isMaximized())
             if scenario != "unused":
                 window.navigate(2)
             if scenario in ("success", "timeout", "pending", "switch"):
@@ -159,7 +164,7 @@ def install() -> None:
                 application_closed=window.bridge.closed,
                 communication_closed=window.communication.closed,
             )
-            faulthandler.dump_traceback(file=output, all_threads=True)
+            faulthandler.dump_traceback(file=stacks, all_threads=True)
 
         def cleanup_peer() -> None:
             stop.set()

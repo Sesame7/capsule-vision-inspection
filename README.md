@@ -50,7 +50,9 @@ Recipes, mappings, ROIs, models, images and licenses. See
 uv run --no-sync python app.py
 ```
 
-The application opens stopped. Valid configuration produces READY; invalid
+The native Windows window opens maximized within the available work area, stopped.
+The shared navigation offers dark/light themes (dark on launch) and a fixed-width
+中文/EN selector. Theme selection is session-only. Valid configuration produces READY; invalid
 required data produces UNCONFIGURED with actionable feedback. It never chooses
 the first available model/Recipe, invents ROIs or substitutes fake inference.
 

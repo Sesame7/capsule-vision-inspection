@@ -56,7 +56,7 @@ from vimo_demo.communication.reporting import (
 )
 
 from .inference_bridge import FutureDelivery
-from .production_style import Language, Style, navigation_icon, text
+from .production_style import Language, Style, navigation_icon, text, theme_colors
 from .reporting_panel import ReportingPanel
 
 
@@ -154,17 +154,6 @@ class CommunicationPage(QWidget):
         layout.setSpacing(Style.space)
         scroll.setWidget(body)
         root.addWidget(scroll)
-        self.setStyleSheet(
-            f"QWidget#commBody, QScrollArea {{ background: {Style.background}; border: none; }}"
-            f"QFrame#commPanel {{ background: {Style.surface}; border: 1px solid {Style.border}; border-radius: 8px; }}"
-            f"QSpinBox, QDoubleSpinBox {{ background: {Style.raised}; border: 1px solid {Style.border}; padding: 5px; }}"
-            f"QTableWidget, QPlainTextEdit {{ background: {Style.background}; border: 1px solid {Style.border}; }}"
-            f"QHeaderView::section {{ background: {Style.raised}; padding: 6px; border: none; }}"
-            f"QScrollBar:vertical {{ background: {Style.background}; width: 16px; }}"
-            f"QScrollBar::handle:vertical {{ background: {Style.raised}; min-height: 40px; border-radius: 6px; }}"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
-            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }"
-        )
 
         if reporting is not None and reporting.reporting_editable:
             self.reporting_panel = ReportingPanel(reporting)
@@ -1164,7 +1153,7 @@ class CommunicationPage(QWidget):
         self.status.setText(status)
         self.status.setToolTip(self._detail)
         self.status.setStyleSheet(
-            f"color: {Style.warning if self._detail else Style.accent};"
+            f"color: {theme_colors(self).warning if self._detail else theme_colors(self).accent};"
         )
         self.success.setText(
             self._response_description(self.last_response)
@@ -1210,7 +1199,7 @@ class CommunicationPage(QWidget):
         )
         self.watch_status.setVisible(bool(self._watch_groups))
         self.watch_status.setStyleSheet(
-            f"color: {Style.warning if self._watch_state == 'comm_watch_failed' else Style.accent};"
+            f"color: {theme_colors(self).warning if self._watch_state == 'comm_watch_failed' else theme_colors(self).accent};"
         )
         lines: list[str] = []
         for entry in self._log:
