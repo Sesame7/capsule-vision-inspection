@@ -1,13 +1,12 @@
 """Six-channel card with owned QImage and image-space hollow evidence boxes."""
 
-from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -34,6 +33,7 @@ from .production_presentation import (
 from .production_style import (
     Language,
     Style,
+    ThemeColors,
     camera_icon,
     indicator_icon,
     text,
@@ -51,7 +51,6 @@ class CameraViewport(QWidget):
         self.conversions = 0
         self.boxes: tuple[BoundingRect, ...] = ()
         self.message = ""
-        self.empty_message = ""
 
     def set_frame(self, frame: DisplayFrame | None) -> None:
         revision = frame.revision if frame else -1
@@ -92,11 +91,6 @@ class CameraViewport(QWidget):
             for box in self.boxes:
                 painter.drawRect(QRectF(*transform.rectangle(box)))
             painter.setClipping(False)
-        elif self.empty_message:
-            painter.setPen(QColor(Style.secondary))
-            painter.drawText(
-                self.rect(), Qt.AlignmentFlag.AlignCenter, self.empty_message
-            )
         if self.message:
             painter.setPen(QColor(Style.secondary))
             painter.drawText(
@@ -119,9 +113,12 @@ class CameraCard(QFrame):
         self._snapshot: ProductionApplicationSnapshot | None = None
         self.result: CameraInspectionResult | None = None
         self.language: Language = "zh"
-        self._expanded: set[int] = set()
+        self._indicator_styles: list[tuple[Indicator, bool, ThemeColors] | None] = [
+            None
+        ] * len(layout.slots)
+        self._icon_color = ""
         root = QVBoxLayout(self)
-        root.setContentsMargins(Style.small, Style.small, Style.small, Style.small)
+        root.setContentsMargins(8, 6, 8, 8)
         root.setSpacing(Style.small)
         header = QGridLayout()
         header.setHorizontalSpacing(Style.small)
@@ -143,11 +140,11 @@ class CameraCard(QFrame):
         slots.setContentsMargins(0, 0, 0, 0)
         slots.setSpacing(2)
         header.addWidget(self.indicator_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
-        self.indicators: list[QPushButton] = []
-        for index, slot in enumerate(layout.slots):
-            button = QPushButton()
+        self.indicators: list[QLabel] = []
+        for slot in layout.slots:
+            button = QLabel()
+            button.setAlignment(Qt.AlignmentFlag.AlignCenter)
             button.setFixedSize(Style.touch, Style.touch)
-            button.clicked.connect(lambda _checked=False, i=index: self._toggle(i))
             button.setAccessibleName(f"{layout.camera_id} CH{slot.channel_id}")
             slots.addWidget(button)
             self.indicators.append(button)
@@ -158,13 +155,6 @@ class CameraCard(QFrame):
         root.addLayout(header)
         self.viewport = CameraViewport()
         root.addWidget(self.viewport, 1)
-
-    def _toggle(self, index: int) -> None:
-        if index in self._expanded:
-            self._expanded.remove(index)
-        else:
-            self._expanded.add(index)
-        self._render_card()
 
     def present(
         self,
@@ -192,9 +182,11 @@ class CameraCard(QFrame):
 
     def _render_card(self) -> None:
         palette = theme_colors(self)
-        self.camera_icon.setPixmap(
-            camera_icon(palette.primary).pixmap(Style.icon, Style.icon)
-        )
+        if self._icon_color != palette.primary:
+            self._icon_color = palette.primary
+            self.camera_icon.setPixmap(
+                camera_icon(palette.primary).pixmap(Style.icon, Style.icon)
+            )
         colors = {
             Indicator.PENDING: palette.secondary,
             Indicator.DISABLED: "#727985",
@@ -216,46 +208,18 @@ class CameraCard(QFrame):
                 channel is not None
                 and channel.assessment.technical_status is TechnicalStatus.ERROR
             )
-            show_id = (
-                state
-                in (
-                    Indicator.NG,
-                    Indicator.ERROR,
-                    Indicator.ERROR_NG,
-                    Indicator.UNKNOWN,
+            presentation = state, error, palette
+            if presentation != self._indicator_styles[index]:
+                self._indicator_styles[index] = presentation
+                button.setPixmap(indicator_icon(state, colors[state]).pixmap(24, 24))
+                button.setStyleSheet(
+                    f"border: 1px solid {palette.warning if error else 'transparent'}; border-radius: 8px;"
                 )
-                or error
-                or index in self._expanded
-            )
-            button.setIcon(indicator_icon(state, colors[state]))
-            button.setIconSize(QSize(16, 16))
-            button.setText(
-                f"{slot.channel_id}{'!' if error and state in (Indicator.ERROR_NG, Indicator.EMPTY) else ''}"
-                if show_id
-                else ""
-            )
             description = f"{text('channel', self.language)} {slot.channel_id} · {text(state.value, self.language)}"
             if channel is not None:
                 description += "\n" + self._details(channel)
             button.setToolTip(description)
             button.setAccessibleName(description)
-            border = palette.warning if error else "transparent"
-            background = (
-                palette.reject
-                if state in (Indicator.NG, Indicator.ERROR_NG)
-                else palette.surface
-            )
-            stylesheet = (
-                f"QPushButton {{ color: {colors[state]}; border: 1px solid {border}; "
-                f"padding: 0px; background: {background}; font-size: 12px; "
-                "border-radius: 8px; outline: none; } "
-                f"QPushButton:hover {{ background: {palette.raised}; border-color: {colors[state]}; }} "
-                f"QPushButton:focus {{ border: 2px solid {palette.accent}; }}"
-            )
-            # Reapplying an identical stylesheet repolishes Qt widgets during
-            # every live frame. Keep the existing appearance without that work.
-            if button.styleSheet() != stylesheet:
-                button.setStyleSheet(stylesheet)
         result = self.result
         technical = (
             result is not None
@@ -310,14 +274,9 @@ class CameraCard(QFrame):
             and result is None
             else ""
         )
-        self.viewport.empty_message = (
-            text("no_display_frame", self.language)
-            if self.viewport.image.isNull()
-            else ""
-        )
         self.viewport.setAccessibleName(
-            f"{name} · {self.viewport.empty_message}"
-            if self.viewport.empty_message
+            f"{name} · {text('no_display_frame', self.language)}"
+            if self.viewport.image.isNull()
             else name
         )
         self.viewport.update()

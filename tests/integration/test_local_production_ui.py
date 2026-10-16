@@ -100,7 +100,7 @@ def test_repeated_cycles_start_gate_order_display_and_restart(
         assert app.snapshot().counters.cycles_started == 1
         engine.release_active.set()
         until(lambda: app.snapshot().counters.cycles_completed >= 2)
-        window.buttons["operation"].click()
+        window.buttons["stop"].click()
         until(lambda: app.snapshot().state is ApplicationState.READY)
         snapshot = app.snapshot()
         result = snapshot.latest_production_result
@@ -130,7 +130,7 @@ def test_repeated_cycles_start_gate_order_display_and_restart(
         until(
             lambda: any(f.generation == 2 for f in composition.store.snapshot().frames)
         )
-        window.buttons["operation"].click()
+        window.buttons["stop"].click()
         until(lambda: app.snapshot().state is ApplicationState.READY)
         latest = app.snapshot().latest_production_result
         assert latest is not None and latest.cycle_id == CycleId(1)
@@ -372,7 +372,7 @@ class ReplayEngine:
 
 
 @pytest.mark.parametrize("phase", ["starting", "stepping", "paused"])
-def test_ready_step_button_and_nonblocking_close_at_each_replay_phase(
+def test_replay_nonblocking_close_at_each_phase(
     qapp: QApplication, tmp_path: Path, phase: str
 ) -> None:
     original_threads = {t.ident for t in threads()}
@@ -386,7 +386,7 @@ def test_ready_step_button_and_nonblocking_close_at_each_replay_phase(
     window = ProductionWindow(bridge, (composition.choice,))
     window.show()
     try:
-        window.buttons["secondary"].click()  # READY Step starts normal readiness.
+        window.bridge.step_replay()  # Existing single-step session setup.
         if phase == "paused":
             until(lambda: replay_state(composition) is ReplayState.PAUSED)
         else:
@@ -394,8 +394,8 @@ def test_ready_step_button_and_nonblocking_close_at_each_replay_phase(
         bridge.refresh()
         if phase == "starting":
             assert not window.buttons["operation"].isEnabled()
-            assert not window.buttons["secondary"].isEnabled()
-            window.buttons["secondary"].click()  # Rapid click grants no second step.
+            assert not window.buttons["pause"].isEnabled()
+            window.buttons["pause"].click()  # Disabled during startup.
             assert app.snapshot().counters == ProductionCounters()
         if phase == "stepping":
             assert window.state_label.text() != text("state_replay_paused", "zh")
@@ -510,17 +510,19 @@ def test_local_buttons_pause_at_boundary_continue_and_end_without_restart(
     window = ProductionWindow(bridge, (composition.choice,), language=language)
     window.resize(*size)
     window.show()
-    primary, secondary = window.buttons["operation"], window.buttons["secondary"]
+    primary, secondary = window.buttons["operation"], window.buttons["pause"]
     try:
         assert primary.text() == text("replay_start", language)
-        assert secondary.text() == text("replay_step", language)
+        assert secondary.accessibleName() == text("replay_pause", language)
+        assert not secondary.isEnabled()
         primary.click()
         until(engine.entered.is_set)
         bridge.refresh()
-        assert primary.text() == text("replay_pause", language)
-        assert secondary.text() == text("replay_end", language)
-        primary.click()
-        assert primary.text() == text("replay_pausing", language)
+        assert (
+            window.buttons["pause"].isEnabled() and window.buttons["stop"].isEnabled()
+        )
+        window.buttons["pause"].click()
+        assert not window.buttons["pause"].isEnabled()
         assert not primary.isEnabled() and app.snapshot().counters.cycles_completed == 0
         assert window.state_label.text() != text("state_replay_paused", language)
         engine.release.set()
@@ -529,7 +531,7 @@ def test_local_buttons_pause_at_boundary_continue_and_end_without_restart(
         qapp.processEvents()  # Apply layout requests from the longer paused label.
         assert window.state_label.text() == text("state_replay_paused", language)
         assert primary.text() == text("replay_continue", language)
-        assert secondary.text() == text("replay_step", language)
+        assert secondary.accessibleName() == text("replay_step", language)
         assert not window.buttons["batch"].isEnabled()  # RUNNING restrictions persist.
         assert app.snapshot().state is ApplicationState.RUNNING
         assert len(engine.calls) == 8 and app.snapshot().generation == 1
@@ -542,7 +544,7 @@ def test_local_buttons_pause_at_boundary_continue_and_end_without_restart(
         for button in (primary, secondary):
             assert not button.icon().isNull()
             assert button.height() >= Style.touch
-            assert button.text() == button.accessibleName()
+            assert button.toolTip() and button.accessibleName()
             assert window.summary.rect().contains(
                 button.mapTo(window.summary, button.rect().topLeft())
             )
@@ -555,7 +557,7 @@ def test_local_buttons_pause_at_boundary_continue_and_end_without_restart(
         bridge.refresh()
         assert app.snapshot().generation == 1 and len(engine.calls) == 9
         assert app.snapshot().counters.cycles_started == 2
-        secondary.click()  # Genuine End while a native call is active.
+        window.buttons["stop"].click()  # Genuine Stop while a native call is active.
         assert app.snapshot().state is ApplicationState.STOPPING
         assert not primary.isEnabled() and not secondary.isEnabled()
         engine.release.set()
@@ -633,7 +635,7 @@ def test_nonloop_exhaustion_after_step_performs_genuine_stop(
         finish_local(composition)
 
 
-def test_ready_step_preserves_camera_source_startup_feedback(
+def test_start_preserves_camera_source_startup_feedback(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     engine = ReplayEngine()
@@ -646,7 +648,7 @@ def test_ready_step_preserves_camera_source_startup_feedback(
     window = ProductionWindow(bridge, (composition.choice,))
     window.show()
     try:
-        window.buttons["secondary"].click()
+        window.buttons["operation"].click()
         until(lambda: "CAM1" in window.event_label.toolTip())
         assert text("source_error", "zh") in window.event_label.toolTip()
         assert app.snapshot().state is ApplicationState.READY

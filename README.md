@@ -62,7 +62,7 @@ the first available model/Recipe, invents ROIs or substitutes fake inference.
   Preview uses a frozen reference and never submits production cycles or counters.
   Save/preparation is separate from activation on the next successful Start.
 - **Production:** Start performs readiness warm-up without production side effects.
-  Folder Replay supports Pause/Continue/Step and End. Basler waits for actual
+  Folder Replay supports Pause/Continue/Step and Stop. Basler waits for actual
   ARMED, then receives external hardware triggers; Production never writes W10.7.
   Stop waits for safe cleanup and returns READY; close normally and verify exit.
 - **Communication:** manual D/W reads/writes and register watches use independently

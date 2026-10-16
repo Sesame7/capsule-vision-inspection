@@ -690,7 +690,8 @@ def continuous_acquisitions(
 
 
 @pytest.mark.parametrize(
-    "problem", ["", "missing", "unexpected extra frame", "ambiguous trigger"]
+    "problem",
+    ["", "missing", "unexpected extra frame", "ambiguous trigger", "idle_stop"],
 )
 def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
     qapp: QApplication,
@@ -735,7 +736,8 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
         window.buttons["operation"].click()
         until(engine.warm.is_set)
         assert window.snapshot.state is ApplicationState.STARTING
-        assert "Basler" in window.event_label.accessibleName()
+        assert not window.event_label.text()
+        assert "Basler" in window.state_label.toolTip()
         assert (
             not any(source.entered.is_set() for source in continuous_acquisitions)
             and startup.application.snapshot().counters == ProductionCounters()
@@ -748,7 +750,9 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
             )
         )
         source = continuous_acquisitions[-1]
-        until(lambda: window.event_label.accessibleName().startswith("ARMED"))
+        until(lambda: progress == ["basler_armed"])
+        assert not window.event_label.text()
+        assert window.state_label.toolTip().startswith("ARMED")
         assert source.serials == SERIALS
         assert startup.application.snapshot().counters == ProductionCounters()
         assert not startup.frames.snapshot().frames
@@ -756,11 +760,19 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
             not window.bridge.replay_enabled
             and not window.buttons["secondary"].isVisible()
         )
-        assert "Stop" in window.buttons["operation"].text()
+        assert (
+            window.buttons["stop"].isEnabled()
+            and not window.buttons["pause"].isEnabled()
+        )
         assert startup.local_replay is not None
         with pytest.raises(ApplicationStateError):
             startup.local_replay.step_replay()
-        source.problem = problem
+        source.problem = "" if problem == "idle_stop" else problem
+        if problem == "idle_stop":
+            window.buttons["stop"].click()
+            assert startup.application.snapshot().state is ApplicationState.STOPPING
+            assert startup.application.snapshot().runtime_owned
+            assert not source.cleaned.is_set()  # Still waiting for the owned SDK path.
         source.release.set()
         if not problem:
             until(lambda: startup.application.snapshot().counters.cycles_completed == 1)
@@ -771,7 +783,12 @@ def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
         if problem:
             assert startup.application.snapshot().counters == ProductionCounters()
             assert not startup.frames.snapshot().frames
-            until(lambda: "RuntimeError" in window.event_label.accessibleName())
+            if problem == "idle_stop":
+                assert startup.application.snapshot().last_issue is None
+                assert not startup.application.snapshot().runtime_owned
+                assert not window.event_label.text()
+            else:
+                until(lambda: "RuntimeError" in window.event_label.accessibleName())
             assert progress == ["basler_armed"]
         else:
             snapshot = startup.application.snapshot()
@@ -935,7 +952,7 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
     window = create_window(startup, delivery)
     window.show()
     try:
-        assert window.bridge.replay_enabled and window.buttons["secondary"].isVisible()
+        assert window.bridge.replay_enabled and window.buttons["secondary"].isHidden()
         window.navigate(4)
         workspace = window.parameters.roi_workspace
         assert workspace is not None and workspace.sources is not None
@@ -961,15 +978,13 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
         window.bridge.refresh()
-        assert (
-            window.bridge.replay_enabled and not window.buttons["secondary"].isHidden()
-        )
+        assert window.bridge.replay_enabled and window.buttons["secondary"].isHidden()
         assert (
             workspace.sources.saved.camera(CameraId("CAM5")).basler_serial == SERIALS[4]
         )
         assert not engine.calls and not acquisitions
         window.navigate(0)
-        assert window.buttons["secondary"].isVisible()
+        assert window.buttons["secondary"].isHidden()
     finally:
         window.close()
         until(lambda: window.bridge.closed)

@@ -166,6 +166,65 @@ class Run:
         assert self.backend.cleaned
 
 
+@pytest.mark.parametrize("prepared", [0, 1, 5, 6])
+@pytest.mark.parametrize("unsafe", [False, True])
+def test_stop_during_preparation_checks_only_owned_devices(
+    monkeypatch: pytest.MonkeyPatch, prepared: int, unsafe: bool
+) -> None:
+    stop = Event()
+
+    class PartialBackend(Backend):
+        def inventory(self, serials: tuple[str, ...]) -> None:
+            super().inventory(serials)
+            if prepared == 0:
+                stop.set()
+
+        def prepare(self, serial: str) -> None:
+            super().prepare(serial)
+            if len(self.prepared) == prepared:
+                stop.set()
+
+        def cleanup(self) -> tuple[CameraCleanup, ...]:
+            # The SDK boundary returns one observation per actually owned device,
+            # not six fictional devices when initialization stopped partway.
+            self.cleaned = True
+            return tuple(
+                CameraCleanup(serial, True, not unsafe, True, True)
+                for serial in self.prepared
+            )
+
+    backend = PartialBackend()
+
+    def factory(*, continuous: bool = False) -> Backend:
+        assert continuous
+        return backend
+
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", factory)
+    source = ContinuousBaslerSource(CAMERAS, SERIALS)
+    starts: list[CycleId] = []
+    frames: list[Frame] = []
+    armed: list[object] = []
+    source.run(stop, begin=starts.append, submit=frames.append, on_armed=armed.append)
+    assert backend.cleaned and len(source.cleanup) == prepared
+    assert source.cleanup_safe is (prepared == 0 or not unsafe)
+    assert not starts and not frames and not armed and source.frames == 0
+
+
+def test_idle_armed_stop_finishes_without_a_frame_or_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = Run(monkeypatch)
+    try:
+        run.start()
+        assert run.backend.waited.wait(WAIT)
+        assert not run.done.done() and not run.starts and not run.frames
+    finally:
+        run.close()
+    run.done.result(WAIT)
+    assert run.source.cleanup_safe and run.source.frames == 0
+    assert run.backend.arms == 1
+
+
 def test_idle_external_frames_early_admission_and_persistent_ownership(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

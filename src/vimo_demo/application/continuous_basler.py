@@ -176,6 +176,6 @@ class ContinuousBaslerSource:
                     cursor = (cursor + 1) % 6
         finally:
             self.cleanup = backend.cleanup()
-            self.cleanup_safe = len(self.cleanup) == 6 and all(
-                row.safe for row in self.cleanup
-            )
+            # Cleanup reports every device the backend actually took ownership
+            # of. Stop may interrupt preparation before all six are opened.
+            self.cleanup_safe = all(row.safe for row in self.cleanup)
