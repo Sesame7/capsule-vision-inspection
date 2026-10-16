@@ -91,6 +91,9 @@ def test_normal_app_native_close_exits_process_tree(
                 if log.exists()
                 else "Probe did not start"
             )
+            stacks = tmp_path / "stacks.log"
+            if stacks.exists():
+                diagnostics += "\n" + stacks.read_text(encoding="utf-8")
             subprocess.run(
                 ["taskkill", "/PID", str(process.pid), "/T", "/F"],
                 capture_output=True,

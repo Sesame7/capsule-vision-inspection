@@ -274,8 +274,10 @@ def test_local_read_only_http_revision_and_cleanup(
     source, store = inputs()
     service = ProductionSnapshotService(source, store, port=0, interval=60)
     original_threads = {thread.ident for thread in threads()}
+    assert not service.http_alive and not service.publisher_alive
     service.start()
     try:
+        assert service.http_alive and service.publisher_alive
         assert bound_addresses == [("127.0.0.1", service.port)]
         wait(lambda: service.publisher.latest() is not None)
         status, body, headers = request(service, "/api/snapshot")
@@ -311,6 +313,7 @@ def test_local_read_only_http_revision_and_cleanup(
         service.request_stop()
         assert service.join(3)
     assert not {thread.ident for thread in threads()} - original_threads
+    assert not service.http_alive and not service.publisher_alive
     with socket.socket() as client:
         assert client.connect_ex(("127.0.0.1", service.port)) != 0
     with pytest.raises(RuntimeError):

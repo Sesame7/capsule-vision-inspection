@@ -658,7 +658,7 @@ def test_communication_layout_screenshot(
         >= page.read_button.fontMetrics().horizontalAdvance(page.read_button.text())
         + 20
     )
-    assert window.event_frame.height() == 33
+    assert window.event_frame.height() == 44
     assert window.grab().save(
         str(tmp_path / f"communication-{language}-{size[0]}x{size[1]}.png")
     )

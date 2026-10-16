@@ -71,9 +71,6 @@ class CameraSourceDialog(QDialog):
         root.addWidget(self.hint)
         self.mapping_scroll = QScrollArea()
         self.mapping_scroll.setWidgetResizable(True)
-        self.mapping_scroll.setStyleSheet(
-            f"QWidget#sourceMappings, QScrollArea {{ background: {Style.background}; border: none; }}"
-        )
         contents = QWidget()
         contents.setObjectName("sourceMappings")
         mapping = QFormLayout(contents)

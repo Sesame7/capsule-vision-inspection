@@ -153,6 +153,15 @@ Qt Close is asynchronous; the final joins occur outside GUI dispatch.
 
 ## Display and Web
 
+The shared Qt shell uses one layout with window-scoped dark/light palettes and
+DPR-aware vector icons. Normal startup maximizes the native framed window, keeping
+taskbar clearance; portrait Production retains two columns and three rows. Theme
+switching is presentation-only and is not persisted. Language retains its existing
+preference behavior. The fixed bottom strip presents application state, the most
+recent PLC reporting observation (ACK is not connectivity/consumption), Web owner
+availability and current feedback. It reuses bridge refresh/notifications without
+another timer or network request.
+
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,
 dimensions and source key. Only matching evidence may overlay those pixels.

@@ -244,6 +244,11 @@ class ProductionSnapshotService:
     def publisher_alive(self) -> bool:
         return bool(self._threads and self._threads[0].is_alive())
 
+    @property
+    def http_alive(self) -> bool:
+        """Local owner observation for the shell, not proof of remote reachability."""
+        return len(self._threads) == 2 and self._threads[1].is_alive()
+
     def join(self, timeout: float | None = None) -> bool:
         deadline = None if timeout is None else monotonic() + max(0, timeout)
         for thread in self._threads:

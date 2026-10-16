@@ -31,7 +31,14 @@ from .production_presentation import (
     image_transform,
     matching_camera,
 )
-from .production_style import Language, Style, camera_icon, indicator_icon, text
+from .production_style import (
+    Language,
+    Style,
+    camera_icon,
+    indicator_icon,
+    text,
+    theme_colors,
+)
 
 
 class CameraViewport(QWidget):
@@ -184,15 +191,19 @@ class CameraCard(QFrame):
         self._render_card()
 
     def _render_card(self) -> None:
+        palette = theme_colors(self)
+        self.camera_icon.setPixmap(
+            camera_icon(palette.primary).pixmap(Style.icon, Style.icon)
+        )
         colors = {
-            Indicator.PENDING: Style.secondary,
+            Indicator.PENDING: palette.secondary,
             Indicator.DISABLED: "#727985",
-            Indicator.OK: Style.ok,
-            Indicator.NG: Style.ng,
-            Indicator.ERROR: Style.warning,
-            Indicator.ERROR_NG: Style.ng,
-            Indicator.UNKNOWN: Style.warning,
-            Indicator.EMPTY: Style.secondary,
+            Indicator.OK: palette.ok,
+            Indicator.NG: palette.ng,
+            Indicator.ERROR: palette.warning,
+            Indicator.ERROR_NG: palette.ng,
+            Indicator.UNKNOWN: palette.warning,
+            Indicator.EMPTY: palette.secondary,
         }
         # A retained result belongs to its own layout, not a newly selected Recipe.
         layout = self.result.layout if self.result else self.camera_layout
@@ -216,7 +227,7 @@ class CameraCard(QFrame):
                 or error
                 or index in self._expanded
             )
-            button.setIcon(indicator_icon(state))
+            button.setIcon(indicator_icon(state, colors[state]))
             button.setIconSize(QSize(16, 16))
             button.setText(
                 f"{slot.channel_id}{'!' if error and state in (Indicator.ERROR_NG, Indicator.EMPTY) else ''}"
@@ -228,18 +239,18 @@ class CameraCard(QFrame):
                 description += "\n" + self._details(channel)
             button.setToolTip(description)
             button.setAccessibleName(description)
-            border = Style.warning if error else "transparent"
+            border = palette.warning if error else "transparent"
             background = (
-                "#3b242d"
+                palette.reject
                 if state in (Indicator.NG, Indicator.ERROR_NG)
-                else Style.surface
+                else palette.surface
             )
             stylesheet = (
                 f"QPushButton {{ color: {colors[state]}; border: 1px solid {border}; "
                 f"padding: 0px; background: {background}; font-size: 12px; "
                 "border-radius: 8px; outline: none; } "
-                f"QPushButton:hover {{ background: {Style.raised}; border-color: {colors[state]}; }} "
-                f"QPushButton:focus {{ border: 2px solid {Style.accent}; }}"
+                f"QPushButton:hover {{ background: {palette.raised}; border-color: {colors[state]}; }} "
+                f"QPushButton:focus {{ border: 2px solid {palette.accent}; }}"
             )
             # Reapplying an identical stylesheet repolishes Qt widgets during
             # every live frame. Keep the existing appearance without that work.
@@ -260,12 +271,10 @@ class CameraCard(QFrame):
             widget.setToolTip(name)
         self.identity.setAccessibleName(name)
         self.identity_group.setAccessibleName(name)
-        identity_style = (
-            f"color: {Style.warning if technical else Style.primary}; font-weight: 600;"
-        )
+        identity_style = f"color: {palette.warning if technical else palette.primary}; font-weight: 600;"
         if self.identity.styleSheet() != identity_style:
             self.identity.setStyleSheet(identity_style)
-        card_style = f"QFrame#camera {{ border-color: {Style.warning if technical else Style.border}; }}"
+        card_style = f"QFrame#camera {{ border-color: {palette.warning if technical else palette.border}; }}"
         if self.styleSheet() != card_style:
             self.setStyleSheet(card_style)
         self.timing.setText(

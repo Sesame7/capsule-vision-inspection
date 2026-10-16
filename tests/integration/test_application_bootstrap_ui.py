@@ -44,7 +44,9 @@ def test_absent_data_opens_five_page_unconfigured_shell(
         assert window.event_label.toolTip() and startup.issues
         window.navigate(1)
         window.navigate(4)
-        window.language_button.click()
+        window.language_selector.activated.emit(
+            1 - window.language_selector.currentIndex()
+        )
         assert window.language == "en"
         preferences = load_preferences(startup.data.preferences)
         assert preferences.language == "en"
@@ -85,7 +87,9 @@ def test_saved_apply_language_restart_and_no_production_side_effects(
             )
         )
         assert startup.application.snapshot().candidate is not None
-        window.language_button.click()
+        window.language_selector.activated.emit(
+            1 - window.language_selector.currentIndex()
+        )
         assert load_preferences(data.preferences).language == "zh"
         snapshot = startup.application.snapshot()
         assert snapshot.state is ApplicationState.READY and snapshot.active is None
@@ -226,7 +230,9 @@ def test_unreliable_preferences_are_never_overwritten_by_ui(
         assert window.pages.count() == 5
         for index in range(5):
             window.navigate(index)
-        window.language_button.click()
+        window.language_selector.activated.emit(
+            1 - window.language_selector.currentIndex()
+        )
         assert data.preferences.read_bytes() == original
         assert "ConfigurationError" in window.event_label.toolTip()
         if kind in ("invalid_language", "external_change"):
@@ -339,7 +345,9 @@ def test_preferences_write_error_is_visible_and_retains_selection(
 
     monkeypatch.setattr("vimo_demo.application.preferences.os.replace", fail)
     try:
-        window.language_button.click()
+        window.language_selector.activated.emit(
+            1 - window.language_selector.currentIndex()
+        )
         assert load_preferences(data.preferences) == before
         assert "ConfigurationIOError" in window.event_label.toolTip()
     finally:

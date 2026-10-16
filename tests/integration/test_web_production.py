@@ -2,6 +2,7 @@
 
 import json
 import socket
+from collections.abc import Callable
 from pathlib import Path
 from threading import enumerate as threads
 
@@ -14,6 +15,18 @@ from vimo_demo.application import ApplicationState
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.ui import bootstrap
 from vimo_demo.web import ProductionSnapshotService
+
+
+class StartupWindow(QWidget):
+    """Keep the bootstrap probe small while observing the real shell handoff."""
+
+    observation: Callable[[], tuple[bool, str]] | None = None
+    interval_ms = 0
+
+    def observe_web(
+        self, observation: Callable[[], tuple[bool, str]], *, interval_ms: int
+    ) -> None:
+        self.observation, self.interval_ms = observation, interval_ms
 
 
 def test_stop_restart_and_close_keep_web_independent_of_production(
@@ -91,7 +104,7 @@ def test_normal_startup_web_defaults_and_interval(
             services.append(self)
             super().start()
 
-    window = QWidget()
+    window = StartupWindow()
     monkeypatch.setattr(bootstrap, "ProductionSnapshotService", ObservedService)
 
     def existing_qt(_args: object) -> QApplication:
@@ -101,8 +114,11 @@ def test_normal_startup_web_defaults_and_interval(
         return window
 
     def observe_before_close() -> int:
+        assert window.isMaximized()
         if services:
             until(lambda: services[0].publisher.latest() is not None)
+        assert window.observation is not None
+        assert window.observation()[0] == bool(services)
         return 0
 
     monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
@@ -135,7 +151,7 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    window = QWidget()
+    window = StartupWindow()
 
     def existing_qt(_args: object) -> QApplication:
         return qapp
@@ -153,6 +169,8 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
             port = occupied.getsockname()[1]
             assert bootstrap.main(tmp_path, ["--web-port", str(port)]) == 0
         assert window.isVisible()
+        assert window.isMaximized()
+        assert window.observation is not None and not window.observation()[0]
         assert "OSError" in capsys.readouterr().err
     finally:
         window.close()

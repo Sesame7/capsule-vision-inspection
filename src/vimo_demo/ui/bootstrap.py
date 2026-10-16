@@ -478,8 +478,23 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                     file=sys.stderr,
                 )
         window = create_window(startup, delivery)
-        window.resize(1080, 1920)
-        window.show()
+        observer = service
+        window.observe_web(
+            lambda: (
+                (
+                    observer.publisher_alive
+                    and observer.http_alive
+                    and not observer.stopping.is_set()
+                    and observer.publisher.error() is None,
+                    observer.publisher.error()
+                    or f"http://{observer.host}:{observer.port}/",
+                )
+                if observer is not None
+                else (False, "" if not args.web_snapshots else "Web startup failed")
+            ),
+            interval_ms=args.web_interval_ms,
+        )
+        window.showMaximized()
         return qt.exec()
     finally:
         if service is not None:

@@ -26,7 +26,7 @@ from vimo_demo.communication.reporting import (
     ReportOutcome,
 )
 
-from .production_style import Language, Style, navigation_icon, text
+from .production_style import Language, Style, navigation_icon, text, theme_colors
 
 
 class ReportingPanel(QFrame):
@@ -274,7 +274,7 @@ class ReportingPanel(QFrame):
             f"ERR {snapshot.failed_count if snapshot else 0}"
         )
         self.status.setStyleSheet(
-            f"color: {Style.warning if key == 'plc_report_failed' else Style.accent};"
+            f"color: {theme_colors(self).warning if key == 'plc_report_failed' else theme_colors(self).accent};"
         )
         detail = text("plc_ack_hint", self.language)
         if snapshot:
@@ -286,7 +286,7 @@ class ReportingPanel(QFrame):
         failure = snapshot.last_failed if snapshot else None
         issue = failure.issue if failure else None
         self.error.setVisible(issue is not None)
-        self.error.setStyleSheet(f"color: {Style.warning};")
+        self.error.setStyleSheet(f"color: {theme_colors(self).warning};")
         self.error.setText(
             f"{text('plc_last_error', self.language)} · {failure.stage.value if failure and failure.stage else '--'}"
         )

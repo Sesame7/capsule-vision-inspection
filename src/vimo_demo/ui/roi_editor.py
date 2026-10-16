@@ -43,15 +43,17 @@ from vimo_demo.inspection import CameraId, CycleId, FrameId
 
 from .camera_source_dialog import CameraSourceDialog
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
-from .production_style import Language, Style, camera_icon, text
+from .production_style import Language, Style, camera_icon, text, theme_colors
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
 
 
-def _image_icon(tool: str) -> QIcon:
+def _image_icon(
+    tool: str, color: str = Style.primary, background: str = Style.raised
+) -> QIcon:
     """Local vector tools; checked modes have a check mark, not just a color."""
     if tool == "camera":
-        return camera_icon()
+        return camera_icon(color)
     icon = QIcon()
     for checked in (False, True):
         for dpr in (1.0, 1.25, 1.5, 2.0):
@@ -60,7 +62,7 @@ def _image_icon(tool: str) -> QIcon:
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor(Style.primary), 1.6))
+            painter.setPen(QPen(QColor(color), 1.6))
             if tool == "refresh":
                 painter.drawArc(5, 5, 14, 14, 40 * 16, 290 * 16)
                 painter.drawLine(19, 4, 19, 10)
@@ -116,7 +118,7 @@ def _image_icon(tool: str) -> QIcon:
                     painter.drawLine(x, y, x + dx * 5, y)
                     painter.drawLine(x, y, x, y + dy * 5)
             if checked and tool in ("folder", "runtime"):
-                painter.fillRect(13, 13, 11, 11, QColor(Style.raised))
+                painter.fillRect(13, 13, 11, 11, QColor(background))
                 painter.drawLine(14, 18, 17, 21)
                 painter.drawLine(17, 21, 23, 15)
             painter.end()
@@ -300,11 +302,6 @@ class MachineRoiWorkspace(QWidget):
         self.camera_tabs = QTabBar()
         self.camera_tabs.setExpanding(False)
         self.camera_tabs.setDrawBase(False)
-        self.camera_tabs.setStyleSheet(
-            f"QTabBar::tab {{ padding: 12px 10px; min-height: 20px; "
-            f"color: {Style.primary}; background: {Style.surface}; border: none; }} "
-            f"QTabBar::tab:selected {{ color: {Style.accent}; background: {Style.raised}; }}"
-        )
         self.camera_tabs.setIconSize(QSize(Style.icon, Style.icon))
         camera_icon = _image_icon("camera")
         for identity in self.draft.definition.layout.camera_ids:
@@ -489,8 +486,28 @@ class MachineRoiWorkspace(QWidget):
         button.setIconSize(QSize(Style.icon, Style.icon))
         return button
 
+    def refresh_theme(self) -> None:
+        colors = theme_colors(self)
+        for index in range(self.camera_tabs.count()):
+            self.camera_tabs.setTabIcon(index, camera_icon(colors.primary))
+        for key, tool in (
+            ("reference_previous", "previous"),
+            ("reference_next", "next"),
+            ("roi_refresh", "refresh"),
+            ("roi_fit", "fit"),
+            ("roi_set_rect", "apply"),
+            ("roi_common", "common"),
+            ("roi_distribute", "distribute"),
+        ):
+            self.buttons[key].setIcon(_image_icon(tool, colors.primary, colors.raised))
+        for mode, button in self.reference_modes.items():
+            button.setIcon(_image_icon(mode, colors.primary, colors.raised))
+        self.browse.setIcon(_image_icon("folder", colors.primary, colors.raised))
+        self.loop.setIcon(_image_icon("loop", colors.primary, colors.raised))
+
     def set_language(self, language: Language) -> None:
         self.language = language
+        self.refresh_theme()
         self.folder.setAccessibleName(text("source_folder", language))
         self.folder.setPlaceholderText(text("source_folder", language))
         if self.source_dialog is not None:
