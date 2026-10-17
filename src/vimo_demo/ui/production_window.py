@@ -36,6 +36,7 @@ from vimo_demo.inspection.production import (
     InspectionLayout,
     TechnicalStatus,
 )
+from vimo_demo.web.runtime import WebRuntime, WebState
 
 from .camera_card import CameraCard
 from .communication_page import CommunicationPage
@@ -1058,6 +1059,10 @@ class ProductionWindow(QMainWindow):
         self._web_interval_ms = interval_ms
         self._render_services()
 
+    def bind_web_runtime(self, runtime: WebRuntime) -> None:
+        self.communication.bind_web_runtime(runtime)
+        self._render_services()
+
     def _render_services(self) -> None:
         bar, colors = self.event_frame, theme_colors(self)
         bar.refresh_icons()
@@ -1085,6 +1090,14 @@ class ProductionWindow(QMainWindow):
             self._web_observation() if self._web_observation else (False, "")
         )
         self.communication.web_panel.observe(available, detail)
+        runtime = self.communication.web_panel.runtime
+        observed = runtime.snapshot() if runtime else None
+        if observed is not None:
+            available = observed.state is WebState.RUNNING
+            detail = observed.error or observed.url
+            if observed.configuration is not None:
+                self._web_interval_ms = observed.configuration.interval_ms
+            self.communication.web_panel.refresh()
         web = (
             f"{self._web_interval_ms} ms"
             if available
@@ -1092,6 +1105,11 @@ class ProductionWindow(QMainWindow):
             if detail
             else ("未启用" if self.language == "zh" else "Off")
         )
+        if observed is not None and observed.state in (
+            WebState.STARTING,
+            WebState.STOPPING,
+        ):
+            web = text("web_" + observed.state.name.lower(), self.language)
         state_text, state_tip = self.state_label.text(), self.state_label.toolTip()
         state_color = (
             colors.fault
@@ -1465,7 +1483,9 @@ class ProductionWindow(QMainWindow):
             self._render_identity()
         if event.type() is QEvent.Type.Resize and watched is self.event_label:
             self._render_status_text()
-        if event.type() is QEvent.Type.Quit and not self.bridge.closed:
+        if event.type() is QEvent.Type.Quit and not (
+            self.bridge.closed and self.communication.closed
+        ):
             self.close()
             return True
         return super().eventFilter(watched, event)

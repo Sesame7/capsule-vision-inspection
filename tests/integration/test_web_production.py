@@ -2,7 +2,6 @@
 
 import json
 import socket
-from collections.abc import Callable
 from pathlib import Path
 from threading import enumerate as threads
 
@@ -10,6 +9,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QWidget
 from tests.integration.test_normal_replay_ui import normal_replay, replay_state
 from tests.qt_support import until
+from tests.reporting_support import readback, seed, server
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.application.communication_preferences import (
@@ -20,18 +20,16 @@ from vimo_demo.application.communication_preferences import (
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.ui import bootstrap
 from vimo_demo.web import ProductionSnapshotService
+from vimo_demo.web.runtime import WebRuntime, WebState
 
 
 class StartupWindow(QWidget):
     """Keep the bootstrap probe small while observing the real shell handoff."""
 
-    observation: Callable[[], tuple[bool, str]] | None = None
-    interval_ms = 0
+    runtime: WebRuntime | None = None
 
-    def observe_web(
-        self, observation: Callable[[], tuple[bool, str]], *, interval_ms: int
-    ) -> None:
-        self.observation, self.interval_ms = observation, interval_ms
+    def bind_web_runtime(self, runtime: WebRuntime) -> None:
+        self.runtime = runtime
 
 
 def test_stop_restart_and_close_keep_web_independent_of_production(
@@ -84,6 +82,73 @@ def test_stop_restart_and_close_keep_web_independent_of_production(
     assert not {thread.ident for thread in threads()} - original_threads
 
 
+def test_runtime_restart_during_inspection_preserves_production_and_reporting(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    with (
+        server() as peer,
+        normal_replay(tmp_path, hold_call=3) as (startup, window, engines),
+    ):
+        seed(peer, 0)
+        page = window.communication
+        panel = page.reporting_panel
+        assert panel is not None
+        panel.port.setValue(peer.port)
+        panel.enabled.setChecked(True)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        page.web_panel.port.setValue(port)
+        page.persist_settings()
+        effective = panel.controller.reporting_selection()
+        settings = page.web_panel.preferences()
+        runtime = WebRuntime(
+            lambda value: ProductionSnapshotService(
+                startup.application,
+                startup.frames,
+                host=value.host,
+                port=value.port,
+                interval=value.interval_ms / 1000,
+            )
+        )
+        window.bind_web_runtime(runtime)
+        start = runtime.start(settings)
+        until(start.done)
+        assert start.result().state is WebState.RUNNING
+        window.bridge.step_replay()
+        until(lambda: bool(engines) and engines[0].entered.is_set())
+        assert startup.application.snapshot().state is ApplicationState.RUNNING
+        restart = runtime.apply(settings)
+        until(restart.done)
+        assert restart.result().state is WebState.RUNNING
+        assert len(engines) == 1 and not engines[0].closed
+        assert startup.application.snapshot().counters.cycles_completed == 0
+        assert panel.controller.reporting_selection() is effective
+        engines[0].release.set()
+        until(lambda: replay_state(startup) is ReplayState.PAUSED)
+        assert readback(peer)[0] == 1
+        stop = runtime.stop()
+        until(stop.done)
+        assert stop.result().state is WebState.STOPPED
+        assert startup.application.snapshot().state is ApplicationState.RUNNING
+        window.bridge.step_replay()
+        until(
+            lambda: (
+                startup.application.snapshot().counters.cycles_completed == 2
+                and replay_state(startup) is ReplayState.PAUSED
+            )
+        )
+        assert readback(peer)[0] == 2
+        assert len(engines) == 1 and panel.controller.reporting_selection() is effective
+        report = panel.controller.reporting_snapshot()
+        assert (
+            report is not None
+            and report.acknowledged_count == 2
+            and report.failed_count == 0
+        )
+
+
 @pytest.mark.parametrize(
     "enabled,interval_ms,expected_interval",
     [(True, 500, 0.5), (False, 500, None), (True, 2000, 2.0), (True, 1000, 1.0)],
@@ -114,10 +179,11 @@ def test_normal_startup_web_defaults_and_interval(
 
     def observe_before_close() -> int:
         assert window.isMaximized()
+        assert window.runtime is not None
+        until(lambda: not window.runtime.snapshot().busy if window.runtime else False)
         if services:
             until(lambda: services[0].publisher.latest() is not None)
-        assert window.observation is not None
-        assert window.observation()[0] == bool(services)
+        assert (window.runtime.snapshot().state is WebState.RUNNING) == bool(services)
         return 0
 
     monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
@@ -166,7 +232,19 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
 
     monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
     monkeypatch.setattr(bootstrap, "create_window", existing_window)
-    monkeypatch.setattr(qapp, "exec", lambda: 0)
+
+    def observed_failure() -> int:
+        assert window.runtime is not None
+        until(
+            lambda: (
+                window.runtime.snapshot().state is WebState.FAILED
+                if window.runtime
+                else False
+            )
+        )
+        return 0
+
+    monkeypatch.setattr(qapp, "exec", observed_failure)
     try:
         with socket.socket() as occupied:
             occupied.bind(("127.0.0.1", 0))
@@ -179,9 +257,9 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
             assert bootstrap.main(tmp_path, []) == 0
         assert window.isVisible()
         assert window.isMaximized()
-        assert window.observation is not None and not window.observation()[0]
+        assert window.runtime is not None
         assert "OSError" in capsys.readouterr().err
-        assert "OSError" in window.observation()[1]
+        assert "OSError" in window.runtime.snapshot().error
     finally:
         window.close()
 

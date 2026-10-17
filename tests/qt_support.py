@@ -45,6 +45,6 @@ def until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
 
 def close_window(window: ProductionWindow) -> None:
     window.close()
-    until(lambda: window.bridge.closed)
+    until(lambda: window.bridge.closed and window.communication.closed)
     assert window.bridge.application.join(1)
     window.deleteLater()

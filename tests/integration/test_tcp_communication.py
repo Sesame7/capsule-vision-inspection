@@ -89,7 +89,7 @@ def test_tcp_manual_operations_owner_and_udp_address_retention(
             page.source[1].setValue(44)
             page.advanced_button.click()
             page.protocol.setCurrentIndex(1)
-            assert page.advanced.isVisible() and not page.advanced.isEnabled()
+            assert page.advanced.isHidden() and page.advanced_button.isHidden()
             page.port.setValue(peer.port)
             page.persist_settings()
             page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
@@ -112,7 +112,7 @@ def test_tcp_manual_operations_owner_and_udp_address_retention(
                 p[3:9] == bytes.fromhex("00 14 00 00 65 00") for p in peer.packets
             )
             page.protocol.setCurrentIndex(0)
-            assert page.advanced.isEnabled()
+            assert page.advanced.isEnabled() and page.advanced.isVisible()
             assert page.destination[1].value() == 33 and page.source[1].value() == 44
         finally:
             close(page)

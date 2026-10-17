@@ -44,6 +44,7 @@ from vimo_demo.configuration import (
 )
 from vimo_demo.inspection import CameraId
 from vimo_demo.web import ProductionSnapshotService
+from vimo_demo.web.runtime import WebRuntime, WebRuntimeSnapshot
 
 from .camera_source_editor import CameraSourceDraft
 from .display_frames import LatestDisplayFrameStore
@@ -457,62 +458,46 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
         print(issue.detail, file=sys.stderr)
     qt = QApplication(sys.argv[:1])
     delivery = FutureDelivery()
-    service: ProductionSnapshotService | None = None
-    web_error = ""
+    runtime: WebRuntime | None = None
     try:
         web = startup.communication.web
+
+        def factory(settings: WebPreferences) -> ProductionSnapshotService:
+            return ProductionSnapshotService(
+                startup.application,
+                startup.frames,
+                cameras=startup.machine.layout.camera_ids if startup.machine else (),
+                host=settings.host,
+                port=settings.port,
+                interval=settings.interval_ms / 1000,
+            )
+
+        runtime = WebRuntime(factory)
+        window = create_window(startup, delivery)
+        window.bind_web_runtime(runtime)
         if web.enabled:
-            try:
-                service = ProductionSnapshotService(
-                    startup.application,
-                    startup.frames,
-                    cameras=startup.machine.layout.camera_ids
-                    if startup.machine
-                    else (),
-                    host=web.host,
-                    port=web.port,
-                    interval=web.interval_ms / 1000,
-                )
-                service.start()
-            except Exception as exc:
-                # Optional observation failure cannot invalidate Production readiness.
-                web_error = f"{type(exc).__name__}: {exc}"
-                traceback.print_exception(exc)
-            else:
+
+            def started(future: Future[WebRuntimeSnapshot]) -> None:
+                # This callback runs on the control thread, never mutates widgets.
+                assert runtime is not None
+                observation = runtime.snapshot()
                 print(
-                    f"Read-only Production snapshots: http://{service.host}:{service.port}/",
+                    observation.error
+                    or f"Read-only Production snapshots: {observation.url}",
                     file=sys.stderr,
                 )
-        window = create_window(startup, delivery)
-        observer = service
-        window.observe_web(
-            lambda: (
-                (
-                    observer.publisher_alive
-                    and observer.http_alive
-                    and not observer.stopping.is_set()
-                    and observer.publisher.error() is None,
-                    observer.publisher.error()
-                    or f"http://{observer.host}:{observer.port}/",
-                )
-                if observer is not None and not web_error
-                else (
-                    False,
-                    "" if not web.enabled else web_error or "Web startup failed",
-                )
-            ),
-            interval_ms=web.interval_ms,
-        )
+
+            runtime.start(web).add_done_callback(started)
         window.showMaximized()
         return qt.exec()
     finally:
-        if service is not None:
-            service.request_stop()
+        if runtime is not None:
+            runtime.request_close()
         # Outside Qt dispatch, retaining ownership until native/source work exits.
         try:
             startup.application.close().result()
             startup.application.join()
         finally:
-            if service is not None:
-                service.join()
+            if runtime is not None:
+                runtime.join()
             delivery.detach()

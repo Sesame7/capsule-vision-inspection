@@ -1,12 +1,15 @@
 """Normal entry settings, separate live observations and explicit persistence."""
 
+import socket
 from collections.abc import Generator
 from dataclasses import replace
 from datetime import UTC, datetime
-from ipaddress import IPv4Interface
 from pathlib import Path
+from threading import Event
 
 import pytest
+from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.bootstrap_support import saved_data
 from tests.qt_support import close_window, until
@@ -33,6 +36,149 @@ from vimo_demo.ui.bootstrap import (
 )
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.production_window import ProductionWindow
+from vimo_demo.web import ProductionSnapshotService
+from vimo_demo.web.runtime import WebRuntime, WebState
+
+
+def available_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_web_actions_use_saved_preferences_and_real_runtime(
+    settings_window: tuple[Startup, ProductionWindow],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    startup, window = settings_window
+    page, panel = window.communication, window.communication.web_panel
+    runtime = WebRuntime(
+        lambda settings: ProductionSnapshotService(
+            startup.application,
+            startup.frames,
+            host=settings.host,
+            port=settings.port,
+            interval=settings.interval_ms / 1000,
+        )
+    )
+    window.bind_web_runtime(runtime)
+    port = available_port()
+    panel.port.setValue(port)
+    assert not panel.runtime_buttons["start"].isEnabled()
+    panel.requested.emit("start")  # Even direct dispatch cannot apply a dirty draft.
+    assert runtime.snapshot().state is WebState.STOPPED
+    page.persist_settings()
+    assert panel.runtime_buttons["start"].isEnabled()
+    panel.runtime_buttons["start"].click()
+    until(lambda: not runtime.snapshot().busy)
+    until(lambda: panel.available)
+    assert runtime.snapshot().state is WebState.RUNNING
+    before = startup.data.communication.read_bytes()
+    urls: list[QUrl] = []
+
+    def opened(url: QUrl) -> bool:
+        urls.append(url)
+        return True
+
+    monkeypatch.setattr(QDesktopServices, "openUrl", opened)
+    panel.open_browser.click()
+    assert [url.toString() for url in urls] == [f"http://127.0.0.1:{port}/"]
+    panel.port.setValue(available_port())
+    assert not panel.runtime_buttons["apply"].isEnabled()
+    assert str(port) in panel.open_browser.text()
+    panel.requested.emit("apply")
+    assert (
+        runtime.snapshot().configuration
+        == load_communication_preferences(startup.data.communication).web
+    )
+    page.reload_settings()
+    panel.enabled.setChecked(False)
+    page.persist_settings()
+    assert runtime.snapshot().state is WebState.RUNNING  # Save is not Apply.
+    panel.runtime_buttons["apply"].click()
+    until(lambda: not runtime.snapshot().busy)
+    until(lambda: not panel.available)
+    assert runtime.snapshot().state is WebState.STOPPED
+    assert not panel.runtime_buttons["start"].isEnabled()
+    assert not load_communication_preferences(startup.data.communication).web.enabled
+    assert startup.data.communication.read_bytes() != before
+    panel.enabled.setChecked(True)
+    page.persist_settings()
+    panel.runtime_buttons["apply"].click()
+    until(lambda: not runtime.snapshot().busy)
+    until(lambda: panel.runtime_buttons["stop"].isEnabled())
+    panel.runtime_buttons["stop"].click()
+    until(lambda: not runtime.snapshot().busy)
+    assert runtime.snapshot().state is WebState.STOPPED
+    assert load_communication_preferences(startup.data.communication).web.enabled
+    assert startup.application.snapshot().generation == 0
+    assert startup.application.snapshot().counters == ProductionCounters()
+
+
+def test_unavailable_ip_refresh_and_discard_preserve_saved_identity(
+    settings_window: tuple[Startup, ProductionWindow],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    startup, window = settings_window
+    page, panel = window.communication, window.communication.web_panel
+    monkeypatch.setattr("vimo_demo.web.hosts.local_interfaces", lambda: ())
+    panel.host.setText("192.0.2.10")
+    page.persist_settings()
+    assert not page.dirty
+    panel.refresh_addresses()
+    assert (
+        panel.host.text() == "192.0.2.10" and panel.addresses.itemText(0) == "127.0.0.1"
+    )
+    assert not page.dirty
+    panel.host.setText("127.0.0.1")
+    page.reload_settings()
+    assert panel.host.text() == "192.0.2.10" and not page.dirty
+    runtime = WebRuntime(
+        lambda settings: ProductionSnapshotService(
+            startup.application, startup.frames, host=settings.host, port=settings.port
+        )
+    )
+    window.bind_web_runtime(runtime)
+    panel.runtime_buttons["start"].click()
+    until(lambda: not runtime.snapshot().busy)
+    until(lambda: "not assigned" in panel.actual.toolTip())
+    assert runtime.snapshot().state is WebState.FAILED
+    assert "not assigned" in panel.actual.toolTip()
+    assert not runtime.snapshot().owned
+    assert (
+        load_communication_preferences(startup.data.communication).web.host
+        == "192.0.2.10"
+    )
+
+
+def test_window_close_during_web_start_keeps_dispatch_and_ownership_observable(
+    settings_window: tuple[Startup, ProductionWindow],
+) -> None:
+    startup, window = settings_window
+    entered, release = Event(), Event()
+
+    def factory(settings: WebPreferences) -> ProductionSnapshotService:
+        entered.set()
+        assert release.wait(5)
+        return ProductionSnapshotService(
+            startup.application, startup.frames, port=settings.port
+        )
+
+    runtime = WebRuntime(factory)
+    window.bind_web_runtime(runtime)
+    try:
+        runtime.start(WebPreferences(port=available_port()))
+        until(entered.is_set)
+        window.close()
+        alive: list[bool] = []
+        QTimer.singleShot(0, lambda: alive.append(True))
+        until(lambda: bool(alive))
+        assert not window.communication.closed and not runtime.closed
+        assert window.isVisible()
+    finally:
+        release.set()
+    until(lambda: runtime.closed and window.communication.closed)
+    until(lambda: not window.isVisible())
 
 
 @pytest.fixture
@@ -143,13 +289,7 @@ def test_invalid_web_bind_and_atomic_failure_keep_previous_settings(
     page.web_panel.host.setText("192.0.2.10")
     monkeypatch.setattr("vimo_demo.web.hosts.local_interfaces", lambda: ())
     page.save_settings.click()
-    assert startup.data.communication.read_bytes() == before
-    assert "not assigned" in page.preferences_status.toolTip()
-    monkeypatch.setattr(
-        "vimo_demo.web.hosts.local_interfaces",
-        lambda: (IPv4Interface("192.0.2.10/24"),),
-    )
-    page.save_settings.click()
+    # Preserve unavailable saved IPs; assignment is checked by actual startup.
     assert (
         load_communication_preferences(startup.data.communication).web.host
         == "192.0.2.10"
@@ -350,11 +490,10 @@ def test_discard_confirmation_and_reload_actual_persisted_definitions(
     assert startup.application.snapshot().counters == ProductionCounters()
 
 
-@pytest.mark.parametrize("failure", ["missing", "invalid", "unassigned"])
+@pytest.mark.parametrize("failure", ["missing", "invalid"])
 def test_reload_failure_preserves_entire_draft(
     settings_window: tuple[Startup, ProductionWindow],
     failure: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     startup, window = settings_window
     page = window.communication
@@ -369,13 +508,6 @@ def test_reload_failure_preserves_entire_draft(
         startup.data.communication.unlink()
     elif failure == "invalid":
         startup.data.communication.write_text("{}", encoding="utf-8")
-    else:
-        value = load_communication_preferences(startup.data.communication)
-        save_communication_preferences(
-            startup.data.communication,
-            replace(value, web=WebPreferences(host="192.0.2.10")),
-        )
-        monkeypatch.setattr("vimo_demo.web.hosts.local_interfaces", lambda: ())
     page.reload_settings()
     assert page.port.value() == 19600 and page.web_panel.port.value() == 8766
     assert panel.enabled.isChecked() and page.dirty
