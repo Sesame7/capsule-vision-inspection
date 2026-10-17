@@ -76,6 +76,62 @@ from vimo_demo.ui.production_style import Language, Theme, text
 SERIALS = ("25334173", "25334174", "25334178", "25334180", "25334188", "25334184")
 
 
+@pytest.mark.parametrize("save_empty", [False, True])
+def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, save_empty: bool
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    recipe_file = data.recipes / "local.recipe.json"
+    root = tmp_path / "empty-archive"
+    save_recipe(
+        recipe_file,
+        replace(
+            load_recipe(recipe_file),
+            image_archive=ImageArchiveSettings(
+                str(root), save_ng=True, save_empty=save_empty
+            ),
+        ),
+    )
+    saved = recipe_file.read_bytes()
+    engine = Engine()
+    engine.release_warm.set()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands) and isinstance(
+        app, ImageArchiveCommands
+    )
+    try:
+        app.connect_source()
+        app.start().result(WAIT)
+        assert startup.editor is not None
+        startup.editor.draft.image_archive.save_empty = not save_empty
+        passive.expose(1, (4, 2, 5, 1, 3, 0))
+        until(lambda: app.snapshot().counters.cycles_completed == 1)
+        app.stop().result(WAIT)
+        assert app.snapshot().state is ApplicationState.READY
+        assert app.snapshot().counters.business_empty == 36
+        observation = app.archive_snapshot()
+        assert observation is not None and not observation.alive
+        assert (
+            observation.written == (6 if save_empty else 0) and observation.failed == 0
+        )
+        assert observation.pending == observation.retained_bytes == 0
+        files = sorted(root.rglob("*.png"))
+        assert len(files) == (6 if save_empty else 0)
+        for path in files:
+            assert path.name.startswith("3_") and path.name.endswith("_1.png")
+            index = int(path.parent.name.removeprefix("CAM")) - 1
+            decoded = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+            np.testing.assert_array_equal(
+                decoded, np.full((20, 60, 3), 10 + index, dtype=np.uint8)
+            )
+        assert recipe_file.read_bytes() == saved
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
 @pytest.mark.parametrize("scenario", ["idle", "startup_failure", "unfinished"])
 def test_archive_zero_or_unfinished_frames_never_fabricate_images(
     qapp: QApplication, tmp_path: Path, passive: PassiveBackend, scenario: str

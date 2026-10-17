@@ -57,7 +57,7 @@ def test_folder_replay_never_creates_production_archive(
         recipe,
         replace(
             load_recipe(recipe),
-            image_archive=ImageArchiveSettings(str(root), True, True, True),
+            image_archive=ImageArchiveSettings(str(root), True, True, True, True),
         ),
     )
     engine = ControlledEngine()

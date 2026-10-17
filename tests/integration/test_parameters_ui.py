@@ -4,7 +4,8 @@ from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
-from PySide6.QtCore import QPoint, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -35,7 +36,7 @@ from vimo_demo.configuration import (
     save_recipe,
 )
 from vimo_demo.ui.parameters_page import DirtyDecision
-from vimo_demo.ui.production_style import Language, Style, text
+from vimo_demo.ui.production_style import Language, Style, Theme, text
 
 
 def test_archive_draft_save_discard_browse_and_runtime_locks(
@@ -72,15 +73,17 @@ def test_archive_draft_save_discard_browse_and_runtime_locks(
     page.buttons["archive_browse"].click()
     assert session.draft.image_archive.root_directory == directory
     page.archive_checks["error"].click()
+    page.archive_checks["empty"].click()
     session.save()
     assert session.entry.recipe.image_archive == ImageArchiveSettings(
-        directory, False, True, True
+        directory, False, True, True, True
     )
     assert session.entry.recipe.defaults == original.defaults
     assert session.entry.recipe.camera_overrides == original.camera_overrides
     assert session.entry.recipe.channel_overrides == original.channel_overrides
     assert app.snapshot() == before and not runtimes
     page.archive_checks["ok"].click()
+    page.archive_checks["empty"].click()
     edit(page.archive_directory, str(tmp_path / "discarded"))
     session.discard()
     page.show_draft()
@@ -89,6 +92,7 @@ def test_archive_draft_save_discard_browse_and_runtime_locks(
     assert (
         page.archive_checks["ng"].isChecked()
         and page.archive_checks["error"].isChecked()
+        and page.archive_checks["empty"].isChecked()
     )
     assert not Path(directory).exists()  # Draft/save never creates archive directories.
     directory_path = Path(directory)
@@ -109,11 +113,82 @@ def test_archive_draft_save_discard_browse_and_runtime_locks(
     assert not page.archive_directory.isEnabled()
     assert not any(check.isEnabled() for check in page.archive_checks.values())
     assert not page.buttons["archive_browse"].isEnabled()
+    assert not page.buttons["archive_open"].isEnabled()
     runtimes[0].ready.set_result(None)
     until(lambda: app.snapshot().state is ApplicationState.RUNNING)
     app.stop().result(3)
     window.bridge.refresh()
     assert page.archive_directory.isEnabled() and not session.dirty
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_archive_responsive_groups_label_hit_targets_and_locks(
+    configured_screen: Screen, language: Language, theme: Theme
+) -> None:
+    window, session, runtimes = configured_screen
+    window.set_language(language)
+    window.set_theme(theme)
+    page = window.parameters
+    assert tuple(page.archive_checks) == ("ok", "ng", "error", "empty")
+    heights: list[int] = []
+    for width, height in ((1080, 1920), (1920, 1080), (1080, 1920)):
+        window.resize(width, height)
+        QApplication.processEvents()
+        conditions = page.archive_checks["ok"]
+        directory_y = page.archive_directory.mapTo(page.archive_section, QPoint()).y()
+        conditions_y = conditions.mapTo(page.archive_section, QPoint()).y()
+        assert (directory_y > conditions_y) == (height > width)
+        heights.append(page.archive_section.height())
+        for widget in (
+            page.archive_directory,
+            *page.archive_checks.values(),
+            page.buttons["archive_browse"],
+            page.buttons["archive_open"],
+        ):
+            assert_inside(widget, page.archive_section)
+        assert (
+            page.buttons["archive_browse"].toolTip()
+            != page.buttons["archive_open"].toolTip()
+        )
+        assert (
+            page.buttons["archive_browse"].icon().pixmap(24, 24).toImage()
+            != page.buttons["archive_open"].icon().pixmap(24, 24).toImage()
+        )
+    assert heights[0] == heights[2] and heights[0] > heights[1]
+    previous_max = page.summary_scroll.maximumHeight()
+    page.summary_scroll.setMaximumHeight(page.archive_section.sizeHint().height())
+    QApplication.processEvents()
+    assert page.summary_scroll.verticalScrollBar().maximum() > 0
+    page.summary_scroll.ensureWidgetVisible(page.archive_directory)
+    QApplication.processEvents()
+    assert_inside(page.archive_directory, page)
+    assert_inside(page.buttons["save_apply"], page)
+    page.summary_scroll.setMaximumHeight(previous_max)
+    QApplication.processEvents()
+    assert page.summary_scroll.verticalScrollBar().maximum() == 0
+    for check in page.archive_checks.values():
+        # Click in the label/padded right edge, away from the indicator.
+        point = QPoint(check.width() - 5, check.height() // 2)
+        QTest.mouseClick(check, Qt.MouseButton.LeftButton, pos=point)
+        assert check.isChecked()
+        QTest.mouseClick(check, Qt.MouseButton.LeftButton, pos=point)
+        assert not check.isChecked()
+    assert not session.dirty
+    app = window.bridge.application
+    app.start()
+    window.bridge.refresh()
+    for check in page.archive_checks.values():
+        QTest.mouseClick(
+            check,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(check.width() - 5, check.height() // 2),
+        )
+        assert not check.isChecked()
+    assert not session.dirty
+    runtimes[0].ready.set_result(None)
+    until(lambda: app.snapshot().state is ApplicationState.RUNNING)
+    app.stop().result(3)
 
 
 def test_archive_failures_are_observable_without_changing_production(

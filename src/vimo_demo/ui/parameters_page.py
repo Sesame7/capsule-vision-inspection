@@ -79,6 +79,13 @@ from .traditional_preview import PreviewMode, TraditionalPreview
 type DirtyDecision = Literal["save", "discard", "cancel"]
 
 
+class _ArchiveCheckBox(QCheckBox):
+    """The full labeled touch target toggles, including its styled padding."""
+
+    def hitButton(self, position: QPoint) -> bool:
+        return self.rect().contains(position)
+
+
 class _RecipeSummary(QScrollArea):
     """Recompute the preferred height when inline content changes/wraps."""
 
@@ -388,22 +395,40 @@ class ParametersPage(QWidget):
         self.archive_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
-        archive = QHBoxLayout(self.archive_section)
-        archive.setContentsMargins(10, 8, 10, 8)
-        archive.setSpacing(Style.small)
+        self._archive_layout = QGridLayout(self.archive_section)
+        self._archive_layout.setContentsMargins(10, 8, 10, 8)
+        self._archive_layout.setSpacing(Style.small)
+        self._archive_stacked: bool | None = None
+        self._archive_conditions = QWidget(self.archive_section)
+        self._archive_conditions.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        conditions = QHBoxLayout(self._archive_conditions)
+        conditions.setContentsMargins(0, 0, 0, 0)
+        conditions.setSpacing(Style.small)
         self.labels["image_archive"] = QLabel()
-        archive.addWidget(self.labels["image_archive"])
+        conditions.addWidget(self.labels["image_archive"])
         self.archive_checks: dict[str, QCheckBox] = {}
-        for name in ("ok", "ng", "error"):
-            check = QCheckBox(name.upper())
+        for name in ("ok", "ng", "error", "empty"):
+            check = _ArchiveCheckBox(name.upper())
+            check.setObjectName("archiveCondition")
             check.setMinimumHeight(Style.touch)
+            check.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             check.toggled.connect(self._archive_edited)
             self.archive_checks[name] = check
-            archive.addWidget(check)
+            conditions.addWidget(check)
+        self._archive_path = QWidget(self.archive_section)
+        self._archive_path.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        path_row = QHBoxLayout(self._archive_path)
+        path_row.setContentsMargins(0, 0, 0, 0)
+        path_row.setSpacing(Style.small)
         self.archive_directory = QLineEdit()
         self.archive_directory.setMinimumHeight(Style.touch)
+        self.archive_directory.setMinimumWidth(6 * Style.touch)
         self.archive_directory.textEdited.connect(self._archive_edited)
-        archive.addWidget(self.archive_directory, 1)
+        path_row.addWidget(self.archive_directory, 1)
         for key, callback in (
             ("archive_browse", self._browse_archive),
             ("archive_open", self._open_archive),
@@ -412,7 +437,7 @@ class ParametersPage(QWidget):
             button.setFixedSize(Style.touch, Style.touch)
             button.clicked.connect(callback)
             self.buttons[key] = button
-            archive.addWidget(button)
+            path_row.addWidget(button)
         sections.addWidget(self.archive_section)
         self._tuning_layout = QVBoxLayout(self.tuning_section)
         self._tuning_layout.setContentsMargins(6, 4, 6, 4)
@@ -523,7 +548,7 @@ class ParametersPage(QWidget):
         self.buttons["recipe_discard"].setIcon(production_icon("reset", colors.primary))
         self.buttons["cache_prepare"].setIcon(production_icon("cycles", colors.primary))
         self.buttons["archive_browse"].setIcon(image_icon("folder", colors.primary))
-        self.buttons["archive_open"].setIcon(image_icon("next", colors.primary))
+        self.buttons["archive_open"].setIcon(image_icon("open_folder", colors.primary))
         for key, tool in (
             ("new_recipe", "plus"),
             ("duplicate_recipe", "copy"),
@@ -544,6 +569,30 @@ class ParametersPage(QWidget):
             if self.width() >= 560
             else QBoxLayout.Direction.TopToBottom
         )
+        margins = self._archive_layout.contentsMargins()
+        required = (
+            self._archive_conditions.sizeHint().width()
+            + self._archive_path.minimumSizeHint().width()
+            + margins.left()
+            + margins.right()
+            + Style.small
+        )
+        stacked = (
+            self.window().height() > self.window().width()
+            or self.archive_section.width() < required
+        )
+        if stacked != self._archive_stacked:
+            self._archive_stacked = stacked
+            self._archive_layout.removeWidget(self._archive_conditions)
+            self._archive_layout.removeWidget(self._archive_path)
+            self._archive_layout.addWidget(self._archive_conditions, 0, 0)
+            self._archive_layout.addWidget(
+                self._archive_path, 1 if stacked else 0, 0 if stacked else 1
+            )
+            self._archive_layout.setColumnStretch(0, 1 if stacked else 0)
+            self._archive_layout.setColumnStretch(1, 0 if stacked else 1)
+            self.archive_section.updateGeometry()
+            self.summary_scroll.updateGeometry()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         self._arrange_fields()
@@ -653,6 +702,7 @@ class ParametersPage(QWidget):
         draft.save_ok = self.archive_checks["ok"].isChecked()
         draft.save_ng = self.archive_checks["ng"].isChecked()
         draft.save_error = self.archive_checks["error"].isChecked()
+        draft.save_empty = self.archive_checks["empty"].isChecked()
         self.changed()
 
     def _browse_archive(self) -> None:
@@ -695,6 +745,9 @@ class ParametersPage(QWidget):
         session, language = self.session, self.language
         allowed = self.editable()
         self.archive_directory.setEnabled(allowed)
+        self.archive_directory.setToolTip(
+            self.archive_directory.text() or text("archive_directory", language)
+        )
         for check in self.archive_checks.values():
             check.setEnabled(allowed)
         if self.roi_workspace is not None:

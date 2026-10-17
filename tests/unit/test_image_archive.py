@@ -64,7 +64,7 @@ def pixels(camera: CameraInspectionResult) -> Frame:
         (PRESENT, SUCCESS, NG, 1),
         (PRESENT, ERROR, UNKNOWN, 2),
         (PRESENT, ERROR, NG, 1),
-        (EMPTY, SUCCESS, OK, None),
+        (EMPTY, SUCCESS, OK, 3),
         (UNCERTAIN, SUCCESS, OK, None),
         (None, SUCCESS, OK, None),
         (PRESENT, DISABLED, UNKNOWN, None),
@@ -95,14 +95,16 @@ def test_camera_decision_uses_all_six_explicit_channels(
 @pytest.mark.parametrize(
     "enabled",
     [
-        (True, False, False),
-        (False, True, False),
-        (False, False, True),
-        (True, True, True),
+        (True, False, False, False),
+        (False, True, False, False),
+        (False, False, True, False),
+        (False, False, False, True),
+        (True, True, True, False),
+        (True, True, True, True),
     ],
 )
 def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
-    tmp_path: Path, enabled: tuple[bool, bool, bool]
+    tmp_path: Path, enabled: tuple[bool, bool, bool, bool]
 ) -> None:
     result = production()
     states = (
@@ -144,7 +146,7 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
     archive.retain(frames[0])  # Late pixels cannot reopen the terminal cycle.
     archive.request_stop()
     assert archive.join(3)
-    expected = {"CAM1": 0, "CAM2": 1, "CAM3": 2, "CAM6": 1}
+    expected = {"CAM1": 0, "CAM2": 1, "CAM3": 2, "CAM4": 3, "CAM6": 1}
     expected = {camera: code for camera, code in expected.items() if enabled[code]}
     files = sorted(tmp_path.rglob("*.png"))
     assert len(files) == len(expected) and count == [6]
@@ -161,6 +163,49 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
         and snapshot.retained_bytes == snapshot.pending == snapshot.collecting == 0
     )
     assert not snapshot.alive
+
+
+@pytest.mark.parametrize(
+    "other,expected",
+    [
+        ((EMPTY, SUCCESS, OK), 3),
+        ((PRESENT, SUCCESS, OK), 3),
+        ((PRESENT, SUCCESS, NG), 1),
+        ((PRESENT, ERROR, UNKNOWN), 2),
+        ((EMPTY, ERROR, UNKNOWN), 2),
+        ((UNCERTAIN, SUCCESS, OK), None),
+        ((None, SUCCESS, OK), None),
+        ((PRESENT, DISABLED, UNKNOWN), None),
+    ],
+)
+def test_empty_requires_confirmed_evidence_and_all_remaining_ok_or_empty(
+    other: tuple[OccupancyState | None, TechnicalStatus, ProductJudgment],
+    expected: int | None,
+) -> None:
+    base = inspected()
+    empty = replace(
+        base, channels=tuple(channel(row, EMPTY, SUCCESS, OK) for row in base.channels)
+    )
+    mixed = replace(
+        empty, channels=(channel(base.channels[0], *other), *empty.channels[1:])
+    )
+    assert camera_archive_status(mixed) == expected
+    assert (
+        camera_archive_status(replace(mixed, frame_id=None, image_shape=None)) is None
+    )
+    for reason in (
+        "basler.missing_camera",
+        "basler.inspection_deadline",
+        "basler.shutdown_unfinished",
+    ):
+        assert (
+            camera_archive_status(
+                replace(
+                    mixed, collection_issue=Reason(FindingSource.COLLECTION, reason)
+                )
+            )
+            is None
+        )
 
 
 @pytest.mark.parametrize(

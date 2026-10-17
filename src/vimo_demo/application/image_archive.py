@@ -23,17 +23,28 @@ from vimo_demo.inspection.production import (
 
 
 def camera_archive_status(camera: CameraInspectionResult) -> int | None:
-    """Six explicit channel outcomes; EMPTY/UNKNOWN never imply camera OK."""
-    if len(camera.channels) != 6 or camera.collection_issue is not None:
+    """NG > ERROR > confirmed EMPTY > all OK; never absence of a frame."""
+    if (
+        len(camera.channels) != 6
+        or camera.collection_issue is not None
+        or camera.frame_id is None
+        or camera.image_shape is None
+    ):
         return None  # Missing/unfinished camera evidence is not an inspected image.
-    if any(row.business_status is ChannelBusinessStatus.NG for row in camera.channels):
+    states = tuple(row.business_status for row in camera.channels)
+    if ChannelBusinessStatus.NG in states:
         return 1
     if any(
         row.assessment.technical_status is TechnicalStatus.ERROR
         for row in camera.channels
     ):
         return 2
-    if all(row.business_status is ChannelBusinessStatus.OK for row in camera.channels):
+    if ChannelBusinessStatus.EMPTY in states and all(
+        state in (ChannelBusinessStatus.OK, ChannelBusinessStatus.EMPTY)
+        for state in states
+    ):
+        return 3
+    if all(state is ChannelBusinessStatus.OK for state in states):
         return 0
     return None
 
@@ -235,6 +246,7 @@ class ImageArchive:
                         self.settings.save_ok,
                         self.settings.save_ng,
                         self.settings.save_error,
+                        self.settings.save_empty,
                     )[status]
                 )
                 if enabled and not self._stopping:

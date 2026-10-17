@@ -79,12 +79,15 @@ ROI, old presence/blob and old per-check color fields are rejected. There is no
 automatic Recipe migration or threshold fitting.
 
 `image_archive` optionally contains `root_directory` (string, omitted default `""`)
-and independent booleans `save_ok`, `save_ng`, `save_error` (all default false).
+and independent booleans `save_ok`, `save_ng`, `save_error`, `save_empty` (all
+default false, including a missing `save_empty` in older archive settings).
 Existing Recipes therefore record nothing. Any nonempty root must be a valid
 absolute directory path; enabling any switch requires one. Saving validates its
 syntax without creating directories or certifying permissions/free space. Runtime
 write failures are observable separately from inspection and PLC results.
-The compact Image Archive card edits only this Recipe draft; Browse selects a
+The responsive Image Archive card edits only this Recipe draft; portrait places
+the four labeled switches above the directory/actions, while landscape keeps one
+row when it fits. Label/padding clicks toggle the whole condition control. Browse selects a
 directory and Open Folder opens an existing directory without creating it.
 Save/apply, Discard and lifecycle editing locks use the ordinary Recipe workflow.
 Only the immutable successfully started Basler session records images; Folder
@@ -289,6 +292,10 @@ frozen Runtime viewing is available. No image history/export/library is created.
 Tune preview measures the current draft without Production admission, accounting,
 candidate activation or source reconfiguration. Frozen-reference ownership,
 camera/mode switching and cache invalidation remain separate from live display.
+No matching pixels means no measurement/judgment overlay. Black pixels in a valid
+frame are still image evidence: enabled Size/Color can report missing-body/unusable
+color NG with unavailable numeric measurements. Tune has no Occupancy fusion and
+does not reinterpret that result as Production EMPTY or consume historical NG.
 
 **Save and apply** separates three outcomes: atomic file persistence; clean saved
 candidate preparation/installation; activation on a later successful Start. Failure

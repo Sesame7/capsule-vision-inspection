@@ -51,7 +51,7 @@ def test_image_archive_optional_strict_roundtrip_and_resolution(tmp_path: Path) 
     )
     original = load_recipe(path)
     assert original.image_archive == ImageArchiveSettings()
-    settings = ImageArchiveSettings(str(tmp_path / "archive"), True, False, True)
+    settings = ImageArchiveSettings(str(tmp_path / "archive"), True, False, True, True)
     recipe = replace(original, image_archive=settings)
     save_recipe(path, recipe)
     assert load_recipe(path) == recipe
@@ -61,12 +61,18 @@ def test_image_archive_optional_strict_roundtrip_and_resolution(tmp_path: Path) 
         == settings
     )
     data = json.loads(path.read_text(encoding="utf-8"))
+    legacy = json.loads(path.read_text(encoding="utf-8"))
+    del legacy["image_archive"]["save_empty"]
+    path.write_text(json.dumps(legacy), encoding="utf-8")
+    assert load_recipe(path).image_archive == replace(settings, save_empty=False)
     for invalid in (
         None,
         {"root_directory": 5},
         {"save_ok": 1},
         {"save_ng": True},
         {"save_error": "true"},
+        {"save_empty": 1},
+        {"save_empty": True},
         {"unknown": False},
         {"root_directory": "relative"},
     ):
@@ -92,6 +98,8 @@ def test_image_archive_optional_strict_roundtrip_and_resolution(tmp_path: Path) 
 def test_enabled_archive_requires_valid_absolute_directory(path: str) -> None:
     with pytest.raises(ConfigurationError):
         ImageArchiveSettings(path, save_ok=True)
+    with pytest.raises(ConfigurationError):
+        ImageArchiveSettings(path, save_empty=True)
 
 
 def machine(*, mirrored: bool = False) -> MachineLayoutDefinition:

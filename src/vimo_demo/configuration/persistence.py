@@ -175,7 +175,7 @@ def _capsule(value: object) -> CapsuleSettings:
 
 
 def _image_archive(value: object) -> ImageArchiveSettings:
-    data = _object(value, "root_directory save_ok save_ng save_error")
+    data = _object(value, "root_directory save_ok save_ng save_error save_empty")
     root = data.get("root_directory", "")
     if not isinstance(root, str):
         raise ConfigurationError("image_archive.root_directory: expected string")
@@ -184,6 +184,7 @@ def _image_archive(value: object) -> ImageArchiveSettings:
         _bool(data.get("save_ok", False)),
         _bool(data.get("save_ng", False)),
         _bool(data.get("save_error", False)),
+        _bool(data.get("save_empty", False)),
     )
 
 

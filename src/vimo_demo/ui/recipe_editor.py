@@ -35,14 +35,25 @@ class ImageArchiveDraft:
     save_ok: bool = False
     save_ng: bool = False
     save_error: bool = False
+    save_empty: bool = False
 
     @classmethod
     def from_settings(cls, value: ImageArchiveSettings) -> ImageArchiveDraft:
-        return cls(value.root_directory, value.save_ok, value.save_ng, value.save_error)
+        return cls(
+            value.root_directory,
+            value.save_ok,
+            value.save_ng,
+            value.save_error,
+            value.save_empty,
+        )
 
     def to_settings(self) -> ImageArchiveSettings:
         return ImageArchiveSettings(
-            self.root_directory, self.save_ok, self.save_ng, self.save_error
+            self.root_directory,
+            self.save_ok,
+            self.save_ng,
+            self.save_error,
+            self.save_empty,
         )
 
 

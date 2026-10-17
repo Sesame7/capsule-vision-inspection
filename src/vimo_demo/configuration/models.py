@@ -125,9 +125,10 @@ class ImageArchiveSettings:
     save_ok: bool = False
     save_ng: bool = False
     save_error: bool = False
+    save_empty: bool = False
 
     def __post_init__(self) -> None:
-        for name in ("save_ok", "save_ng", "save_error"):
+        for name in ("save_ok", "save_ng", "save_error", "save_empty"):
             boolean(getattr(self, name), name)
         root = cast(object, self.root_directory)
         if not isinstance(root, str):
@@ -159,7 +160,7 @@ class ImageArchiveSettings:
 
     @property
     def enabled(self) -> bool:
-        return self.save_ok or self.save_ng or self.save_error
+        return self.save_ok or self.save_ng or self.save_error or self.save_empty
 
 
 @dataclass(frozen=True, slots=True)

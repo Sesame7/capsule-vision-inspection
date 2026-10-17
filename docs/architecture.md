@@ -226,8 +226,10 @@ archival write/drop as well as inference completion. No additional full-image co
 is made at handoff.
 
 Each camera's six channels determine its code: any definite channel NG -> `1`;
-otherwise technical ERROR -> `2`; otherwise all six business statuses explicitly
-OK -> `0`. EMPTY/UNKNOWN without NG/ERROR is unclassified and skipped. The matching
+otherwise technical ERROR -> `2`; otherwise at least one confirmed EMPTY with all
+remaining channels explicitly OK/EMPTY -> `3`; otherwise all six explicitly OK ->
+`0`. UNKNOWN prevents EMPTY/OK classification. EMPTY means confirmed absence in an
+inspected frame, never absence of a frame. The matching
 Recipe switch controls one image per camera/cycle, independently of other cameras.
 Unassigned findings do not invent channel judgments. Collection-forced rejection
 does not turn an unfinished frame into an inspected archive image.

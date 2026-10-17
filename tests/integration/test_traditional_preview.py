@@ -248,6 +248,74 @@ def test_basler_reference_filters_mapping_and_requires_explicit_refresh(
     assert preview.frame and preview.frame.frame_id.sequence == 3
 
 
+@pytest.mark.parametrize("reference", ["none", "black", "ng"])
+def test_runtime_preview_never_invents_pixels_or_results_but_preserves_real_pixel_judgment(
+    configured_screen: Screen, tmp_path: Path, reference: str
+) -> None:
+    window, session, runtimes = configured_screen
+    source_preview(configured_screen, tmp_path, basler=True)
+    before = window.bridge.application.snapshot()
+    if reference != "none":
+        image = (
+            np.zeros((120, 480, 3), dtype=np.uint8)
+            if reference == "black"
+            else np.concatenate([bodies(30) for _ in range(6)], axis=1)
+        )
+        window.bridge.frames.publish(
+            Frame(FrameId(CycleId(10), CameraId("CAM1"), 12), 1, image),
+            generation=3,
+            source_key="basler:1000",
+        )
+        if reference == "ng":
+            session.draft.capsule = replace(
+                SETTINGS,
+                size=replace(
+                    SETTINGS.size, target_width=SETTINGS.size.target_width + 50
+                ),
+            )
+    window.parameters.open_preview("size")
+    preview = window.parameters.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    if reference == "none":
+        assert (
+            preview.frame is None and not preview.measurements and not preview.results
+        )
+        assert not preview.canvas.rows and not preview.canvas.results
+        assert not preview.runtime_button.isEnabled()
+    else:
+        assert preview.frame is not None and preview.frame.frame_id == FrameId(
+            CycleId(10), CameraId("CAM1"), 12
+        )
+        assert (
+            preview.frame.source_key == "basler:1000" and preview.frame.generation == 3
+        )
+        assert len(preview.measurements) == len(preview.results) == 6
+        assert all(
+            result and result.assessment.judgment is ProductJudgment.NG
+            for result in preview.results
+        )
+        if reference == "black":
+            assert not np.any(preview.frame.image)
+            assert all(
+                row.measured and all(view.body is None for view in row.measured.views)
+                for row in preview.measurements
+            )
+        else:
+            assert all(
+                row.measured
+                and all(view.body is not None for view in row.measured.views)
+                for row in preview.measurements
+            )
+    preview.camera_tabs.setCurrentIndex(1)
+    until(lambda: not preview.busy)
+    assert preview.frame is None and not preview.results and not preview.measurements
+    assert not preview.canvas.results and not preview.canvas.rows
+    preview.select_view(0, 0)
+    assert preview.canvas.selection is None
+    assert window.bridge.application.snapshot() == before and not runtimes
+
+
 def test_blank_preview_uses_only_authoritative_connected_dimensions(
     configured_screen: Screen,
     tmp_path: Path,
