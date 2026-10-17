@@ -24,12 +24,16 @@ from vimo_demo.application import (
     LocalCycleIngress,
     ProductionCounters,
 )
+from vimo_demo.application.image_archive import ImageArchiveCommands
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.communication.reporting import ReportingCapacityError, ReportStage
 from vimo_demo.configuration import (
     CameraFolder,
     CameraSources,
+    ImageArchiveSettings,
+    load_recipe,
     save_camera_sources,
+    save_recipe,
 )
 from vimo_demo.inference import ImageResult
 from vimo_demo.inference._validation import uint8_array
@@ -42,6 +46,36 @@ from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_presentation import matching_camera
 from vimo_demo.ui.production_style import Language, Style, text
 from vimo_demo.ui.production_window import ProductionWindow
+
+
+def test_folder_replay_never_creates_production_archive(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    model, machine, recipe, paths = input_files(tmp_path)
+    root = tmp_path / "must-not-exist"
+    save_recipe(
+        recipe,
+        replace(
+            load_recipe(recipe),
+            image_archive=ImageArchiveSettings(str(root), True, True, True),
+        ),
+    )
+    engine = ControlledEngine()
+    engine.release_warm.set()
+    engine.release_active.set()
+    composition = compose(
+        model, machine, recipe, paths, engine_factory=lambda _: engine
+    )
+    app = composition.application
+    assert isinstance(app, ImageArchiveCommands)
+    try:
+        app.start().result(WAIT)
+        until(lambda: app.snapshot().counters.cycles_completed >= 1)
+        app.stop().result(WAIT)
+        assert app.archive_snapshot() is None and not root.exists()
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
 
 
 class ControlledEngine:

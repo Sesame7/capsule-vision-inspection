@@ -13,6 +13,7 @@ saved Model / Recipe / MachineLayout / CameraSources
   -> bounded runtime -> one InferenceWorker / ViMo engine
   -> configured channel inspection -> compact terminal result / accounting
        -> bounded serial first-station PLC reporting
+       -> bounded original-frame PNG archive (opt-in Basler Recipe)
        -> independent latest display copies -> Qt and read-only Web
 ```
 
@@ -212,6 +213,47 @@ original owner for an explicit Disconnect/Close retry. There is no automatic
 reconnection. Source loss stops the bound session and remains visible in Vision;
 it does not fabricate results. Notification or timeout is not termination, and
 native calls are never forcibly cancelled. Qt Close stays asynchronous.
+
+## Image archiving
+
+An enabled Basler session owns one `application.image_archive.ImageArchive` thread.
+The source retains the original immutable full BGR Frame before runtime submission;
+the terminal camera result must match its session generation, CycleId, CameraId,
+complete FrameId and dimensions. Generation is session-bound, not guessed from
+timestamps. Missing, unfinished or ambiguously attributed frames are skipped;
+display copies are never a substitute. Borrowed aliases remain immutable until
+archival write/drop as well as inference completion. No additional full-image copy
+is made at handoff.
+
+Each camera's six channels determine its code: any definite channel NG -> `1`;
+otherwise technical ERROR -> `2`; otherwise all six business statuses explicitly
+OK -> `0`. EMPTY/UNKNOWN without NG/ERROR is unclassified and skipped. The matching
+Recipe switch controls one image per camera/cycle, independently of other cameras.
+Unassigned findings do not invent channel judgments. Collection-forced rejection
+does not turn an unfinished frame into an inspected archive image.
+
+Handoff is bounded and performs no encoding/filesystem work. The session registers
+PLC submission first; image writing never gates accounting, reporting ACKs or
+inspection deadlines. Limits are 8 collecting cycles, 12 queued/active writes,
+32 MiB per frame and 128 MiB combined retained/queued/active raw pixels. Encoding
+uses additional transient storage for one image, so this is not an RSS cap.
+Overflow drops archival work with scalar diagnostics; disk/encoding/path failures
+record a bounded last issue and continue subsequent images. Bridge observation
+shows an archive warning/detail without changing judgments, counters or PLC state.
+No completed-image history is retained. Stop/Close drain accepted writes after
+runtime callbacks settle and wait for the actual writer exit on the application
+lifecycle thread. A blocked writer keeps shutdown pending; no timeout abandons it.
+
+The exact selected root receives `YYYY-MM-DD/<CameraId>/<code>_HHmmssSSS_<cycle-id>.png`.
+Configured `CAM1`..`CAM6` names remain unchanged; filesystem-unsafe camera bytes
+are escaped without assigning a different camera identity. One local wall-clock
+observation timestamp captured at frame retention supplies both date and filename
+(it is not a claimed camera exposure time). PNG preserves all original pixels and
+dimensions, without overlays/crops. Same-directory `.part` write/fsync followed by
+atomic no-replace publication avoids completed-looking partial PNGs. Existing files
+get `_1`, `_2`, etc.; exhaustion at 999 collisions is an observable failure.
+There are no sidecars, indexes, retention rules or automatic deletion. Recording
+is best-effort, not guaranteed evidence delivery or storage-capacity management.
 
 ## Display and Web
 

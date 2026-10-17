@@ -15,6 +15,17 @@ type Theme = Literal["dark", "light"]
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "image_archive": ("图像归档", "Image archive"),
+    "archive_directory": ("归档目录", "Archive directory"),
+    "archive_browse": ("选择归档目录", "Choose archive directory"),
+    "archive_open": ("打开归档目录", "Open archive directory"),
+    "archive_issue": (
+        "图像归档异常 · 请检查目录与磁盘",
+        "Image archive issue · check directory and disk",
+    ),
+    "archive_ok": ("保存 OK 相机图像", "Save OK camera images"),
+    "archive_ng": ("保存 NG 相机图像", "Save NG camera images"),
+    "archive_error": ("保存 ERROR 相机图像", "Save ERROR camera images"),
     "configured_hash": ("配置 SHA-256", "Configured SHA-256"),
     "recipe_labels": ("缺陷标签", "Defect labels"),
     "recipe_default_label": ("默认缺陷标签：", "Default defect label:"),

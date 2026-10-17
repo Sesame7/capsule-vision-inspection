@@ -51,7 +51,7 @@ overlap, but is not production calibration. An existing saved layout always wins
 
 Required fields are `schema_version`, `recipe_id`, `display_name` and `defaults`.
 Optional fields: `product_code`, `model_override_id`, `camera_overrides`,
-`channel_overrides`, `capsule`. Explicit default and override Model IDs must both
+`channel_overrides`, `capsule`, `image_archive`. Explicit default and override Model IDs must both
 exist. Duplicate/unknown camera/channel overrides fail.
 
 ViMo leaves `enabled`, `required` and `disabled_labels` resolve per channel in order
@@ -77,6 +77,19 @@ Enabled Size/Color are required checks, subject to the explicit confirmed-EMPTY
 skip. Occupancy is always on and has no persisted switch/threshold fields. Recipe
 ROI, old presence/blob and old per-check color fields are rejected. There is no
 automatic Recipe migration or threshold fitting.
+
+`image_archive` optionally contains `root_directory` (string, omitted default `""`)
+and independent booleans `save_ok`, `save_ng`, `save_error` (all default false).
+Existing Recipes therefore record nothing. Any nonempty root must be a valid
+absolute directory path; enabling any switch requires one. Saving validates its
+syntax without creating directories or certifying permissions/free space. Runtime
+write failures are observable separately from inspection and PLC results.
+The compact Image Archive card edits only this Recipe draft; Browse selects a
+directory and Open Folder opens an existing directory without creating it.
+Save/apply, Discard and lifecycle editing locks use the ordinary Recipe workflow.
+Only the immutable successfully started Basler session records images; Folder
+Replay, warm-up, tuning and snapshots never record Production archives.
+See [archive ownership and output](architecture.md#image-archiving).
 
 ## CameraSources
 
@@ -109,7 +122,7 @@ selection is read-only. The compact Model selector shows its display name and
 configured SHA-256 prefix; its tooltip exposes the full ID/hash, not a runtime
 verification claim. The second row shows compact default defect-label checkboxes,
 wrapping at the available width. There is no filter popup, technical-details or
-policy-summary panel. The three summary cards use their content's natural height;
+policy-summary panel. The summary cards use their content's natural height;
 one enclosing scroll area updates on wrapping/content/language changes and scrolls
 only when needed, leaving Save/apply accessible.
 Opening Recipe reads the selected segmentation module's complete

@@ -13,6 +13,7 @@ from vimo_demo.application import (
     ProductionApplicationSnapshot,
 )
 from vimo_demo.application.basler_connection import SourceConnectionCommands
+from vimo_demo.application.image_archive import ArchiveSnapshot, ImageArchiveCommands
 from vimo_demo.application.local_replay import (
     LocalReplayCommands,
     ReplaySnapshot,
@@ -42,6 +43,7 @@ class QtProductionBridge(QObject):
     reporting_changed = Signal(object)
     source_connection_changed = Signal(object)
     model_preparation_changed = Signal(object)
+    archive_changed = Signal(object)
     command_finished = Signal(str)
     command_failed = Signal(str, object)
     shutdown_finished = Signal()
@@ -67,6 +69,10 @@ class QtProductionBridge(QObject):
             else None
         )
         self.reporting_snapshot: ReportingSnapshot | None = None
+        self.archive: ImageArchiveCommands | None = (
+            application if isinstance(application, ImageArchiveCommands) else None
+        )
+        self.archive_snapshot: ArchiveSnapshot | None = None
         self.source_connection = (
             application if isinstance(application, SourceConnectionCommands) else None
         )
@@ -255,6 +261,13 @@ class QtProductionBridge(QObject):
             if preparation != self._preparation_snapshot:
                 self._preparation_snapshot = preparation
                 self.model_preparation_changed.emit(preparation)
+            archive = (
+                self.archive.archive_snapshot() if self.archive is not None else None
+            )
+            if archive != self.archive_snapshot:
+                self.archive_snapshot = archive
+                self.archive_changed.emit(archive)
+                changed = True
             if replay_changed:
                 self.replay_changed.emit(replay)
             reporting = (

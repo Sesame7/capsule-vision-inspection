@@ -333,6 +333,7 @@ class ProductionWindow(QMainWindow):
         self.parameters.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
         bridge.model_preparation_changed.connect(self._replay_changed)
+        bridge.archive_changed.connect(self._replay_changed)
         bridge.replay_changed.connect(self._replay_changed)
         bridge.source_progress_changed.connect(self._source_progress_changed)
         bridge.frames_changed.connect(self._frames_changed)
@@ -981,11 +982,26 @@ class ProductionWindow(QMainWindow):
                     language,
                 )
         self._event_message = message
+        archive = self.bridge.archive_snapshot
+        if (
+            not message
+            and not self._closing
+            and archive is not None
+            and archive.last_issue
+        ):
+            message, warning = text("archive_issue", language), True
+            self._event_message = message
         detail = (
             self.configuration_issue
             if self.configuration_messages and not (warning or fault or self._closing)
             else ""
         )
+        if (
+            archive is not None
+            and archive.last_issue
+            and message == text("archive_issue", language)
+        ):
+            detail = archive.last_issue
         if event_key == "command_error" and command == "preferences":
             detail = "\n".join(
                 part

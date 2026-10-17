@@ -2,6 +2,8 @@
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path, PureWindowsPath
+from typing import cast
 
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId
@@ -118,6 +120,49 @@ class ChannelOverride:
 
 
 @dataclass(frozen=True, slots=True)
+class ImageArchiveSettings:
+    root_directory: str = ""
+    save_ok: bool = False
+    save_ng: bool = False
+    save_error: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("save_ok", "save_ng", "save_error"):
+            boolean(getattr(self, name), name)
+        root = cast(object, self.root_directory)
+        if not isinstance(root, str):
+            raise ConfigurationError("image_archive.root_directory: expected string")
+        if not root:
+            if self.enabled:
+                raise ConfigurationError("Image archive requires an absolute directory")
+            return
+        text(root, "image_archive.root_directory")
+        path = PureWindowsPath(root)
+        if not Path(root).is_absolute() or any(
+            any(c in part for c in '<>:"|?*')
+            or part.endswith((".", " "))
+            or part in (".", "..")
+            or part.split(".")[0].upper()
+            in {
+                "CON",
+                "PRN",
+                "AUX",
+                "NUL",
+                *(f"COM{i}" for i in range(1, 10)),
+                *(f"LPT{i}" for i in range(1, 10)),
+            }
+            for part in path.parts[1:]
+        ):
+            raise ConfigurationError(
+                "Image archive requires a valid absolute directory"
+            )
+
+    @property
+    def enabled(self) -> bool:
+        return self.save_ok or self.save_ng or self.save_error
+
+
+@dataclass(frozen=True, slots=True)
 class RecipeDefinition:
     recipe_id: str
     display_name: str
@@ -128,6 +173,7 @@ class RecipeDefinition:
     channel_overrides: tuple[ChannelOverride, ...] = ()
     schema_version: int = 1
     capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
+    image_archive: ImageArchiveSettings = field(default_factory=ImageArchiveSettings)
 
     def __post_init__(self) -> None:
         version(self.schema_version)
@@ -230,6 +276,7 @@ class ResolvedInspectionConfiguration:
     layout: InspectionLayout
     channels: tuple[ResolvedChannelConfiguration, ...]
     capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
+    image_archive: ImageArchiveSettings = field(default_factory=ImageArchiveSettings)
 
     def __post_init__(self) -> None:
         channels = tuple(self.channels)

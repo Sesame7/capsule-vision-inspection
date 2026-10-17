@@ -24,8 +24,11 @@ from vimo_demo.application import (
     ModelPreparationState,
     PreparedConfiguration,
 )
+from vimo_demo.application.image_archive import ArchiveSnapshot
 from vimo_demo.configuration import (
+    ConfigurationError,
     ConfigurationIOError,
+    ImageArchiveSettings,
     ModelRegistry,
     RecipeDefinition,
     load_recipe,
@@ -33,6 +36,104 @@ from vimo_demo.configuration import (
 )
 from vimo_demo.ui.parameters_page import DirtyDecision
 from vimo_demo.ui.production_style import Language, Style, text
+
+
+def test_archive_draft_save_discard_browse_and_runtime_locks(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    window, session, runtimes = configured_screen
+    page, app = window.parameters, window.bridge.application
+    assert session.entry is not None
+    before = app.snapshot()
+    session.load(
+        next(
+            entry
+            for entry in session.catalog.discover().entries
+            if entry.recipe.channel_overrides
+        )
+    )
+    page.show_draft()
+    original = session.entry.recipe
+    assert original.camera_overrides and original.channel_overrides
+    assert not original.image_archive.enabled
+    page.archive_checks["ng"].click()
+    assert session.dirty
+    with pytest.raises(ConfigurationError, match="absolute"):
+        session.draft.to_recipe()
+    directory = str(tmp_path / "archives")
+
+    def choose_directory(*_args: object) -> str:
+        return directory
+
+    monkeypatch.setattr(
+        "vimo_demo.ui.parameters_page.QFileDialog.getExistingDirectory",
+        choose_directory,
+    )
+    page.buttons["archive_browse"].click()
+    assert session.draft.image_archive.root_directory == directory
+    page.archive_checks["error"].click()
+    session.save()
+    assert session.entry.recipe.image_archive == ImageArchiveSettings(
+        directory, False, True, True
+    )
+    assert session.entry.recipe.defaults == original.defaults
+    assert session.entry.recipe.camera_overrides == original.camera_overrides
+    assert session.entry.recipe.channel_overrides == original.channel_overrides
+    assert app.snapshot() == before and not runtimes
+    page.archive_checks["ok"].click()
+    edit(page.archive_directory, str(tmp_path / "discarded"))
+    session.discard()
+    page.show_draft()
+    assert not session.dirty and page.archive_directory.text() == directory
+    assert not page.archive_checks["ok"].isChecked()
+    assert (
+        page.archive_checks["ng"].isChecked()
+        and page.archive_checks["error"].isChecked()
+    )
+    assert not Path(directory).exists()  # Draft/save never creates archive directories.
+    directory_path = Path(directory)
+    directory_path.mkdir()
+    opened: list[str] = []
+
+    def open_directory(url: object) -> bool:
+        opened.append(str(url))
+        return True
+
+    monkeypatch.setattr(
+        "vimo_demo.ui.parameters_page.QDesktopServices.openUrl", open_directory
+    )
+    page.buttons["archive_open"].click()
+    assert len(opened) == 1 and not session.dirty
+    app.start()
+    window.bridge.refresh()
+    assert not page.archive_directory.isEnabled()
+    assert not any(check.isEnabled() for check in page.archive_checks.values())
+    assert not page.buttons["archive_browse"].isEnabled()
+    runtimes[0].ready.set_result(None)
+    until(lambda: app.snapshot().state is ApplicationState.RUNNING)
+    app.stop().result(3)
+    window.bridge.refresh()
+    assert page.archive_directory.isEnabled() and not session.dirty
+
+
+def test_archive_failures_are_observable_without_changing_production(
+    configured_screen: Screen,
+) -> None:
+    window, _session, runtimes = configured_screen
+    app = window.bridge.application
+    before = app.snapshot()
+
+    class Observation:
+        def archive_snapshot(self) -> ArchiveSnapshot:
+            return ArchiveSnapshot(
+                1, 0, 1, 1, 0, 0, 0, "PermissionError: denied", False
+            )
+
+    window.bridge.archive = Observation()
+    window.bridge.refresh()
+    assert text("archive_issue", window.language) == window.event_label.accessibleName()
+    assert "PermissionError" in window.event_label.toolTip()
+    assert app.snapshot() == before and not runtimes
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -138,7 +239,7 @@ def test_compact_recipe_layout(
     assert page.findChildren(QComboBox) == [page.recipes, page.model]
     assert page.findChildren(QScrollArea) == [page.summary_scroll]
     assert not page.findChildren(QGroupBox)
-    assert len(page.findChildren(QLineEdit)) == 2
+    assert len(page.findChildren(QLineEdit)) == 3
     assert set(page.buttons) == {
         "new_recipe",
         "duplicate_recipe",
@@ -147,6 +248,8 @@ def test_compact_recipe_layout(
         "recipe_discard",
         "save_apply",
         "cache_prepare",
+        "archive_browse",
+        "archive_open",
     }
     assert window.navigation[1].text() == text("parameters", language)
     for button in page.buttons.values():

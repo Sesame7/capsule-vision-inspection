@@ -16,16 +16,18 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QTimer,
+    QUrl,
     Signal,
     Slot,
 )
-from PySide6.QtGui import QResizeEvent, QShowEvent
+from PySide6.QtGui import QDesktopServices, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -381,6 +383,37 @@ class ParametersPage(QWidget):
             expand.clicked.connect(expand_mode)
         inspection.addLayout(inspections)
         sections.addWidget(self.inspection_section)
+        self.archive_section = QFrame(self)
+        self.archive_section.setObjectName("recipeSection")
+        self.archive_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        archive = QHBoxLayout(self.archive_section)
+        archive.setContentsMargins(10, 8, 10, 8)
+        archive.setSpacing(Style.small)
+        self.labels["image_archive"] = QLabel()
+        archive.addWidget(self.labels["image_archive"])
+        self.archive_checks: dict[str, QCheckBox] = {}
+        for name in ("ok", "ng", "error"):
+            check = QCheckBox(name.upper())
+            check.setMinimumHeight(Style.touch)
+            check.toggled.connect(self._archive_edited)
+            self.archive_checks[name] = check
+            archive.addWidget(check)
+        self.archive_directory = QLineEdit()
+        self.archive_directory.setMinimumHeight(Style.touch)
+        self.archive_directory.textEdited.connect(self._archive_edited)
+        archive.addWidget(self.archive_directory, 1)
+        for key, callback in (
+            ("archive_browse", self._browse_archive),
+            ("archive_open", self._open_archive),
+        ):
+            button = QPushButton(self.archive_section)
+            button.setFixedSize(Style.touch, Style.touch)
+            button.clicked.connect(callback)
+            self.buttons[key] = button
+            archive.addWidget(button)
+        sections.addWidget(self.archive_section)
         self._tuning_layout = QVBoxLayout(self.tuning_section)
         self._tuning_layout.setContentsMargins(6, 4, 6, 4)
         self._tuning_layout.setSpacing(0)
@@ -459,6 +492,11 @@ class ParametersPage(QWidget):
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
         self.inspection_title.setText("检测" if language == "zh" else "Inspection")
+        self.archive_directory.setPlaceholderText(text("archive_directory", language))
+        self.archive_directory.setAccessibleName(text("archive_directory", language))
+        for key, check in self.archive_checks.items():
+            check.setToolTip(text(f"archive_{key}", language))
+            check.setAccessibleName(check.toolTip())
         self.label_choices.setAccessibleName(text("recipe_labels", language))
         for mode, button in self.expand_tuning.items():
             button.setToolTip(
@@ -484,6 +522,8 @@ class ParametersPage(QWidget):
         colors = theme_colors(self)
         self.buttons["recipe_discard"].setIcon(production_icon("reset", colors.primary))
         self.buttons["cache_prepare"].setIcon(production_icon("cycles", colors.primary))
+        self.buttons["archive_browse"].setIcon(image_icon("folder", colors.primary))
+        self.buttons["archive_open"].setIcon(image_icon("next", colors.primary))
         for key, tool in (
             ("new_recipe", "plus"),
             ("duplicate_recipe", "copy"),
@@ -562,6 +602,9 @@ class ParametersPage(QWidget):
         session, draft = self.session, self.session.draft
         self.metadata["display_name"].setText(draft.display_name)
         self.metadata["product_code"].setText(draft.product_code or "")
+        self.archive_directory.setText(draft.image_archive.root_directory)
+        for name, check in self.archive_checks.items():
+            check.setChecked(getattr(draft.image_archive, f"save_{name}"))
         self.model.clear()
         self._model_ids = tuple(
             None if m.model_id == session.default_model_id else m.model_id
@@ -602,6 +645,36 @@ class ParametersPage(QWidget):
         self.session.draft.product_code = self.metadata["product_code"].text() or None
         self.changed()
 
+    def _archive_edited(self) -> None:
+        if self._loading or not self.editable() or self.session is None:
+            return
+        draft = self.session.draft.image_archive
+        draft.root_directory = self.archive_directory.text()
+        draft.save_ok = self.archive_checks["ok"].isChecked()
+        draft.save_ng = self.archive_checks["ng"].isChecked()
+        draft.save_error = self.archive_checks["error"].isChecked()
+        self.changed()
+
+    def _browse_archive(self) -> None:
+        if not self.editable():
+            return
+        chosen = QFileDialog.getExistingDirectory(
+            self, text("archive_browse", self.language), self.archive_directory.text()
+        )
+        if chosen and self.editable():
+            self.archive_directory.setText(chosen)
+            self._archive_edited()
+
+    def _open_archive(self) -> None:
+        path = Path(self.archive_directory.text())
+        if (
+            not path.is_absolute()
+            or not path.is_dir()
+            or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        ):
+            self._report_error(text("archive_issue", self.language))
+            self.refresh_state()
+
     def _model_changed(self, index: int) -> None:
         if (
             not self._loading
@@ -621,6 +694,9 @@ class ParametersPage(QWidget):
         self.refresh_theme()
         session, language = self.session, self.language
         allowed = self.editable()
+        self.archive_directory.setEnabled(allowed)
+        for check in self.archive_checks.values():
+            check.setEnabled(allowed)
         if self.roi_workspace is not None:
             self.roi_workspace.refresh()
         if self.preview is not None:
