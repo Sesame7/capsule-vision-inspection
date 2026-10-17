@@ -15,6 +15,21 @@ type Theme = Literal["dark", "light"]
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "image_archive": ("图像归档", "Image archive"),
+    "archive_directory": ("归档目录", "Archive directory"),
+    "archive_browse": ("选择归档目录", "Choose archive directory"),
+    "archive_open": ("打开归档目录", "Open archive directory"),
+    "archive_issue": (
+        "图像归档异常 · 请检查目录与磁盘",
+        "Image archive issue · check directory and disk",
+    ),
+    "archive_ok": ("保存 OK 相机图像", "Save OK camera images"),
+    "archive_ng": ("保存 NG 相机图像", "Save NG camera images"),
+    "archive_error": ("保存 ERROR 相机图像", "Save ERROR camera images"),
+    "archive_empty": (
+        "保存确认 EMPTY 的相机图像",
+        "Save confirmed EMPTY camera images",
+    ),
     "configured_hash": ("配置 SHA-256", "Configured SHA-256"),
     "recipe_labels": ("缺陷标签", "Defect labels"),
     "recipe_default_label": ("默认缺陷标签：", "Default defect label:"),
@@ -866,6 +881,11 @@ def stylesheet(theme: Theme = "dark") -> str:
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
     QCheckBox {{ background: transparent; spacing: 8px; }}
     QCheckBox::indicator {{ width: 20px; height: 20px; }}
+    QCheckBox#archiveCondition {{ color: {c.primary}; background: {c.surface}; border: 1px solid {c.border}; border-radius: 6px; padding: 4px 8px; spacing: 6px; }}
+    QCheckBox#archiveCondition:hover:enabled {{ border-color: {c.secondary}; }}
+    QCheckBox#archiveCondition:checked:enabled {{ background: {c.selected}; border-color: {c.accent}; }}
+    QCheckBox#archiveCondition:focus:enabled {{ border-color: {c.accent}; }}
+    QCheckBox#archiveCondition:disabled {{ color: {c.secondary}; background: {c.raised}; border-color: {c.border}; }}
     QTabBar::tab {{ padding: 12px 10px; min-height: 20px; color: {c.primary}; background: {c.surface}; border: none; }}
     QTabBar::tab:selected {{ color: {c.accent}; background: {c.selected}; }}
     QSlider::groove:horizontal {{ height: 6px; background: {c.border}; border-radius: 3px; }}

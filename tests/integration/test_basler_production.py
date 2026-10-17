@@ -10,6 +10,7 @@ from threading import Condition, Event, Thread, get_ident
 from threading import enumerate as threads
 from time import perf_counter
 
+import cv2
 import numpy as np
 import pytest
 from numpy.typing import NDArray
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.application_support import WAIT
 from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
+from tests.production_support import inferred
 from tests.qt_support import until
 from tests.reporting_support import seed, server
 
@@ -41,6 +43,11 @@ from vimo_demo.application.basler_connection import (
     SourceConnectionCommands,
 )
 from vimo_demo.application.basler_control import BaslerControlSnapshot
+from vimo_demo.application.image_archive import (
+    ArchiveImage,
+    ImageArchive,
+    ImageArchiveCommands,
+)
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.communication.reporting import (
     LocalReportingSettings,
@@ -49,10 +56,13 @@ from vimo_demo.communication.reporting import (
     ReportStage,
 )
 from vimo_demo.configuration import (
+    ImageArchiveSettings,
     load_camera_sources,
+    load_recipe,
     save_camera_sources,
+    save_recipe,
 )
-from vimo_demo.inference import ImageResult
+from vimo_demo.inference import BoundingRect, ImageResult
 from vimo_demo.inference._validation import uint8_array
 from vimo_demo.inspection import CameraId
 from vimo_demo.ui import local_production
@@ -64,6 +74,263 @@ from vimo_demo.ui.production_style import Language, Theme, text
 # Provisional field mapping in configured CAM1..CAM6 order; explicitly includes
 # the CAM5/CAM6 order that differs from sorting serials. This is test data only.
 SERIALS = ("25334173", "25334174", "25334178", "25334180", "25334188", "25334184")
+
+
+@pytest.mark.parametrize("save_empty", [False, True])
+def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, save_empty: bool
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    recipe_file = data.recipes / "local.recipe.json"
+    root = tmp_path / "empty-archive"
+    save_recipe(
+        recipe_file,
+        replace(
+            load_recipe(recipe_file),
+            image_archive=ImageArchiveSettings(
+                str(root), save_ng=True, save_empty=save_empty
+            ),
+        ),
+    )
+    saved = recipe_file.read_bytes()
+    engine = Engine()
+    engine.release_warm.set()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands) and isinstance(
+        app, ImageArchiveCommands
+    )
+    try:
+        app.connect_source()
+        app.start().result(WAIT)
+        assert startup.editor is not None
+        startup.editor.draft.image_archive.save_empty = not save_empty
+        passive.expose(1, (4, 2, 5, 1, 3, 0))
+        until(lambda: app.snapshot().counters.cycles_completed == 1)
+        app.stop().result(WAIT)
+        assert app.snapshot().state is ApplicationState.READY
+        assert app.snapshot().counters.business_empty == 36
+        observation = app.archive_snapshot()
+        assert observation is not None and not observation.alive
+        assert (
+            observation.written == (6 if save_empty else 0) and observation.failed == 0
+        )
+        assert observation.pending == observation.retained_bytes == 0
+        files = sorted(root.rglob("*.png"))
+        assert len(files) == (6 if save_empty else 0)
+        for path in files:
+            assert path.name.startswith("3_") and path.name.endswith("_1.png")
+            index = int(path.parent.name.removeprefix("CAM")) - 1
+            decoded = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+            np.testing.assert_array_equal(
+                decoded, np.full((20, 60, 3), 10 + index, dtype=np.uint8)
+            )
+        assert recipe_file.read_bytes() == saved
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+@pytest.mark.parametrize("scenario", ["idle", "startup_failure", "unfinished"])
+def test_archive_zero_or_unfinished_frames_never_fabricate_images(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, scenario: str
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    recipe_file = data.recipes / "local.recipe.json"
+    root = tmp_path / "archive"
+    save_recipe(
+        recipe_file,
+        replace(
+            load_recipe(recipe_file),
+            image_archive=ImageArchiveSettings(str(root), True, True, True),
+        ),
+    )
+    engine = Engine()
+    engine.release_warm.set()
+    engine.fail_warmup = scenario == "startup_failure"
+    if scenario == "unfinished":
+        engine.release_active.clear()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    assert isinstance(app, ImageArchiveCommands)
+    try:
+        app.connect_source()
+        if scenario == "startup_failure":
+            with pytest.raises(ApplicationError):
+                app.start().result(WAIT)
+            assert app.snapshot().state is ApplicationState.READY
+        else:
+            app.start().result(WAIT)
+            if scenario == "unfinished":
+                passive.expose(1, (0,))
+                assert engine.active.wait(WAIT)
+                stopped = app.stop()
+                until(lambda: app.snapshot().counters.cycles_completed == 1)
+                assert not stopped.done()
+                engine.release_active.set()
+                stopped.result(WAIT)
+            else:
+                app.stop().result(WAIT)
+        observed = app.archive_snapshot()
+        assert observed is not None and not observed.alive
+        assert observed.retained_bytes == observed.pending == observed.written == 0
+        assert not root.exists()
+        assert app.snapshot().counters.cycles_completed == (
+            1 if scenario == "unfinished" else 0
+        )
+    finally:
+        engine.release_active.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+@pytest.mark.parametrize("ending", ["stop", "close"])
+@pytest.mark.parametrize("disk_failure", [False, True])
+def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    ending: str,
+    disk_failure: bool,
+) -> None:
+    from vimo_demo.application.image_archive import write_png
+
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    recipe_file = data.recipes / "local.recipe.json"
+    root = tmp_path / "archive"
+    recipe = load_recipe(recipe_file)
+    save_recipe(
+        recipe_file,
+        replace(
+            recipe, image_archive=ImageArchiveSettings(str(root), True, True, True)
+        ),
+    )
+    entered, release = Event(), Event()
+    owners: list[int] = []
+    requests: list[ArchiveImage] = []
+
+    def writer(directory: Path, item: ArchiveImage) -> None:
+        owners.append(get_ident())
+        requests.append(item)
+        entered.set()
+        assert release.wait(WAIT)
+        if disk_failure:
+            raise OSError("Simulated full disk")
+        write_png(directory, item)
+
+    def archiver(
+        settings: ImageArchiveSettings, generation: int, cameras: tuple[CameraId, ...]
+    ) -> ImageArchive:
+        return ImageArchive(settings, generation, cameras, writer=writer)
+
+    monkeypatch.setattr(local_production, "ImageArchive", archiver)
+
+    class DefectEngine(Engine):
+        def infer(self, image_bgr: NDArray[np.generic]) -> ImageResult:
+            base = super().infer(image_bgr)
+            return replace(base, regions=inferred(BoundingRect(0, 0, 8, 10)).regions)
+
+    engine = DefectEngine()
+    engine.release_warm.set()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    assert isinstance(app, ProductionReportingCommands)
+    assert isinstance(app, ImageArchiveCommands)
+    original = (
+        recipe_file.read_bytes(),
+        data.sources.read_bytes(),
+        data.machine.read_bytes(),
+    )
+    initial_threads = {t.ident for t in threads()}
+    with server() as peer:
+        seed(peer, 0)
+        app.set_reporting_selection(
+            ReportingSelection(True, LocalReportingSettings(port=peer.port, timeout=2))
+        )
+        try:
+            app.connect_source()
+            app.start().result(WAIT)
+            assert app.snapshot().counters == ProductionCounters()
+            assert not root.exists() and app.archive_snapshot() is not None
+            # Source draft edits after successful activation cannot redirect recording.
+            assert startup.editor is not None
+            startup.editor.draft.image_archive.root_directory = str(
+                tmp_path / "draft-only"
+            )
+            passive.expose(1, (5, 3, 1, 4, 2, 0))
+            assert entered.wait(WAIT)
+            until(lambda: app.snapshot().counters.cycles_completed == 1)
+            until(
+                lambda: (
+                    (s := app.reporting_snapshot()) is not None
+                    and s.acknowledged_count == 1
+                )
+            )
+            result = app.snapshot().latest_production_result
+            assert result is not None and len(result.channels) == 36
+            accounting = app.snapshot().counters
+            pending = app.stop() if ending == "stop" else app.close()
+            assert not pending.done()  # Actual archive owner still writing.
+            assert engine.closed or app.snapshot().state is ApplicationState.STOPPING
+            release.set()
+            pending.result(WAIT)
+            observed = app.archive_snapshot()
+            assert (
+                observed is not None
+                and not observed.alive
+                and observed.retained_bytes == 0
+            )
+            assert observed.written + observed.failed == 6
+            assert observed.failed == (6 if disk_failure else 0)
+            assert app.snapshot().counters == accounting
+            assert all(
+                item.generation == 1
+                and item.frame.id
+                == result.cameras[
+                    result.layout.camera_ids.index(item.frame.id.camera_id)
+                ].frame_id
+                for item in requests
+            )
+            assert len({item.frame.id for item in requests}) == 6
+            assert (
+                len(set(owners)) == 1
+                and owners[0] != get_ident()
+                and owners[0] not in {owner for _, owner in engine.calls}
+            )
+            for item in requests:
+                index = result.layout.camera_ids.index(item.frame.id.camera_id)
+                assert (
+                    np.all(item.frame.image == 10 + index)
+                    and not item.frame.image.flags.writeable
+                )
+            if not disk_failure:
+                files = list(root.rglob("*.png"))
+                assert len(files) == 6
+                for file in files:
+                    image = cv2.imdecode(
+                        np.fromfile(file, dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
+                    assert image is not None and image.shape == (20, 60, 3)
+            assert not (tmp_path / "draft-only").exists()
+            assert original == (
+                recipe_file.read_bytes(),
+                data.sources.read_bytes(),
+                data.machine.read_bytes(),
+            )
+            assert not any(
+                t.ident not in initial_threads and t.name.startswith("ImageArchive-")
+                for t in threads()
+            )
+        finally:
+            release.set()
+            app.close().result(WAIT)
+            assert app.join(WAIT)
 
 
 class Engine:

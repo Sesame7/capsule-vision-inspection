@@ -1,6 +1,6 @@
 """Shared Vision/Recipe image tools; whole-group wrapping and DPR-aware icons."""
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap, QResizeEvent
 from PySide6.QtWidgets import QGridLayout, QSizePolicy, QWidget
 
@@ -22,7 +22,17 @@ def image_icon(tool: str, color: str = Style.primary) -> QIcon:
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(QPen(QColor(color), 1.6))
-            if tool == "refresh":
+            if tool == "open_folder":
+                painter.drawPolyline(
+                    [QPoint(3, 9), QPoint(3, 20), QPoint(20, 20), QPoint(20, 14)]
+                )
+                painter.drawPolyline(
+                    [QPoint(3, 9), QPoint(3, 5), QPoint(9, 5), QPoint(12, 8)]
+                )
+                painter.drawLine(12, 13, 21, 4)
+                painter.drawLine(15, 4, 21, 4)
+                painter.drawLine(21, 4, 21, 10)
+            elif tool == "refresh":
                 painter.drawArc(5, 5, 14, 14, 40 * 16, 290 * 16)
                 painter.drawLine(19, 4, 19, 10)
                 painter.drawLine(19, 10, 13, 10)

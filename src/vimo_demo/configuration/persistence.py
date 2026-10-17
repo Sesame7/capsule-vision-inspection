@@ -28,6 +28,7 @@ from .models import (
     ChannelOverride,
     CheckConfiguration,
     CheckOverrides,
+    ImageArchiveSettings,
     MachineLayoutDefinition,
     ModelDefinition,
     RecipeDefinition,
@@ -173,10 +174,24 @@ def _capsule(value: object) -> CapsuleSettings:
     )
 
 
+def _image_archive(value: object) -> ImageArchiveSettings:
+    data = _object(value, "root_directory save_ok save_ng save_error save_empty")
+    root = data.get("root_directory", "")
+    if not isinstance(root, str):
+        raise ConfigurationError("image_archive.root_directory: expected string")
+    return ImageArchiveSettings(
+        root,
+        _bool(data.get("save_ok", False)),
+        _bool(data.get("save_ng", False)),
+        _bool(data.get("save_error", False)),
+        _bool(data.get("save_empty", False)),
+    )
+
+
 def _recipe(value: object) -> RecipeDefinition:
     data = _schema(
         value,
-        "recipe_id display_name defaults product_code model_override_id camera_overrides channel_overrides capsule",
+        "recipe_id display_name defaults product_code model_override_id camera_overrides channel_overrides capsule image_archive",
         "recipe_id display_name defaults",
     )
     cameras: list[CameraOverride] = []
@@ -203,6 +218,7 @@ def _recipe(value: object) -> RecipeDefinition:
         tuple(cameras),
         tuple(channels),
         capsule=_capsule(data.get("capsule", {})),
+        image_archive=_image_archive(data.get("image_archive", {})),
     )
 
 
@@ -336,6 +352,7 @@ def save_recipe(path: Path, recipe: RecipeDefinition) -> None:
         "display_name": recipe.display_name,
         "defaults": _checks_data(recipe.defaults),
         "capsule": asdict(recipe.capsule),
+        "image_archive": asdict(recipe.image_archive),
     }
     for key, value in (
         ("product_code", recipe.product_code),

@@ -45,6 +45,7 @@ from vimo_demo.application.folder_replay import (
     FolderSourceError,
     start_interval_wait,
 )
+from vimo_demo.application.image_archive import ArchiveSnapshot, ImageArchive
 from vimo_demo.application.local_replay import LocalReplayControl, ReplaySnapshot
 from vimo_demo.application.session import EngineFactory, ProductionCycle
 from vimo_demo.communication import FinsMemoryArea, FinsTransport
@@ -177,6 +178,12 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         self._source_stop = Event()
         self.replay_control = replay_control
         self.reporting = reporting
+        settings = prepared.configuration.image_archive
+        self.archive = (
+            ImageArchive(settings, generation, self._layout.camera_ids)
+            if continuous_source is not None and settings.enabled
+            else None
+        )
         self._reporting_overload: RuntimeError | None = None
         self.source_done: Future[None] = Future()
         self.source_done.set_running_or_notify_cancel()
@@ -189,6 +196,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         )
 
     def start(self) -> Future[None]:
+        if self.archive is not None:
+            self.archive.start()
         if self.reporting is not None:
             self.reporting.start()
         ready = super().start()
@@ -207,12 +216,40 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         super().request_stop()
 
     def begin_cycle(self, cycle_id: CycleId) -> ProductionCycle:
-        cycle = super().begin_cycle(cycle_id)
+        archive = self.archive
+        retained = archive.begin(cycle_id) if archive is not None else False
+        try:
+            cycle = super().begin_cycle(cycle_id)
+        except BaseException:
+            if retained and archive is not None:
+                archive.complete(cycle_id, None)
+            raise
         if self.reporting is not None:
             cycle.result.add_done_callback(
                 lambda future: self._report_result(cycle_id, future)
             )
+        if retained:
+            cycle.result.add_done_callback(
+                lambda future: self._archive_result(cycle_id, future)
+            )
         return cycle
+
+    def _archive_result(
+        self, cycle_id: CycleId, future: Future[ProductionInspectionResult]
+    ) -> None:
+        assert self.archive is not None
+        try:
+            result = (
+                future.result()
+            )  # Terminal only; archive handoff never encodes/writes.
+        except BaseException:
+            result = None
+        if (
+            self._continuous_source is not None
+            and not self._continuous_source.attributable(cycle_id)
+        ):
+            result = None
+        self.archive.complete(cycle_id, result)
 
     def _report_result(
         self, cycle_id: CycleId, future: Future[ProductionInspectionResult]
@@ -268,6 +305,12 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                 self.reporting.request_stop(drain=True)
             remaining = None if deadline is None else max(0, deadline - monotonic())
             joined = self.reporting.join(remaining) and joined
+        if self.archive is not None:
+            if joined:
+                # All runtime/source callbacks have handed off terminal outcomes.
+                self.archive.request_stop()
+            remaining = None if deadline is None else max(0, deadline - monotonic())
+            joined = self.archive.join(remaining) and joined
         if (
             joined
             and self.cleanup_safe
@@ -282,8 +325,10 @@ class LocalRuntimeSession(ProductionRuntimeSession):
 
     @property
     def cleanup_safe(self) -> bool:
-        return super().cleanup_safe and (
-            self.reporting is None or self.reporting.cleanup_safe
+        return (
+            super().cleanup_safe
+            and (self.reporting is None or self.reporting.cleanup_safe)
+            and (self.archive is None or not self.archive.snapshot().alive)
         )
 
     @property
@@ -292,6 +337,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
             *super().thread_names,
             self._source.name,
             *((self.reporting.thread_name,) if self.reporting else ()),
+            *((self.archive.thread_name,) if self.archive else ()),
         )
 
     def _produce(self) -> None:
@@ -437,6 +483,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                 cycle.result.add_done_callback(completed)
 
         def submit(frame: Frame) -> None:
+            if self.archive is not None:
+                self.archive.retain(frame)
             self._application.submit_frame(frame).result()
             self._store.publish(
                 frame,
@@ -496,6 +544,7 @@ class _LocalApplication(ProductionApplication):
         self.replay_cache = cache
         self._reporting_lock = Lock()
         self._reporting_worker: FirstStationReportingWorker | None = None
+        self._archive_owner: ImageArchive | None = None
         self._reporting_selection = ReportingSelection(
             reporting is not None,
             reporting
@@ -522,6 +571,15 @@ class _LocalApplication(ProductionApplication):
 
     def source_snapshot(self) -> SourceConnectionSnapshot:
         return self.connection.snapshot()
+
+    def archive_snapshot(self) -> ArchiveSnapshot | None:
+        with self._reporting_lock:
+            owner = self._archive_owner
+        return owner.snapshot() if owner is not None else None
+
+    def set_archive_owner(self, owner: ImageArchive | None) -> None:
+        with self._reporting_lock:
+            self._archive_owner = owner
 
     def capture_image(
         self, camera: CameraId, *, timeout: float = 10.0
@@ -1034,6 +1092,7 @@ def local_application(
             else None,
         )
         app.set_reporting_owner(report_worker)
+        app.set_archive_owner(session.archive)
         observe_source(session.source_done)
         return session
 

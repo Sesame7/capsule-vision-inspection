@@ -11,6 +11,7 @@ from vimo_demo.configuration import (
     CheckConfiguration,
     CheckOverrides,
     ConfigurationError,
+    ImageArchiveSettings,
     MachineLayoutDefinition,
     ModelRegistry,
     RecipeDefinition,
@@ -29,6 +30,34 @@ from .recipe_catalog import RecipeCatalog, RecipeEntry
 
 
 @dataclass
+class ImageArchiveDraft:
+    root_directory: str = ""
+    save_ok: bool = False
+    save_ng: bool = False
+    save_error: bool = False
+    save_empty: bool = False
+
+    @classmethod
+    def from_settings(cls, value: ImageArchiveSettings) -> ImageArchiveDraft:
+        return cls(
+            value.root_directory,
+            value.save_ok,
+            value.save_ng,
+            value.save_error,
+            value.save_empty,
+        )
+
+    def to_settings(self) -> ImageArchiveSettings:
+        return ImageArchiveSettings(
+            self.root_directory,
+            self.save_ok,
+            self.save_ng,
+            self.save_error,
+            self.save_empty,
+        )
+
+
+@dataclass
 class RecipeDraft:
     recipe_id: str
     display_name: str
@@ -39,6 +68,7 @@ class RecipeDraft:
     channels: dict[ChannelId, CheckOverrides] = field(default_factory=lambda: {})
 
     capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
+    image_archive: ImageArchiveDraft = field(default_factory=ImageArchiveDraft)
 
     @classmethod
     def from_recipe(cls, recipe: RecipeDefinition) -> RecipeDraft:
@@ -51,6 +81,7 @@ class RecipeDraft:
             {c.camera_id: c.checks for c in recipe.camera_overrides},
             {c.channel_id: c.checks for c in recipe.channel_overrides},
             recipe.capsule,
+            ImageArchiveDraft.from_settings(recipe.image_archive),
         )
 
     def to_recipe(self) -> RecipeDefinition:
@@ -63,6 +94,7 @@ class RecipeDraft:
             tuple(CameraOverride(c, rows) for c, rows in self.cameras.items()),
             tuple(ChannelOverride(c, rows) for c, rows in self.channels.items()),
             capsule=self.capsule,
+            image_archive=self.image_archive.to_settings(),
         )
 
 
