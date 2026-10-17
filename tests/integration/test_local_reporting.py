@@ -16,8 +16,10 @@ from tests.qt_support import until
 from tests.reporting_support import WAIT, readback, seed, server, settings
 
 from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters
+from vimo_demo.application.communication_preferences import CommunicationPreferences
 from vimo_demo.application.session import EngineFactory
 from vimo_demo.communication import first_station_reject_words
+from vimo_demo.communication.operations import RequestKind
 from vimo_demo.communication.reporting import (
     LocalReportingSettings,
     ReportingCapacityError,
@@ -391,10 +393,14 @@ def test_slow_reporter_keeps_gui_responsive_and_close_waits_actual_exit(
             until(lambda: app.snapshot().counters.cycles_completed >= 2)
             until(engine.gate.is_set)
             window.navigate(2)
-            assert window.communication.read_button.isEnabled()
+            assert window.communication.write_button.isEnabled()
             assert not window.communication.auto_refresh  # Independent manual owner.
+            window.communication.configure_preferences(
+                tmp_path / "communication.json", CommunicationPreferences()
+            )
             window.communication.port.setValue(manual_peer.port)
-            window.communication.test_button.click()
+            window.communication.persist_settings()
+            window.communication.dispatch(RequestKind.TEST)
             until(lambda: not window.communication.busy)
             response = window.communication.last_response
             assert response is not None and response.values == (1234,)

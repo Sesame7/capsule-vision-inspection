@@ -1,6 +1,7 @@
 """Checkpoint A: existing manual/watch owner against independent TCP frames."""
 
 from collections.abc import Sequence
+from pathlib import Path
 from threading import Event, get_ident
 from threading import enumerate as threads
 
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from tests.fins_tcp_support import Fault, Stage, TcpPeer
 from tests.qt_support import until
 
+from vimo_demo.application.communication_preferences import CommunicationPreferences
 from vimo_demo.communication import FinsMemoryArea, FinsTcpClient, FinsTransport
 from vimo_demo.communication.operations import (
     CommunicationRequest,
@@ -32,6 +34,7 @@ def close(page: CommunicationPage) -> None:
 @pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_tcp_manual_operations_owner_and_udp_address_retention(
     qapp: QApplication,
+    tmp_path: Path,
     language: Language,
     area: FinsMemoryArea,
     monkeypatch: pytest.MonkeyPatch,
@@ -75,6 +78,9 @@ def test_tcp_manual_operations_owner_and_udp_address_retention(
     )
     with TcpPeer() as peer:
         page = CommunicationPage()
+        page.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
         page.set_language(language)
         page.show()
         try:
@@ -83,22 +89,22 @@ def test_tcp_manual_operations_owner_and_udp_address_retention(
             page.source[1].setValue(44)
             page.advanced_button.click()
             page.protocol.setCurrentIndex(1)
-            page.settings_button.click()
             assert page.advanced.isVisible() and not page.advanced.isEnabled()
             page.port.setValue(peer.port)
+            page.persist_settings()
             page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
             page.address.setValue(100)
+            page.persist_settings()
             assert page.dispatch(RequestKind.TEST)
             until(lambda: not page.busy)
-            assert page.status.text() == text("comm_test_ok", language)
+            assert page.feedback_text == text("comm_test_ok", language)
             assert page.last_response is not None
             assert page.last_response.request.transport is FinsTransport.TCP
             page.write_values.setText("7 65535")
             assert page.dispatch(RequestKind.WRITE)
             until(lambda: not page.busy)
             assert peer.words(100, 2, area.value) == (7, 65535)
-            page.count.setValue(2)
-            assert page.dispatch(RequestKind.READ)
+            assert page.dispatch(RequestKind.READ, count=2)
             until(lambda: not page.busy)
             assert page.last_read is not None and page.last_read.values == (7, 65535)
             assert "FINS/TCP" in page.success.text()
@@ -129,6 +135,7 @@ def test_tcp_manual_operations_owner_and_udp_address_retention(
 
 def test_tcp_read_capture_does_not_follow_programmatic_protocol_change(
     qapp: QApplication,
+    tmp_path: Path,
 ) -> None:
     entered, release = Event(), Event()
     captured: list[CommunicationRequest] = []
@@ -141,9 +148,13 @@ def test_tcp_read_capture_does_not_follow_programmatic_protocol_change(
 
     with TcpPeer() as peer:
         page = CommunicationPage(execute=execute)
+        page.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
         page.show()
         page.protocol.setCurrentIndex(1)
         page.port.setValue(peer.port)
+        page.persist_settings()
         try:
             assert page.dispatch(RequestKind.READ)
             assert entered.wait(5)
@@ -152,7 +163,7 @@ def test_tcp_read_capture_does_not_follow_programmatic_protocol_change(
             release.set()
             until(lambda: not page.busy)
             assert captured[0].transport is FinsTransport.TCP
-            assert "FINS/TCP" in page.success.text()
+            assert "FINS/TCP" in page.feedback_details
             assert len(peer.packets) == 1
         finally:
             release.set()
@@ -161,12 +172,17 @@ def test_tcp_read_capture_does_not_follow_programmatic_protocol_change(
 
 def test_tcp_watch_refresh_and_active_close_observe_actual_exit(
     qapp: QApplication,
+    tmp_path: Path,
 ) -> None:
     with TcpPeer(sequence=77) as peer:
         page = CommunicationPage()
+        page.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
         page.show()
         page.protocol.setCurrentIndex(1)
         page.port.setValue(peer.port)
+        page.persist_settings()
         try:
             assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100))
             assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 2))
@@ -201,6 +217,7 @@ def test_tcp_watch_refresh_and_active_close_observe_actual_exit(
 )
 def test_tcp_watch_errors_use_existing_feedback_and_stop_refresh(
     qapp: QApplication,
+    tmp_path: Path,
     stage: Stage,
     fault: Fault,
     key: str,
@@ -208,16 +225,21 @@ def test_tcp_watch_errors_use_existing_feedback_and_stop_refresh(
     with TcpPeer() as peer:
         peer.fail_next(stage, fault)
         page = CommunicationPage()
+        page.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
         page.show()
         page.protocol.setCurrentIndex(1)
         page.port.setValue(peer.port)
+        page.persist_settings()
         page.timeout.setValue(0.05)
+        page.persist_settings()
         try:
             page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100))
             assert page.start_monitoring()
             until(lambda: not page.busy)
             assert not page.auto_refresh
-            assert text(key, "zh") in page.status.text()
+            assert text(key, "zh") in page.feedback_text
             assert text("comm_watch_failed", "zh") in page.watch_status.text()
         finally:
             close(page)

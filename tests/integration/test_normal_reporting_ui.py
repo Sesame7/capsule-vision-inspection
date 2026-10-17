@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
-from threading import Event, get_ident
+from threading import Event, Thread, get_ident
 from threading import enumerate as threads
 
 import numpy as np
@@ -24,6 +24,7 @@ from vimo_demo.application import (
     ApplicationState,
     ApplicationStateError,
 )
+from vimo_demo.application.communication_preferences import CommunicationPreferences
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.communication import (
     FinsAddress,
@@ -111,7 +112,7 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         assert commands.reporting_selection() == ReportingSelection()
         assert panel.protocol.currentText() == "FINS/UDP"
         assert commands.reporting_snapshot() is None
-        assert text("plc_disabled", window.language) in panel.status.text()
+        assert text("plc_disabled", window.language) in panel.service_status.text()
         assert "ACK --" in panel.status.text() and not panel.error.isVisible()
         before = {p: p.read_bytes() for p in startup.data.root.rglob("*.json")}
         startup.application.start().result(WAIT)
@@ -122,7 +123,8 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         panel.update_state(ApplicationState.READY)
         panel.port.setValue(19600)
         panel.enabled.setChecked(True)
-        assert commands.reporting_selection().enabled
+        assert not commands.reporting_selection().enabled
+        assert panel.selection().enabled
         assert {p: p.read_bytes() for p in before} == before
         data = startup.data
     restored = load_startup(data)
@@ -151,7 +153,8 @@ def test_unconfigured_reporting_preferences_do_not_invent_assets(
         assert panel is not None and panel.enabled.isEnabled()
         panel.enabled.setChecked(True)
         panel.port.setValue(19600)
-        assert panel.controller.reporting_selection().enabled
+        assert not panel.controller.reporting_selection().enabled
+        assert panel.selection().enabled
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
         assert panel.controller.reporting_snapshot() is None
         assert not list(tmp_path.rglob("*"))
@@ -193,6 +196,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         panel.source[1].setValue(3)
         panel.source[2].setValue(7)
         panel.enabled.setChecked(True)
+        window.communication.persist_settings()
         selected = panel.controller.reporting_selection()
         window.bridge.start()
         until(lambda: startup.application.snapshot().state is ApplicationState.RUNNING)
@@ -217,7 +221,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         )
         assert clients[0][5] != get_ident()
         assert not panel.enabled.isEnabled() and not panel.port.isEnabled()
-        assert text("plc_active", window.language) in panel.status.text()
+        assert text("plc_acknowledged", window.language) in panel.service_status.text()
         assert "ACK 89" in panel.status.text()
         assert "generation=1" in panel.status.toolTip()
         packets = peer.packets[1:]  # Exclude the independent sequence seeding request.
@@ -239,15 +243,14 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         with pytest.raises(ApplicationStateError):
             panel.controller.set_reporting_selection(ReportingSelection())
         assert panel.controller.reporting_selection() is selected
-        window.communication.settings_button.click()
         assert not panel.port.isEnabled() and window.communication.host.isEnabled()
         window.communication.host.setText("192.0.2.10")
         assert panel.endpoint.text() == f"FINS/UDP · 127.0.0.1:{peer.port}"
         window.communication.host.setText("127.0.0.1")
-        window.communication.settings_dialog.reject()
 
         page = window.communication
         page.port.setValue(peer.port)
+        window.communication.persist_settings()
         page.area.setCurrentIndex(1)  # W, independent from automatic settings.
         page.write_values.setText("7")
         counters = startup.application.snapshot().counters
@@ -259,8 +262,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
             assert len(peer.packets) == before and not page.busy
             assert text("plc_reserved_write", window.language) in page.status.text()
         page.address.setValue(49)
-        page.count.setValue(4)
-        assert page.dispatch(RequestKind.READ)
+        assert page.dispatch(RequestKind.READ, count=4)
         until(lambda: not page.busy)
         assert page.last_response is not None and page.last_response.values == readback(
             peer
@@ -292,6 +294,7 @@ def test_settings_locked_starting_stopping_then_restart_has_new_generation(
     ):
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)
+        window.communication.persist_settings()
         selected = panel.controller.reporting_selection()
         future = startup.application.start()
         assert first.entered.wait(WAIT)
@@ -338,6 +341,7 @@ def test_reporting_failure_feedback_does_not_fault_production(
         peer.fail_next(ReportStage.INITIALIZATION, "plc")
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)
+        window.communication.persist_settings()
         window.bridge.start()
         until(
             lambda: (
@@ -355,7 +359,7 @@ def test_reporting_failure_feedback_does_not_fault_production(
         window.navigate(2)
         assert "ACK --" in panel.status.text() and panel.error.isVisible()
         assert "initialization" in panel.error.text()
-        assert text("plc_report_failed", window.language) in panel.status.text()
+        assert text("plc_report_failed", window.language) in panel.service_status.text()
         assert (
             "generation=1" in panel.error.toolTip()
             and "FinsPlcError" in panel.error.toolTip()
@@ -376,6 +380,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         panel.port.setValue(peer.port)
         panel.timeout.setValue(2)
         panel.enabled.setChecked(True)
+        window.communication.persist_settings()
         startup.application.start().result(WAIT)
         assert peer.entered.wait(WAIT)
         stop = startup.application.stop()
@@ -384,6 +389,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         assert not stop.done() and not panel.port.isEnabled()
         page = window.communication
         page.port.setValue(peer.port)
+        window.communication.persist_settings()
         page.area.setCurrentIndex(1)
         page.address.setValue(49)
         page.write_values.setText("7")
@@ -398,6 +404,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         )
         assert observed.last_acknowledged.sequence == 51 and first.closed
         panel.timeout.setValue(0.2)
+        window.communication.persist_settings()
         startup.application.start().result(WAIT)
         assert second.entered.wait(WAIT)
         until(
@@ -416,6 +423,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         startup.application.stop().result(WAIT)
         window.bridge.refresh()
         panel.enabled.setChecked(False)
+        window.communication.persist_settings()
         before = len(peer.packets)
         startup.application.start().result(WAIT)
         assert disabled.entered.wait(WAIT)
@@ -430,6 +438,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
     with server() as peer, normal_window(tmp_path, engine) as (startup, window, panel):
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)
+        window.communication.persist_settings()
         guard = panel.controller.validate_manual_request
         caller = get_ident()
         entered, release = Event(), Event()
@@ -443,6 +452,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
         monkeypatch.setattr(panel.controller, "validate_manual_request", delayed_guard)
         page = window.communication
         page.port.setValue(peer.port)
+        window.communication.persist_settings()
         page.area.setCurrentIndex(1)
         page.address.setValue(49)
         page.write_values.setText("7")
@@ -488,6 +498,9 @@ def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
             local.application, local.store, local_replay=local.application
         )
         window = ProductionWindow(bridge, (local.choice,))
+        window.communication.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
         try:
             assert window.communication.reporting_panel is None
             assert not local.application.reporting_editable
@@ -504,6 +517,7 @@ def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
             with pytest.raises(ApplicationStateError):
                 local.application.set_reporting_selection(ReportingSelection())
             window.communication.port.setValue(peer.port)
+            window.communication.persist_settings()
             window.communication.area.setCurrentIndex(1)
             window.communication.address.setValue(49)
             window.communication.write_values.setText("7")
@@ -524,6 +538,7 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
             panel.port.setValue(peer.port)
             panel.timeout.setValue(5)
             panel.enabled.setChecked(True)
+            window.communication.persist_settings()
             try:
                 window.bridge.step_replay()
                 assert peer.entered.wait(WAIT)
@@ -540,6 +555,7 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
                 assert not panel.protocol.isEnabled()
                 page = window.communication
                 page.port.setValue(peer.port)
+                window.communication.persist_settings()
                 page.area.setCurrentIndex(1)
                 page.address.setValue(49)
                 page.write_values.setText("7")
@@ -565,6 +581,7 @@ def test_fault_and_closed_keep_preferences_locked(
     engine = Engine(fatal=True, hold=100)
     with normal_window(tmp_path, engine) as (startup, window, panel):
         panel.enabled.setChecked(True)
+        window.communication.persist_settings()
         startup.application.start().result(WAIT)
         until(lambda: startup.application.snapshot().state is ApplicationState.FAULT)
         window.bridge.refresh()
@@ -596,11 +613,10 @@ def test_reporting_panel_localized_layout(
             window.communication.body.width()
             <= window.communication.scroll_area.viewport().width()
         )
-        assert not window.communication.settings_dialog.isVisible()
+        assert panel.host.isVisible()
         assert window.grab().save(
             str(tmp_path / f"communication-empty-{language}-{width}x{height}.png")
         )
-        panel.settings_button.click()
         panel.advanced_button.click()
         window.communication.advanced_button.click()
         qapp.processEvents()
@@ -609,10 +625,8 @@ def test_reporting_panel_localized_layout(
         assert panel.port.accessibleName() == text("comm_port", language)
         assert panel.host.text() == "127.0.0.1" and panel.advanced.isVisible()
         assert panel.geometry().width() <= width
-        assert panel.height() < 120
         for widget in (panel.enabled, panel.port, panel.timeout, panel.advanced_button):
             assert widget.width() >= widget.minimumSizeHint().width()
-        assert window.communication.settings_dialog.width() <= width
         for widget in (
             panel.port,
             panel.timeout,
@@ -624,11 +638,8 @@ def test_reporting_panel_localized_layout(
         ):
             parent = widget.parentWidget()
             assert parent is not None and parent.rect().contains(widget.geometry())
-        assert window.communication.settings_dialog.grab().save(
-            str(tmp_path / f"normal-reporting-{language}-{width}x{height}.png")
-        )
         window.communication.port.setValue(peer.port)
-        window.communication.settings_dialog.reject()
+        window.communication.persist_settings()
         assert window.communication.add_watch_group(
             RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "首工位 / First station")
         )
@@ -677,6 +688,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         page = window.communication
         page.protocol.setCurrentIndex(1 if manual_transport is FinsTransport.TCP else 0)
         page.port.setValue(manual.port)
+        window.communication.persist_settings()
         panel.source[1].setValue(3)
         panel.protocol.setCurrentIndex(
             1 if automatic_transport is FinsTransport.TCP else 0
@@ -684,6 +696,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         panel.port.setValue(automatic.port)
         panel.timeout.setValue(0.2)
         panel.enabled.setChecked(True)
+        window.communication.persist_settings()
         selected = panel.controller.reporting_selection()
         assert selected.settings.transport is automatic_transport
         window.bridge.step_replay()
@@ -790,6 +803,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         until(lambda: startup.application.snapshot().state is ApplicationState.READY)
         window.bridge.refresh()
         panel.protocol.setCurrentIndex(1 - panel.protocol.currentIndex())
+        window.communication.persist_settings()
         assert (
             panel.controller.reporting_selection().settings.transport
             is not automatic_transport
@@ -804,18 +818,99 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         assert {p: p.read_bytes() for p in files} == files
 
 
-def test_reporting_host_editor_validates_and_forwards_remote_endpoint(
+def test_reporting_host_editor_preserves_invalid_draft_and_saved_endpoint(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
-    with normal_window(tmp_path) as (_, _, panel):
+    with normal_window(tmp_path) as (_, window, panel):
         panel.host.setText("192.0.2.42")
-        panel.host.editingFinished.emit()
+        assert panel.controller.reporting_selection().settings.host == "127.0.0.1"
+        window.communication.persist_settings()
         assert panel.controller.reporting_selection().settings.host == "192.0.2.42"
-        assert "192.0.2.42" in panel.endpoint.text()
         panel.host.setText("not-an-ip")
-        panel.host.editingFinished.emit()
+        window.communication.persist_settings()
+        assert panel.host.text() == "not-an-ip"
         assert panel.controller.reporting_selection().settings.host == "192.0.2.42"
-        assert panel.host.text() == "192.0.2.42"
-        assert "not-an-ip" in panel.host.toolTip()
+        assert "not-an-ip" in window.communication.preferences_status.toolTip()
         assert panel.controller.reporting_snapshot() is None
+
+
+def test_unsaved_reporting_draft_does_not_admit_or_change_active_session(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    engine = Engine(hold=9)
+    with normal_window(tmp_path, engine) as (startup, window, panel):
+        page = window.communication
+        page.persist_settings()
+        before = startup.data.communication.read_bytes()
+        original = panel.controller.reporting_selection()
+        panel.enabled.setChecked(True)
+        panel.port.setValue(19600)
+        startup.application.start().result(WAIT)
+        assert engine.entered.wait(WAIT)
+        window.bridge.refresh()
+        assert not panel.enabled.isEnabled() and not panel.port.isEnabled()
+        assert panel.controller.reporting_selection() is original
+        assert panel.controller.reporting_snapshot() is None
+        page.web_panel.port.setValue(8766)
+        page.persist_settings()  # Changed reporting is locked, including Save/Start races.
+        assert startup.data.communication.read_bytes() == before
+        assert page.dirty and panel.enabled.isChecked()
+        engine.release.set()
+        startup.application.stop().result(WAIT)
+        window.bridge.refresh()
+        page.persist_settings()
+        assert panel.controller.reporting_selection().enabled
+        assert panel.controller.reporting_selection().settings.port == 19600
+        assert panel.controller.reporting_snapshot() is None
+
+
+def test_save_and_start_share_admission_lock(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    engine = Engine(hold=1)
+    with normal_window(tmp_path, engine) as (startup, _, panel):
+        entered, release, requested, finished = Event(), Event(), Event(), Event()
+        errors: list[BaseException] = []
+        selected = ReportingSelection(False, LocalReportingSettings(port=19601))
+
+        def persist() -> None:
+            entered.set()
+            assert release.wait(WAIT)
+
+        def save() -> None:
+            try:
+                panel.controller.persist_reporting_selection(selected, persist)
+            except BaseException as exc:
+                errors.append(exc)
+
+        def start() -> None:
+            requested.set()
+            try:
+                startup.application.start().result(WAIT)
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                finished.set()
+
+        saving = Thread(target=save, name="CommunicationSaveTest")
+        starting = Thread(target=start, name="CommunicationStartTest")
+        saving.start()
+        try:
+            assert entered.wait(WAIT)
+            starting.start()
+            assert requested.wait(WAIT)
+            release.set()
+            assert engine.entered.wait(WAIT)
+            assert panel.controller.reporting_selection() == selected
+            engine.release.set()
+            assert finished.wait(WAIT)
+            assert not errors and panel.controller.reporting_snapshot() is None
+        finally:
+            release.set()
+            engine.release.set()
+            saving.join(WAIT)
+            if starting.ident is not None:
+                starting.join(WAIT)
+            assert not saving.is_alive() and not starting.is_alive()

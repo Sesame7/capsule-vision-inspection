@@ -13,6 +13,12 @@ from typing import cast
 
 import pytest
 
+from vimo_demo.application.communication_preferences import (
+    CommunicationPreferences,
+    WebPreferences,
+    save_communication_preferences,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows WM_CLOSE")
 
@@ -72,11 +78,19 @@ def test_normal_app_native_close_exits_process_tree(
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
-    command.extend(("--web-port", str(port)))
-    if web_host == "off":
-        command.append("--no-web-snapshots")
-    elif web_host is not None:
-        command.extend(("--web-snapshots", "--web-host", web_host))
+    settings_path = tmp_path / "data" / "communication.json"
+    save_communication_preferences(
+        settings_path,
+        CommunicationPreferences(
+            web=WebPreferences(enabled=web_host != "off", port=port)
+        ),
+    )
+    if web_host not in (None, "off", "127.0.0.1"):
+        settings = cast(
+            dict[str, object], json.loads(settings_path.read_text(encoding="utf-8"))
+        )
+        cast(dict[str, object], settings["web"])["host"] = web_host
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
     with subprocess.Popen(
         command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
@@ -116,7 +130,7 @@ def test_normal_app_native_close_exits_process_tree(
     assert "application_joined" in stages
     assert (b"Read-only Production snapshots" in stderr) == web_started
     if web_host not in (None, "off") and not web_started:
-        assert b"ValueError" in stderr
+        assert b"Invalid communication settings" in stderr or b"ValueError" in stderr
     for record in records:
         if record["stage"] == "last_window_closed" or (
             record["stage"] == "close_return" and record["accepted"]

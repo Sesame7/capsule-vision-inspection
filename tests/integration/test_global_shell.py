@@ -94,8 +94,8 @@ def test_navigation_language_and_themes_preserve_presentation_contract(
                 assert window.bridge.application.snapshot() == baseline
                 if page == 2:
                     assert window.pages.currentWidget() is window.communication
-                    assert window.communication.test_button.text() == text(
-                        "comm_test", current
+                    assert window.communication.write_button.text() == text(
+                        "comm_write", current
                     )
             assert window.pages.currentWidget() is window.parameters.settings
             palette = window.parameters.metadata["display_name"].palette()

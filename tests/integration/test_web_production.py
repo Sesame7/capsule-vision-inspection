@@ -12,6 +12,11 @@ from tests.integration.test_normal_replay_ui import normal_replay, replay_state
 from tests.qt_support import until
 
 from vimo_demo.application import ApplicationState
+from vimo_demo.application.communication_preferences import (
+    CommunicationPreferences,
+    WebPreferences,
+    save_communication_preferences,
+)
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.ui import bootstrap
 from vimo_demo.web import ProductionSnapshotService
@@ -80,21 +85,15 @@ def test_stop_restart_and_close_keep_web_independent_of_production(
 
 
 @pytest.mark.parametrize(
-    "arguments,expected_interval",
-    [
-        ([], 0.5),
-        (["--web-snapshots"], 0.5),
-        (["--no-web-snapshots"], None),
-        (["--web-interval-ms", "2000"], 2.0),
-        (["--web-interval-ms", "1000"], 1.0),
-        (["--web-interval-ms", "500"], 0.5),
-    ],
+    "enabled,interval_ms,expected_interval",
+    [(True, 500, 0.5), (False, 500, None), (True, 2000, 2.0), (True, 1000, 1.0)],
 )
 def test_normal_startup_web_defaults_and_interval(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    arguments: list[str],
+    enabled: bool,
+    interval_ms: int,
     expected_interval: float | None,
 ) -> None:
     services: list[ProductionSnapshotService] = []
@@ -127,8 +126,14 @@ def test_normal_startup_web_defaults_and_interval(
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
+    save_communication_preferences(
+        bootstrap.ApplicationData.at_entry(tmp_path).communication,
+        CommunicationPreferences(
+            web=WebPreferences(enabled=enabled, port=port, interval_ms=interval_ms)
+        ),
+    )
     try:
-        assert bootstrap.main(tmp_path, [*arguments, "--web-port", str(port)]) == 0
+        assert bootstrap.main(tmp_path, []) == 0
         assert len(services) == int(expected_interval is not None)
         if services:
             service = services[0]
@@ -167,16 +172,33 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
             occupied.bind(("127.0.0.1", 0))
             occupied.listen()
             port = occupied.getsockname()[1]
-            assert bootstrap.main(tmp_path, ["--web-port", str(port)]) == 0
+            save_communication_preferences(
+                bootstrap.ApplicationData.at_entry(tmp_path).communication,
+                CommunicationPreferences(web=WebPreferences(port=port)),
+            )
+            assert bootstrap.main(tmp_path, []) == 0
         assert window.isVisible()
         assert window.isMaximized()
         assert window.observation is not None and not window.observation()[0]
         assert "OSError" in capsys.readouterr().err
+        assert "OSError" in window.observation()[1]
     finally:
         window.close()
 
 
-def test_invalid_refresh_interval_rejected_before_startup(tmp_path: Path) -> None:
-    with pytest.raises(SystemExit) as error:
-        bootstrap.main(tmp_path, ["--web-interval-ms", "100"])
-    assert error.value.code == 2
+def test_invalid_saved_interval_recovers_without_silent_overwrite(
+    tmp_path: Path,
+) -> None:
+    path = bootstrap.ApplicationData.at_entry(tmp_path).communication
+    save_communication_preferences(path, CommunicationPreferences())
+    raw = path.read_text(encoding="utf-8").replace(
+        '"interval_ms": 500', '"interval_ms": 100'
+    )
+    path.write_text(raw, encoding="utf-8")
+    startup = bootstrap.load_startup(bootstrap.ApplicationData.at_entry(tmp_path))
+    try:
+        assert not startup.communication.web.enabled and startup.communication_error
+        assert path.read_text(encoding="utf-8") == raw
+    finally:
+        startup.application.close().result(5)
+        assert startup.application.join(5)
