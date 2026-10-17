@@ -26,6 +26,7 @@ from vimo_demo.application import (
 )
 from vimo_demo.application.basler_connection import (
     BaslerConnection,
+    CameraSnapshot,
     ConnectionState,
     InspectionBinding,
     SourceConnectionSnapshot,
@@ -522,6 +523,21 @@ class _LocalApplication(ProductionApplication):
     def source_snapshot(self) -> SourceConnectionSnapshot:
         return self.connection.snapshot()
 
+    def capture_image(
+        self, camera: CameraId, *, timeout: float = 10.0
+    ) -> Future[CameraSnapshot]:
+        with self._condition:
+            self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+            if self._closing:
+                raise ApplicationStateError("Application is closing")
+            return self.connection.capture_image(camera, timeout=timeout)
+
+    def close(self) -> Future[None]:
+        with self._condition:
+            completed = super().close()
+            self.connection.cancel_capture()
+            return completed
+
     def connect_source(self) -> None:
         with self._condition:
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
@@ -592,6 +608,7 @@ class _LocalApplication(ProductionApplication):
     def _start_reporting_session(self) -> Future[None]:
         with self._condition:
             startup = super().start()  # Same authoritative readiness/activation.
+            self.connection.cancel_capture()
             with self._reporting_lock:
                 self._reporting_generation = self.snapshot().generation
                 selection = self._reporting_selection

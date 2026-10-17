@@ -8,14 +8,20 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import Enum, auto
+from math import isfinite
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
+from time import monotonic
 from typing import Protocol, runtime_checkable
 
+import numpy as np
+from numpy.typing import NDArray
+
+from vimo_demo.inference._validation import validate_image
 from vimo_demo.inspection import CameraId, CycleId, Frame
 from vimo_demo.runtime import CoordinatorStoppedError
 
-from .basler import CameraSettings
+from .basler import AcquisitionMetadata, CameraSettings
 from .basler_control import BaslerAdmissionControl
 from .continuous_basler import ContinuousArmedAcquisition, ContinuousBaslerSource
 from .models import ApplicationCapacityError, ApplicationStateError
@@ -47,6 +53,8 @@ class SourceConnectionSnapshot:
     inspection_generation: int | None
     received_frames: int
     discarded_frames: int
+    capture_camera: CameraId | None
+    capture_waiting: bool
 
     @property
     def locked(self) -> bool:
@@ -63,11 +71,31 @@ class InspectionBinding:
     admitting: Callable[[], bool]
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class CameraSnapshot:
+    """Temporary idle image, never a Production Frame or display publication."""
+
+    camera_id: CameraId
+    metadata: AcquisitionMetadata
+    pixels: NDArray[np.uint8]
+
+
+@dataclass(slots=True)
+class _Capture:
+    camera: CameraId
+    deadline: float
+    future: Future[CameraSnapshot]
+    armed: bool = False
+
+
 @runtime_checkable
 class SourceConnectionCommands(Protocol):
     def source_snapshot(self) -> SourceConnectionSnapshot: ...
     def connect_source(self) -> None: ...
     def disconnect_source(self) -> None: ...
+    def capture_image(
+        self, camera: CameraId, *, timeout: float = 10.0
+    ) -> Future[CameraSnapshot]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +106,9 @@ class _Command:
 
 
 class BaslerConnection:
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], float] = monotonic) -> None:
+        self._clock = clock
+        self._capture: _Capture | None = None
         self._lock = Lock()
         self._state = ConnectionState.DISCONNECTED
         self._cameras: tuple[ConnectedCamera, ...] = ()
@@ -102,6 +132,12 @@ class BaslerConnection:
                 self._binding.control.generation if self._binding else None,
                 self._source.received_frames if self._source else 0,
                 self._source.discarded_frames if self._source else 0,
+                self._capture.camera
+                if self._capture and not self._capture.future.done()
+                else None,
+                self._capture is not None
+                and self._capture.armed
+                and not self._capture.future.done(),
             )
 
     def begin_connect(
@@ -143,6 +179,7 @@ class BaslerConnection:
             raise
 
     def request_disconnect(self) -> None:
+        self.cancel_capture()
         with self._lock:
             if self._binding is not None:
                 raise ApplicationStateError("Stop inspection before disconnecting")
@@ -201,7 +238,86 @@ class BaslerConnection:
         source = self._source
         return source is not None and source.attributable(cycle)
 
+    def capture_image(
+        self, camera: CameraId, *, timeout: float = 10.0
+    ) -> Future[CameraSnapshot]:
+        """One idle request; owner observes an empty complete boundary first.
+
+        No trigger is sent. The next matching retrieved external frame is copied.
+        A cancelled/done Future releases the slot; there is no image history.
+        """
+        if not isfinite(timeout) or not 0 < timeout <= 120:
+            raise ValueError("Capture timeout must be finite and in (0,120]")
+        future: Future[CameraSnapshot] = Future()
+        with self._lock:
+            if self._state is not ConnectionState.CONNECTED or self._binding:
+                raise ApplicationStateError("Capture requires connected idle cameras")
+            if camera not in {row.camera_id for row in self._cameras}:
+                raise ValueError("Unknown capture camera")
+            if self._capture is not None and not self._capture.future.done():
+                raise ApplicationCapacityError("One camera capture is already pending")
+            self._capture = _Capture(camera, self._clock() + timeout, future)
+        return future
+
+    def cancel_capture(self) -> None:
+        with self._lock:
+            capture, self._capture = self._capture, None
+        if capture is not None:
+            capture.future.cancel()
+
+    def _poll_capture(self, clean: Callable[[], bool]) -> None:
+        error: Exception | None = None
+        deliver = False
+        with self._lock:
+            capture = self._capture
+            if capture is None:
+                return
+            if capture.future.done():
+                self._capture = None
+                return
+            if self._clock() >= capture.deadline:
+                error = TimeoutError(
+                    "No matching external camera frame before deadline"
+                )
+            elif not capture.armed:
+                if clean():
+                    capture.armed = True
+                else:
+                    error = ApplicationStateError(
+                        "Capture requires an idle complete SDK boundary"
+                    )
+            if error is not None:
+                self._capture = None
+                deliver = capture.future.set_running_or_notify_cancel()
+        if error is not None and deliver:
+            capture.future.set_exception(error)
+
+    def _capture_frame(
+        self, camera: CameraId, metadata: AcquisitionMetadata, pixels: NDArray[np.uint8]
+    ) -> None:
+        with self._lock:
+            capture = self._capture
+            if capture is None or not capture.armed or capture.camera != camera:
+                return
+            self._capture = None
+            if not capture.future.set_running_or_notify_cancel():
+                return
+        if self._clock() >= capture.deadline:
+            capture.future.set_exception(TimeoutError("Camera capture timed out"))
+            return
+        try:
+            pixels = validate_image(pixels)
+            if pixels.shape != (metadata.height, metadata.width, 3):
+                raise ValueError("Camera snapshot dimensions differ from metadata")
+            owned = np.frombuffer(pixels.tobytes(), dtype=np.uint8).reshape(
+                pixels.shape
+            )
+            capture.future.set_result(CameraSnapshot(camera, metadata, owned))
+        except Exception as exc:
+            capture.future.set_exception(exc)
+
     def _poll(self, clean: Callable[[], bool]) -> bool:
+        self._poll_capture(clean)
         changed = False
         while True:
             try:
@@ -209,6 +325,8 @@ class BaslerConnection:
             except Empty:
                 return changed
             try:
+                if command.attach:
+                    self.cancel_capture()
                 with self._lock:
                     changes_binding = command.attach or self._binding is command.binding
                     if command.attach:
@@ -302,12 +420,14 @@ class BaslerConnection:
                 on_armed=armed,
                 on_prepared=self._prepared,
                 on_poll=self._poll,
+                on_idle_frame=self._capture_frame,
             )
             if not self._stop.is_set():
                 raise ApplicationStateError("Camera owner terminated unexpectedly")
         except BaseException as exc:
             error = exc
         finally:
+            self.cancel_capture()
             if not source.cleanup_safe:
                 error = error or ApplicationStateError("Camera cleanup unresolved")
             with self._lock:

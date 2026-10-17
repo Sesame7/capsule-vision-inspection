@@ -34,8 +34,8 @@ data/
   machine/machine.json        # Saved camera/channel order and ROI geometry
   models/*.json               # Model definitions and their referenced artifacts
   recipes/*.recipe.json
-  sources/camera_sources.json # Folder references and optional Basler serials
-images/                       # Local Folder/reference images
+  sources/camera_sources.json # Folder inputs and optional Basler serials
+images/                       # Local Folder images
 models/                       # Optional independent engineering inputs
 outputs/                      # Runtime caches and generated tool/test files
 ```
@@ -56,9 +56,12 @@ The shared navigation offers dark/light themes (dark on launch) and a fixed-widt
 required data produces UNCONFIGURED with actionable feedback. It never chooses
 the first available model/Recipe, invents ROIs or substitutes fake inference.
 
-- **Vision:** select Folder Replay or Basler, assign all six serials explicitly,
-  calibrate Machine ROIs and Save/apply. Basler Connect all is explicit; Folder
-  references are optional. Disconnect before editing source identity.
+- **Vision:** edit Folder inputs or explicitly assign/discover Basler serials on
+  the six camera cards, calibrate Machine ROIs and Save/apply. Basler Connect all
+  is explicit; disconnect before editing source identity. While inspection is
+  stopped, Capture image waits up to ten seconds for the selected camera's next
+  external-triggered frame. Import and eligible frozen Runtime images are also
+  temporary canvas inputs; none creates a production result or an image library.
 - **Recipe:** select the model and defect filtering; enable/tune Size and Color.
   Preview uses a frozen reference and never submits production cycles or counters.
   Save/preparation is separate from activation on the next successful Start.

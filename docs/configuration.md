@@ -87,9 +87,9 @@ inferred positions. Basler requires exactly six distinct nonempty serials.
 Mappings are resolved by CameraId into MachineLayout order. Incomplete drafts
 cannot be saved or executed as Basler.
 
-`loop` is boolean; FPS is finite/positive. They pace Folder Replay only. Basler
-Folder references are optional strings (including empty), used only for offline
-image workflows. Connect all explicitly uses saved/applied mappings; Start requires
+`loop` is boolean; FPS is finite/positive. They pace Folder Replay only. Stored
+Folder paths are retained across mode changes but are not shown or used as
+independent references in Basler mode. They may be empty. Connect all explicitly uses saved/applied mappings; Start requires
 the connected source, validates actual dimensions and warms ViMo with synthetic BGR.
 Switching mode preserves both folders and serials. Disconnect before changing
 source mapping/mode; Recipe/Batch/page changes do not disconnect cameras.
@@ -106,27 +106,41 @@ filters, Size/Color enablement and one Tune preview entry. Hidden policies remai
 in drafts and saved data. Single-model configuration is read-only selection.
 Vision owns source setup and canvas-first Machine ROI editing, numeric Apply,
 Common size and Distribute evenly. Those operations reject invalid bounds atomically;
-they never silently clamp. Folder/Runtime references are explicit frozen images.
+they never silently clamp.
 Vision stacks the global source-mode selector, six camera cards in configured
-order (two columns), reference controls/canvas and ROI controls. Card headers select
+order (two columns), image controls/canvas and ROI controls. Card headers select
 the displayed camera; inline path/browse and Basler serial fields edit that camera's
-existing source draft without selecting it. Basler cards retain optional Folder
-references and show explicit connection state; serial assignment alone is not
+existing source draft without selecting it. Basler cards offer manual serial entry
+and explicit device discovery/selection; undiscovered saved assignments are retained.
+Discovery reads device information off Qt dispatch without opening cameras or
+assigning them by enumeration order. Cards show explicit connection state; assignment alone is not
 connection status or live preview. Connect all/Disconnect are stopped operations
 off Qt dispatch, owned by the application rather than the widget. Source fields
 are locked until Disconnect; ROI editing remains subject to inspection locks.
-The source dialog remains available for existing device discovery/mapping. Compact
+There is no separate source dialog. Compact
 Folder playback options edit Loop/FPS; Basler does not use these pacing settings.
-The image selector and previous/next browse frozen Folder references; Runtime,
-Refresh, Fit and 1:1 keep their existing meanings. ROI channel selection changes
+The image selector and previous/next browse Folder inputs. Import loads a temporary
+image; Use runtime image freezes the latest eligible same-camera/source display
+frame, with explicit refresh. Neither tracks live pixels. Fit and 1:1 retain their
+canvas transforms. ROI channel selection changes
 the displayed slot; numeric Apply edits only the machine draft until Save/apply.
 Mode selection edits the same CameraSources draft and requires explicit Save/apply;
 selecting a card never changes saved sources or geometry. Runtime editing locks remain.
-Basler Save/apply permits structurally valid ROIs without reference images; numeric
+Save/apply permits structurally valid ROIs without canvas images; numeric
 editing does not require image pixels. Available connected dimensions supply bounds
 checks, always repeated before Start. Folder mode still validates all configured
-inputs at Save/Start. Drawing and image navigation need an actual Folder or eligible
-Runtime reference; synthetic warm-up images are never published as references.
+inputs at Save/Start. Drawing needs an actual image; synthetic warm-up images are
+never published. Images are temporary canvas content, not independent persisted
+reference configuration. Replacing an image never rescales, repairs or saves ROIs.
+
+With Basler connected and inspection stopped, **Capture image** waits for the
+selected camera's next valid external-triggered frame (ten-second deadline).
+It never sends a trigger. Only one request can be pending; Cancel, camera/source
+changes, Disconnect, Start and Close invalidate it. Waiting, timeout, cancellation
+and success are explicit. Delivery is asynchronous and owns immutable BGR pixels;
+late callbacks cannot replace a different camera's image. This operation does not
+publish Production frames, infer, count or report. During inspection only existing
+frozen Runtime viewing is available. No image history/export/library is created.
 
 Tune preview measures the current draft without Production admission, accounting,
 candidate activation or source reconfiguration. Frozen-reference ownership,

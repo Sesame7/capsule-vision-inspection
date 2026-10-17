@@ -209,10 +209,14 @@ def test_responsive_bilingual_editor(
     window.resize(*size)
     publish(window)
     dialog = open_editor(window)
-    assert dialog.reference_modes["runtime"].accessibleName() == text(
-        "reference_runtime", language
+    assert dialog.buttons["vision_runtime"].accessibleName() == text(
+        "vision_runtime", language
     )
-    assert set(dialog.findChildren(QComboBox)) == {dialog.reference, dialog.channel}
+    assert set(dialog.findChildren(QComboBox)) == {
+        dialog.reference,
+        dialog.channel,
+        *(card.device for card in dialog.camera_cards.values()),
+    }
     source_fields = {
         field
         for card in dialog.camera_cards.values()
