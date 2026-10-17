@@ -105,8 +105,8 @@ def test_folder_warning_survives_apply_until_verified_source_save(
         workspace = window.parameters.roi_workspace
         assert workspace is not None
         until(lambda: not window.parameters.busy)
-        for index in range(6):
-            workspace.camera_tabs.setCurrentIndex(index)
+        for card in workspace.camera_cards.values():
+            card.click()
             until(lambda: not window.parameters.busy)
             workspace.folder.setText(str(tmp_path / "frames"))
             workspace.source_edited(str(tmp_path / "frames"))

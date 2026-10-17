@@ -38,7 +38,7 @@ def open_editor(window: ProductionWindow) -> MachineRoiWorkspace:
     window.navigate(4)
     dialog = page.roi_workspace
     assert dialog is not None
-    dialog.camera_tabs.setCurrentIndex(2)
+    dialog.camera_cards[CameraId("CAM3")].click()
     dialog.select_roi(4)
     QApplication.processEvents()
     return dialog
@@ -114,9 +114,9 @@ def test_six_rois_selection_move_resize_and_camera_switch(
     ):
         if a.channel_id != 17:
             assert a == b
-    dialog.camera_tabs.setCurrentIndex(3)
+    dialog.camera_cards[CameraId("CAM4")].click()
     assert dialog.frame is None and not dialog.canvas.model.can_drag
-    dialog.camera_tabs.setCurrentIndex(2)
+    dialog.camera_cards[CameraId("CAM3")].click()
     dialog.select_roi(4)
     assert dialog.canvas.model.rect == BoundingRect(42, 3, 10, 12)
     QTest.mouseClick(dialog.canvas, Qt.MouseButton.LeftButton, pos=point(dialog, 24, 5))
@@ -212,15 +212,22 @@ def test_responsive_bilingual_editor(
     assert dialog.reference_modes["runtime"].accessibleName() == text(
         "reference_runtime", language
     )
-    assert not dialog.findChildren(QComboBox)
-    assert len(dialog.findChildren(QLineEdit)) == 4
+    assert set(dialog.findChildren(QComboBox)) == {dialog.reference, dialog.channel}
+    source_fields = {
+        field
+        for card in dialog.camera_cards.values()
+        for field in (card.folder, card.serial)
+    }
+    assert set(dialog.findChildren(QLineEdit)) == set(
+        dialog.coordinates.values()
+    ) | source_fields | {dialog.fps}
     assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
     for button in dialog.buttons.values():
         assert dialog.rect().contains(button.mapTo(dialog, QPoint(0, 0)))
         assert (
             button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 12
         )
-    assert dialog.canvas.height() > dialog.height() * 0.7
+    assert dialog.canvas.height() > dialog.source_cards.height()
     assert not session.dirty
     dialog.request_back()
 
@@ -325,7 +332,7 @@ def test_prepare_failure_keeps_saved_machine_and_workspace(
     assert window.parameters.roi_workspace is dialog
 
 
-def test_camera_tabs_use_custom_configured_order(configured_screen: Screen) -> None:
+def test_camera_cards_use_custom_configured_order(configured_screen: Screen) -> None:
     window, session, _ = configured_screen
     draft = session.machine_editor
     layout = replace(
@@ -335,20 +342,18 @@ def test_camera_tabs_use_custom_configured_order(configured_screen: Screen) -> N
     draft.definition = draft.saved = replace(draft.definition, layout=layout)
     publish(window)
     workspace = open_editor(window)
-    assert [workspace.camera_tabs.tabText(i) for i in range(6)] == [
-        str(c.camera_id).removeprefix("CAM") for c in layout.cameras
-    ]
+    assert list(workspace.camera_cards) == list(layout.camera_ids)
     QTest.mouseClick(
-        workspace.camera_tabs,
+        workspace.camera_cards[layout.camera_ids[3]],
         Qt.MouseButton.LeftButton,
-        pos=workspace.camera_tabs.tabRect(3).center(),
     )
     assert workspace.camera == CameraId("CAM3")
     assert workspace.frame is not None and len(workspace.canvas.rois) == 6
-    workspace.camera_tabs.setFocus()
-    QTest.keyClick(workspace.camera_tabs, Qt.Key.Key_Right)
+    workspace.camera_cards[CameraId("CAM2")].setFocus()
+    QTest.keyClick(workspace.camera_cards[CameraId("CAM2")], Qt.Key.Key_Space)
     assert workspace.camera == CameraId("CAM2")
-    QTest.keyClick(workspace.camera_tabs, Qt.Key.Key_Left)
+    workspace.camera_cards[CameraId("CAM3")].setFocus()
+    QTest.keyClick(workspace.camera_cards[CameraId("CAM3")], Qt.Key.Key_Space)
     assert workspace.camera == CameraId("CAM3")
     workspace.request_back()
 
@@ -413,8 +418,8 @@ def test_workspace_open_refresh_and_reopen_never_reinitialize_saved_layout(
     payload = session.machine_path.read_bytes()
     for _ in range(2):
         workspace.refresh_frame()
-        workspace.camera_tabs.setCurrentIndex(0)
-        workspace.camera_tabs.setCurrentIndex(2)
+        workspace.camera_cards[CameraId("CAM1")].click()
+        workspace.camera_cards[CameraId("CAM3")].click()
         assert session.machine_editor.definition == saved
         workspace.request_back()
         workspace = open_editor(window)

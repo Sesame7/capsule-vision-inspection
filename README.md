@@ -57,16 +57,18 @@ required data produces UNCONFIGURED with actionable feedback. It never chooses
 the first available model/Recipe, invents ROIs or substitutes fake inference.
 
 - **Vision:** select Folder Replay or Basler, assign all six serials explicitly,
-  select reference folders and calibrate Machine ROIs. Save and apply before Start.
+  calibrate Machine ROIs and Save/apply. Basler Connect all is explicit; Folder
+  references are optional. Disconnect before editing source identity.
 - **Recipe:** select the model and defect filtering; enable/tune Size and Color.
   Preview uses a frozen reference and never submits production cycles or counters.
   Save/preparation is separate from activation on the next successful Start.
 - **Production:** Start performs readiness warm-up without production side effects.
   Folder Replay and Basler support Pause/Continue/Step and Stop, with separate
-  source-boundary semantics. Basler waits for actual ARMED and external hardware
+  source-boundary semantics. Basler requires an already connected/ARMED source and external hardware
   triggers; paused frames are discarded, and Step waits for one subsequent capture.
   These controls only affect inspection admission; Production never writes W10.7.
-  Stop waits for safe cleanup and returns READY; close normally and verify exit.
+  Stop settles inspection and returns READY while Basler remains connected.
+  Vision Disconnect or normal application Close releases cameras; verify actual exit.
 - **Communication:** manual D/W reads/writes and register watches use independently
   selected UDP/TCP. Automatic W49–W52 reporting is opt-in, memory-only and captured
   at Start. Folder defaults to localhost/UDP; Basler defaults to field TCP.
@@ -99,7 +101,7 @@ returns 410. `/health` describes publication, not machine readiness.
 | Tool | Purpose |
 | --- | --- |
 | [run_production_ui.py](scripts/run_production_ui.py) | Fake-engine UI review; no hardware/model required |
-| [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit configuration paths for real developer diagnosis; optional one-cycle Basler mode, not normal persistent startup |
+| [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit configuration paths for real developer diagnosis; Folder/fixed inputs or saved Basler mappings with explicit Vision connection |
 | [visualize_inference.py](scripts/visualize_inference.py) | Typed inference masks/contours/boxes for a selected local model and images |
 | [run_fins_simulator.py](scripts/run_fins_simulator.py) | Localhost UDP simulator, optionally tracing accepted W49 writes |
 
@@ -140,8 +142,8 @@ uv run --no-sync pytest tests/integration/test_reference.py tests/integration/te
 - **UNCONFIGURED / Start fails:** inspect the displayed detail, explicit IDs, file
   paths, model SHA, source availability and ROI bounds. Do not replace calibration
   with generated geometry.
-- **Basler shows no images:** confirm saved Basler mode/serials, warm-up folders,
-  actual ARMED and an external trigger. Do not open another camera owner. Very
+- **Basler shows no images:** confirm saved Basler mode/serials, Vision Connect all,
+  actual ARMED, then Start inspection before external triggering. Do not open another camera owner. Very
   dark decoded frames are different from unavailable frames.
 - **PLC reports fail:** verify transport, endpoint, node negotiation and reporting
   enablement before Start. ACK is not PLC scan consumption or physical rejection.

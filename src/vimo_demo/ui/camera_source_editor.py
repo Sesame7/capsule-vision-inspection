@@ -29,6 +29,9 @@ class CameraSourceDraft:
     def set_loop(self, enabled: bool) -> None:
         self.definition = replace(self.definition, loop=enabled)
 
+    def set_fps(self, value: float) -> None:
+        self.definition = replace(self.definition, target_fps=value)
+
     def set_mode(self, mode: Literal["folder", "basler"]) -> None:
         self.definition = replace(self.definition, mode=mode)
 

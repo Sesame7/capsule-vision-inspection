@@ -7,30 +7,38 @@ from time import monotonic
 from typing import Literal
 
 import numpy as np
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QRegularExpression, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QIcon,
     QPainter,
+    QPaintEvent,
     QPen,
     QPixmap,
+    QRegularExpressionValidator,
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QTabBar,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
+from vimo_demo.application.basler_connection import (
+    ConnectionState,
+    SourceConnectionCommands,
+)
 from vimo_demo.application.folder_replay import (
     FolderReplay,
     FolderSourceError,
@@ -43,7 +51,14 @@ from vimo_demo.inspection import CameraId, CycleId, FrameId
 
 from .camera_source_dialog import CameraSourceDialog
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
-from .production_style import Language, Style, camera_icon, text, theme_colors
+from .production_style import (
+    Language,
+    Style,
+    camera_icon,
+    navigation_icon,
+    text,
+    theme_colors,
+)
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
 
@@ -52,8 +67,6 @@ def _image_icon(
     tool: str, color: str = Style.primary, background: str = Style.raised
 ) -> QIcon:
     """Local vector tools; checked modes have a check mark, not just a color."""
-    if tool == "camera":
-        return camera_icon(color)
     icon = QIcon()
     for checked in (False, True):
         for dpr in (1.0, 1.25, 1.5, 2.0):
@@ -146,6 +159,90 @@ class _FolderReference:
     error: str = ""
 
 
+class _SourceCard(QPushButton):
+    """The card selects; its child editors never select or connect a camera."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = self.detail = self.summary = ""
+        self.setCheckable(True)
+        self.setMinimumWidth(180)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setAutoDefault(False)
+        contents = QVBoxLayout(self)
+        contents.setContentsMargins(12, 40, 12, 10)
+        contents.setSpacing(Style.small)
+        folder = QHBoxLayout()
+        folder.setSpacing(Style.small)
+        self.serial_row = QWidget()
+        serial = QHBoxLayout(self.serial_row)
+        serial.setContentsMargins(0, 0, 0, 0)
+        serial.setSpacing(Style.small)
+        serial.addWidget(QLabel("SN"))
+        self.serial = QLineEdit()
+        self.serial.setValidator(
+            QRegularExpressionValidator(QRegularExpression("[0-9]*"), self.serial)
+        )
+        self.serial.setMinimumHeight(Style.touch)
+        self.serial.setFixedWidth(116)
+        serial.addWidget(self.serial)
+        folder.addWidget(self.serial_row)
+        self.serial_row.hide()
+        self.folder_label = QLabel()
+        folder.addWidget(self.folder_label)
+        self.folder = QLineEdit()
+        self.folder.setMinimumHeight(Style.touch)
+        self.folder.setMinimumWidth(0)
+        folder.addWidget(self.folder, 1)
+        self.browse = QPushButton()
+        self.browse.setFixedSize(Style.touch, Style.touch)
+        self.browse.setIconSize(QSize(Style.icon, Style.icon))
+        folder.addWidget(self.browse)
+        contents.addLayout(folder)
+
+    def sizeHint(self) -> QSize:
+        return QSize(280, 100)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        colors = theme_colors(self)
+        painter = QPainter(self)
+        color = (
+            colors.secondary
+            if not self.isEnabled()
+            else colors.accent
+            if self.isChecked()
+            else colors.primary
+        )
+        camera_icon(color).paint(painter, 14, 13, Style.icon, Style.icon)
+        metrics = self.fontMetrics()
+        summary_width = min(
+            metrics.horizontalAdvance(self.summary) + 4, self.width() // 3
+        )
+        painter.setPen(QColor(colors.secondary))
+        painter.drawText(
+            self.width() - 14 - summary_width,
+            10,
+            summary_width,
+            28,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            metrics.elidedText(
+                self.summary, Qt.TextElideMode.ElideRight, summary_width
+            ),
+        )
+        painter.setPen(QColor(color))
+        title_width = max(0, self.width() - 70 - summary_width)
+        painter.drawText(
+            44,
+            10,
+            title_width,
+            28,
+            Qt.AlignmentFlag.AlignVCenter,
+            metrics.elidedText(self.title, Qt.TextElideMode.ElideRight, title_width),
+        )
+        painter.end()
+
+
 class _RoiToolbar(QWidget):
     """Align three compact groups; wrap whole groups without shrinking controls."""
 
@@ -203,7 +300,7 @@ class _RoiToolbar(QWidget):
         return sum(heights) + 2 * Style.small
 
     def sync_metrics(self) -> None:
-        # Recompute after localized labels/status change; retain all camera tabs.
+        # Recompute after localized labels/status changes.
         for group in self._groups:
             layout = group.layout()
             if layout is not None:
@@ -266,6 +363,7 @@ class MachineRoiWorkspace(QWidget):
             [Callable[[], object], Callable[[object, BaseException | None], None]], bool
         ]
         | None = None,
+        connection: SourceConnectionCommands | None = None,
     ) -> None:
         super().__init__(parent)
         self.session, self.draft = session, session.machine_editor
@@ -277,6 +375,8 @@ class MachineRoiWorkspace(QWidget):
         )
         self._leave, self._run_io = leave, run_io
         self.sources = session.camera_sources
+        self.connection = connection
+        self._hardware_bounds: set[CameraId] = set()
         self._reference_revision = 0
         self._reading = False
         self._pending_reference = False
@@ -284,6 +384,8 @@ class MachineRoiWorkspace(QWidget):
         self._folder_paths: dict[CameraId, tuple[Path, ...]] = {}
         self._positions: dict[CameraId, int] = {}
         self._reference_modes: dict[CameraId, ReferenceMode] = {}
+        self._selector_paths: tuple[Path, ...] = ()
+        self._selector_mode: ReferenceMode | None = None
         self.language: Language = language
         self.simulation = simulation
         self.frame: DisplayFrame | None = None
@@ -293,26 +395,51 @@ class MachineRoiWorkspace(QWidget):
         self._feedback = ""
         self._preparing = False
         self._save_failed = False
+        self._fps_issue = ""
         self._decision: QMessageBox | None = None
         self.source_dialog: CameraSourceDialog | None = None
         self.buttons: dict[str, QPushButton] = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(Style.small)
-        self.camera_tabs = QTabBar()
-        self.camera_tabs.setExpanding(False)
-        self.camera_tabs.setDrawBase(False)
-        self.camera_tabs.setIconSize(QSize(Style.icon, Style.icon))
-        camera_icon = _image_icon("camera")
-        for identity in self.draft.definition.layout.camera_ids:
-            self.camera_tabs.addTab(camera_icon, str(identity).removeprefix("CAM"))
-        self.camera_tabs.setCurrentIndex(
-            self.draft.definition.layout.camera_ids.index(camera)
-        )
+        self._cameras = QButtonGroup(self)
+        self.camera_cards: dict[CameraId, _SourceCard] = {}
+        self.source_cards = QWidget()
+        cards = QGridLayout(self.source_cards)
+        cards.setContentsMargins(0, 0, 0, 0)
+        cards.setSpacing(Style.small)
+        for index, identity in enumerate(self.draft.definition.layout.camera_ids):
+            card = _SourceCard()
+            self._cameras.addButton(card, index)
+            self.camera_cards[identity] = card
+            cards.addWidget(card, index // 2, index % 2)
+            card.setChecked(identity == camera)
+
+            def edit_folder(value: str, target: CameraId = identity) -> None:
+                self.source_edited(value, target)
+
+            def finish_folder(
+                target: CameraId = identity, field: QLineEdit = card.folder
+            ) -> None:
+                modified = field.isModified()
+                field.setModified(False)
+                if modified and target == self.camera:
+                    self.refresh_frame()
+
+            def browse(_checked: bool = False, target: CameraId = identity) -> None:
+                self.browse_folder(target)
+
+            def edit_serial(value: str, target: CameraId = identity) -> None:
+                self.serial_edited(target, value)
+
+            card.folder.textEdited.connect(edit_folder)
+            card.folder.editingFinished.connect(finish_folder)
+            card.browse.clicked.connect(browse)
+            card.serial.textEdited.connect(edit_serial)
+        cards.setColumnStretch(0, 1)
+        cards.setColumnStretch(1, 1)
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
-        self.folder = QLineEdit()
-        self.browse = QPushButton()
         self.loop = QPushButton()
         self.loop.setCheckable(True)
         self.loop.setIcon(_image_icon("loop"))
@@ -320,32 +447,79 @@ class MachineRoiWorkspace(QWidget):
         self.source_notice = QLabel()
         self.source_notice.setWordWrap(True)
         self.source_settings = self.button("source_settings")
-        source_row = QHBoxLayout()
-        source_row.setSpacing(Style.small)
-        source_row.addWidget(self.folder, 1)
-        source_row.addWidget(self.browse)
-        source_row.addWidget(self.loop)
-        source_row.addWidget(self.source_settings)
-        if self.sources is not None:
-            self.folder.setMinimumHeight(Style.touch)
-            self.browse.setFixedSize(Style.touch, Style.touch)
-            self.browse.setIcon(_image_icon("folder"))
-            self.browse.setIconSize(QSize(24, 24))
-            self.loop.setMinimumHeight(Style.touch)
-            source_row.addWidget(self.source_notice)
-        else:
+        self.source_settings.setText("")
+        self.source_settings.setFixedSize(Style.touch, Style.touch)
+        self.source_settings.setIconSize(QSize(Style.icon, Style.icon))
+        self.playback = QPushButton()
+        self.playback.setFixedSize(Style.touch, Style.touch)
+        self.playback.setIconSize(QSize(Style.icon, Style.icon))
+        self.playback_menu = QMenu(self)
+        options = QWidget()
+        playback_options = QHBoxLayout(options)
+        playback_options.addWidget(self.loop)
+        playback_options.addWidget(QLabel("FPS"))
+        self.fps = QLineEdit()
+        self.fps.setMinimumHeight(Style.touch)
+        self.fps.setMinimumWidth(100)
+        playback_options.addWidget(self.fps)
+        action = QWidgetAction(self.playback_menu)
+        action.setDefaultWidget(options)
+        self.playback_menu.addAction(action)
+        self.playback.setMenu(self.playback_menu)
+        self.loop.toggled.connect(self.loop_changed)
+        self.fps.editingFinished.connect(self.fps_changed)
+        self.playback_menu.aboutToHide.connect(self.fps_changed)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(Style.small)
+        self._source_modes = QButtonGroup(self)
+        self.source_modes: dict[Literal["folder", "basler"], QPushButton] = {}
+        source_modes: tuple[Literal["folder", "basler"], ...] = ("folder", "basler")
+        for mode in source_modes:
+            button = QPushButton()
+            button.setCheckable(True)
+            button.setMinimumHeight(Style.touch)
+            self._source_modes.addButton(button)
+            self.source_modes[mode] = button
+
+            def choose_source(
+                _checked: bool = False, m: Literal["folder", "basler"] = mode
+            ) -> None:
+                self.set_source_mode(m)
+
+            button.clicked.connect(choose_source)
+            mode_row.addWidget(button)
+        mode_row.addStretch(1)
+        mode_row.addWidget(self.source_notice)
+        self.connection_status = QLabel()
+        self.connect_source = QPushButton()
+        self.disconnect_source = QPushButton()
+        for widget in (
+            self.connection_status,
+            self.connect_source,
+            self.disconnect_source,
+        ):
+            mode_row.addWidget(widget)
+            widget.setVisible(connection is not None)
+        for button in (self.connect_source, self.disconnect_source):
+            button.setMinimumHeight(Style.touch)
+        self.connect_source.clicked.connect(
+            lambda: self.connection_operation(connect=True)
+        )
+        self.disconnect_source.clicked.connect(
+            lambda: self.connection_operation(connect=False)
+        )
+        mode_row.addWidget(self.playback)
+        mode_row.addWidget(self.source_settings)
+        root.addLayout(mode_row)
+        root.addWidget(self.source_cards)
+        self.loop.setMinimumHeight(Style.touch)
+        if self.sources is None:
             for widget in (
-                self.folder,
-                self.browse,
-                self.loop,
                 self.source_notice,
                 self.source_settings,
+                self.playback,
             ):
                 widget.hide()  # Fake demo keeps its synthetic source; no real folder execution.
-        self.folder.textEdited.connect(self.source_edited)
-        self.folder.editingFinished.connect(self.refresh_frame)
-        self.browse.clicked.connect(self.browse_folder)
-        self.loop.toggled.connect(self.loop_changed)
         self.source_settings.clicked.connect(self.open_source_settings)
         reference_controls = QWidget()
         references = QHBoxLayout(reference_controls)
@@ -379,10 +553,14 @@ class MachineRoiWorkspace(QWidget):
             button.setIcon(_image_icon(tool))
             button.setIconSize(QSize(24, 24))
             references.addWidget(button)
-        self.reference = QLabel()
-        self.reference.setTextFormat(Qt.TextFormat.PlainText)
-        self.reference.setProperty("role", "secondary")
-        references.addWidget(self.reference)
+        self.reference = QComboBox()
+        self.reference.setMinimumHeight(Style.touch)
+        self.reference.setMinimumContentsLength(16)
+        self.reference.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.reference.setMaximumWidth(360)
+        self.reference.activated.connect(self.choose_reference)
         references.addWidget(self.icon_button("roi_refresh", "refresh"))
         display_controls = QWidget()
         display = QHBoxLayout(display_controls)
@@ -400,18 +578,18 @@ class MachineRoiWorkspace(QWidget):
             button.setFixedSize(Style.touch, Style.touch)
             display.addWidget(button)
         self.reference_toolbar = _RoiToolbar(
-            self.camera_tabs, reference_controls, display_controls
+            reference_controls, self.reference, display_controls
         )
         root.addWidget(self.reference_toolbar)
-        if self.sources is not None:
-            root.addLayout(source_row)
         self.canvas = RoiCanvas(self.editable)
         root.addWidget(self.canvas, 1)
         numeric, actions, saving = QWidget(), QWidget(), QWidget()
         geometry = QHBoxLayout(numeric)
         geometry.setContentsMargins(0, 0, 0, 0)
         geometry.setSpacing(Style.small)
-        self.channel = QLabel()
+        self.channel = QComboBox()
+        self.channel.setMinimumHeight(Style.touch)
+        self.channel.activated.connect(self.select_roi)
         geometry.addWidget(self.channel)
         self.coordinates: dict[str, QLineEdit] = {}
         for key in ("X", "Y", "W", "H"):
@@ -462,7 +640,7 @@ class MachineRoiWorkspace(QWidget):
             lambda: self.operation(lambda: self.draft.distribute(self.camera))
         )
         self.buttons["roi_save_apply"].clicked.connect(lambda: self.save_and_apply())
-        self.camera_tabs.currentChanged.connect(self.switch_camera)
+        self._cameras.idToggled.connect(self._camera_selected)
         self.canvas.selected.connect(self.select_roi)
         self.canvas.geometry_changed.connect(self.commit_geometry)
         self.set_language(language)
@@ -470,7 +648,16 @@ class MachineRoiWorkspace(QWidget):
 
     @property
     def camera(self) -> CameraId:
-        return self.draft.definition.layout.camera_ids[self.camera_tabs.currentIndex()]
+        return self.draft.definition.layout.camera_ids[self._cameras.checkedId()]
+
+    @property
+    def folder(self) -> QLineEdit:
+        """The selected card's editor, not a second source field."""
+        return self.camera_cards[self.camera].folder
+
+    @property
+    def browse(self) -> QPushButton:
+        return self.camera_cards[self.camera].browse
 
     def button(self, key: str) -> QPushButton:
         button = QPushButton(text(key, self.language))
@@ -488,8 +675,9 @@ class MachineRoiWorkspace(QWidget):
 
     def refresh_theme(self) -> None:
         colors = theme_colors(self)
-        for index in range(self.camera_tabs.count()):
-            self.camera_tabs.setTabIcon(index, camera_icon(colors.primary))
+        for card in self.camera_cards.values():
+            card.browse.setIcon(_image_icon("folder", colors.primary, colors.raised))
+            card.update()
         for key, tool in (
             ("reference_previous", "previous"),
             ("reference_next", "next"),
@@ -502,19 +690,29 @@ class MachineRoiWorkspace(QWidget):
             self.buttons[key].setIcon(_image_icon(tool, colors.primary, colors.raised))
         for mode, button in self.reference_modes.items():
             button.setIcon(_image_icon(mode, colors.primary, colors.raised))
-        self.browse.setIcon(_image_icon("folder", colors.primary, colors.raised))
         self.loop.setIcon(_image_icon("loop", colors.primary, colors.raised))
+        self.playback.setIcon(_image_icon("loop", colors.primary, colors.raised))
+        self.source_settings.setIcon(navigation_icon(4, colors.primary))
 
     def set_language(self, language: Language) -> None:
         self.language = language
         self.refresh_theme()
-        self.folder.setAccessibleName(text("source_folder", language))
-        self.folder.setPlaceholderText(text("source_folder", language))
         if self.source_dialog is not None:
             self.source_dialog.set_language(language)
-        self.browse.setAccessibleName(text("browse", language))
-        self.browse.setToolTip(text("browse", language))
         self.loop.setToolTip(text("source_loop", language))
+        self.fps.setAccessibleName(text("vision_fps", language))
+        self.fps.setToolTip(text("vision_playback_tip", language))
+        self.playback.setAccessibleName(text("vision_playback", language))
+        self.playback.setToolTip(text("vision_playback", language))
+        self.reference.setAccessibleName(text("vision_image_select", language))
+        self.channel.setAccessibleName(text("vision_roi_select", language))
+        for button, key in (
+            (self.connect_source, "source_connect"),
+            (self.disconnect_source, "source_disconnect"),
+        ):
+            button.setText(text(key, language))
+            button.setAccessibleName(text(key, language))
+            button.setToolTip(text(key, language))
         self.source_notice.setText(text("cli_sources_short", language))
         self.source_notice.setToolTip(text("cli_sources", language))
         self.source_notice.setAccessibleName(text("cli_sources", language))
@@ -523,13 +721,18 @@ class MachineRoiWorkspace(QWidget):
             button.setText("")
             button.setAccessibleName(text("reference_" + mode, language))
             button.setToolTip(text("reference_" + mode + "_tip", language))
-        self.camera_tabs.setAccessibleName(text("camera_setup", language))
-        for index in range(self.camera_tabs.count()):
-            name = text("camera_number", language).format(
-                number=self.camera_tabs.tabText(index)
+        for mode, button in self.source_modes.items():
+            key = "vision_folder_mode" if mode == "folder" else "vision_basler_mode"
+            button.setText(text(key, language))
+            button.setAccessibleName(text(key, language))
+            button.setToolTip(text("source_mode_tip", language))
+            button.setMinimumWidth(
+                max(
+                    button.fontMetrics().horizontalAdvance(text(key, locale))
+                    for locale in ("zh", "en")
+                )
+                + 32
             )
-            self.camera_tabs.setTabToolTip(index, name)
-            self.camera_tabs.setAccessibleTabName(index, name)
         for key, button in self.buttons.items():
             button.setAccessibleName(text(key, language))
             button.setToolTip(text(key, language))
@@ -541,6 +744,7 @@ class MachineRoiWorkspace(QWidget):
                 "reference_next",
                 "roi_common",
                 "roi_distribute",
+                "source_settings",
             ):
                 button.setText(text(key, language))
         numeric_apply = self.buttons["roi_set_rect"]
@@ -556,7 +760,57 @@ class MachineRoiWorkspace(QWidget):
         self.refresh()
 
     def editable(self) -> bool:
-        return self._allowed() and not self._preparing and self.frame is not None
+        return (
+            self._allowed()
+            and not self._preparing
+            and (
+                self.frame is not None
+                or self.sources is not None
+                and self.sources.definition.mode == "basler"
+            )
+        )
+
+    def source_editable(self) -> bool:
+        return (
+            self._allowed()
+            and not self._preparing
+            and not (
+                self.connection is not None and self.connection.source_snapshot().locked
+            )
+        )
+
+    def connection_operation(self, *, connect: bool) -> None:
+        if (
+            self.connection is None
+            or self._run_io is None
+            or not self._allowed()
+            or self._preparing
+        ):
+            return
+        if connect and (self.sources is None or self.sources.dirty):
+            self._report_error(
+                text("source_save_first", self.language), "vision_validation_error"
+            )
+            self.refresh()
+            return
+
+        def completed(_value: object, error: BaseException | None) -> None:
+            if error is not None:
+                self._report_error(error, "source_connection_error")
+            else:
+                self._error = ""
+            self.refresh()
+
+        self._run_io(
+            self.connection.connect_source
+            if connect
+            else self.connection.disconnect_source,
+            completed,
+        )
+
+    def _camera_selected(self, _index: int, checked: bool) -> None:
+        if checked:
+            self.switch_camera()
 
     def switch_camera(self) -> None:
         self.selected_index = 0
@@ -567,45 +821,91 @@ class MachineRoiWorkspace(QWidget):
             self.loop.blockSignals(False)
         self._request_reference(reload=False)
 
-    def source_edited(self, folder: str) -> None:
-        if not self._allowed() or self.sources is None:
+    def source_edited(self, folder: str, camera: CameraId | None = None) -> None:
+        if not self.source_editable() or self.sources is None:
             return
-        previous_key = self.sources.definition.camera(self.camera).key(
+        camera = self.camera if camera is None else camera
+        previous_key = self.sources.definition.camera(camera).key(
             self.sources.path.parent
         )
-        self.sources.set_folder(self.camera, folder)
+        self.sources.set_folder(camera, folder)
         if (
-            self.sources.definition.camera(self.camera).key(self.sources.path.parent)
+            self.sources.definition.camera(camera).key(self.sources.path.parent)
             != previous_key
         ):
-            self._folder_paths.pop(self.camera, None)
-            self._positions.pop(self.camera, None)
-            self._reference_modes[self.camera] = "folder"
+            self._folder_paths.pop(camera, None)
+            self._positions.pop(camera, None)
+            self._reference_modes[camera] = "folder"
         self._save_failed = False
-        self._reference_revision += 1
-        self.draft.bounds.pop(self.camera, None)
-        self._set_reference(None)
+        self.draft.bounds.pop(camera, None)
+        if camera == self.camera:
+            self._reference_revision += 1
+            self._set_reference(None)
         self._changed()
 
-    def browse_folder(self) -> None:
-        if not self._allowed() or self.sources is None:
+    def browse_folder(self, camera: CameraId | None = None) -> None:
+        if not self.source_editable() or self.sources is None:
             return
+        camera = self.camera if camera is None else camera
         folder = QFileDialog.getExistingDirectory(
-            self, text("source_folder", self.language), self.folder.text()
+            self,
+            text("source_folder", self.language),
+            self.camera_cards[camera].folder.text(),
         )
         if folder:
-            self.folder.setText(folder)
-            self.source_edited(folder)
-            self.refresh_frame()
+            self.source_edited(folder, camera)
+            if camera == self.camera:
+                self.refresh_frame()
+
+    def serial_edited(self, camera: CameraId, serial: str) -> None:
+        if not self.source_editable() or self.sources is None:
+            return
+        try:
+            self.sources.set_serial(camera, serial)
+        except ConfigurationError as exc:
+            self._report_error(exc, "vision_validation_error")
+            self.refresh()
+            return
+        self._source_identity_changed()
 
     def loop_changed(self, enabled: bool) -> None:
-        if self._allowed() and self.sources is not None:
+        if self.source_editable() and self.sources is not None:
             self.sources.set_loop(enabled)
             self._changed()
 
+    def fps_changed(self) -> None:
+        if not self.source_editable() or self.sources is None:
+            return
+        try:
+            modified = self.fps.isModified()
+            value = float(self.fps.text())
+            previous = self.sources.definition.target_fps
+            self.sources.set_fps(value)
+        except (ValueError, ConfigurationError) as exc:
+            self._fps_issue = str(exc)
+            self._report_error(exc, "vision_validation_error")
+            self.fps.setText(str(self.sources.definition.target_fps))
+            self.refresh()
+            return
+        if value == previous and not modified:
+            return
+        self.fps.setModified(False)
+        if self._error == self._fps_issue:
+            self._error = self._fps_issue = ""
+        if value != previous:
+            self._changed()
+        self.refresh()
+
+    def set_source_mode(self, mode: Literal["folder", "basler"]) -> None:
+        if not self.source_editable() or self.sources is None:
+            return
+        if self.sources.definition.mode != mode:
+            self.sources.set_mode(mode)
+            self._source_identity_changed()
+
     def open_source_settings(self) -> None:
         if (
-            not self._allowed()
+            not self.source_editable()
             or self._preparing
             or self.sources is None
             or self._run_io is None
@@ -615,7 +915,7 @@ class MachineRoiWorkspace(QWidget):
             self.source_dialog = CameraSourceDialog(
                 self.sources,
                 self.draft.definition.layout.camera_ids,
-                self._allowed,
+                self.source_editable,
                 self._run_io,
                 language=self.language,
                 parent=self,
@@ -637,6 +937,7 @@ class MachineRoiWorkspace(QWidget):
         self.draft.bounds.pop(self.camera, None)
         if self.canvas.model.size is not None:
             self.draft.bounds[self.camera] = self.canvas.model.size
+        self._connection_bounds()
         self.select_roi(self.selected_index)
         if frame is not None:
             try:
@@ -697,6 +998,14 @@ class MachineRoiWorkspace(QWidget):
             return  # No implicit wrap, decode, or geometry changes at a boundary.
         self._positions[self.camera] = index
         self._request_reference(reload=False)
+
+    def choose_reference(self, index: int) -> None:
+        if self.reference_mode != "folder" or self._reading or self._preparing:
+            return
+        if 0 <= index < len(self._folder_paths.get(self.camera, ())):
+            if index != self._positions.get(self.camera, 0):
+                self._positions[self.camera] = index
+                self._request_reference(reload=False)
 
     def refresh_frame(self) -> None:
         self._request_reference(reload=True)
@@ -788,6 +1097,7 @@ class MachineRoiWorkspace(QWidget):
             self.coordinates[key].setText(str(value))
 
     def refresh(self) -> None:
+        self._connection_bounds()
         self.canvas.rois = self.draft.camera(self.camera).slots
         slot = self.canvas.rois[self.selected_index]
         rect = slot.rect
@@ -795,12 +1105,26 @@ class MachineRoiWorkspace(QWidget):
         self.canvas.model.editable = self.editable()
         if not self.canvas.model.can_drag:
             self.canvas.cancel_roi_drag()
-        self.channel.setText(f"CH{slot.channel_id:02d}")
+        channels = tuple(f"CH{row.channel_id:02d}" for row in self.canvas.rois)
+        if (
+            tuple(self.channel.itemText(i) for i in range(self.channel.count()))
+            != channels
+        ):
+            self.channel.clear()
+            self.channel.addItems(channels)
+        self.channel.setCurrentIndex(self.selected_index)
+        self.channel.setEnabled(not self._preparing)
         for line in self.coordinates.values():
             line.setReadOnly(not self.editable())
         for key in ("roi_common", "roi_distribute", "roi_set_rect"):
             self.buttons[key].setEnabled(self.editable())
-        self.camera_tabs.setEnabled(not self._preparing)
+        self.source_cards.setEnabled(not self._preparing)
+        for mode, button in self.source_modes.items():
+            button.setChecked(
+                self.sources is not None and self.sources.definition.mode == mode
+            )
+            button.setEnabled(self.sources is not None and self.source_editable())
+        self._refresh_source_cards()
         viewing = not self._reading and not self._preparing
         paths = self._folder_paths.get(self.camera, ())
         index = self._positions.get(self.camera, 0)
@@ -835,13 +1159,22 @@ class MachineRoiWorkspace(QWidget):
             and not self.session.dirty
             and self.session.entry is not None
         )
-        for control in (self.folder, self.browse, self.source_settings):
-            control.setEnabled(self._allowed() and not self._preparing)
-        self.loop.setEnabled(
-            self._allowed()
-            and not self._preparing
-            and (self.sources is None or self.sources.definition.mode == "folder")
+        source_editable = self.sources is not None and self.source_editable()
+        self.source_settings.setEnabled(source_editable)
+        self.playback.setEnabled(source_editable)
+        folder_options = (
+            source_editable
+            and self.sources is not None
+            and self.sources.definition.mode == "folder"
         )
+        self.loop.setEnabled(folder_options)
+        self.fps.setReadOnly(not folder_options)
+        if self.sources is not None:
+            self.loop.blockSignals(True)
+            self.loop.setChecked(self.sources.definition.loop)
+            self.loop.blockSignals(False)
+            if not self.fps.hasFocus():
+                self.fps.setText(str(self.sources.definition.target_fps))
         loop_state = text(
             "source_loop_on" if self.loop.isChecked() else "source_loop_off",
             self.language,
@@ -900,15 +1233,160 @@ class MachineRoiWorkspace(QWidget):
         self.reference.setToolTip(
             str(paths[index])
             if paths and index < len(paths) and self.reference_mode == "folder"
-            else text("reference_runtime_tip", self.language)
+            else text(
+                "roi_no_frame_tip" if self.frame is None else "reference_runtime_tip",
+                self.language,
+            )
         )
-        self.reference.setText(
-            (text("simulation", self.language) + " · " if self.simulation else "")
-            + info
+        if paths != self._selector_paths or self.reference_mode != self._selector_mode:
+            self._selector_paths, self._selector_mode = paths, self.reference_mode
+            self.reference.clear()
+            if self.reference_mode == "folder" and paths:
+                self.reference.addItems(
+                    [f"{i + 1}/{len(paths)} · {p.name}" for i, p in enumerate(paths)]
+                )
+        if self.reference_mode != "folder" or not paths:
+            if self.reference.count() == 0:
+                self.reference.addItem(info)
+            else:
+                self.reference.setItemText(0, info)
+        self.reference.setCurrentIndex(
+            index if self.reference_mode == "folder" and paths else 0
         )
+        self.reference.setEnabled(
+            viewing and self.reference_mode == "folder" and bool(paths)
+        )
+        self.reference.setAccessibleDescription(info)
         self.reference_toolbar.sync_metrics()
         self.geometry_toolbar.sync_metrics()
         self.canvas.update()
+
+    def _refresh_source_cards(self) -> None:
+        connection = self.connection.source_snapshot() if self.connection else None
+        actual = (
+            {row.camera_id: row for row in connection.cameras} if connection else {}
+        )
+        if connection is not None:
+            basler_mode = (
+                self.sources is not None and self.sources.definition.mode == "basler"
+            )
+            for widget in (
+                self.connection_status,
+                self.connect_source,
+                self.disconnect_source,
+            ):
+                widget.setVisible(basler_mode)
+            self.connection_status.setText(
+                text("source_" + connection.state.name.lower(), self.language)
+            )
+            self.connection_status.setToolTip(connection.error)
+            self.connect_source.setEnabled(
+                self._allowed()
+                and not self._preparing
+                and not connection.locked
+                and self.sources is not None
+                and self.sources.definition.mode == "basler"
+                and not self.sources.dirty
+            )
+            self.disconnect_source.setEnabled(
+                self._allowed() and not self._preparing and connection.locked
+            )
+        for camera, card in self.camera_cards.items():
+            card.title = text("camera_number", self.language).format(
+                number=str(camera).removeprefix("CAM")
+            )
+            if self.sources is None:
+                card.detail, card.summary = text("simulation", self.language), ""
+                hint = card.detail
+            else:
+                source = self.sources.definition.camera(camera)
+                if self.sources.definition.mode == "folder":
+                    card.detail = source.folder or text(
+                        "source_unconfigured", self.language
+                    )
+                    card.summary = text("reference_folder", self.language)
+                    hint = card.detail
+                else:
+                    card.detail = source.basler_serial or text(
+                        "source_unconfigured", self.language
+                    )
+                    card.summary = (
+                        text("vision_assigned", self.language)
+                        if source.basler_serial
+                        else ""
+                    )
+                    hint = (
+                        text("source_serial", self.language)
+                        + ": "
+                        + card.detail
+                        + "\n"
+                        + text("vision_connection_unchecked", self.language)
+                    )
+                    if connection is not None:
+                        card.summary = text(
+                            "source_" + connection.state.name.lower(), self.language
+                        )
+                        if (
+                            connection.state is ConnectionState.CONNECTED
+                            and camera in actual
+                        ):
+                            row = actual[camera]
+                            hint = f"{row.serial} · {row.width}×{row.height}"
+                for editor, value in (
+                    (card.folder, source.folder),
+                    (card.serial, source.basler_serial),
+                ):
+                    if editor.text() != value:
+                        editor.setText(value)
+                basler = self.sources.definition.mode == "basler"
+                card.serial_row.setVisible(basler)
+                card.folder_label.setVisible(basler)
+                card.folder_label.setText(text("vision_reference_short", self.language))
+                card.folder_label.setToolTip(
+                    text("vision_warmup_folder", self.language)
+                )
+            allowed = self.sources is not None and self.source_editable()
+            card.folder.setEnabled(allowed)
+            card.serial.setEnabled(allowed)
+            card.browse.setEnabled(allowed)
+            card.folder.setPlaceholderText(text("source_folder", self.language))
+            card.serial.setPlaceholderText(text("source_serial", self.language))
+            card.folder.setAccessibleName(
+                f"{camera} · {text('source_folder', self.language)}"
+            )
+            card.folder.setToolTip(
+                card.folder.text() + "\n" + text("vision_warmup_folder", self.language)
+            )
+            card.serial.setAccessibleName(
+                f"{camera} · {text('source_serial', self.language)}"
+            )
+            card.serial.setToolTip(
+                card.serial.text() + "\n" + text("source_serial_tip", self.language)
+            )
+            card.browse.setAccessibleName(f"{camera} · {text('browse', self.language)}")
+            card.browse.setToolTip(text("vision_warmup_folder", self.language))
+            card.setToolTip(f"{card.title} · {camera}\n{hint}")
+            card.setAccessibleName(
+                f"{card.title} · {camera} · {card.detail} · {card.summary}"
+            )
+            card.update()
+
+    def _connection_bounds(self) -> None:
+        if self.connection is not None:
+            snapshot = self.connection.source_snapshot()
+            if snapshot.state is ConnectionState.CONNECTED:
+                for row in snapshot.cameras:
+                    self.draft.bounds[row.camera_id] = row.width, row.height
+                    self._hardware_bounds.add(row.camera_id)
+            elif self._hardware_bounds:
+                for identity in self._hardware_bounds:
+                    self.draft.bounds.pop(identity, None)
+                self._hardware_bounds.clear()
+                if self.frame is not None:
+                    self.draft.bounds[self.camera] = (
+                        self.frame.image.shape[1],
+                        self.frame.image.shape[0],
+                    )
 
     def operation(self, action: Callable[[], None]) -> bool:
         if not self.editable():
@@ -976,7 +1454,21 @@ class MachineRoiWorkspace(QWidget):
         def validate() -> None:
             if sources is not None and base is not None:
                 sources.validate_cameras(layout.camera_ids)
-                FolderReplay(layout, sources, base).next_group()
+                state = self.connection.source_snapshot() if self.connection else None
+                if (
+                    state is not None
+                    and state.locked
+                    and self.sources is not None
+                    and sources != self.sources.saved
+                ):
+                    raise ValueError("Disconnect before changing camera sources")
+                if sources.mode == "folder":
+                    FolderReplay(layout, sources, base).next_group()
+                elif state is not None and state.state is ConnectionState.CONNECTED:
+                    for camera, actual in zip(
+                        layout.cameras, state.cameras, strict=True
+                    ):
+                        camera.validate_shape((actual.height, actual.width, 3))
 
         def validated(_value: object, error: BaseException | None) -> None:
             self._preparing = False
@@ -1018,7 +1510,7 @@ class MachineRoiWorkspace(QWidget):
                 self._feedback = "" if error else "roi_applied"
                 self.refresh()
                 if not error and self.sources is not None:
-                    # All folders/bounds were checked and saved, and Apply succeeded.
+                    # Mode-specific validation, persistence and Apply succeeded.
                     self.sources_verified.emit()
                 if not error and after is not None:
                     after()

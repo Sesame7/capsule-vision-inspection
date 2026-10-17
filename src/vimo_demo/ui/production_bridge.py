@@ -12,6 +12,7 @@ from vimo_demo.application import (
     ProductionApplication,
     ProductionApplicationSnapshot,
 )
+from vimo_demo.application.basler_connection import SourceConnectionCommands
 from vimo_demo.application.local_replay import (
     LocalReplayCommands,
     ReplaySnapshot,
@@ -39,6 +40,7 @@ class QtProductionBridge(QObject):
     replay_changed = Signal(object)
     source_progress_changed = Signal(int, str)
     reporting_changed = Signal(object)
+    source_connection_changed = Signal(object)
     command_finished = Signal(str)
     command_failed = Signal(str, object)
     shutdown_finished = Signal()
@@ -64,6 +66,10 @@ class QtProductionBridge(QObject):
             else None
         )
         self.reporting_snapshot: ReportingSnapshot | None = None
+        self.source_connection = (
+            application if isinstance(application, SourceConnectionCommands) else None
+        )
+        self._connection_snapshot = None
         self.local_replay = local_replay
         self.source_control = (
             application if isinstance(application, SourceControlCommands) else None
@@ -224,6 +230,14 @@ class QtProductionBridge(QObject):
         changed = False
         try:
             snapshot = self.application.snapshot()
+            connection = (
+                self.source_connection.source_snapshot()
+                if self.source_connection
+                else None
+            )
+            if connection != self._connection_snapshot:
+                self._connection_snapshot = connection
+                self.source_connection_changed.emit(connection)
             replay = self.control_snapshot()
             replay_changed = (
                 replay != self.replay_snapshot
