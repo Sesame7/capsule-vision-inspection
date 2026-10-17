@@ -125,15 +125,23 @@ assigning them by enumeration order. Cards show explicit connection state; assig
 connection status or live preview. Connect all/Disconnect are stopped operations
 off Qt dispatch, owned by the application rather than the widget. Source fields
 are locked until Disconnect; ROI editing remains subject to inspection locks.
-There is no separate source dialog. Folder Loop and integer FPS choices 1–10 are
-directly accessible on the source toolbar. Existing fractional or out-of-range
-FPS values are retained as display-only entries, with the full value in a tooltip;
-only an explicit 1–10 selection replaces the draft value. This UI range does not
+There is no separate source dialog. Folder Loop and an editable integer FPS stepper
+are directly accessible on the source toolbar. Explicit FPS edits accept 1–10;
+boundary step buttons are disabled. Existing fractional or out-of-range FPS values
+remain unchanged, with the full value in a tooltip and stepping disabled until
+explicit valid entry. Focus changes never clamp or rewrite them. This UI range does not
 change the persisted positive/finite FPS contract. Basler does not use these pacing
 settings. Connection/discovery actions are compact icons with localized tooltips;
 the connection summary is numeric. Routine device/status prose is omitted;
 Vision errors use the existing bottom feedback strip with full diagnostic tooltips.
 That feedback is page-scoped and never supersedes application FAULT or shutdown.
+The global strip normally shows the saved source mode rather than repeating READY:
+Folder is a source selection, not device connectivity or a continuously verified
+camera count. Camera counts come from actual connected CameraId/serial matches.
+Unsaved selections do not change that strip. Lifecycle transitions and errors keep
+precedence; source availability does not establish full inspection readiness.
+Save/apply remains primary, Discard secondary; a compact status symbol exposes
+clean, dirty, saving or failed state through localized accessibility text/tooltips.
 The image selector and previous/next browse Folder inputs. Import loads a temporary
 image; Use runtime image freezes the latest eligible same-camera/source display
 frame, with explicit refresh. Neither tracks live pixels. Fit and 1:1 retain their

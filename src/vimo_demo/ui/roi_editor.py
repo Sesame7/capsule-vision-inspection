@@ -59,10 +59,14 @@ from vimo_demo.inspection import CameraId, CycleId, FrameId
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
 from .inference_bridge import FutureDelivery
+from .production_presentation import Indicator
 from .production_style import (
     Language,
     Style,
     camera_icon,
+    indicator_icon,
+    production_icon,
+    shell_icon,
     text,
     theme_colors,
 )
@@ -74,6 +78,8 @@ def _image_icon(tool: str, color: str = Style.primary) -> QIcon:
     """Local vector tools with DPR-aware enabled/disabled states."""
     if tool == "capture":
         return camera_icon(color)
+    if tool == "folder":
+        return shell_icon("folder", color)
     icon = QIcon()
     for checked in (False, True):
         for dpr in (1.0, 1.25, 1.5, 2.0):
@@ -100,17 +106,6 @@ def _image_icon(tool: str, color: str = Style.primary) -> QIcon:
             elif tool == "cancel":
                 painter.drawLine(5, 5, 19, 19)
                 painter.drawLine(19, 5, 5, 19)
-            elif tool == "folder":
-                for x, y, dx, dy in (
-                    (3, 8, 3, 5),
-                    (3, 5, 10, 5),
-                    (10, 5, 13, 8),
-                    (13, 8, 21, 8),
-                    (21, 8, 21, 19),
-                    (21, 19, 3, 19),
-                    (3, 19, 3, 8),
-                ):
-                    painter.drawLine(x, y, dx, dy)
             elif tool == "runtime":
                 painter.drawRect(3, 4, 18, 13)
                 painter.drawLine(9, 20, 15, 20)
@@ -141,6 +136,10 @@ def _image_icon(tool: str, color: str = Style.primary) -> QIcon:
                 x, dx = (15, -7) if tool == "previous" else (9, 7)
                 painter.drawLine(x, 5, x + dx, 12)
                 painter.drawLine(x + dx, 12, x, 19)
+            elif tool in ("minus", "plus"):
+                painter.drawLine(6, 12, 18, 12)
+                if tool == "plus":
+                    painter.drawLine(12, 6, 12, 18)
             else:
                 for x, y, dx, dy in (
                     (4, 4, 1, 1),
@@ -215,6 +214,7 @@ class _SourceCard(QPushButton):
         self.setMinimumWidth(180)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setAutoDefault(False)
+        self.setObjectName("visionSourceCard")
         contents = QVBoxLayout(self)
         contents.setContentsMargins(10, 34, 10, 8)
         contents.setSpacing(Style.small)
@@ -231,6 +231,7 @@ class _SourceCard(QPushButton):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.device.setMinimumHeight(Style.touch)
+        self.device.setObjectName("visionSourceValue")
         serial.addWidget(self.device, 1)
         folder.addWidget(self.serial_row)
         self.serial_row.hide()
@@ -241,6 +242,7 @@ class _SourceCard(QPushButton):
         self.folder = QLineEdit()
         self.folder.setMinimumHeight(Style.touch)
         self.folder.setMinimumWidth(0)
+        self.folder.setObjectName("visionSourceValue")
         fields.addWidget(self.folder, 1)
         self.browse = QPushButton()
         self.browse.setFixedSize(Style.touch, Style.touch)
@@ -284,6 +286,9 @@ class _SourceCard(QPushButton):
             ),
         )
         painter.setPen(QColor(color))
+        font = painter.font()
+        font.setBold(True)
+        painter.setFont(font)
         title_width = max(0, self.width() - 70 - summary_width)
         painter.drawText(
             44,
@@ -556,6 +561,7 @@ class MachineRoiWorkspace(QWidget):
             card.device.activated.connect(select_device)
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status.setFixedSize(24, Style.touch)
         self.loop = QPushButton()
         self.loop.setCheckable(True)
         self.loop.setIcon(_image_icon("loop"))
@@ -569,13 +575,28 @@ class MachineRoiWorkspace(QWidget):
         playback_options.setSpacing(Style.small)
         playback_options.addWidget(self.loop)
         playback_options.addWidget(QLabel("FPS"))
-        self.fps = QComboBox()
-        self.fps.addItems([str(value) for value in range(1, 11)])
+        self.fps_stepper = QFrame()
+        self.fps_stepper.setObjectName("visionFps")
+        stepper = QHBoxLayout(self.fps_stepper)
+        stepper.setContentsMargins(0, 0, 0, 0)
+        stepper.setSpacing(0)
+        self.fps_decrease, self.fps_increase = QPushButton(), QPushButton()
+        self.fps = QLineEdit()
+        self.fps.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.fps.setInputMethodHints(Qt.InputMethodHint.ImhDigitsOnly)
         self.fps.setMinimumHeight(Style.touch)
-        self.fps.setFixedWidth(92)
-        playback_options.addWidget(self.fps)
+        self.fps.setFixedWidth(64)
+        for button in (self.fps_decrease, self.fps_increase):
+            button.setFixedSize(Style.touch, Style.touch)
+            button.setIconSize(QSize(Style.icon, Style.icon))
+        stepper.addWidget(self.fps_decrease)
+        stepper.addWidget(self.fps)
+        stepper.addWidget(self.fps_increase)
+        playback_options.addWidget(self.fps_stepper)
         self.loop.toggled.connect(self.loop_changed)
-        self.fps.activated.connect(self.fps_changed)
+        self.fps.editingFinished.connect(self.fps_changed)
+        self.fps_decrease.clicked.connect(lambda: self._step_fps(-1))
+        self.fps_increase.clicked.connect(lambda: self._step_fps(1))
         mode_row = QHBoxLayout()
         mode_row.setSpacing(Style.small)
         self._source_modes = QButtonGroup(self)
@@ -809,6 +830,8 @@ class MachineRoiWorkspace(QWidget):
         ):
             self.buttons[key].setIcon(_image_icon(tool, colors.primary))
         self.loop.setIcon(_image_icon("loop", colors.primary))
+        self.fps_decrease.setIcon(_image_icon("minus", colors.primary))
+        self.fps_increase.setIcon(_image_icon("plus", colors.primary))
         self.source_modes["folder"].setIcon(_image_icon("folder", colors.primary))
         self.source_modes["basler"].setIcon(camera_icon(colors.primary))
         self.connect_source.setIcon(_image_icon("connect", colors.primary))
@@ -820,6 +843,12 @@ class MachineRoiWorkspace(QWidget):
         self._populate_devices()
         self.loop.setToolTip(text("source_loop", language))
         self.fps.setAccessibleName(text("vision_fps", language))
+        for button, key in (
+            (self.fps_decrease, "vision_fps_decrease"),
+            (self.fps_increase, "vision_fps_increase"),
+        ):
+            button.setAccessibleName(text(key, language))
+            button.setToolTip(text(key, language))
         self.reference.setAccessibleName(text("vision_image_select", language))
         self.channel.setAccessibleName(text("vision_roi_select", language))
         for button, key in (
@@ -1008,34 +1037,49 @@ class MachineRoiWorkspace(QWidget):
             self.sources.set_loop(enabled)
             self._changed()
 
-    def fps_changed(self, index: int) -> None:
+    def fps_changed(self) -> None:
+        value = self.fps.text()
+        self.fps.setModified(False)
         if (
             not self.source_editable()
             or self.sources is None
             or self.sources.definition.mode != "folder"
-            or not 0 <= index < 10
         ):
             self.refresh()
             return
-        self.sources.set_fps(float(index + 1))
+        if value == str(self.sources.definition.target_fps):
+            self.refresh()  # An untouched legacy value remains authoritative.
+            return
+        if value not in {str(i) for i in range(1, 11)}:
+            self._report_error(text("vision_fps_invalid", self.language))
+            self.refresh()
+            return
+        self.sources.set_fps(float(value))
+        self._error = ""
         self._changed()
         self.refresh()
+
+    def _step_fps(self, delta: int) -> None:
+        if self.sources is None or not self.source_editable():
+            return
+        value = self.sources.definition.target_fps
+        if not (float(value).is_integer() and 1 <= value + delta <= 10):
+            return
+        # Legacy values are replaced by explicit entry, never by implicit clamping.
+        if not 1 <= value <= 10:
+            return
+        self.fps.setText(str(int(value) + delta))
+        self.fps_changed()
 
     def _sync_fps(self) -> None:
         if self.sources is None:
             return
         value = self.sources.definition.target_fps
         standard = 1 <= value <= 10 and float(value).is_integer()
-        if self.fps.count() > 10 and (standard or self.fps.itemText(10) != str(value)):
-            self.fps.removeItem(10)
-        if not standard and self.fps.count() == 10:
-            self.fps.addItem(str(value))
-            model = self.fps.model()
-            if isinstance(model, QStandardItemModel):
-                item = model.item(10)
-                # Display-only legacy value; never clamp/persist a replacement.
-                item.setEnabled(False)
-        self.fps.setCurrentIndex(int(value) - 1 if standard else 10)
+        if not (self.fps.hasFocus() and self.fps.isModified()):
+            self.fps.setText(str(int(value)) if standard else str(value))
+        self.fps_decrease.setEnabled(standard and value > 1)
+        self.fps_increase.setEnabled(standard and value < 10)
         self.fps.setToolTip(
             text("vision_fps", self.language)
             + f": {value}"
@@ -1045,6 +1089,7 @@ class MachineRoiWorkspace(QWidget):
                 else ""
             )
         )
+        self.fps_stepper.setToolTip(self.fps.toolTip())
 
     def set_source_mode(self, mode: Literal["folder", "basler"]) -> None:
         if not self.source_editable() or self.sources is None:
@@ -1446,6 +1491,7 @@ class MachineRoiWorkspace(QWidget):
             self.coordinates[key].setText(str(value))
 
     def refresh(self) -> None:
+        colors = theme_colors(self)
         if self._capture_future is not None and (
             not self._allowed()
             or self.connection is None
@@ -1551,6 +1597,7 @@ class MachineRoiWorkspace(QWidget):
         self.loop.setEnabled(folder_options)
         self.playback_options.setEnabled(folder_options)
         self.fps.setEnabled(folder_options)
+        self.fps_stepper.setEnabled(folder_options)
         if self.sources is not None:
             self.loop.blockSignals(True)
             self.loop.setChecked(self.sources.definition.loop)
@@ -1561,23 +1608,50 @@ class MachineRoiWorkspace(QWidget):
             self.language,
         )
         self.loop.setText("")
+        self.loop.setIcon(
+            _image_icon(
+                "loop", colors.accent if self.loop.isChecked() else colors.secondary
+            )
+        )
         self.loop.setToolTip(text("source_loop", self.language) + " · " + loop_state)
         self.loop.setAccessibleName(
             text("source_loop", self.language) + " · " + loop_state
         )
-        self.status.setText(
-            text(
-                "vision_reloading"
-                if self._reloading
-                else "setup_saving"
-                if self._preparing
-                else "setup_failed"
-                if self._save_failed
-                else "unsaved"
-                if self.draft.dirty or (self.sources is not None and self.sources.dirty)
-                else "saved",
-                self.language,
-            )
+        status_key = (
+            "vision_reloading"
+            if self._reloading
+            else "setup_saving"
+            if self._preparing
+            else "setup_failed"
+            if self._save_failed
+            else "unsaved"
+            if self.draft.dirty or (self.sources is not None and self.sources.dirty)
+            else "saved"
+        )
+        self.status.setAccessibleName(text(status_key, self.language))
+        self.status.setToolTip(self.status.accessibleName())
+        status_color = (
+            colors.warning
+            if status_key == "unsaved"
+            else colors.fault
+            if status_key == "setup_failed"
+            else colors.ok
+            if status_key == "saved"
+            else colors.secondary
+        )
+        self.status.setPixmap(
+            (
+                indicator_icon(Indicator.PENDING, status_color)
+                if status_key == "unsaved"
+                else production_icon(
+                    "READY"
+                    if status_key == "saved"
+                    else "FAULT"
+                    if status_key == "setup_failed"
+                    else "STARTING",
+                    status_color,
+                )
+            ).pixmap(20, 20)
         )
         bounds_issue = ""
         size = self.draft.bounds.get(self.camera)
@@ -1587,9 +1661,10 @@ class MachineRoiWorkspace(QWidget):
             except ValueError as exc:
                 bounds_issue = str(exc)
         self._bounds_issue = bounds_issue
-        self.status.setToolTip(
-            text("roi_applied", self.language) if self._feedback else ""
-        )
+        if self._feedback:
+            self.status.setToolTip(
+                self.status.toolTip() + "\n" + text("roi_applied", self.language)
+            )
         position = (
             f"{index + 1}/{len(paths)}"
             if paths and self.reference_mode == "folder"

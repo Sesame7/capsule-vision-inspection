@@ -354,7 +354,8 @@ def test_vision_folder_summaries_and_tooltips_preserve_configuration(
         folder in window.event_label.toolTip()
         and folder not in window.event_label.text()
     )
-    assert workspace.status.text() == text("setup_failed", language)
+    assert workspace.status.accessibleName() == text("setup_failed", language)
+    assert workspace.status.text() == "" and workspace.status.pixmap() is not None
     assert (
         path.read_bytes() == original
         and window.bridge.application.snapshot() == snapshot

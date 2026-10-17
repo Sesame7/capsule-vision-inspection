@@ -196,10 +196,25 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Save and apply source configuration first.",
     ),
     "vision_fps_preserved": (
-        "保留当前值；仅主动选择 1–10 才会更改草稿。",
-        "Current value is preserved; explicitly choose 1–10 to change the draft.",
+        "保留当前值；仅主动输入 1–10 整数才会更改草稿。",
+        "Current value is preserved; explicitly enter an integer 1–10 to change the draft.",
     ),
     "vision_fps": ("文件夹回放 FPS", "Folder replay FPS"),
+    "vision_fps_decrease": ("降低回放 FPS", "Decrease replay FPS"),
+    "vision_fps_increase": ("提高回放 FPS", "Increase replay FPS"),
+    "vision_fps_invalid": (
+        "请输入 1–10 的整数 FPS。",
+        "Enter an integer FPS from 1 to 10.",
+    ),
+    "source_folder_status": ("文件夹", "Folder"),
+    "source_folder_status_tip": (
+        "已保存的文件夹来源；实际图像可用性在保存/启动时验证，不代表检测已就绪。",
+        "Saved Folder source; image availability is checked at Save/Start, not a claim of inspection readiness.",
+    ),
+    "source_basler_status_tip": (
+        "已保存的相机来源；计数仅含匹配映射的已连接相机，不代表检测已就绪。",
+        "Saved Camera source; count includes connected cameras matching the mappings, not inspection readiness.",
+    ),
     "vision_image_select": ("选择图像", "Select image"),
     "vision_roi_select": ("选择 ROI 通道", "Select ROI channel"),
     "vision_connection_unchecked": (
@@ -777,6 +792,16 @@ def stylesheet(theme: Theme = "dark") -> str:
     QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}
     QWidget#production QPushButton#start:focus:enabled {{ border-color: {c.primary}; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
+    QPushButton#visionSourceCard {{ background: {c.background}; border-radius: {Style.radius}px; }}
+    QPushButton#visionSourceCard:hover {{ background: {c.raised}; border-color: {c.secondary}; }}
+    QPushButton#visionSourceCard:checked {{ background: {c.selected}; border-color: {c.accent}; }}
+    QPushButton#visionSourceCard:focus:enabled {{ border: 2px solid {c.accent}; }}
+    QPushButton#visionSourceCard:disabled {{ background: {c.surface}; border-color: {c.border}; }}
+    QFrame#visionSources QLineEdit#visionSourceValue, QFrame#visionSources QComboBox#visionSourceValue {{ font-weight: 600; }}
+    QFrame#visionFps {{ background: {c.background}; border: 1px solid {c.border}; border-radius: 7px; }}
+    QFrame#visionFps QPushButton, QFrame#visionFps QLineEdit {{ background: transparent; border: none; padding: 0; }}
+    QFrame#visionFps QPushButton:hover:enabled {{ background: {c.selected}; }}
+    QFrame#visionFps QPushButton:focus:enabled, QFrame#visionFps QLineEdit:focus {{ border: 1px solid {c.accent}; }}
     QPushButton#start {{ background: #5b7ffc; color: #ffffff; font-weight: 600; border-color: #5b7ffc; }}
     QPushButton#start:hover {{ background: #6d8eff; }}
     QPushButton#start:pressed {{ background: #4265de; }}
@@ -1108,6 +1133,11 @@ def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
             p.drawLine(3, 12, 21, 12)
             p.drawLine(5, 7, 19, 7)
             p.drawLine(5, 17, 19, 17)
+        elif kind == "folder":
+            path = QPainterPath(QPointF(3, 8))
+            for x, y in ((3, 5), (10, 5), (13, 8), (21, 8), (21, 19), (3, 19), (3, 8)):
+                path.lineTo(x, y)
+            p.drawPath(path)
         else:
             p.drawEllipse(QRectF(3, 3, 18, 18))
             p.drawLine(12, 6, 12, 12)

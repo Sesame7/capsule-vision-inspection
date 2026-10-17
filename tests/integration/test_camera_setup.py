@@ -23,6 +23,7 @@ from tests.unit.test_folder_replay import folders, write_image
 
 from vimo_demo.application import ApplicationState, ProductionCounters
 from vimo_demo.application.basler import BaslerDevice
+from vimo_demo.application.basler_connection import ConnectedCamera, ConnectionState
 from vimo_demo.application.folder_replay import FolderSourceError, decode_image
 from vimo_demo.configuration import (
     ConfigurationIOError,
@@ -286,7 +287,8 @@ def test_save_reload_partial_failure_and_running_guards(
     )
     workspace.source_edited("forbidden")
     workspace.loop_changed(True)
-    workspace.fps_changed(9)
+    workspace.fps.setText("10")
+    workspace.fps_changed()
     workspace.select_device(CameraId("CAM2"), 0)
     workspace.set_source_mode("basler")
     workspace.save_and_apply()
@@ -627,7 +629,9 @@ def test_setup_save_waits_for_actual_prepare_and_reports_failure(
         workspace.save_and_apply()
         until(entered.is_set)
         assert window.parameters.busy
-        assert workspace.status.text() == text("setup_saving", window.language)
+        assert workspace.status.accessibleName() == text(
+            "setup_saving", window.language
+        )
         assert window.event_label.text() != text("roi_applied", window.language)
         assert not workspace.buttons["roi_save_apply"].isEnabled()
     finally:
@@ -635,7 +639,7 @@ def test_setup_save_waits_for_actual_prepare_and_reports_failure(
     until(lambda: not window.parameters.busy)
     assert not source.dirty and load_camera_sources(source.path) == source.definition
     assert "post-save preparation failed" in window.event_label.toolTip()
-    assert workspace.status.text() == text("setup_failed", window.language)
+    assert workspace.status.accessibleName() == text("setup_failed", window.language)
     assert window.bridge.application.snapshot().candidate == candidate
 
 
@@ -732,7 +736,8 @@ def test_vision_discard_restores_all_configuration_but_keeps_view_and_applicatio
     if edits in ("source", "mixed"):
         workspace.source_edited("unused-draft-folder", CameraId("CAM3"))
         workspace.loop.setChecked(not source.saved.loop)
-        workspace.fps.activated.emit(8)
+        workspace.fps.setText("9")
+        workspace.fps_changed()
     if edits in ("roi", "mixed"):
         workspace.coordinates["X"].setText("31")
         workspace.apply_geometry()
@@ -803,7 +808,7 @@ def test_vision_discard_uses_current_disk_files_not_initial_memory(
     until(lambda: not window.parameters.busy)
     assert workspace.draft.saved == workspace.draft.definition == disk != initial
     assert source.saved == source.definition == sources
-    assert workspace.fps.currentText() == "3.5"
+    assert workspace.fps.text() == "3.5"
     assert (source.path.read_bytes(), workspace.draft.path.read_bytes()) == files
     assert (
         window.bridge.application.snapshot().candidate == candidate and not engine.calls
@@ -863,7 +868,9 @@ def test_vision_discard_reload_is_bounded_and_preserves_draft_if_edit_lock_chang
     until(entered.is_set)
     try:
         assert window.parameters.busy
-        assert workspace.status.text() == text("vision_reloading", window.language)
+        assert workspace.status.accessibleName() == text(
+            "vision_reloading", window.language
+        )
         assert not workspace.buttons["vision_discard"].isEnabled()
         assert not workspace.buttons["roi_save_apply"].isEnabled()
         workspace.request_discard()
@@ -1116,7 +1123,7 @@ def test_selected_xywh_edit_and_atomic_rejection(
     after = workspace.draft.camera(workspace.camera).slots
     assert after[2].rect == BoundingRect(20, 2, 5, 8)
     assert all(after[i] == before[i] for i in (0, 1, 3, 4, 5))
-    assert workspace.status.text() == text("unsaved", window.language)
+    assert workspace.status.accessibleName() == text("unsaved", window.language)
     for field, value in zip(workspace.coordinates.values(), invalid, strict=True):
         field.setText(value)
     workspace.buttons["roi_set_rect"].click()
@@ -1433,15 +1440,11 @@ def test_direct_loop_fps_preserves_legacy_until_explicit_selection(
     workspace.refresh()
     saved, geometry = sources.path.read_bytes(), workspace.draft.definition
     assert workspace.loop.isVisible() and workspace.fps.isVisible()
-    assert not workspace.fps.isEditable()
-    assert [workspace.fps.itemText(i) for i in range(10)] == [
-        str(i) for i in range(1, 11)
-    ]
-    assert workspace.fps.currentText() == str(legacy) and workspace.fps.count() == 11
-    assert not (
-        workspace.fps.model().flags(workspace.fps.model().index(10, 0))
-        & Qt.ItemFlag.ItemIsEnabled
-    )
+    assert workspace.fps.text() == str(legacy)
+    assert not workspace.fps_decrease.isEnabled()
+    assert not workspace.fps_increase.isEnabled()
+    workspace.fps.editingFinished.emit()  # Untouched legacy focus/blur is not an edit.
+    assert not sources.dirty
     workspace.refresh()
     window.set_language("en")
     window.set_theme("light")
@@ -1451,11 +1454,16 @@ def test_direct_loop_fps_preserves_legacy_until_explicit_selection(
     until(lambda: not window.parameters.busy)
     assert load_camera_sources(sources.path).target_fps == legacy
     assert not load_camera_sources(sources.path).loop
-    for invalid in (-1, 10, 20):
-        workspace.fps_changed(invalid)
+    for invalid in ("0", "11", "3.5", "1e1", "", "abc"):
+        workspace.fps.setText(invalid)
+        workspace.fps_changed()
         assert sources.definition.target_fps == legacy and not sources.dirty
-    workspace.fps.setCurrentIndex(9)
-    workspace.fps.activated.emit(9)
+    workspace.fps.setText("10")
+    workspace.fps.editingFinished.emit()
+    assert workspace.fps_decrease.isEnabled() and not workspace.fps_increase.isEnabled()
+    workspace.fps_decrease.click()
+    assert sources.definition.target_fps == 9
+    workspace.fps_increase.click()
     assert sources.definition.target_fps == 10 and sources.dirty
     assert load_camera_sources(sources.path).target_fps == legacy
     workspace.source_modes["basler"].click()
@@ -1470,6 +1478,100 @@ def test_direct_loop_fps_preserves_legacy_until_explicit_selection(
         and workspace.draft.definition == geometry
         and not engine.calls
     )
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_source_status_uses_saved_mode_and_actual_matching_connections(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    monkeypatch: pytest.MonkeyPatch,
+    language: Language,
+) -> None:
+    window, workspace, engine = camera_screen
+    window.set_language(language)
+    sources = workspace.sources
+    connection = window.bridge.source_connection
+    assert sources is not None and connection is not None
+    before = window.bridge.application.snapshot()
+    window.bridge.timer.timeout.emit()
+    assert window.event_frame.state.accessibleName() == text(
+        "source_folder_status", language
+    )
+    assert "/6" not in window.event_frame.state.accessibleName()
+    assert (
+        text("source_folder_status_tip", language) in window.event_frame.state.toolTip()
+    )
+    workspace.source_modes["basler"].click()
+    assert sources.dirty
+    assert window.event_frame.state.accessibleName() == text(
+        "source_folder_status", language
+    )
+    sources.definition = replace(
+        sources.definition,
+        cameras=tuple(
+            replace(c, basler_serial=f"100{i}")
+            for i, c in enumerate(sources.definition.cameras)
+        ),
+    )
+    sources.save()
+    snapshot = connection.source_snapshot()
+    observed = [snapshot]
+    monkeypatch.setattr(connection, "source_snapshot", lambda: observed[0])
+    window.bridge.timer.timeout.emit()
+    assert window.event_frame.state.accessibleName() == "0/6"
+    connected = tuple(
+        ConnectedCamera(c.camera_id, c.basler_serial, 60, 20)
+        for c in sources.saved.cameras
+    )
+    observed[0] = replace(snapshot, state=ConnectionState.CONNECTED, cameras=connected)
+    window.bridge.timer.timeout.emit()
+    assert window.event_frame.state.accessibleName() == "6/6"
+    assert (
+        text("source_basler_status_tip", language) in window.event_frame.state.toolTip()
+    )
+    # A stale device from another mapping is not counted as this configured source.
+    observed[0] = replace(
+        observed[0], cameras=(*connected[:-1], replace(connected[-1], serial="99999"))
+    )
+    window.bridge.timer.timeout.emit()
+    assert window.event_frame.state.accessibleName() == "5/6"
+    for state in (
+        ApplicationState.UNCONFIGURED,
+        ApplicationState.STARTING,
+        ApplicationState.STOPPING,
+        ApplicationState.FAULT,
+    ):
+        window.bridge.snapshot_changed.emit(replace(before, state=state))
+        assert window.event_frame.state.accessibleName() == window.state_label.text()
+    window.bridge.snapshot_changed.emit(before)
+    window.bridge.command_failed.emit("sources", ValueError("source diagnostic"))
+    assert window.event_frame.state.accessibleName() == window.state_label.text()
+    assert window.event_label.accessibleName()
+    assert window.bridge.application.snapshot() == before and not engine.calls
+    # This test changes observations, never opens a camera or starts Production.
+    observed[0] = snapshot
+
+
+def test_fps_stepper_boundaries_and_keyboard_entry(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    sources = workspace.sources
+    assert sources is not None
+    saved = sources.path.read_bytes()
+    workspace.fps.setFocus()
+    workspace.fps.selectAll()
+    QTest.keyClicks(workspace.fps, "1")
+    QTest.keyClick(workspace.fps, Qt.Key.Key_Return)
+    assert sources.definition.target_fps == 1
+    assert not workspace.fps_decrease.isEnabled() and workspace.fps_increase.isEnabled()
+    workspace.fps_increase.click()
+    assert sources.definition.target_fps == 2
+    workspace.fps_decrease.click()
+    assert sources.definition.target_fps == 1
+    assert sources.path.read_bytes() == saved and sources.dirty and not engine.calls
+    assert workspace.status.text() == "" and workspace.status.pixmap() is not None
+    assert workspace.status.accessibleName() == text("unsaved", window.language)
+    assert workspace.buttons["vision_discard"].isEnabled()
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -1652,7 +1754,7 @@ def test_incomplete_basler_mapping_save_rejects_before_machine_or_source_write(
     until(lambda: not window.parameters.busy)
     assert source.path.read_bytes() == initial_source
     assert workspace.draft.path.read_bytes() == initial_machine
-    assert source.dirty and workspace.status.text() == text(
+    assert source.dirty and workspace.status.accessibleName() == text(
         "setup_failed", window.language
     )
     assert "six distinct" in window.event_label.toolTip()
