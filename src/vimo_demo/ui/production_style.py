@@ -180,7 +180,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "source_mode": ("全局采集模式", "Global source mode"),
     "vision_folder_mode": ("文件夹图像", "Folder images"),
     "vision_basler_mode": ("工业相机", "Industrial cameras"),
-    "vision_assigned": ("已分配", "Assigned"),
     "source_connect": ("连接全部", "Connect all"),
     "source_disconnect": ("断开", "Disconnect"),
     "source_disconnected": ("未连接", "Disconnected"),
@@ -196,10 +195,9 @@ STRINGS: dict[str, tuple[str, str]] = {
         "请先保存并应用来源配置。",
         "Save and apply source configuration first.",
     ),
-    "vision_playback": ("文件夹回放选项", "Folder playback options"),
-    "vision_playback_tip": (
-        "仅用于文件夹回放；不改变 Basler 硬件触发。FPS 必须为有限正数。",
-        "Folder replay only; does not change Basler hardware triggering. FPS must be positive and finite.",
+    "vision_fps_preserved": (
+        "保留当前值；仅主动选择 1–10 才会更改草稿。",
+        "Current value is preserved; explicitly choose 1–10 to change the draft.",
     ),
     "vision_fps": ("文件夹回放 FPS", "Folder replay FPS"),
     "vision_image_select": ("选择图像", "Select image"),
@@ -214,9 +212,10 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "source_discover": ("刷新设备", "Refresh devices"),
     "source_discovering": ("正在读取设备信息…", "Reading device information…"),
-    "source_discovered": (
-        "发现 {count} 台设备；请明确选择对应关系。未发现的原序列号保持不变。",
-        "Found {count} devices; select assignments explicitly. Undiscovered assignments are retained.",
+    "source_discovered_short": ("{count} 台设备", "{count} devices"),
+    "source_duplicate": (
+        "该设备已分配给其他相机，请先解除原分配。",
+        "Device already assigned to another camera; clear that assignment first.",
     ),
     "source_discovery_failed": (
         "设备读取失败；请检查 pypylon/pylon 安装及相机连接，再刷新。原分配保持不变。",
@@ -230,8 +229,8 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "source_serial": ("相机序列号", "Camera serial"),
     "source_serial_tip": (
-        "显式对应当前相机；Basler 模式需要六个不同的数字序列号",
-        "Explicit identity for this camera; Basler requires six distinct numeric serials",
+        "选择已发现的设备；保留未发现的已存映射，不自动分配。Basler 需要六台不同设备。",
+        "Select a discovered device; undiscovered saved mappings are retained, never assigned automatically. Basler requires six distinct devices.",
     ),
     "basler_preparing": (
         "Basler 准备中；尚未就绪，请勿触发",
@@ -747,6 +746,11 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLabel[role="number"] {{ font-size: {Style.number}px; font-weight: 600; }}
     QLabel[role="state"] {{ font-size: {Style.title}px; font-weight: 600; }}
     QLabel[role="error"] {{ color: {c.warning}; }}
+    QFrame#visionModeSwitch {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 9px; }}
+    QFrame#visionModeSwitch QPushButton {{ background: transparent; border: none; padding: 0; }}
+    QFrame#visionModeSwitch QPushButton:checked {{ background: {c.selected}; border: 1px solid {c.accent}; }}
+    QFrame#visionModeSwitch QPushButton:focus:enabled {{ border: 2px solid {c.accent}; }}
+    QFrame#visionDivider {{ background: {c.border}; border: none; }}
     QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}

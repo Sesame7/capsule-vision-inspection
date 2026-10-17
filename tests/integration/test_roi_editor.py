@@ -215,16 +215,16 @@ def test_responsive_bilingual_editor(
     assert set(dialog.findChildren(QComboBox)) == {
         dialog.reference,
         dialog.channel,
+        dialog.fps,
         *(card.device for card in dialog.camera_cards.values()),
     }
     source_fields = {
-        field
-        for card in dialog.camera_cards.values()
-        for field in (card.folder, card.serial)
+        field for card in dialog.camera_cards.values() for field in (card.folder,)
     }
-    assert set(dialog.findChildren(QLineEdit)) == set(
-        dialog.coordinates.values()
-    ) | source_fields | {dialog.fps}
+    assert (
+        set(dialog.findChildren(QLineEdit))
+        == set(dialog.coordinates.values()) | source_fields
+    )
     assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
     for button in dialog.buttons.values():
         assert dialog.rect().contains(button.mapTo(dialog, QPoint(0, 0)))

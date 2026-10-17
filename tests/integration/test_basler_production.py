@@ -599,6 +599,15 @@ def test_vision_capture_cancellation_and_stale_delivery(
             app.snapshot().counters == ProductionCounters()
             and not startup.frames.snapshot().frames
         )
+        if action == "success":
+            workspace.disconnect_source.click()
+            until(lambda: not window.parameters.busy)
+            workspace.source_modes["folder"].click()
+            until(lambda: not window.parameters.busy)
+            assert not workspace.capture_status.isVisible()
+            assert not workspace.capture.isVisible()
+            assert workspace.sources is not None
+            workspace.sources.discard()
     finally:
         window.close()
         until(lambda: window.bridge.closed)
@@ -1034,7 +1043,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         until(lambda: not window.parameters.busy)
         assert startup.application.source_snapshot().state is ConnectionState.CONNECTED
         assert all(
-            not card.serial.isEnabled() for card in workspace.camera_cards.values()
+            not card.device.isEnabled() for card in workspace.camera_cards.values()
         )
         assert not workspace.discover.isEnabled() and workspace.editable()
         presentations: tuple[tuple[Language, Theme, tuple[int, int]], ...] = (
@@ -1058,7 +1067,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
             )
         saved = workspace.sources.definition
         workspace.set_source_mode("folder")
-        workspace.serial_edited(CameraId("CAM1"), "999")
+        workspace.select_device(CameraId("CAM1"), 0)
         assert workspace.sources.definition == saved
         workspace.coordinates["W"].setText("61")
         workspace.apply_geometry()

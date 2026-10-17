@@ -107,18 +107,30 @@ in drafts and saved data. Single-model configuration is read-only selection.
 Vision owns source setup and canvas-first Machine ROI editing, numeric Apply,
 Common size and Distribute evenly. Those operations reject invalid bounds atomically;
 they never silently clamp.
-Vision stacks the global source-mode selector, six camera cards in configured
-order (two columns), image controls/canvas and ROI controls. Card headers select
-the displayed camera; inline path/browse and Basler serial fields edit that camera's
-existing source draft without selecting it. Basler cards offer manual serial entry
-and explicit device discovery/selection; undiscovered saved assignments are retained.
+Vision stacks an icon-based Folder/Camera segmented switch, six camera cards,
+and a separated image/ROI workspace. Cards retain configured row-major order:
+two columns on narrow workspaces, three when at least 1092 logical pixels are
+available for cards. Camera headers use the same icon + numeric identity as
+Production, with full localized names in accessibility text/tooltips. Card headers
+select the displayed camera; inline Folder path/browse and discovered-device
+selection edit that camera's existing source draft without selecting it.
+Basler serials are selected from discovered devices, not entered manually.
+Undiscovered saved assignments remain visible and unchanged; discovery never
+auto-assigns or clears them. Devices used by another card cannot be assigned twice;
+clear the previous assignment explicitly before moving one. Device model/serial,
+connection state and actual dimensions are shown only where observed.
 Discovery reads device information off Qt dispatch without opening cameras or
 assigning them by enumeration order. Cards show explicit connection state; assignment alone is not
 connection status or live preview. Connect all/Disconnect are stopped operations
 off Qt dispatch, owned by the application rather than the widget. Source fields
 are locked until Disconnect; ROI editing remains subject to inspection locks.
-There is no separate source dialog. Compact
-Folder playback options edit Loop/FPS; Basler does not use these pacing settings.
+There is no separate source dialog. Folder Loop and integer FPS choices 1–10 are
+directly accessible beside the mode switch. Existing fractional or out-of-range
+FPS values are retained as display-only entries, with the full value in a tooltip;
+only an explicit 1–10 selection replaces the draft value. This UI range does not
+change the persisted positive/finite FPS contract. Basler does not use these pacing
+settings. Connection/discovery actions are compact icons with localized tooltips;
+the global connection summary is numeric, while faults remain explicit.
 The image selector and previous/next browse Folder inputs. Import loads a temporary
 image; Use runtime image freezes the latest eligible same-camera/source display
 frame, with explicit refresh. Neither tracks live pixels. Fit and 1:1 retain their

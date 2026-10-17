@@ -134,12 +134,12 @@ def test_unified_layout_camera_reference_and_frozen_refresh(
     assert list(workspace.camera_cards) == [CameraId(f"CAM{i}") for i in range(1, 7)]
     for index, card in enumerate(workspace.camera_cards.values()):
         name = text("camera_number", language).format(number=index + 1)
-        assert card.title == name and name in card.accessibleName()
+        assert card.title == str(index + 1) and name in card.accessibleName()
         assert f"CAM{index + 1}" in card.toolTip()
         assert card.width() >= Style.touch and card.height() >= Style.touch
         assert card.isChecked() == (index == 0)
         assert card.detail in card.toolTip()
-        if index % 2:
+        if index % workspace.source_cards.columns:
             previous = list(workspace.camera_cards.values())[index - 1]
             assert card.y() == previous.y() and card.x() > previous.x()
     assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 1
@@ -276,18 +276,17 @@ def test_save_reload_partial_failure_and_running_guards(
     assert not workspace.folder.isEnabled() and not workspace.browse.isEnabled()
     assert not workspace.loop.isEnabled() and not workspace.editable()
     assert all(not button.isEnabled() for button in workspace.source_modes.values())
-    assert not workspace.playback.isEnabled() and workspace.fps.isReadOnly()
+    assert not workspace.playback_options.isEnabled() and not workspace.fps.isEnabled()
     assert all(
         not card.folder.isEnabled()
-        and not card.serial.isEnabled()
+        and not card.device.isEnabled()
         and not card.browse.isEnabled()
         for card in workspace.camera_cards.values()
     )
     workspace.source_edited("forbidden")
     workspace.loop_changed(True)
-    workspace.fps.setText("19")
-    workspace.fps_changed()
-    workspace.serial_edited(CameraId("CAM2"), "999")
+    workspace.fps_changed(9)
+    workspace.select_device(CameraId("CAM2"), 0)
     workspace.set_source_mode("basler")
     workspace.save_and_apply()
     assert source.definition == before
@@ -912,7 +911,10 @@ def test_settings_representative_screenshot(
         .rect()
         .contains(workspace.folder.geometry())
     )
-    assert workspace.reference_toolbar.y() > workspace.source_cards.geometry().bottom()
+    assert (
+        workspace.reference_toolbar.mapTo(workspace, QPoint()).y()
+        > workspace.source_cards.geometry().bottom()
+    )
     assert workspace.canvas.y() > workspace.reference_toolbar.geometry().bottom()
     assert window.grab().save(
         str(tmp_path / f"vision-{mode}-{theme}-{language}-{size[0]}x{size[1]}.png")
@@ -932,11 +934,17 @@ def test_compact_icon_states_and_loop_click_preserve_configuration(
     saved = sources.path.read_bytes()
     geometry = workspace.draft.definition
     assert workspace.loop.isChecked()
-    assert workspace.loop.text() == text("source_loop_on", language)
+    assert (
+        workspace.loop.text() == ""
+        and text("source_loop_on", language) in workspace.loop.toolTip()
+    )
     assert text("source_loop", language) in workspace.loop.accessibleName()
     workspace.loop.click()
     assert not workspace.loop.isChecked() and not sources.definition.loop
-    assert workspace.loop.text() == text("source_loop_off", language)
+    assert (
+        workspace.loop.text() == ""
+        and text("source_loop_off", language) in workspace.loop.toolTip()
+    )
     assert sources.dirty and sources.path.read_bytes() == saved
     workspace.loop.click()
     assert sources.definition.loop and not sources.dirty
@@ -1028,8 +1036,9 @@ def test_inline_folder_edit_and_browse_do_not_select_or_persist(
     assert window.bridge.application.snapshot() == snapshot and not engine.calls
 
 
-def test_inline_serial_mapping_validation_and_save_use_the_existing_draft(
+def test_scanned_mapping_prevents_duplicates_and_saves_existing_draft(
     camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    device_inventory: tuple[BaslerDevice, ...],
 ) -> None:
     window, workspace, engine = camera_screen
     sources = workspace.sources
@@ -1038,13 +1047,40 @@ def test_inline_serial_mapping_validation_and_save_use_the_existing_draft(
     geometry = workspace.draft.definition
     folders_before = tuple(c.folder for c in sources.definition.cameras)
     workspace.source_modes["basler"].click()
+    workspace.discover.click()
+    until(lambda: not window.parameters.busy)
     for i, card in enumerate(workspace.camera_cards.values(), 1):
-        QTest.mouseClick(card.serial, Qt.MouseButton.LeftButton)
-        QTest.keyClicks(card.serial, f"100{i}")
+        assert not card.device.isEditable() and card.device.lineEdit() is None
+        index = card.device.findData(f"100{i}")
+        card.device.setCurrentIndex(index)
+        card.device.activated.emit(index)
     assert workspace.camera == CameraId("CAM1")
     card = workspace.camera_cards[CameraId("CAM6")]
-    card.serial.selectAll()
-    QTest.keyClicks(card.serial, "1001")
+    duplicate = card.device.findData("1001")
+    assert not (
+        card.device.model().flags(card.device.model().index(duplicate, 0))
+        & Qt.ItemFlag.ItemIsEnabled
+    )
+    before = sources.definition
+    for invalid in (-1, card.device.count()):
+        card.device.activated.emit(invalid)
+        assert sources.definition == before
+    card.device.setCurrentIndex(duplicate)
+    card.device.activated.emit(
+        duplicate
+    )  # Even a synthetic activation cannot bypass validation.
+    assert sources.definition == before
+    assert card.device.currentData() == "1006"
+    assert workspace.message.text() == text("source_duplicate", window.language)
+    assert sources.path.read_bytes() == saved
+    # Explicit unassignment is permitted; incomplete Basler Save remains invalid.
+    card.device.setCurrentIndex(0)
+    card.device.activated.emit(0)
+    other = workspace.camera_cards[CameraId("CAM5")].device
+    assert (
+        other.model().flags(other.model().index(other.findData("1006"), 0))
+        & Qt.ItemFlag.ItemIsEnabled
+    )
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
     assert "six distinct" in workspace.message.toolTip()
@@ -1052,72 +1088,73 @@ def test_inline_serial_mapping_validation_and_save_use_the_existing_draft(
         sources.path.read_bytes() == saved
         and workspace.draft.path.read_bytes() == machine
     )
-    card.serial.selectAll()
-    QTest.keyClicks(card.serial, "001234")
-    QTest.keyClicks(card.serial, "x")  # The existing ASCII numeric contract rejects it.
-    assert card.serial.text() == "001234"
-    card.serial.selectAll()
-    QTest.keyClick(card.serial, Qt.Key.Key_Backspace)
-    workspace.save_and_apply()
-    until(lambda: not window.parameters.busy)
-    assert (
-        "six distinct" in workspace.message.toolTip()
-        and sources.path.read_bytes() == saved
-    )
-    QTest.keyClicks(card.serial, "001234")
+    index = card.device.findData("1006")
+    card.device.setCurrentIndex(index)
+    card.device.activated.emit(index)
     workspace.source_modes["folder"].click()
     until(lambda: not window.parameters.busy)
     workspace.source_modes["basler"].click()
-    assert card.serial.text() == "001234"  # Mode changes preserve both mappings.
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
     loaded = load_camera_sources(sources.path)
-    assert loaded.basler_serials(geometry.layout.camera_ids) == (
-        "1001",
-        "1002",
-        "1003",
-        "1004",
-        "1005",
-        "001234",
+    assert loaded.basler_serials(geometry.layout.camera_ids) == tuple(
+        f"100{i}" for i in range(1, 7)
     )
     assert tuple(c.folder for c in loaded.cameras) == folders_before
     assert not sources.dirty and workspace.draft.definition == geometry
     assert window.bridge.application.snapshot().active is None and not engine.calls
 
 
-def test_playback_options_validate_fps_without_rounding_or_runtime_side_effects(
+@pytest.mark.parametrize("legacy", [3.141592653589793, 20.0, 0.5])
+def test_direct_loop_fps_preserves_legacy_until_explicit_selection(
     camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    legacy: float,
 ) -> None:
     window, workspace, engine = camera_screen
     sources = workspace.sources
     assert sources is not None
+    sources.definition = replace(sources.definition, target_fps=legacy)
+    sources.save()
+    workspace.refresh()
     saved, geometry = sources.path.read_bytes(), workspace.draft.definition
-    assert workspace.playback.menu() is workspace.playback_menu
-    workspace.playback_menu.popup(workspace.playback.mapToGlobal(QPoint()))
-    QApplication.processEvents()
     assert workspace.loop.isVisible() and workspace.fps.isVisible()
+    assert not workspace.fps.isEditable()
+    assert [workspace.fps.itemText(i) for i in range(10)] == [
+        str(i) for i in range(1, 11)
+    ]
+    assert workspace.fps.currentText() == str(legacy) and workspace.fps.count() == 11
+    assert not (
+        workspace.fps.model().flags(workspace.fps.model().index(10, 0))
+        & Qt.ItemFlag.ItemIsEnabled
+    )
+    workspace.refresh()
+    window.set_language("en")
+    window.set_theme("light")
+    assert not sources.dirty and sources.path.read_bytes() == saved
     workspace.loop.click()
-    assert not sources.definition.loop
-    for invalid in ("0", "-1", "nan", "inf", "not-a-number"):
-        previous = sources.definition
-        workspace.fps.setText(invalid)
-        workspace.fps.editingFinished.emit()
-        assert sources.definition == previous and workspace.message.isVisible()
-        assert workspace.fps.text() == str(previous.target_fps)
-    workspace.fps.setText("3.141592653589793")
-    workspace.fps.editingFinished.emit()
-    assert sources.definition.target_fps == 3.141592653589793
-    workspace.playback_menu.close()
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert load_camera_sources(sources.path).target_fps == legacy
+    assert not load_camera_sources(sources.path).loop
+    for invalid in (-1, 10, 20):
+        workspace.fps_changed(invalid)
+        assert sources.definition.target_fps == legacy and not sources.dirty
+    workspace.fps.setCurrentIndex(9)
+    workspace.fps.activated.emit(9)
+    assert sources.definition.target_fps == 10 and sources.dirty
+    assert load_camera_sources(sources.path).target_fps == legacy
     workspace.source_modes["basler"].click()
-    assert workspace.fps.isReadOnly() and not workspace.loop.isEnabled()
+    assert not workspace.fps.isVisible() and not workspace.fps.isEnabled()
     workspace.source_modes["folder"].click()
     until(lambda: not window.parameters.busy)
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
-    loaded = load_camera_sources(sources.path)
-    assert loaded.target_fps == 3.141592653589793 and not loaded.loop
-    assert sources.path.read_bytes() != saved and not sources.dirty
-    assert workspace.draft.definition == geometry and not engine.calls
+    assert load_camera_sources(sources.path).target_fps == 10
+    assert (
+        not sources.dirty
+        and workspace.draft.definition == geometry
+        and not engine.calls
+    )
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -1229,7 +1266,7 @@ def test_basler_mode_draft_reference_identity_and_explicit_save(
         f"100{i}" for i in range(1, 7)
     ]
     assert all(
-        text("vision_connection_unchecked", window.language) in c.toolTip()
+        text("source_disconnected", window.language) in c.toolTip()
         for c in workspace.camera_cards.values()
     )
     assert not workspace.loop.isEnabled() and not workspace.folder.isVisible()
@@ -1261,7 +1298,7 @@ def test_basler_mode_draft_reference_identity_and_explicit_save(
         and window.bridge.application.snapshot().counters == ProductionCounters()
     )
     # Discard restores both configurations, not just the current source mode.
-    workspace.serial_edited(CameraId("CAM1"), "")
+    workspace.select_device(CameraId("CAM1"), 0)
     workspace.source_modes["folder"].click()
     until(lambda: not window.parameters.busy)
     window.navigate(0)
@@ -1325,24 +1362,21 @@ def test_inline_discovery_mapping_validation_and_explicit_save(
     until(lambda: not window.parameters.busy)
     assert workspace.camera == CameraId("CAM1")
     assert not engine.calls
-    for camera, card in workspace.camera_cards.items():
+    assert workspace.discovery_status.text() == text(
+        "source_discovered_short", window.language
+    ).format(count=6)
+    assert all(
+        not c.basler_serial for c in source.definition.cameras
+    )  # Discovery never auto-assigns.
+    for i, (camera, card) in enumerate(workspace.camera_cards.items(), 1):
         assert not card.folder.isVisible() and card.device.isVisible()
-        assert card.device.isEditable() and card.device.count() == 7
-        index = card.device.findData("1001")
+        assert not card.device.isEditable() and card.device.count() == 7
+        index = card.device.findData(f"100{i}")
         assert "acA1920-test" in card.device.itemText(index)
         card.device.setCurrentIndex(index)
         card.device.activated.emit(index)
-        assert source.definition.camera(camera).basler_serial == "1001"
-    assert workspace.camera == CameraId("CAM1")
-    workspace.save_and_apply()
-    until(lambda: not window.parameters.busy)
-    assert "six distinct" in workspace.message.toolTip()
-    assert source.path.read_bytes() == original
-    # Manual serial entry and discovered selection edit the very same draft.
-    for i, (camera, card) in enumerate(workspace.camera_cards.items(), 1):
-        card.serial.selectAll()
-        QTest.keyClicks(card.serial, f"100{i}")
         assert source.definition.camera(camera).basler_serial == f"100{i}"
+    assert workspace.camera == CameraId("CAM1") and source.path.read_bytes() == original
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
     assert not source.dirty and source.saved.mode == "basler"
@@ -1366,8 +1400,9 @@ def test_inline_discovery_retains_offline_assignments_and_errors(
     source = workspace.sources
     assert source is not None
     for i in range(1, 7):
-        workspace.serial_edited(CameraId(f"CAM{i}"), f"100{i}")
+        source.set_serial(CameraId(f"CAM{i}"), f"100{i}")
     workspace.source_modes["basler"].click()
+    source.save()
     before, payload = source.definition, source.path.read_bytes()
 
     def discover() -> tuple[BaslerDevice, ...]:
@@ -1379,7 +1414,8 @@ def test_inline_discovery_retains_offline_assignments_and_errors(
     workspace.discover.click()
     until(lambda: not window.parameters.busy)
     assert source.definition == before and source.path.read_bytes() == payload
-    assert workspace.camera_cards[CameraId("CAM3")].serial.text() == "1003"
+    assert workspace.camera_cards[CameraId("CAM3")].device.currentData() == "1003"
+    assert not source.dirty
     if sdk_failure:
         assert workspace.discovery_status.text() == text(
             "source_discovery_failed", window.language
@@ -1391,6 +1427,49 @@ def test_inline_discovery_retains_offline_assignments_and_errors(
             card.device.findData("1003")
         )
     assert workspace.camera_cards[CameraId("CAM3")].device.currentData() == "1003"
+    assert not engine.calls
+
+
+def test_vision_cards_reflow_by_usable_width_without_changing_pixels_or_identity(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    order = tuple(workspace.camera_cards)
+    frame = workspace.frame
+    assert frame is not None and workspace.sources is not None
+    before = workspace.sources.definition, workspace.draft.definition
+    workspace.select_roi(3)
+    workspace.canvas.zoom(2)
+    heights: dict[int, int] = {}
+    for size, columns in (
+        ((1080, 1920), 2),
+        ((1920, 1080), 3),
+        ((1300, 1920), 3),
+        ((1080, 1920), 2),
+    ):
+        window.resize(*size)
+        QApplication.processEvents()
+        assert workspace.source_cards.columns == columns
+        heights[columns] = workspace.source_cards.height()
+        assert tuple(workspace.camera_cards) == order
+        for i, card in enumerate(workspace.camera_cards.values()):
+            item = workspace.source_cards.grid.itemAtPosition(i // columns, i % columns)
+            assert item is not None and item.widget() is card
+        assert workspace.frame is frame and workspace.selected_index == 3
+        assert workspace.canvas.model.scale == 2
+        assert workspace.camera == CameraId("CAM1")
+        assert (
+            0
+            <= workspace.geometry_toolbar.y() - workspace.canvas.geometry().bottom()
+            <= Style.small
+        )
+    assert heights[3] < heights[2]
+    # Actual widget width controls reflow even inside a wide/landscape shell.
+    window.resize(1920, 1080)
+    workspace.source_cards.setFixedWidth(1000)
+    QApplication.processEvents()
+    assert workspace.source_cards.columns == 2
+    assert (workspace.sources.definition, workspace.draft.definition) == before
     assert not engine.calls
 
 
