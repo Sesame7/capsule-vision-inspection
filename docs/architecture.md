@@ -295,7 +295,8 @@ most 640 pixels on the longest side, quality 70, with unchanged frame bytes reus
 Application/display snapshots are sampled separately, not atomic six-camera capture.
 Publisher ID, revision and source identities prevent old bytes/new evidence aliasing.
 
-Default server/browser interval is 500 ms (CLI alternatives 1000/2000). The publisher
+Default server/browser interval is 500 ms (saved Communication preferences also
+allow 1000/2000 ms; Web changes require application restart). The publisher
 waits after each publication; the browser never overlaps polls, fetches JPEGs
 sequentially and owns at most six displayed object URLs plus one decode. Requests
 have a five-second poll deadline; 410 waits for the next observation, without an

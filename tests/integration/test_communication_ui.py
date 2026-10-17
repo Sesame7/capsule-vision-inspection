@@ -15,6 +15,7 @@ from tests.integration.test_production_ui import screen as screen
 from tests.qt_support import ensure_test_fonts, until
 
 from vimo_demo.application import ApplicationState
+from vimo_demo.application.communication_preferences import CommunicationPreferences
 from vimo_demo.communication import (
     FinsAddress,
     FinsMemoryArea,
@@ -46,12 +47,6 @@ def response(request: CommunicationRequest) -> CommunicationResponse:
     )
 
 
-def cell(page: CommunicationPage, row: int, column: int) -> str:
-    item = page.values_table.item(row, column)
-    assert item is not None
-    return item.text()
-
-
 class WatchProbe(CommunicationPage):
     @property
     def refresh_timer(self) -> QTimer:
@@ -60,8 +55,12 @@ class WatchProbe(CommunicationPage):
 
 
 @pytest.fixture
-def page(qapp: QApplication) -> Iterator[WatchProbe]:
+def page(qapp: QApplication, tmp_path: Path) -> Iterator[WatchProbe]:
     widget = WatchProbe()
+    widget.configure_preferences(
+        tmp_path / "communication.json", CommunicationPreferences()
+    )
+    widget.persist_settings()
     widget.show()
     yield widget
     widget.request_close(lambda: None)
@@ -169,45 +168,32 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
     )
     page.set_language(language)
     page.port.setValue(simulator.port)
+    page.persist_settings()
     page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
-    page.test_button.click()
+    page.persist_settings()
+    page.dispatch(RequestKind.TEST)
     until(lambda: not page.busy)
     assert page.last_response is not None and page.last_response.values == (
         (1234,) if area is FinsMemoryArea.DM else (0,)
     )
     assert page.last_response.request.area is area
-    assert page.status.text() == text("comm_test_ok", language)
-    page.count.setValue(3)
+    assert page.feedback_text == text("comm_test_ok", language)
     page.write_values.setText("0, 65535 4321")
     page.write_button.click()
     until(lambda: not page.busy)
     assert page.last_response is not None and page.last_response.values is None
-    assert page.status.text() == text("comm_write_ok", language)
+    assert page.feedback_text == text("comm_write_ok", language)
     assert page.last_read is not None and page.last_read.values == (
         (1234,) if area is FinsMemoryArea.DM else (0,)
     )
-    assert cell(page, 0, 1) == (
-        "1234" if area is FinsMemoryArea.DM else "0"
-    )  # No auto-readback.
-    page.read_button.click()
+    page.dispatch(RequestKind.READ, count=3)
     until(lambda: not page.busy)
     assert page.last_response is not None and page.last_response.values == (
         0,
         65535,
         4321,
     )
-    assert [cell(page, row, 0) for row in range(3)] == [
-        f"{area.prefix}100",
-        f"{area.prefix}101",
-        f"{area.prefix}102",
-    ]
-    assert [cell(page, row, 1) for row in range(3)] == [
-        "0",
-        "65535",
-        "4321",
-    ]
     assert page.log_count == 3 and "ms" in page.success.text()
-    assert [cell(page, row, 2) for row in range(3)] == ["0000", "FFFF", "10E1"]
     assert [name for name, _ in identities] == [
         "create",
         "read",
@@ -229,7 +215,7 @@ def test_actual_udp_ui_read_write_readback_and_owner_thread(
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_validation_remote_read_and_write(
-    qapp: QApplication, language: Language, area: FinsMemoryArea
+    qapp: QApplication, tmp_path: Path, language: Language, area: FinsMemoryArea
 ) -> None:
     calls: list[CommunicationRequest] = []
 
@@ -238,42 +224,47 @@ def test_validation_remote_read_and_write(
         return response(request)
 
     page = CommunicationPage(execute=execute)
+    page.configure_preferences(
+        tmp_path / "communication.json", CommunicationPreferences()
+    )
     page.set_language(language)
     page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
     page.show()
     try:
-        assert not calls and page.status.text() == text("comm_idle", language)
+        assert not calls and page.feedback_text == text("comm_idle", language)
         assert page.protocol.count() == 2 and page.protocol.isEnabled()
-        page.settings_button.click()
-        assert page.settings_dialog.isVisible() and not calls
+        assert page.host.isVisible() and not calls
         assert not page.advanced.isVisible()
         page.advanced_button.click()
         assert page.advanced.isVisible()
         page.host.setText("192.0.2.10")
-        assert page.write_button.isEnabled() and page.read_button.isEnabled()
+        assert page.write_button.isEnabled() and page.write_button.isEnabled()
         assert text("comm_local_write", language) == page.permission.text()
         page.write_values.setText("4321")
+        page.persist_settings()
         assert page.dispatch(RequestKind.WRITE)
         until(lambda: not page.busy)
         assert calls[-1].host == "192.0.2.10"
         page.destination[1].setValue(19)
+        page.persist_settings()
         assert page.dispatch(RequestKind.READ)
         until(lambda: not page.busy)
         assert calls[-1].host == "192.0.2.10" and calls[-1].destination.node == 19
         page.host.setText("127.0.0.2")
+        page.persist_settings()
         assert page.write_button.isEnabled() and page.dispatch(RequestKind.WRITE)
         until(lambda: not page.busy)
         assert calls[-1].host == "127.0.0.2"
         page.host.setText("localhost")
-        assert not page.dispatch(RequestKind.READ)
-        assert page.status.text() == text("comm_invalid", language)
+        page.persist_settings()
+        assert "localhost" in page.preferences_status.toolTip()
+        assert page.dirty
         page.host.setText("127.0.0.1")
         for values in ("", "-1", "65536", "abc", "1," + "0," * 998):
             page.write_values.setText(values)
             assert not page.dispatch(RequestKind.WRITE)
         page.address.setValue(area.word_count - 1)
-        page.count.setValue(2)
-        assert not page.dispatch(RequestKind.READ)
+        assert not page.dispatch(RequestKind.READ, count=2)
         assert len(calls) == 3
         assert page.write_button.toolTip() == text("comm_local_write", language)
     finally:
@@ -303,12 +294,12 @@ def test_localized_error_feedback(
         page.set_language(language)
         assert page.dispatch(RequestKind.READ)
         until(lambda: not page.busy)
-        assert text(key, language) in page.status.text()
-        assert type(error).__name__ in page.status.toolTip()
+        assert text(key, language) in page.feedback_text
+        assert type(error).__name__ in page.feedback_error
         if isinstance(error, FinsPlcError):
-            assert "0x1103" in page.status.text() and "0x1103" in page.log.toPlainText()
+            assert "0x1103" in page.feedback_text and "0x1103" in page.feedback_details
         page.set_language("en" if language == "zh" else "zh")
-        assert text(key, page.language) in page.status.text()
+        assert text(key, page.language) in page.feedback_text
     finally:
         page.request_close(lambda: None)
         page.deleteLater()
@@ -321,9 +312,10 @@ def test_real_udp_timeout_and_malformed_response_feedback(
         silent.bind(("127.0.0.1", 0))
         page.port.setValue(silent.getsockname()[1])
         page.timeout.setValue(0.05)
+        page.persist_settings()
         page.write_button.click()
         until(lambda: not page.busy)
-        assert page.status.text() == text("comm_write_unknown", page.language)
+        assert page.feedback_text == text("comm_write_unknown", page.language)
         silent.settimeout(0.05)
         assert silent.recvfrom(65535)[0][10:12] == b"\x01\x02"
         with pytest.raises(TimeoutError):
@@ -334,6 +326,7 @@ def test_real_udp_timeout_and_malformed_response_feedback(
         malformed.settimeout(1)
         page.port.setValue(malformed.getsockname()[1])
         page.timeout.setValue(1)
+        page.persist_settings()
         failures: list[BaseException] = []
 
         def send() -> None:
@@ -346,12 +339,12 @@ def test_real_udp_timeout_and_malformed_response_feedback(
         owner = Thread(target=send, name="h1b-test-malformed")
         owner.start()
         try:
-            page.read_button.click()
+            page.dispatch(RequestKind.READ)
             until(lambda: not page.busy)
         finally:
             owner.join(2)
         assert not owner.is_alive() and not failures
-        assert page.status.text() == text("comm_protocol_error", page.language)
+        assert page.feedback_text == text("comm_protocol_error", page.language)
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -381,15 +374,13 @@ def test_navigation_busy_snapshot_and_production_isolation(
         assert page.dispatch(RequestKind.READ)
         until(entered.is_set)
         assert not page.dispatch(RequestKind.READ)
-        assert not page.host.isEnabled() and not page.read_button.isEnabled()
+        assert not page.host.isEnabled() and not page.write_button.isEnabled()
         QTimer.singleShot(0, tick.set)
         until(tick.is_set)
         page.host.setText("192.0.2.99")  # Programmatic edit cannot redirect snapshot.
-        page.settings_button.click()
-        assert page.settings_dialog.isVisible() and page.busy
+        assert page.host.isVisible() and page.busy
         window.navigate(3)
         assert window.pages.currentIndex() == 3 and page.busy
-        assert not page.settings_dialog.isVisible()
         assert window.bridge.application.snapshot() == baseline
     finally:
         release.set()
@@ -397,7 +388,7 @@ def test_navigation_busy_snapshot_and_production_isolation(
     assert len(requests) == 1 and requests[0].host == "127.0.0.1"
     if fail:
         assert page.last_response is None
-        assert page.status.text() == text("comm_protocol_error", page.language)
+        assert page.feedback_text == text("comm_protocol_error", page.language)
     else:
         assert (
             page.last_response is not None
@@ -432,13 +423,10 @@ def test_close_waits_for_actual_exit_not_future_notification(
         until(returned.is_set)
         QApplication.processEvents()
         assert page.busy and page.last_response is None
-        page.settings_button.click()
-        assert page.settings_dialog.isVisible()
         window.close()
         window.close()
         until(lambda: window.bridge.closed)
         assert window.isVisible() and not page.closed
-        assert not page.settings_dialog.isVisible()
         assert not page.dispatch(RequestKind.READ)
         with pytest.raises(RuntimeError, match="active"):
             page.dispose()
@@ -450,7 +438,9 @@ def test_close_waits_for_actual_exit_not_future_notification(
 
 
 def test_close_during_real_udp_wait_keeps_socket_on_worker_until_reply(
-    screen: tuple[ProductionWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+    screen: tuple[ProductionWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     window, _ = screen
     entered, release = Event(), Event()
@@ -501,8 +491,13 @@ def test_close_during_real_udp_wait_keeps_socket_on_worker_until_reply(
         owner = Thread(target=serve, name="h1b-test-close-peer")
         owner.start()
         page = window.communication
+        page.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
         page.port.setValue(peer.getsockname()[1])
+        page.persist_settings()
         page.timeout.setValue(2)
+        page.persist_settings()
         try:
             assert page.dispatch(RequestKind.READ)
             until(entered.is_set)
@@ -551,7 +546,7 @@ def test_application_close_failure_keeps_communication_usable(
         release.set()
         session.cleanup_safe = True
         until(lambda: not page.busy)
-    assert page.read_button.isEnabled() and not page.closed
+    assert page.write_button.isEnabled() and not page.closed
     assert page.last_response is not None
     assert page.dispatch(RequestKind.READ)
     until(lambda: not page.busy)
@@ -567,10 +562,10 @@ def test_stale_delivery_and_bounded_log(qapp: QApplication) -> None:
         for _ in range(102):
             assert page.dispatch(RequestKind.TEST)
             until(lambda: not page.busy)
-        assert page.log_count == 100 and page.log.blockCount() == 100
-        current = page.status.text()
+        assert page.log_count == 100 and len(page.feedback_details.splitlines()) == 100
+        current = page.feedback_text
         page.replay("1")
-        assert page.status.text() == current
+        assert page.feedback_text == current
         page.request_close(lambda: None)
         page.dispose()
         page.replay("102")
@@ -604,7 +599,6 @@ def test_communication_layout_screenshot(
     window.set_language(language)
     window.resize(*size)
     window.navigate(2)
-    window.communication.settings_button.click()
     window.communication.advanced_button.click()
     window.communication.watch_editor_button.click()
     window.communication.manual_button.click()
@@ -615,8 +609,7 @@ def test_communication_layout_screenshot(
         RegisterWatchGroup(FinsMemoryArea.DM, 100, 3, "测试 / Test")
     )
     monkeypatch.setattr(window.communication, "_execute", response)
-    window.communication.count.setValue(3)
-    window.communication.read_button.click()
+    window.communication.dispatch(RequestKind.READ, count=3)
     until(lambda: not window.communication.busy)
     window.communication.read_watch_once()
     until(lambda: not window.communication.busy)
@@ -627,9 +620,6 @@ def test_communication_layout_screenshot(
         page.port,
         page.timeout,
         page.address,
-        page.count,
-        page.read_button,
-        page.test_button,
         page.write_button,
         page.advanced_button,
         page.area,
@@ -653,19 +643,10 @@ def test_communication_layout_screenshot(
         assert (
             button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 20
         )
-    assert (
-        page.read_button.width()
-        >= page.read_button.fontMetrics().horizontalAdvance(page.read_button.text())
-        + 20
-    )
     assert window.event_frame.height() == 44
     assert window.grab().save(
         str(tmp_path / f"communication-{language}-{size[0]}x{size[1]}.png")
     )
-    assert page.settings_dialog.grab().save(
-        str(tmp_path / f"communication-settings-{language}-{size[0]}x{size[1]}.png")
-    )
-    page.settings_dialog.reject()
 
 
 def test_failed_thread_start_leaves_no_owner_or_disabled_controls(
@@ -677,8 +658,8 @@ def test_failed_thread_start_leaves_no_owner_or_disabled_controls(
 
     monkeypatch.setattr("vimo_demo.ui.communication_page.Thread", Unstarted)
     assert not page.dispatch(RequestKind.READ)
-    assert not page.busy and page.read_button.isEnabled()
-    assert page.status.text() == text("comm_unexpected_error", page.language)
+    assert not page.busy and page.write_button.isEnabled()
+    assert page.feedback_text == text("comm_unexpected_error", page.language)
     assert not any(t.name == "FinsCommunication" for t in threads())
 
 
@@ -695,8 +676,7 @@ def test_unconfigured_shell_communication_has_no_production_dependency(
         window.show()
         window.navigate(2)
         assert window.snapshot.state is ApplicationState.UNCONFIGURED
-        assert window.communication.read_button.isEnabled()
-        assert window.communication.test_button.isEnabled()
+        assert window.communication.write_button.isEnabled()
         assert window.communication.last_response is None
         assert window.communication.log_count == 0
         assert not window.snapshot.runtime_owned
@@ -716,15 +696,10 @@ def watch_cell(page: CommunicationPage, row: int, column: int) -> str:
 def test_compact_empty_and_bounded_populated_watch(
     page: CommunicationPage, qapp: QApplication
 ) -> None:
-    assert page.watch_table.isHidden() and page.values_table.isHidden()
+    assert page.watch_table.isHidden()
     assert page.watch_empty.isVisible()
-    assert (
-        page.watch_editor.isHidden()
-        and page.manual_body.isHidden()
-        and page.log.isHidden()
-    )
-    assert not page.settings_dialog.isVisible()
-    assert page.settings_button.toolTip() and page.settings_button.accessibleName()
+    assert page.watch_editor.isHidden() and page.manual_body.isHidden()
+    assert page.host.isVisible() and page.write_button.toolTip()
     page.watch_editor_button.click()
     assert page.watch_editor.isVisible()
     assert page.add_watch_group(
@@ -765,41 +740,31 @@ def test_settings_and_disclosure_do_not_dispatch_or_change_active_watch(
         return response(request)
 
     monkeypatch.setattr(page, "_execute", execute)
-    page.settings_button.click()
     page.port.setValue(19600)
     page.source[1].setValue(4)
     page.advanced_button.click()
-    page.settings_dialog.reject()
     assert not requests and page.port.value() == 19600
+    page.persist_settings()
     assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4))
     assert page.start_monitoring()
     until(entered.is_set)
     try:
-        page.settings_button.click()
-        assert page.settings_dialog.isVisible() and not page.port.isEnabled()
+        assert not page.port.isEnabled()
         page.manual_button.click()
-        page.log_button.click()
         page.watch_editor_button.click()
-        assert page.manual_body.isVisible() and page.log.isVisible()
+        assert page.manual_body.isVisible()
         assert not page.watch_add.isEnabled() and not page.write_button.isEnabled()
         page.set_language("en")
-        assert page.settings_dialog.windowTitle() == text("comm_settings", "en")
-        page.settings_dialog.reject()
+        assert page.host.accessibleName() == text("comm_host", "en")
         page.manual_button.click()
-        page.log_button.click()
         assert page.auto_refresh and page.busy and len(requests) == 1
         assert requests[0].port == 19600 and requests[0].source.node == 4
     finally:
         page.stop_monitoring()
         release.set()
         until(lambda: not page.busy)
-    assert (
-        not page.auto_refresh
-        and not page.manual_body.isVisible()
-        and not page.log.isVisible()
-    )
-    page.log_button.click()
-    assert page.log.isVisible() and not requests[0].values
+    assert not page.auto_refresh and not page.manual_body.isVisible()
+    assert not requests[0].values
 
 
 def test_watch_editor_validation_and_identity(page: CommunicationPage) -> None:
@@ -811,7 +776,7 @@ def test_watch_editor_validation_and_identity(page: CommunicationPage) -> None:
     page.watch_count.setValue(2)
     page.watch_add.click()
     assert not page.watch_groups and not page.busy
-    assert page.status.text() == text("comm_invalid", page.language)
+    assert page.feedback_text == text("comm_invalid", page.language)
     page.watch_address.setValue(49)
     page.watch_count.setValue(4)
     page.watch_name.setText("First station")
@@ -869,6 +834,7 @@ def test_watch_localhost_mixed_groups_read_once_and_thread_ownership(
 
     monkeypatch.setattr(page, "_execute", execute)
     page.port.setValue(simulator.port)
+    page.persist_settings()
     assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Reject"))
     assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100, 1))
     assert not calls
@@ -958,7 +924,7 @@ def test_auto_slow_pass_no_overlap_or_tick_backlog_and_snapshot(
     page.refresh_timer.timeout.emit()
     QApplication.processEvents()
     assert len(requests) == 4 and not page.auto_refresh
-    assert page.host.isEnabled() and page.read_button.isEnabled()
+    assert page.host.isEnabled() and page.write_button.isEnabled()
 
 
 def test_monitor_failure_retains_per_group_timestamp_and_requires_restart(
@@ -991,13 +957,13 @@ def test_monitor_failure_retains_per_group_timestamp_and_requires_restart(
     until(lambda: not page.busy)
     assert len(calls) == 5
     assert not page.auto_refresh and not page.refresh_timer.isActive()
-    assert page.status.text() == text("comm_timeout_error", page.language)
+    assert page.feedback_text == text("comm_timeout_error", page.language)
     assert text("comm_watch_failed", page.language) in page.watch_status.text()
     assert watch_cell(page, 0, 2) == "4" and text(
         "comm_current", page.language
     ) in watch_cell(page, 0, 4)
     assert watch_cell(page, 1, 2) == "2"
-    assert watch_cell(page, 1, 4) == retained + " · " + text(
+    assert watch_cell(page, 1, 4) == "ERR · " + retained + " · " + text(
         "comm_previous", page.language
     )
     assert text("comm_previous", page.language) in watch_cell(page, 2, 4)
@@ -1013,10 +979,14 @@ def test_monitor_failure_retains_per_group_timestamp_and_requires_restart(
     until(lambda: not page.busy)
     page.stop_monitoring()
     assert len(calls) == 8 and page.log_count == 2
-    page.host.setText("localhost")  # Pre-dispatch failures also leave old values stale.
-    assert not page.start_monitoring()
-    assert len(calls) == 8 and not page.auto_refresh
-    assert all("Previous" in watch_cell(page, i, 4) for i in range(3))
+    page.host.setText("localhost")  # Unsaved invalid text cannot redirect watches.
+    page.persist_settings()
+    assert page.dirty
+    assert page.start_monitoring()
+    until(lambda: not page.busy)
+    page.stop_monitoring()
+    assert len(calls) == 11 and not page.auto_refresh
+    assert all(request.host == "127.0.0.1" for request in calls)
 
 
 @pytest.mark.parametrize("action", ["stop", "leave", "close"])
@@ -1056,7 +1026,7 @@ def test_active_monitor_stops_unstarted_groups_and_preserves_owner(
             until(lambda: window.bridge.closed)
             assert window.isVisible() and not page.closed
         assert not page.auto_refresh and page.busy
-        assert not page.read_button.isEnabled()
+        assert not page.write_button.isEnabled()
         with pytest.raises(RuntimeError, match="active"):
             page.dispose()
     finally:

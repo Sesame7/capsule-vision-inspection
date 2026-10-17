@@ -1,6 +1,6 @@
-"""Compact presentation of session-local preferences and the existing H2B owner."""
+"""Compact presentation of next-Start preferences and the existing H2B owner."""
 
-from PySide6.QtCore import QSize, Qt, Slot
+from PySide6.QtCore import QSize, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vimo_demo.application import ApplicationState, ApplicationStateError
+from vimo_demo.application import ApplicationState
 from vimo_demo.communication import FinsAddress, FinsTransport
 from vimo_demo.communication.reporting import (
     LocalReportingSettings,
@@ -30,12 +30,15 @@ from .production_style import Language, Style, navigation_icon, text, theme_colo
 
 
 class ReportingPanel(QFrame):
+    edited = Signal()
+
     def __init__(self, controller: ProductionReportingCommands) -> None:
         super().__init__()
         self.controller = controller
         self.language: Language = "zh"
         self.state = ApplicationState.UNCONFIGURED
         self._syncing = False
+        self._draft = controller.reporting_selection()
         self.setObjectName("commPanel")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root = QVBoxLayout(self)
@@ -52,25 +55,12 @@ class ReportingPanel(QFrame):
         self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.enabled)
         self.endpoint = QLabel()
-        header.addWidget(self.endpoint)
         header.addStretch()
-        self.settings_button = QPushButton()
-        self.settings_button.setIcon(navigation_icon(1))
-        self.settings_button.setIconSize(QSize(Style.icon, Style.icon))
-        self.settings_button.setFixedSize(Style.touch, Style.touch)
-        header.addWidget(self.settings_button)
+        self.service_status = QLabel()
+        header.addWidget(self.service_status)
         root.addLayout(header)
-        # These same editors are reparented into the page's retained settings
-        # dialog. There is no duplicate draft or reporting-state owner.
-        self.settings_body = QFrame()
-        self.settings_body.setObjectName("commPanel")
-        settings = QVBoxLayout(self.settings_body)
-        settings.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
+        settings = root
         self._captions: list[tuple[str, QLabel]] = []
-        caption = QLabel()
-        caption.setStyleSheet("font-size: 18px; font-weight: 600;")
-        self._captions.append(("plc_reporting", caption))
-        settings.addWidget(caption)
         self.host = QLineEdit()
         self.host.setMaxLength(64)
         self.protocol = QComboBox()
@@ -130,6 +120,7 @@ class ReportingPanel(QFrame):
         self.error.setWordWrap(True)
         status_row = QHBoxLayout()
         status_row.addWidget(self.status, 1)
+        status_row.addWidget(self.endpoint)
         status_row.addWidget(self.error)
         root.addLayout(status_row)
         self._fields = (self.port, self.timeout, *self.destination, *self.source)
@@ -137,7 +128,7 @@ class ReportingPanel(QFrame):
             field.valueChanged.connect(self._changed)
         self.enabled.toggled.connect(self._changed)
         self.protocol.currentIndexChanged.connect(self._changed)
-        self.host.editingFinished.connect(self._changed)
+        self.host.textChanged.connect(self._changed)
         self._load_selection()
         self.set_language("zh")
 
@@ -149,8 +140,13 @@ class ReportingPanel(QFrame):
             field.setMinimumHeight(Style.touch)
         return fields
 
+    def set_selection(self, selected: ReportingSelection) -> None:
+        self._draft = selected
+        self._load_selection()
+        self.refresh()
+
     def _load_selection(self) -> None:
-        selected = self.controller.reporting_selection()
+        selected = self._draft
         self._syncing = True
         try:
             self.enabled.setChecked(selected.enabled)
@@ -175,45 +171,42 @@ class ReportingPanel(QFrame):
     def _changed(self) -> None:
         if self._syncing:
             return
-        previous = self.controller.reporting_selection()
+        if self.state not in (ApplicationState.READY, ApplicationState.UNCONFIGURED):
+            self._load_selection()
+            return
         try:
-            self.controller.set_reporting_selection(
-                ReportingSelection(
-                    self.enabled.isChecked(),
-                    LocalReportingSettings(
-                        host=self.host.text().strip(),
-                        port=self.port.value(),
-                        timeout=self.timeout.value(),
-                        destination=FinsAddress(
-                            *(field.value() for field in self.destination)
-                        ),
-                        source=FinsAddress(*(field.value() for field in self.source)),
-                        max_pending=previous.settings.max_pending,
-                        transport=FinsTransport.TCP
-                        if self.protocol.currentIndex() == 1
-                        else FinsTransport.UDP,
-                    ),
-                )
-            )
-        except (ApplicationStateError, ValueError) as exc:
-            self._load_selection()  # Includes programmatic edits to disabled widgets.
-            self.host.setToolTip(str(exc))
-        else:
-            self.host.setToolTip(text("plc_session_only", self.language))
+            self._draft = self.selection()
+        except ValueError:
+            pass  # Invalid text remains a draft; Save reports the validation error.
         self.refresh()
+        self.edited.emit()
+
+    def selection(self) -> ReportingSelection:
+        return ReportingSelection(
+            self.enabled.isChecked(),
+            LocalReportingSettings(
+                host=self.host.text().strip(),
+                port=self.port.value(),
+                timeout=self.timeout.value(),
+                destination=FinsAddress(*(f.value() for f in self.destination)),
+                source=FinsAddress(*(f.value() for f in self.source)),
+                max_pending=self._draft.settings.max_pending,
+                transport=FinsTransport.TCP
+                if self.protocol.currentIndex() == 1
+                else FinsTransport.UDP,
+            ),
+        )
 
     def set_language(self, language: Language) -> None:
         self.language = language
         self.title.setText(text("plc_reporting", language))
         self.enabled.setText(text("plc_enable", language))
         self.enabled.setAccessibleName(self.enabled.text())
-        self.enabled.setToolTip(text("plc_session_only", language))
-        self.settings_button.setToolTip(text("comm_settings", language))
-        self.settings_button.setAccessibleName(text("comm_settings", language))
+        self.enabled.setToolTip(text("plc_next_start", language))
         self.advanced_button.setText(text("comm_advanced", language))
         self.advanced_button.setAccessibleName(self.advanced_button.text())
         self.host.setAccessibleName(text("comm_host", language))
-        self.host.setToolTip(text("plc_session_only", language))
+        self.host.setToolTip(text("plc_next_start", language))
         for key, caption in self._captions:
             caption.setText(text(key, language))
         for key, widget in (
@@ -244,7 +237,7 @@ class ReportingPanel(QFrame):
         for widget in (self.enabled, self.host, self.protocol, *self._fields):
             widget.setEnabled(editable)
         selected = self.controller.reporting_selection()
-        udp = selected.settings.transport is FinsTransport.UDP
+        udp = self.protocol.currentIndex() == 0
         self.advanced.setEnabled(editable and udp)
         self.advanced_button.setEnabled(editable and udp)
         self.protocol.setToolTip(
@@ -253,7 +246,7 @@ class ReportingPanel(QFrame):
         self.endpoint.setText(
             f"FINS/{selected.settings.transport.name} · {selected.settings.host}:{selected.settings.port}"
         )
-        self.endpoint.setToolTip(text("plc_session_only", self.language))
+        self.endpoint.setToolTip(text("plc_next_start", self.language))
         snapshot = self.controller.reporting_snapshot()
         key = "plc_disabled" if not selected.enabled else "plc_enabled"
         if snapshot is not None and snapshot.thread_alive:
@@ -268,8 +261,17 @@ class ReportingPanel(QFrame):
             ):
                 key = "plc_report_failed"
         ack = snapshot.last_acknowledged if snapshot else None
+        if snapshot and snapshot.thread_alive and snapshot.last_outcome:
+            if snapshot.last_outcome.outcome is ReportOutcome.ACKNOWLEDGED:
+                key = "plc_acknowledged"
+            elif snapshot.last_outcome.outcome in (
+                ReportOutcome.FAILED,
+                ReportOutcome.REJECTED,
+            ):
+                key = "plc_report_failed"
+        self.service_status.setText(text(key, self.language))
         self.status.setText(
-            f"{text(key, self.language)} · ACK {ack.sequence if ack else '--'} · "
+            f"ACK {ack.sequence if ack else '--'} · "
             f"{text('plc_success', self.language)} {snapshot.acknowledged_count if snapshot else 0} · "
             f"ERR {snapshot.failed_count if snapshot else 0}"
         )
@@ -281,6 +283,8 @@ class ReportingPanel(QFrame):
             detail += f"\ngeneration={snapshot.generation}; pending={snapshot.pending}; skipped={snapshot.skipped_count}; rejected={snapshot.rejected_count}"
             if ack:
                 detail += f"\nACK cycle={ack.identity.cycle_id}; sequence={ack.sequence}; words={ack.reject_words}"
+        self.service_status.setToolTip(detail)
+        self.service_status.setAccessibleDescription(detail)
         self.status.setToolTip(detail)
         self.status.setAccessibleDescription(detail)
         failure = snapshot.last_failed if snapshot else None

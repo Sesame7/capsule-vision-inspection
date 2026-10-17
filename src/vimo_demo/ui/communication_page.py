@@ -1,4 +1,4 @@
-"""Session-local FINS reads/watches; one background owner, independent of Production."""
+"""Persistent endpoints and session-local FINS reads/watches; one background owner, independent of Production."""
 
 import re
 from collections import deque
@@ -6,14 +6,14 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from threading import Event, Thread
 
-from PySide6.QtCore import QSize, Qt, QThread, QTimer, Slot
-from PySide6.QtGui import QHideEvent
+from PySide6.QtCore import Qt, QThread, QTimer, Slot
+from PySide6.QtGui import QHideEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QDialog,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -32,6 +32,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from vimo_demo.application.communication_preferences import (
+    CommunicationPreferences,
+    load_communication_preferences,
+    save_communication_preferences,
+)
 from vimo_demo.communication import (
     FinsAddress,
     FinsMemoryArea,
@@ -51,13 +56,24 @@ from vimo_demo.communication.operations import (
     execute_request,
 )
 from vimo_demo.communication.reporting import (
+    LocalReportingSettings,
     ProductionReportingCommands,
     ReportingWriteProtectedError,
 )
+from vimo_demo.configuration import ConfigurationError
+from vimo_demo.web.hosts import validate_host
 
 from .inference_bridge import FutureDelivery
-from .production_style import Language, Style, navigation_icon, text, theme_colors
+from .production_style import (
+    Language,
+    Style,
+    navigation_icon,
+    production_icon,
+    text,
+    theme_colors,
+)
 from .reporting_panel import ReportingPanel
+from .web_settings_panel import WebSettingsPanel
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +131,14 @@ class CommunicationPage(QWidget):
         self.last_response: CommunicationResponse | None = None
         self.last_read: CommunicationResponse | None = None
         self._watch_groups: list[RegisterWatchGroup] = []
+        self._watch_errors: list[str | None] = []
+        self._feedback_kind: RequestKind | None = None
+        self._write_state, self._write_detail = "comm_idle", ""
+        self._last_write: CommunicationResponse | None = None
+        self._settings_loading = False
+        self._settings_missing = True
+        self._settings_message, self._settings_detail = "", ""
+        self._discard_dialog: QMessageBox | None = None
         self._watch_observations: list[CommunicationResponse | None] = []
         self._watch_fresh: set[int] = set()
         self._watch_pass = False
@@ -155,32 +179,20 @@ class CommunicationPage(QWidget):
         scroll.setWidget(body)
         root.addWidget(scroll)
 
+        self.service_cards = QWidget()
+        self.service_layout = QGridLayout(self.service_cards)
+        self.service_layout.setContentsMargins(0, 0, 0, 0)
+        self.service_layout.setSpacing(Style.space)
         if reporting is not None and reporting.reporting_editable:
             self.reporting_panel = ReportingPanel(reporting)
-            layout.addWidget(self.reporting_panel)
-        self.settings_button = (
-            self.reporting_panel.settings_button
-            if self.reporting_panel
-            else QPushButton()
-        )
-        self.settings_button.setIcon(navigation_icon(1))
-        self.settings_button.setIconSize(QSize(Style.icon, Style.icon))
-        self.settings_button.setFixedSize(Style.touch, Style.touch)
-        self.settings_button.clicked.connect(self.open_settings)
-        self.settings_dialog = QDialog(self)
-        self.settings_dialog.resize(820, 700)
-        dialog_layout = QVBoxLayout(self.settings_dialog)
-        settings_scroll = QScrollArea()
-        settings_scroll.setWidgetResizable(True)
-        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        settings_body = QWidget()
-        settings_body.setObjectName("commBody")
-        settings_layout = QVBoxLayout(settings_body)
-        if self.reporting_panel is not None:
-            settings_layout.addWidget(self.reporting_panel.settings_body)
-        settings_scroll.setWidget(settings_body)
-        dialog_layout.addWidget(settings_scroll)
-        settings = self._panel(settings_layout, "comm_manual_connection")
+            self.service_layout.addWidget(self.reporting_panel, 0, 0)
+        self.web_panel = WebSettingsPanel()
+        self.service_layout.addWidget(self.web_panel, 1, 0)
+        layout.addWidget(self.service_cards)
+        diagnostics = self._panel(layout, "comm_diagnostics")
+        settings = diagnostics
+        self._preferences_path: Path | None = None
+        self._preferences = CommunicationPreferences()
         common = QGridLayout()
         common.setHorizontalSpacing(Style.space)
         self.protocol = QComboBox()
@@ -209,10 +221,6 @@ class CommunicationPage(QWidget):
             widget.setMinimumHeight(Style.touch)
         settings.addLayout(common)
         test_row = QHBoxLayout()
-        self.test_button = self._button(
-            "comm_test", lambda: self.dispatch(RequestKind.TEST)
-        )
-        test_row.addWidget(self.test_button)
         test_row.addStretch()
         self.advanced_button = self._button("comm_advanced", self._toggle_advanced)
         self.advanced_button.setCheckable(True)
@@ -244,22 +252,10 @@ class CommunicationPage(QWidget):
                 routing.addWidget(field, row, column)
         settings.addWidget(self.advanced)
         self.advanced.hide()
-        settings_layout.addStretch()
-        self.settings_close = QPushButton()
-        self.settings_close.setMinimumHeight(Style.touch)
-        self.settings_close.clicked.connect(self.settings_dialog.reject)
-        dialog_layout.addWidget(self.settings_close, 0, Qt.AlignmentFlag.AlignRight)
-
-        watch_header = QWidget()
-        watch_heading = QHBoxLayout(watch_header)
-        watch_heading.setContentsMargins(0, 0, 0, 0)
-        watch_heading.addWidget(self._caption("comm_watch"))
+        watch = diagnostics
+        watch.addWidget(self._caption("comm_watch"))
         self.manual_endpoint = QLabel()
-        watch_heading.addStretch()
-        watch_heading.addWidget(self.manual_endpoint)
-        if self.reporting_panel is None:
-            watch_heading.addWidget(self.settings_button)
-        watch = self._panel(layout, "comm_watch", header=watch_header)
+        watch.addWidget(self.manual_endpoint)
         self.watch_editor_button = self._button(
             "comm_watch_edit", self._toggle_watch_editor
         )
@@ -337,7 +333,8 @@ class CommunicationPage(QWidget):
         self.manual_button = self._button("comm_registers", self._toggle_manual)
         self.manual_button.setCheckable(True)
         self.manual_button.setIcon(navigation_icon(2))
-        operations = self._panel(layout, "comm_registers", header=self.manual_button)
+        diagnostics.addWidget(self.manual_button)
+        operations = diagnostics
         self.manual_body = QWidget()
         manual = QVBoxLayout(self.manual_body)
         manual.setContentsMargins(0, 0, 0, 0)
@@ -347,17 +344,8 @@ class CommunicationPage(QWidget):
         self.area = self._area_selector()
         self.address = self._spin(0, 32767, 100)
         self.address.setPrefix("D")
-        self.count = self._spin(1, 999, 1)
         self._field(register_row, "comm_area", self.area, 0, 0)
         self._field(register_row, "comm_address", self.address, 0, 1)
-        self._field(register_row, "comm_count", self.count, 0, 2)
-        register_row.setColumnStretch(0, 1)
-        register_row.setColumnStretch(1, 1)
-        self.read_button = self._button(
-            "comm_read", lambda: self.dispatch(RequestKind.READ)
-        )
-        register_row.setColumnStretch(2, 1)
-        register_row.addWidget(self.read_button, 1, 3)
         manual.addLayout(register_row)
         write_row = QHBoxLayout()
         self.write_values = QLineEdit("4321")
@@ -379,39 +367,31 @@ class CommunicationPage(QWidget):
         self.area.currentIndexChanged.connect(self._manual_area_changed)
         self._manual_area_changed()
 
-        self.read_caption = QLabel()
-        self.read_caption.setWordWrap(True)
-        self.read_caption.setTextFormat(Qt.TextFormat.PlainText)
-        manual.addWidget(self.read_caption)
-        self.values_table = QTableWidget(0, 3)
-        self.values_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.values_table.verticalHeader().hide()
-        self.values_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
-        self.values_table.setMinimumWidth(200)
-        manual.addWidget(self.values_table)
-
-        feedback = self._panel(layout, "comm_feedback")
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
-        feedback.addWidget(self.status)
+        manual.addWidget(self.status)
         self.success = QLabel()
         self.success.setWordWrap(True)
         self.success.setTextFormat(Qt.TextFormat.PlainText)
-        feedback.addWidget(self.success)
-        self.log_button = self._button("comm_details", self._toggle_log)
-        self.log_button.setCheckable(True)
-        self.log_button.setIcon(navigation_icon(3))
-        feedback.addWidget(self.log_button)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(100)
-        self.log.setMinimumHeight(100)
-        self.log.setMaximumHeight(240)
-        feedback.addWidget(self.log)
-        self.log.hide()
+        manual.addWidget(self.success)
+        preferences_row = QHBoxLayout()
+        self.preferences_status = QLabel()
+        self.preferences_status.setWordWrap(True)
+        self.preferences_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.save_settings = QPushButton()
+        self.save_settings.setObjectName("start")
+        self.save_settings.setMinimumHeight(Style.touch)
+        self.save_settings.clicked.connect(self.persist_settings)
+        preferences_row.addWidget(self.preferences_status, 1)
+        self.discard_settings = QPushButton()
+        self.discard_settings.setFixedSize(Style.touch, Style.touch)
+        self.discard_settings.clicked.connect(self.request_discard)
+        preferences_row.addWidget(self.discard_settings)
+        preferences_row.addWidget(self.save_settings)
+        self.save_settings.hide()
+        self.discard_settings.hide()
+        root.addLayout(preferences_row)
         layout.addStretch(1)
         self.host.textChanged.connect(self._refresh)
         self.protocol.currentIndexChanged.connect(self._refresh)
@@ -474,17 +454,254 @@ class CommunicationPage(QWidget):
     def _toggle_watch_editor(self) -> None:
         self.watch_editor.setVisible(self.watch_editor_button.isChecked())
 
-    @Slot()
-    def _toggle_log(self) -> None:
-        self.log.setVisible(self.log_button.isChecked())
+    def refresh_icons(self) -> None:
+        self.discard_settings.setIcon(
+            production_icon("reset", theme_colors(self).primary)
+        )
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._arrange_services()
+
+    def _arrange_services(self) -> None:
+        panel = self.reporting_panel
+        if panel is None:
+            return
+        required = (
+            panel.minimumSizeHint().width()
+            + self.web_panel.minimumSizeHint().width()
+            + Style.space
+        )
+        wide = self.width() > self.height() and self.service_cards.width() >= required
+        position = (0, 1) if wide else (1, 0)
+        if self.service_layout.itemAtPosition(*position) is None:
+            self.service_layout.removeWidget(self.web_panel)
+            self.service_layout.addWidget(
+                self.web_panel, *position, Qt.AlignmentFlag.AlignTop
+            )
+        self.service_layout.setColumnStretch(0, 1)
+        self.service_layout.setColumnStretch(1, 1 if wide else 0)
+        self.service_cards.updateGeometry()
+
+    def diagnostic_selection(self) -> LocalReportingSettings:
+        return LocalReportingSettings(
+            host=self.host.text().strip(),
+            port=self.port.value(),
+            timeout=self.timeout.value(),
+            destination=FinsAddress(*(f.value() for f in self.destination)),
+            source=FinsAddress(*(f.value() for f in self.source)),
+            transport=FinsTransport.TCP
+            if self.protocol.currentIndex() == 1
+            else FinsTransport.UDP,
+        )
+
+    def _draft_preferences(self) -> CommunicationPreferences:
+        return CommunicationPreferences(
+            self.reporting_panel.selection()
+            if self.reporting_panel
+            else self._reporting.reporting_selection()
+            if self._reporting
+            else self._preferences.reporting,
+            self.diagnostic_selection(),
+            self.web_panel.preferences(),
+        )
+
+    @property
+    def dirty(self) -> bool:
+        try:
+            return self._draft_preferences() != self._preferences
+        except ValueError:
+            return True
+
+    def _show_preferences(self, value: CommunicationPreferences) -> None:
+        self._settings_loading = True
+        try:
+            endpoint = value.diagnostic
+            self.host.setText(endpoint.host)
+            self.protocol.setCurrentIndex(
+                1 if endpoint.transport is FinsTransport.TCP else 0
+            )
+            self.port.setValue(endpoint.port)
+            self.timeout.setValue(endpoint.timeout)
+            for fields, address in (
+                (self.destination, endpoint.destination),
+                (self.source, endpoint.source),
+            ):
+                for field, number in zip(
+                    fields, (address.network, address.node, address.unit), strict=True
+                ):
+                    field.setValue(number)
+            if self.reporting_panel is not None:
+                self.reporting_panel.set_selection(value.reporting)
+            self.web_panel.set_preferences(value.web)
+        finally:
+            self._settings_loading = False
+        self._refresh()
+
+    def configure_preferences(
+        self, path: Path, value: CommunicationPreferences, error: str = ""
+    ) -> None:
+        if self._reporting is not None and self.reporting_panel is None:
+            value = replace(value, reporting=self._reporting.reporting_selection())
+        self._preferences_path, self._preferences = path, value
+        self._settings_missing = not path.exists()
+        self._show_preferences(value)
+        self.web_panel.launched = value.web
+        self.web_panel.refresh()
+        self._settings_message = "comm_settings_failed" if error else ""
+        self._settings_detail = error
+        self.save_settings.show()
+        self.discard_settings.show()
+        for field in (self.host, self.web_panel.host):
+            field.textChanged.connect(self._settings_edited)
+        for field in (self.protocol, self.web_panel.interval):
+            field.currentIndexChanged.connect(self._settings_edited)
+        self.web_panel.enabled.toggled.connect(self._settings_edited)
+        for field in (
+            self.port,
+            self.timeout,
+            *self.destination,
+            *self.source,
+            self.web_panel.port,
+        ):
+            field.valueChanged.connect(self._settings_edited)
+        if self.reporting_panel is not None:
+            self.reporting_panel.edited.connect(self._settings_edited)
+            self.reporting_panel.advanced_button.toggled.connect(
+                lambda: QTimer.singleShot(0, self._arrange_services)
+            )
+        self._render_preferences()
+
+    def _render_preferences(self) -> None:
+        dirty = self.dirty
+        key = self._settings_message or (
+            "comm_settings_dirty"
+            if dirty
+            else "comm_settings_defaults"
+            if self._settings_missing
+            else "comm_settings_saved"
+        )
+        self.preferences_status.setText(text(key, self.language))
+        self.preferences_status.setToolTip(
+            self._settings_detail or str(self._preferences_path or "")
+        )
+        self.preferences_status.setAccessibleDescription(
+            self.preferences_status.toolTip()
+        )
+        failed = self._settings_message in (
+            "comm_settings_failed",
+            "comm_reload_failed",
+        )
+        self.preferences_status.setStyleSheet(
+            f"color: {theme_colors(self).warning if failed else theme_colors(self).secondary};"
+        )
+        editable = not (
+            self.busy or self._auto_refresh or self._closing or self._disposed
+        )
+        self.save_settings.setEnabled(
+            editable and (dirty or failed or self._settings_missing)
+        )
+        self.discard_settings.setEnabled(editable and dirty)
 
     @Slot()
-    def open_settings(self) -> None:
-        if self._closing or self._disposed:
+    def _settings_edited(self) -> None:
+        if self._settings_loading:
             return
-        self.settings_dialog.show()  # Nonblocking; opening does not dispatch I/O.
-        self.settings_dialog.raise_()
-        self.settings_dialog.activateWindow()
+        self._settings_message = self._settings_detail = ""
+        self._render_preferences()
+
+    def _commit_preferences(
+        self, value: CommunicationPreferences, persist: Callable[[], None]
+    ) -> None:
+        if self._reporting is not None:
+            self._reporting.persist_reporting_selection(value.reporting, persist)
+        else:
+            persist()
+        if value.diagnostic != self._preferences.diagnostic:
+            self._watch_fresh.clear()
+            self._render_watch()
+        self._preferences = value
+
+    @Slot()
+    def persist_settings(self) -> None:
+        if (
+            self._preferences_path is None
+            or self._closing
+            or self._disposed
+            or self.busy
+            or self._auto_refresh
+        ):
+            return
+        try:
+            value = self._draft_preferences()
+            validate_host(value.web.host)
+            path = self._preferences_path
+            self._commit_preferences(
+                value, lambda: save_communication_preferences(path, value)
+            )
+        except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
+            self._settings_message, self._settings_detail = (
+                "comm_settings_failed",
+                str(exc),
+            )
+        else:
+            self._settings_missing = False
+            self._settings_message, self._settings_detail = "comm_settings_saved", ""
+        self._refresh()
+        if self.reporting_panel is not None:
+            self.reporting_panel.refresh()
+
+    def request_discard(self) -> None:
+        if (
+            not self.dirty
+            or self._discard_dialog is not None
+            or not self.discard_settings.isEnabled()
+        ):
+            return
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(text("comm_discard", self.language))
+        dialog.setText(text("comm_discard_question", self.language))
+        accept = dialog.addButton(
+            text("comm_discard", self.language), QMessageBox.ButtonRole.AcceptRole
+        )
+        cancel = dialog.addButton(
+            text("cancel", self.language), QMessageBox.ButtonRole.RejectRole
+        )
+        dialog.setDefaultButton(cancel)
+        self._discard_dialog = dialog
+
+        def finished() -> None:
+            self._discard_dialog = None
+            if dialog.clickedButton() is accept:
+                self.reload_settings()
+            dialog.deleteLater()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+
+    def reload_settings(self) -> None:
+        if (
+            self._preferences_path is None
+            or self._closing
+            or self._disposed
+            or self.busy
+            or self._auto_refresh
+        ):
+            return
+        try:
+            value = load_communication_preferences(self._preferences_path)
+            validate_host(value.web.host)
+            self._commit_preferences(value, lambda: None)
+        except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
+            self._settings_message, self._settings_detail = (
+                "comm_reload_failed",
+                str(exc),
+            )
+        else:
+            self._show_preferences(value)
+            self._settings_missing = False
+            self._settings_message, self._settings_detail = "comm_settings_saved", ""
+        self._refresh()
 
     def _field(
         self, layout: QGridLayout, key: str, widget: QWidget, row: int, column: int
@@ -528,11 +745,12 @@ class CommunicationPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        self.settings_dialog.setWindowTitle(text("comm_settings", language))
-        self.settings_button.setToolTip(text("comm_settings", language))
-        self.settings_button.setAccessibleName(text("comm_settings", language))
-        self.settings_close.setText(text("comm_settings_close", language))
-        self.settings_close.setAccessibleName(self.settings_close.text())
+        self.web_panel.set_language(language)
+        self.save_settings.setText(text("comm_save_settings", language))
+        self.save_settings.setAccessibleName(self.save_settings.text())
+        self.discard_settings.setToolTip(text("comm_discard", language))
+        self.discard_settings.setAccessibleName(text("comm_discard", language))
+        self.refresh_icons()
         if self.reporting_panel is not None:
             self.reporting_panel.set_language(language)
         for key, caption in self._captions:
@@ -547,7 +765,6 @@ class CommunicationPage(QWidget):
             ("comm_port", self.port),
             ("comm_timeout", self.timeout),
             ("comm_address", self.address),
-            ("comm_count", self.count),
             ("comm_area", self.area),
             ("comm_area", self.watch_area),
             ("comm_address", self.watch_address),
@@ -568,20 +785,10 @@ class CommunicationPage(QWidget):
                 )
         self.write_values.setPlaceholderText(text("comm_values_hint", language))
         self.write_values.setAccessibleName(text("comm_values", language))
-        self.test_button.setToolTip(text("comm_test_hint", language))
         self.watch_editor_button.setToolTip(
             text("comm_watch_edit", language)
             + "\n"
             + text("comm_watch_limit", language)
-        )
-        self.log_button.setToolTip(text("comm_log", language))
-        self.log_button.setAccessibleName(text("comm_log", language))
-        self.values_table.setHorizontalHeaderLabels(
-            (
-                text("comm_word_address", language),
-                "DEC",
-                "HEX",
-            )
         )
         self.watch_table.setHorizontalHeaderLabels(
             tuple(
@@ -607,14 +814,11 @@ class CommunicationPage(QWidget):
             item = self.watch_table.horizontalHeaderItem(column)
             assert item is not None
             item.setToolTip(text(key, language))
-        for column, key in enumerate(("comm_word_address", "comm_word", "comm_hex")):
-            item = self.values_table.horizontalHeaderItem(column)
-            assert item is not None
-            item.setToolTip(text(key, language))
         self._render_watch()
         self._refresh()
+        QTimer.singleShot(0, self._arrange_services)
 
-    def _snapshot(self, kind: RequestKind) -> CommunicationRequest:
+    def _snapshot(self, kind: RequestKind, count: int = 1) -> CommunicationRequest:
         values = (
             tuple(
                 int(word, 10)
@@ -624,24 +828,19 @@ class CommunicationPage(QWidget):
             if kind is RequestKind.WRITE
             else ()
         )
+        endpoint = self._preferences.diagnostic
         return CommunicationRequest(
             kind,
-            self.host.text().strip(),
-            self.port.value(),
-            self.timeout.value(),
-            FinsAddress(*(field.value() for field in self.destination)),
-            FinsAddress(*(field.value() for field in self.source)),
+            endpoint.host,
+            endpoint.port,
+            endpoint.timeout,
+            endpoint.destination,
+            endpoint.source,
             self.address.value(),
-            len(values)
-            if kind is RequestKind.WRITE
-            else 1
-            if kind is RequestKind.TEST
-            else self.count.value(),
+            len(values) if kind is RequestKind.WRITE else count,
             values,
             self._selected_area(self.area),
-            FinsTransport.TCP
-            if self.protocol.currentIndex() == 1
-            else FinsTransport.UDP,
+            endpoint.transport,
         )
 
     @property
@@ -664,6 +863,7 @@ class CommunicationPage(QWidget):
             return False
         self._watch_groups.append(group)
         self._watch_observations.append(None)
+        self._watch_errors.append(None)
         self._render_watch()
         self.watch_selector.setCurrentIndex(len(self._watch_groups) - 1)
         self._refresh()
@@ -695,6 +895,7 @@ class CommunicationPage(QWidget):
             return False
         self._watch_groups.pop(index)
         self._watch_observations.pop(index)
+        self._watch_errors.pop(index)
         self._watch_fresh = {
             i if i < index else i - 1 for i in self._watch_fresh if i != index
         }
@@ -725,6 +926,7 @@ class CommunicationPage(QWidget):
             self.watch_selector.setItemData(
                 index, f"{name} · {address}", Qt.ItemDataRole.ToolTipRole
             )
+            error = self._watch_errors[index]
             for offset in range(group.count):
                 value = (
                     observation.values[offset]
@@ -748,7 +950,7 @@ class CommunicationPage(QWidget):
                     f"{group.area.prefix}{group.start + offset}",
                     str(value) if value is not None else "--",
                     f"{value:04X}" if value is not None else "--",
-                    observed,
+                    "ERR · " + observed if error else observed,
                 )
                 for column, content in enumerate(cells):
                     item = QTableWidgetItem(content)
@@ -762,6 +964,8 @@ class CommunicationPage(QWidget):
                         if observation
                         else f"{name} · {address}\n{observed}"
                     )
+                    if error:
+                        item.setToolTip(f"{name} · {address}\n{error}")
                     self.watch_table.setItem(row, column, item)
                 row += 1
         self.watch_selector.setCurrentIndex(
@@ -838,6 +1042,7 @@ class CommunicationPage(QWidget):
             self._refresh()
             return False
         self._watch_fresh.clear()
+        self._feedback_kind = RequestKind.READ
         try:
             # Manual register fields do not affect watch requests. Endpoint and
             # routing are captured once, then each group gets its own read range.
@@ -858,14 +1063,15 @@ class CommunicationPage(QWidget):
         self._render_watch()
         return self._launch(requests, watch=True)
 
-    def dispatch(self, kind: RequestKind) -> bool:
+    def dispatch(self, kind: RequestKind, *, count: int = 1) -> bool:
         if QThread.currentThread() != self.thread():
             raise RuntimeError("Communication dispatch requires the GUI thread")
         if self.busy or self._auto_refresh or self._closing or self._disposed:
             return False
+        self._feedback_kind = kind
         request: CommunicationRequest | None = None
         try:
-            request = self._snapshot(kind)
+            request = self._snapshot(kind, count)
             request.validate()
         except (ValueError, PermissionError) as exc:
             self._error(exc, request)
@@ -894,6 +1100,8 @@ class CommunicationPage(QWidget):
         self._sequence += 1
         self._completion = None
         self._state_key, self._detail = "comm_busy", ""
+        if self._feedback_kind is RequestKind.WRITE:
+            self._write_state, self._write_detail = "comm_write_busy", ""
         future: Future[CommunicationResponse | _WatchOutcome] = Future()
         execute = self._execute
         guard = (
@@ -987,19 +1195,9 @@ class CommunicationPage(QWidget):
                 self._detail = ""
                 if value.values is not None:
                     self.last_read = value
-                    self.values_table.setRowCount(len(value.values))
-                    for row, word in enumerate(value.values):
-                        self.values_table.setItem(
-                            row,
-                            0,
-                            QTableWidgetItem(
-                                f"{value.request.area.prefix}{value.request.start + row}"
-                            ),
-                        )
-                        self.values_table.setItem(row, 1, QTableWidgetItem(str(word)))
-                        self.values_table.setItem(
-                            row, 2, QTableWidgetItem(f"{word:04X}")
-                        )
+                if value.request.kind is RequestKind.WRITE:
+                    self._last_write = value
+                    self._write_state, self._write_detail = self._state_key, ""
                 self._append(request, self._state_key, value.elapsed_ms)
             else:
                 self._error(RuntimeError("Invalid communication result"), request)
@@ -1016,10 +1214,16 @@ class CommunicationPage(QWidget):
     def _finish_watch(self, outcome: _WatchOutcome) -> None:
         for index, response in enumerate(outcome.responses):
             self._watch_observations[index] = response
+            self._watch_errors[index] = None
             self._watch_fresh.add(index)
             self._watch_success = response.completed_at
             self.last_response = response
         if outcome.error is not None:
+            failed = len(outcome.responses)
+            if failed < len(self._watch_errors):
+                self._watch_errors[failed] = (
+                    f"{type(outcome.error).__name__}: {outcome.error}"[:1200]
+                )
             self._auto_refresh = False
             self._auto_timer.stop()
             self._watch_state = "comm_watch_failed"
@@ -1068,6 +1272,8 @@ class CommunicationPage(QWidget):
         self._detail = f"{type(error).__name__}: {error}"[:1200]
         if isinstance(error, FinsPlcError):
             self._detail += f" · 0x{error.end_code:04X}"
+        if self._feedback_kind is RequestKind.WRITE:
+            self._write_state, self._write_detail = key, self._detail
         self._append(request, key, None, self._detail)
 
     def _append(
@@ -1114,16 +1320,16 @@ class CommunicationPage(QWidget):
             text("comm_protocol" if udp else "comm_tcp_nodes", self.language)
         )
         for button in (
-            self.settings_button,
             self.watch_editor_button,
             self.manual_button,
-            self.log_button,
         ):
             button.setEnabled(not (self._closing or self._disposed))
+        endpoint = self._preferences.diagnostic
         self.manual_endpoint.setText(
-            f"{self.protocol.currentText()} · {self.host.text().strip()}:{self.port.value()}"
+            text("comm_effective_endpoint", self.language)
+            + f" · FINS/{endpoint.transport.name} · {endpoint.host}:{endpoint.port}"
         )
-        self.manual_endpoint.setToolTip(text("comm_manual_connection", self.language))
+        self.manual_endpoint.setToolTip(text("comm_endpoint_hint", self.language))
         self.watch_remove.setEnabled(editable and bool(self._watch_groups))
         self.watch_once.setEnabled(editable and bool(self._watch_groups))
         self.watch_auto.setEnabled(
@@ -1142,48 +1348,22 @@ class CommunicationPage(QWidget):
         self.write_button.setEnabled(editable)
         self.write_button.setToolTip(text("comm_local_write", self.language))
         self.permission.setText(text("comm_local_write", self.language))
-        key = "comm_closing" if self._closing else self._state_key
-        status = text(key, self.language)
-        if key == "comm_busy" and self._request is not None:
-            status = status.format(
-                operation=text("comm_" + self._request.kind.value, self.language)
-            )
-        if key == "comm_plc_error" and self._detail:
-            status += " · " + self._detail.rsplit(" · ", 1)[-1]
-        self.status.setText(status)
-        self.status.setToolTip(self._detail)
+        key = "comm_closing" if self._closing else self._write_state
+        self.status.setText(text(key, self.language))
+        self.status.setToolTip(self._write_detail)
+        self.status.setAccessibleDescription(self._write_detail)
         self.status.setStyleSheet(
-            f"color: {theme_colors(self).warning if self._detail else theme_colors(self).accent};"
+            f"color: {theme_colors(self).warning if self._write_detail else theme_colors(self).accent};"
         )
         self.success.setText(
-            self._response_description(self.last_response)
-            if self.last_response
-            else text("comm_no_success", self.language)
+            text("comm_last_write_ack", self.language)
+            + " · "
+            + self._response_description(self._last_write)
+            if self._last_write
+            else ""
         )
-        self.success.setToolTip(
-            text("comm_observation", self.language)
-            + (
-                "\n"
-                + text(
-                    "comm_" + self.last_response.request.kind.value + "_ok",
-                    self.language,
-                )
-                + " · "
-                + self._response_description(self.last_response)
-                if self.last_response
-                else ""
-            )
-        )
-        self.success.setVisible(self.last_response is not None)
-        self.read_caption.setText(
-            text("comm_last_read", self.language)
-            + (
-                " · " + self._response_description(self.last_read)
-                if self.last_read
-                else ""
-            )
-        )
-        self._size_table(self.values_table, 8)
+        self.success.setToolTip(text("comm_observation", self.language))
+        self.success.setVisible(self._last_write is not None)
         self.watch_status.setText(
             text(self._watch_state, self.language)
             + (
@@ -1201,17 +1381,26 @@ class CommunicationPage(QWidget):
         self.watch_status.setStyleSheet(
             f"color: {theme_colors(self).warning if self._watch_state == 'comm_watch_failed' else theme_colors(self).accent};"
         )
-        lines: list[str] = []
-        for entry in self._log:
-            elapsed = (
-                f" · {entry.elapsed_ms:.1f} ms" if entry.elapsed_ms is not None else ""
-            )
-            detail = " · " + entry.detail.replace("\n", " ") if entry.detail else ""
-            lines.append(
-                f"{entry.time} · {text(entry.operation, self.language)} · {entry.target} {entry.words} · {text(entry.outcome, self.language)}{elapsed}{detail}"
-            )
-        self.log.setPlainText("\n".join(lines))
-        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+        self._render_preferences()
+
+    @property
+    def feedback_text(self) -> str:
+        return text(self._state_key, self.language) + (
+            " · " + self._detail.rsplit(" · ", 1)[-1]
+            if self._state_key == "comm_plc_error" and self._detail
+            else ""
+        )
+
+    @property
+    def feedback_error(self) -> str:
+        return self._detail
+
+    @property
+    def feedback_details(self) -> str:
+        return "\n".join(
+            f"{entry.time} · {text(entry.operation, self.language)} · {entry.target} {entry.words} · {text(entry.outcome, self.language)} · {entry.elapsed_ms} ms · {entry.detail}"
+            for entry in self._log
+        )
 
     def request_close(self, after: Callable[[], None]) -> None:
         if self._disposed:
@@ -1219,11 +1408,13 @@ class CommunicationPage(QWidget):
             return
         if self._closing:
             return
-        self.settings_dialog.hide()
         self.stop_monitoring()
+        if self._discard_dialog is not None:
+            self._discard_dialog.reject()
         self._closing = True
         self._after_close = after
         self._refresh()
+        self.save_settings.setEnabled(False)
         if not self.busy:
             self._after_close = None
             after()
@@ -1233,6 +1424,7 @@ class CommunicationPage(QWidget):
         if self._disposed:
             raise RuntimeError("Communication workspace is disposed")
         self._closing = False
+        self.save_settings.setEnabled(True)
         self._after_close = None
         if not self.busy:
             self._state_key = "comm_idle"
@@ -1249,6 +1441,5 @@ class CommunicationPage(QWidget):
             self._delivery.detach()
 
     def hideEvent(self, event: QHideEvent) -> None:
-        self.settings_dialog.hide()
         self.stop_monitoring()
         super().hideEvent(event)

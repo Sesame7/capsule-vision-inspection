@@ -64,10 +64,14 @@ still require equipment commissioning.
 
 ## Automatic reporting lifecycle
 
-Communication's enable/host/transport controls are memory-only, initially disabled
-on each launch and editable while stopped. Start freezes settings under the
-application lifecycle lock for that generation. Warm-up sends no report/network
-requests. Stop retains the selection; a new Start creates a fresh owner.
+Communication's Production enable/endpoint/routing fields are drafts. Only a
+successful **Save settings** publishes preferences to the next Start and persists
+them in `data/communication.json`. Persistence and publication share the existing
+Application admission lock, so a competing Start cannot freeze a half-saved selection. Missing settings keep the previous defaults (disabled;
+Folder localhost/UDP, Basler field endpoint/TCP). Restoring enabled never creates
+a reporting client or sends before Start; warm-up still sends nothing. Production
+settings remain locked during STARTING/RUNNING/STOPPING and FAULT. Old ACKs,
+counts and connectivity are never restored as live observations.
 
 `FirstStationReportingWorker` receives compact generation/CycleId and 36 scalar
 statuses, never image/result histories. One non-daemon thread owns its connection,
@@ -105,11 +109,42 @@ access control.
 
 ## Communication workspace
 
-The manual panel provides DM/WR reads/writes and bounded register monitoring.
-TCP node negotiation belongs to its serial network owner. Register watches have
-explicit area/start/count and byte-order/format choices, without modifying the
-underlying register semantics. Refresh is serialized; replacing a watch/source
-does not allow late replies to overwrite a newer request's presentation.
+The page has three content-driven sections: **Production reporting**, **Web
+observer**, and **Diagnostics**. Production protocol, endpoint, timeout and enabled
+selection are inline; FINS routing expands separately (TCP negotiates nodes).
+Diagnostics has its own independently saved endpoint and routing, grouped DM/WR
+watches and serialized manual/auto refresh, plus explicit one-shot writes.
+Requests always snapshot the saved/effective diagnostic endpoint, identified above
+the operations; draft edits never silently redirect them. Read errors are shown
+at their groups, retaining stale values/timestamps; write ACK/error/uncertain
+execution appears beside writing. Detailed errors remain in tooltips and bounded
+observations. Test Read, standalone read controls and the Operation Details panel
+are removed from the UI; underlying typed reads/tests remain supported. Register
+groups, values and observation history are session-only.
+TCP node negotiation remains with the serial network owner. Late responses cannot
+replace a newer request's presentation.
+
+**Save settings** atomically writes definitions for all three sections; failed
+validation/write preserves the entire draft and effective settings. Unsaved fields
+never change reporting admission. An active session retains its frozen selection.
+Unchanged reporting allows independent Web/diagnostic settings to be saved during
+Production; changed reporting is rejected while its editing lock applies.
+
+The fixed bottom bar offers Save, confirmed Discard and concise dirty/error status.
+Discard strictly reloads/validates the actual file, not an earlier page snapshot;
+missing/invalid/unusable settings leave the draft intact with an error tooltip.
+It does not persist, restart/stop any owner or undo earlier network operations.
+The default settings can be explicitly saved before any edits. Portrait stacks
+cards; landscape places Production/Web side by side only when their actual content
+fits. Expanded routing/diagnostics grow in the outer scroll area.
+Web enabled/bind/port/interval preferences apply only at the next process launch;
+concise actual service status sits at the card header's right edge. Detailed
+URLs/errors are in its tooltip. Reporting has a separate header status and compact
+generation counters. The restart notice remains separate from edited values.
+There is no runtime Web start/stop/rebind action. Binding still requires one
+assigned local IPv4 (default 127.0.0.1:8765, 500 ms), and the observer remains
+read-only and unauthenticated; use only trusted networks. See
+[configuration](configuration.md#communication-preferences) for validation/recovery.
 
 Automatic reporting presents current/last-generation ACK/failure/skip/rejection
 counts, pending depth and recent compact observation, separately from manual

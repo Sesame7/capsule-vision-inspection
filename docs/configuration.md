@@ -9,6 +9,7 @@ fallback, automatic geometry creation or fake inference is used for recovery.
 | File | Content |
 | --- | --- |
 | `data/app.json` | v1: `default_model_id`, `last_applied_recipe_id`, `language` (`zh`/`en`) |
+| `data/communication.json` | optional v1 global Production reporting, diagnostic endpoint and Web preferences |
 | `data/models/*.json` | v1 Model definition: `model_id`, `display_name`, `model_path`, `expected_sha256`, `module_id` |
 | `data/recipes/*.recipe.json` | v1 Recipe, selected by explicit ID |
 | `data/machine/machine.json` | v1 configured camera order, slots, ChannelIds and ROIs |
@@ -28,6 +29,48 @@ keeps the shell UNCONFIGURED; a structurally valid candidate with unavailable
 Folder inputs can remain READY with a warning but fails Start preflight.
 Unreliable saved preferences are not silently overwritten. Invalid optional language
 can fall back visibly; required Model/Recipe identities cannot be guessed.
+
+## Communication preferences
+
+`data/communication.json` is independent from `app.json`, Recipes, MachineLayout
+and CameraSources. Communication's explicit **Save settings** atomically replaces
+this file (same-directory temporary write, fsync, replace); it does not change any
+other asset or start a network owner. All fields are drafts until a successful
+Save. Unsaved reporting edits never change next-Start admission; diagnostic
+requests continue to use the effective saved endpoint, not draft text. Save and
+reporting publication are serialized with Start under the existing Application
+lock. An unchanged reporting selection permits saving independent Web/diagnostic
+preferences during Production. Active sessions keep their frozen settings.
+
+Confirmed Discard reloads the actual file through this codec, without writing or
+undoing requests/results. On any reload/validation failure (including a missing
+file before the first Save), the complete draft is preserved. Default settings
+can be explicitly saved to establish that initial file. Save/Discard feedback
+and actions remain outside the scrolling content.
+
+The strict v1 object has exactly `schema_version`, `reporting`, `diagnostic`, and
+`web`. `reporting` contains `enabled` and `endpoint`; `diagnostic` is another
+endpoint. Each endpoint contains `transport` (`udp`/`tcp`), numeric IPv4 `host`,
+`port` (1–65535), `timeout` (0.05–30 seconds), `destination` and `source` (each
+`network`/`node`/`unit`, with existing FINS ranges). TCP retains inactive UDP route
+values but negotiates its nodes. Queue limits and W49–W52 mapping are not settings.
+`web` contains `enabled`, `host`, `port` and `interval_ms` (500/1000/2000). Only
+127.0.0.1 or a specific local unicast IPv4 is supported; Save and service launch
+also verify local assignment/subnet validity, without DNS or adapter selection UI.
+
+A missing file retains earlier defaults: reporting disabled, source-specific
+Production endpoint, independent localhost/UDP diagnostics, and Web enabled on
+127.0.0.1:8765 at 500 ms. Invalid files remain unchanged, with visible recovery
+feedback; reporting and Web stay disabled in memory until reviewed. An explicit
+Save replaces the invalid file with validated settings. If a saved Web address is
+no longer assigned or its port cannot bind, optional service startup fails visibly
+without changing the file or invalidating Production readiness.
+
+Restored reporting selection is frozen at the next Production Start, never a
+connection or authorization to transmit at startup/warm-up. Runtime observations,
+ACKs, watches, counters and results are not persisted. Web is a process-lifetime
+owner: saved changes require restart and do not alter the currently running
+service. Developer launchers retain their independent CLI settings.
 
 ## MachineLayout
 

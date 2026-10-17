@@ -693,6 +693,27 @@ class _LocalApplication(ProductionApplication):
             with self._reporting_lock:
                 self._reporting_selection = selection
 
+    def persist_reporting_selection(
+        self, selection: ReportingSelection, persist: Callable[[], None]
+    ) -> None:
+        """Publish saved preferences under the same lock that freezes Start.
+
+        Unchanged reporting permits saving independent Web/diagnostic preferences
+        during Production. Failed persistence never changes next-Start admission.
+        """
+        with self._condition:
+            changed = selection != self.reporting_selection()
+            if changed:
+                self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+                if not self.reporting_editable:
+                    raise ApplicationStateError(
+                        "Reporting settings are fixed by this launcher"
+                    )
+            persist()
+            if changed:
+                with self._reporting_lock:
+                    self._reporting_selection = selection
+
     def reporting_for_generation(
         self, generation: int
     ) -> LocalReportingSettings | None:

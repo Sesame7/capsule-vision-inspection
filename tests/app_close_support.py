@@ -114,10 +114,10 @@ def install() -> None:
                 return
             monitor.stop()
             if scenario == "timeout":
-                assert "Timeout" in window.communication.status.toolTip()
+                assert "Timeout" in window.communication.feedback_error
             else:
-                item = window.communication.values_table.item(0, 1)
-                assert item is not None and item.text() == "1234"
+                observed = window.communication.last_read
+                assert observed is not None and observed.values == (1234,)
             record("request_drained", scenario=scenario)
             if scenario == "switch":
                 window.navigate(0)
@@ -136,7 +136,9 @@ def install() -> None:
             if scenario in ("success", "timeout", "pending", "switch"):
                 simulator = FinsUdpSimulator(port=0)
                 window.communication.port.setValue(simulator.port)
+                window.communication.persist_settings()
                 window.communication.timeout.setValue(0.15)
+                window.communication.persist_settings()
                 if scenario in ("success", "switch"):
                     peer = Thread(
                         target=lambda: simulator.serve(stop) if simulator else None,

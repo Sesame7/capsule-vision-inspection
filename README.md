@@ -31,6 +31,7 @@ Normal startup requires authorized local configuration and assets beside `app.py
 ```text
 data/
   app.json                    # Explicit default Model / last-applied Recipe IDs
+  communication.json          # Optional global reporting/diagnostic/Web preferences
   machine/machine.json        # Saved camera/channel order and ROI geometry
   models/*.json               # Model definitions and their referenced artifacts
   recipes/*.recipe.json
@@ -73,8 +74,8 @@ the first available model/Recipe, invents ROIs or substitutes fake inference.
   Stop settles inspection and returns READY while Basler remains connected.
   Vision Disconnect or normal application Close releases cameras; verify actual exit.
 - **Communication:** manual D/W reads/writes and register watches use independently
-  selected UDP/TCP. Automatic W49–W52 reporting is opt-in, memory-only and captured
-  at Start. Folder defaults to localhost/UDP; Basler defaults to field TCP.
+  selected UDP/TCP. Automatic W49–W52 reporting is opt-in, restored from saved
+  preferences and captured at Start only after successful Save. Unsaved edits stay drafts. Folder defaults to localhost/UDP; Basler defaults to field TCP.
 
 Counters describe admitted cycles and channel judgment occurrences, not physical
 capsules. Stop/Start or a Recipe change does not reset them; explicit Batch does.
@@ -85,19 +86,17 @@ Technical ERROR, product NG and application FAULT are distinct.
 Open `http://127.0.0.1:8765/`. Default refresh is **500 ms**, coordinated between
 publisher and browser. The service serves bounded latest snapshots/JPEGs and has
 no controls, history, authentication or HTTPS. Optional startup failure is reported
-without blocking Production. Diagnostics can disable it or select 1/2-second updates:
+without blocking Production.
 
-```powershell
-uv run --no-sync python app.py --no-web-snapshots
-uv run --no-sync python app.py --web-interval-ms 1000
-```
-
-`--web-snapshots` remains an explicit enable flag. `--web-port` changes the port.
-For an isolated trusted LAN, `--web-host <assigned-local-IPv4>` selects one local
-address; wildcards/hostnames are rejected. Restrict access through the network and
-firewall; the application does not configure them. JPEG URLs returned by
-`/api/snapshot` include exact publisher/revision identities; a superseded URL
-returns 410. `/health` describes publication, not machine readiness.
+Use **Communication → Web observer** to edit enablement, bind IPv4, port and
+500/1000/2000 ms refresh. **Save settings** persists all three Communication
+sections in `data/communication.json`; Web changes take effect after application
+restart. The page shows the actual service separately. A trusted-LAN bind must be
+one assigned local IPv4; wildcard/DNS/broadcast bindings remain unsupported.
+Normal `app.py` accepts only `--help`, with no operator Web flags. Developer
+launchers retain their own explicit options. Access/firewall configuration remains
+external. JPEG URLs from `/api/snapshot` include publisher/revision identities;
+superseded URLs return 410. `/health` describes publication, not machine readiness.
 
 ## Developer tools and checks
 

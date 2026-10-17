@@ -16,6 +16,11 @@ from vimo_demo.application import (
     ProductionApplication,
     prepare_configuration,
 )
+from vimo_demo.application.communication_preferences import (
+    CommunicationPreferences,
+    WebPreferences,
+    load_communication_preferences,
+)
 from vimo_demo.application.continuous_basler import ContinuousArmedAcquisition
 from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
 from vimo_demo.application.local_replay import LocalReplayCommands
@@ -25,6 +30,7 @@ from vimo_demo.application.preferences import (
     save_preferences,
 )
 from vimo_demo.application.session import EngineFactory
+from vimo_demo.communication.reporting import ProductionReportingCommands
 from vimo_demo.configuration import (
     ConfigurationError,
     MachineLayoutDefinition,
@@ -68,6 +74,10 @@ class ApplicationData:
     @property
     def preferences(self) -> Path:
         return self.root / "app.json"
+
+    @property
+    def communication(self) -> Path:
+        return self.root / "communication.json"
 
     @property
     def machine(self) -> Path:
@@ -125,6 +135,8 @@ class Startup:
     issues: tuple[StartupIssue, ...]
     preferences_writable: bool
     local_replay: LocalReplayCommands | None = None
+    communication: CommunicationPreferences = CommunicationPreferences()
+    communication_error: str = ""
 
 
 def load_startup(
@@ -301,6 +313,27 @@ def load_startup(
         )
         # Availability selects Folder-only controls across saved mode changes.
         local_replay = application
+    communication = CommunicationPreferences(
+        reporting=application.reporting_selection()
+        if isinstance(application, ProductionReportingCommands)
+        else CommunicationPreferences().reporting,
+    )
+    communication_error = ""
+    try:
+        communication = load_communication_preferences(data.communication)
+    except ConfigurationError as exc:
+        if not isinstance(exc.__cause__, FileNotFoundError):
+            # Preserve the bad file; safe in-memory recovery is visible and only
+            # an explicit settings Save can replace it. Never open a wider bind.
+            communication_error = str(exc)
+            communication = replace(communication, web=WebPreferences(enabled=False))
+            issues.append(
+                StartupIssue(
+                    "startup_communication", communication_error, blocking=False
+                )
+            )
+    if isinstance(application, ProductionReportingCommands):
+        application.set_reporting_selection(communication.reporting)
     choice = None
     if prepared is not None:
         application.configure(prepared)
@@ -316,6 +349,8 @@ def load_startup(
         tuple(issues),
         preferences_writable,
         local_replay,
+        communication,
+        communication_error,
     )
 
 
@@ -393,6 +428,9 @@ def create_window(startup: Startup, delivery: FutureDelivery) -> ProductionWindo
         configuration_messages=tuple(dict.fromkeys(i.key for i in startup.issues)),
         configuration_notices=tuple((i.key, i.detail) for i in startup.issues),
     )
+    window.communication.configure_preferences(
+        startup.data.communication, startup.communication, startup.communication_error
+    )
     PreferenceNotifications(
         window,
         startup.data.preferences,
@@ -406,40 +444,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Persistent ViMo Production application"
     )
-    web = parser.add_mutually_exclusive_group()
-    web.add_argument(
-        "--web-snapshots",
-        action="store_true",
-        default=True,
-        help="Enable read-only snapshots (enabled by default)",
-    )
-    web.add_argument(
-        "--no-web-snapshots",
-        dest="web_snapshots",
-        action="store_false",
-        help="Disable the optional read-only observer",
-    )
-    parser.add_argument(
-        "--web-interval-ms",
-        type=int,
-        choices=(500, 1000, 2000),
-        default=500,
-        help="Publication and browser refresh interval (default: 500 ms)",
-    )
-    parser.add_argument(
-        "--web-host",
-        default="127.0.0.1",
-        help="Specific local IPv4 on a trusted test LAN (default: 127.0.0.1)",
-    )
-    parser.add_argument(
-        "--web-port",
-        type=int,
-        default=8765,
-        help="Snapshot listening port (default: 8765)",
-    )
-    args = parser.parse_args(argv)
-    if not 1 <= args.web_port <= 65535:
-        parser.error("--web-port must be between 1 and 65535")
+    parser.parse_args(argv)
     # Preparation before Qt creation, as in the explicit-path developer launcher.
     startup = load_startup(
         ApplicationData.at_entry(entry_directory),
@@ -453,8 +458,10 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
     qt = QApplication(sys.argv[:1])
     delivery = FutureDelivery()
     service: ProductionSnapshotService | None = None
+    web_error = ""
     try:
-        if args.web_snapshots:
+        web = startup.communication.web
+        if web.enabled:
             try:
                 service = ProductionSnapshotService(
                     startup.application,
@@ -462,13 +469,14 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                     cameras=startup.machine.layout.camera_ids
                     if startup.machine
                     else (),
-                    host=args.web_host,
-                    port=args.web_port,
-                    interval=args.web_interval_ms / 1000,
+                    host=web.host,
+                    port=web.port,
+                    interval=web.interval_ms / 1000,
                 )
                 service.start()
             except Exception as exc:
                 # Optional observation failure cannot invalidate Production readiness.
+                web_error = f"{type(exc).__name__}: {exc}"
                 traceback.print_exception(exc)
             else:
                 print(
@@ -487,10 +495,13 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                     observer.publisher.error()
                     or f"http://{observer.host}:{observer.port}/",
                 )
-                if observer is not None
-                else (False, "" if not args.web_snapshots else "Web startup failed")
+                if observer is not None and not web_error
+                else (
+                    False,
+                    "" if not web.enabled else web_error or "Web startup failed",
+                )
             ),
-            interval_ms=args.web_interval_ms,
+            interval_ms=web.interval_ms,
         )
         window.showMaximized()
         return qt.exec()

@@ -444,9 +444,8 @@ class ProductionWindow(QMainWindow):
                     else production_icon(symbol, colors.secondary)
                 ).pixmap(28, 28)
             )
-        self.communication.settings_button.setIcon(
-            navigation_icon(1, theme_colors(self).secondary)
-        )
+
+        self.communication.refresh_icons()
 
     def set_language(self, language: Language) -> None:
         self.language = language
@@ -1085,6 +1084,7 @@ class ProductionWindow(QMainWindow):
         available, detail = (
             self._web_observation() if self._web_observation else (False, "")
         )
+        self.communication.web_panel.observe(available, detail)
         web = (
             f"{self._web_interval_ms} ms"
             if available
