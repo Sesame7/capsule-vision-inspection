@@ -132,3 +132,14 @@ def test_hit_targets_letterbox_and_read_only() -> None:
     assert model.hit(240, 400, t) is None
     model.size = None
     assert model.transform(800, 800) is None
+
+
+def test_schematic_extent_only_affects_projection_not_edit_bounds() -> None:
+    model = RoiInteractionModel(rect=BoundingRect(20, 10, 50, 30), editable=True)
+    model.schematic_size = (70, 40)
+    transform = model.transform(700, 400)
+    assert transform is not None and transform.scale == 10
+    assert model.size is None and not model.can_drag
+    assert model.hit(300, 200, transform) is None
+    model.size = (100, 80)
+    assert model.display_size == (100, 80) and model.can_drag

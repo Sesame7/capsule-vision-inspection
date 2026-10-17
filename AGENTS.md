@@ -55,7 +55,10 @@ tag, push, add features or redesign architecture without authorization.
 
 Keep strict Pyright for maintained source/tests/scripts. No broad `Any`, global
 ignores or weakened diagnostics. Vendor typing workarounds must be local and
-justified at the adapter boundary. Run relevant focused checks, then normal gates:
+justified at the adapter boundary. During UI iteration, use actual Qt screenshots,
+focused interaction tests and checks relevant to changed files. Review screenshots
+and fix visual issues before final comprehensive validation; do not rerun the full
+suite for each styling adjustment. At phase completion, run the normal gates once:
 
 ```powershell
 uv run --no-sync ruff check src tests scripts app.py

@@ -206,7 +206,8 @@ class PylonBackend:
         )
         _call(camera, "Attach", _call(self.factory, "CreateDevice", self.infos[serial]))
         _call(camera, "Open")
-        if _str(_call(_call(camera, "GetDeviceInfo"), "GetSerialNumber")) != serial:
+        info = _call(camera, "GetDeviceInfo")
+        if _str(_call(info, "GetSerialNumber")) != serial:
             raise RuntimeError("Opened camera identity mismatch")
         for name in _FEATURES:
             value = self._read(device, name)
@@ -243,6 +244,7 @@ class PylonBackend:
             MappingProxyType(
                 {k: MappingProxyType(v.copy()) for k, v in device.triggers.items()}
             ),
+            model=_str(_call(info, "GetModelName")),
         )
 
     def arm(self) -> tuple[CameraReadiness, ...]:

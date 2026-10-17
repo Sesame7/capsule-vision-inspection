@@ -64,6 +64,22 @@ class RoiCanvas(QWidget):
                 image.data, width, height, image.strides[0], QImage.Format.Format_BGR888
             ).copy()
             self.model.size = width, height
+        self.model.schematic_size = None
+        self.update()
+
+    def set_projection(self, size: tuple[int, int] | None) -> None:
+        """No pixels: real bounds and schematic display extents stay distinct."""
+        if not self._image.isNull():
+            return
+        extent = (
+            max((s.rect.x + s.rect.width for s in self.rois), default=1),
+            max((s.rect.y + s.rect.height for s in self.rois), default=1),
+        )
+        schematic = extent if size is None else None
+        if (self.model.size, self.model.schematic_size) != (size, schematic):
+            self.cancel_gesture()
+            self.model.scale, self.model.pan = None, (0, 0)
+        self.model.size, self.model.schematic_size = size, schematic
         self.update()
 
     def cancel_gesture(self) -> None:
@@ -94,8 +110,8 @@ class RoiCanvas(QWidget):
             8.0, max(0.05, transform.scale * 1.2 ** (event.angleDelta().y() / 120))
         )
         self.model.scale = scale
-        assert self.model.size is not None
-        width, height = self.model.size
+        assert self.model.display_size is not None
+        width, height = self.model.display_size
         # Keep the pointed source pixel fixed where bounded pan permits it.
         mx, my = (
             max(0, (width * scale - self.width()) / 2),
@@ -116,7 +132,10 @@ class RoiCanvas(QWidget):
         destination = QRectF(
             transform.x, transform.y, transform.width, transform.height
         )
-        painter.drawImage(destination, self._image)
+        if not self._image.isNull():
+            painter.drawImage(destination, self._image)
+        else:
+            painter.fillRect(destination, QColor(Style.surface))
         painter.setClipRect(destination)
         for slot in self.rois:
             outline = QRectF(*transform.rectangle(slot.rect))
@@ -127,6 +146,10 @@ class RoiCanvas(QWidget):
                 Qt.AlignmentFlag.AlignTop,
                 f"CH{slot.channel_id:02d}",
             )
+        if self.model.schematic_size is not None:
+            pen = QPen(QColor(Style.warning), 1, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawRect(destination.adjusted(1, 1, -1, -1))
         rect = self.model.rect
         if rect is None:
             return

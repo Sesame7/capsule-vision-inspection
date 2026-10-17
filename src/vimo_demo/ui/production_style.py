@@ -180,7 +180,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "source_mode": ("全局采集模式", "Global source mode"),
     "vision_folder_mode": ("文件夹图像", "Folder images"),
     "vision_basler_mode": ("工业相机", "Industrial cameras"),
-    "vision_assigned": ("已分配", "Assigned"),
     "source_connect": ("连接全部", "Connect all"),
     "source_disconnect": ("断开", "Disconnect"),
     "source_disconnected": ("未连接", "Disconnected"),
@@ -196,12 +195,26 @@ STRINGS: dict[str, tuple[str, str]] = {
         "请先保存并应用来源配置。",
         "Save and apply source configuration first.",
     ),
-    "vision_playback": ("文件夹回放选项", "Folder playback options"),
-    "vision_playback_tip": (
-        "仅用于文件夹回放；不改变 Basler 硬件触发。FPS 必须为有限正数。",
-        "Folder replay only; does not change Basler hardware triggering. FPS must be positive and finite.",
+    "vision_fps_preserved": (
+        "保留当前值；仅主动输入 1–10 整数才会更改草稿。",
+        "Current value is preserved; explicitly enter an integer 1–10 to change the draft.",
     ),
     "vision_fps": ("文件夹回放 FPS", "Folder replay FPS"),
+    "vision_fps_decrease": ("降低回放 FPS", "Decrease replay FPS"),
+    "vision_fps_increase": ("提高回放 FPS", "Increase replay FPS"),
+    "vision_fps_invalid": (
+        "请输入 1–10 的整数 FPS。",
+        "Enter an integer FPS from 1 to 10.",
+    ),
+    "source_folder_status": ("文件夹", "Folder"),
+    "source_folder_status_tip": (
+        "已保存的文件夹来源；实际图像可用性在保存/启动时验证，不代表检测已就绪。",
+        "Saved Folder source; image availability is checked at Save/Start, not a claim of inspection readiness.",
+    ),
+    "source_basler_status_tip": (
+        "已保存的相机来源；计数仅含匹配映射的已连接相机，不代表检测已就绪。",
+        "Saved Camera source; count includes connected cameras matching the mappings, not inspection readiness.",
+    ),
     "vision_image_select": ("选择图像", "Select image"),
     "vision_roi_select": ("选择 ROI 通道", "Select ROI channel"),
     "vision_connection_unchecked": (
@@ -214,24 +227,43 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "source_discover": ("刷新设备", "Refresh devices"),
     "source_discovering": ("正在读取设备信息…", "Reading device information…"),
-    "source_discovered": (
-        "发现 {count} 台设备；请明确选择对应关系。未发现的原序列号保持不变。",
-        "Found {count} devices; select assignments explicitly. Undiscovered assignments are retained.",
+    "source_duplicate": (
+        "该设备已分配给其他相机，请先解除原分配。",
+        "Device already assigned to another camera; clear that assignment first.",
+    ),
+    "vision_schematic": ("ROI 示意", "ROI schematic"),
+    "vision_schematic_tip": (
+        "仅按 ROI 几何绘制示意；不代表相机或图像尺寸。",
+        "Illustrative ROI extents only; not camera dimensions or valid image bounds.",
+    ),
+    "vision_discard": ("放弃视觉配置修改", "Discard Vision changes"),
+    "vision_reloading": ("正在恢复…", "Restoring…"),
+    "vision_discard_question": (
+        "放弃全部未保存的来源和 ROI 修改，并从已保存文件重新加载？不会应用到检测会话。",
+        "Discard all unsaved source and ROI changes and reload saved files? This will not apply to the inspection session.",
+    ),
+    "vision_reload_error": (
+        "无法恢复已保存配置；草稿保留，请检查配置文件和详情。",
+        "Could not reload saved configuration; draft kept. Check the files and details.",
+    ),
+    "vision_dimensions_only": (
+        "无图像 · {width}×{height}",
+        "No pixels · {width}×{height}",
     ),
     "source_discovery_failed": (
         "设备读取失败；请检查 pypylon/pylon 安装及相机连接，再刷新。原分配保持不变。",
         "Discovery failed. Check pypylon/pylon and camera connections, then Refresh. Assignments are retained.",
     ),
     "source_unconfigured": ("未配置", "Unconfigured"),
-    "source_not_discovered": ("未发现 / 离线", "Not discovered / offline"),
+    "source_not_discovered": ("未发现", "Not discovered"),
     "source_mode_tip": (
         "六台相机统一使用此模式；切换只修改草稿，保存并应用后生效。",
         "One mode for all six cameras; changes edit the draft until Save and apply.",
     ),
     "source_serial": ("相机序列号", "Camera serial"),
     "source_serial_tip": (
-        "显式对应当前相机；Basler 模式需要六个不同的数字序列号",
-        "Explicit identity for this camera; Basler requires six distinct numeric serials",
+        "选择已发现的设备；保留未发现的已存映射，不自动分配。Basler 需要六台不同设备。",
+        "Select a discovered device; undiscovered saved mappings are retained, never assigned automatically. Basler requires six distinct devices.",
     ),
     "basler_preparing": (
         "Basler 准备中；尚未就绪，请勿触发",
@@ -747,6 +779,11 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLabel[role="number"] {{ font-size: {Style.number}px; font-weight: 600; }}
     QLabel[role="state"] {{ font-size: {Style.title}px; font-weight: 600; }}
     QLabel[role="error"] {{ color: {c.warning}; }}
+    QFrame#visionSources {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
+    QFrame#visionRoi {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
+    QFrame#visionModeSwitch QPushButton {{ background: transparent; border: none; border-radius: 20px; padding: 0; }}
+    QFrame#visionModeSwitch QPushButton:checked, QFrame#visionModeSwitch QPushButton:hover, QFrame#visionModeSwitch QPushButton:disabled {{ background: transparent; border: none; }}
+    QFrame#visionModeSwitch QPushButton:focus:enabled {{ border: 1px dotted {c.accent}; }}
     QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}
@@ -755,6 +792,16 @@ def stylesheet(theme: Theme = "dark") -> str:
     QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}
     QWidget#production QPushButton#start:focus:enabled {{ border-color: {c.primary}; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
+    QPushButton#visionSourceCard {{ background: {c.background}; border-radius: {Style.radius}px; }}
+    QPushButton#visionSourceCard:hover {{ background: {c.raised}; border-color: {c.secondary}; }}
+    QPushButton#visionSourceCard:checked {{ background: {c.selected}; border-color: {c.accent}; }}
+    QPushButton#visionSourceCard:focus:enabled {{ border: 2px solid {c.accent}; }}
+    QPushButton#visionSourceCard:disabled {{ background: {c.surface}; border-color: {c.border}; }}
+    QFrame#visionSources QLineEdit#visionSourceValue, QFrame#visionSources QComboBox#visionSourceValue {{ font-weight: 600; }}
+    QFrame#visionFps {{ background: {c.background}; border: 1px solid {c.border}; border-radius: 7px; }}
+    QFrame#visionFps QPushButton, QFrame#visionFps QLineEdit {{ background: transparent; border: none; padding: 0; }}
+    QFrame#visionFps QPushButton:hover:enabled {{ background: {c.selected}; }}
+    QFrame#visionFps QPushButton:focus:enabled, QFrame#visionFps QLineEdit:focus {{ border: 1px solid {c.accent}; }}
     QPushButton#start {{ background: #5b7ffc; color: #ffffff; font-weight: 600; border-color: #5b7ffc; }}
     QPushButton#start:hover {{ background: #6d8eff; }}
     QPushButton#start:pressed {{ background: #4265de; }}
@@ -1086,6 +1133,11 @@ def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
             p.drawLine(3, 12, 21, 12)
             p.drawLine(5, 7, 19, 7)
             p.drawLine(5, 17, 19, 17)
+        elif kind == "folder":
+            path = QPainterPath(QPointF(3, 8))
+            for x, y in ((3, 5), (10, 5), (13, 8), (21, 8), (21, 19), (3, 19), (3, 8)):
+                path.lineTo(x, y)
+            p.drawPath(path)
         else:
             p.drawEllipse(QRectF(3, 3, 18, 18))
             p.drawLine(12, 6, 12, 12)

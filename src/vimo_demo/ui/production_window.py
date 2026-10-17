@@ -53,6 +53,7 @@ from .production_style import (
     Style,
     Theme,
     apply_theme,
+    camera_icon,
     indicator_icon,
     navigation_icon,
     production_icon,
@@ -988,6 +989,20 @@ class ProductionWindow(QMainWindow):
                 for part in (self._command_detail, self.configuration_issue)
                 if part
             )
+        workspace = self.parameters.roi_workspace
+        vision_feedback = (
+            workspace.feedback
+            if workspace is not None and self.pages.currentIndex() == 4
+            else None
+        )
+        if vision_feedback is not None and not (
+            fault or self._closing or snapshot.last_issue or self._source_issue
+        ):
+            key, detail = vision_feedback
+            message, warning = text(key, language), True
+            if detail == message:
+                detail = ""
+            self._event_message = message
         self.event_label.setToolTip(
             "\n".join(part for part in (message, detail) if part)
         )
@@ -1058,20 +1073,7 @@ class ProductionWindow(QMainWindow):
             if detail
             else ("未启用" if self.language == "zh" else "Off")
         )
-        identity = (
-            self.theme,
-            self.language,
-            self.state_label.text(),
-            self.state_label.toolTip(),
-            plc,
-            web,
-            detail,
-        )
-        if identity == self._service_presentation:
-            return
-        self._service_presentation = identity
-        bar.state.setText(self.state_label.text())
-        bar.state.setToolTip(self.state_label.toolTip())
+        state_text, state_tip = self.state_label.text(), self.state_label.toolTip()
         state_color = (
             colors.fault
             if self.snapshot.state is ApplicationState.FAULT
@@ -1079,7 +1081,79 @@ class ProductionWindow(QMainWindow):
             if self.snapshot.state in (ApplicationState.READY, ApplicationState.RUNNING)
             else colors.secondary
         )
-        bar.state_icon.setPixmap(shell_icon("state", state_color).pixmap(20, 20))
+        state_icon = shell_icon("state", state_color)
+        session = self.parameters.session
+        sources = (
+            session.camera_sources.saved if session and session.camera_sources else None
+        )
+        if (
+            sources is not None
+            and session is not None
+            and not session.cli_sources
+            and self.snapshot.state
+            in (ApplicationState.READY, ApplicationState.RUNNING)
+            and not (self._closing or self._event_message or self.snapshot.last_issue)
+        ):
+            if sources.mode == "folder":
+                state_text, state_color = (
+                    text("source_folder_status", self.language),
+                    colors.secondary,
+                )
+                state_tip += "\n" + text("source_folder_status_tip", self.language)
+                state_icon = shell_icon("folder", state_color)
+            else:
+                connection = self.bridge.source_connection
+                snapshot = connection.source_snapshot() if connection else None
+                count = (
+                    sum(
+                        any(
+                            c.camera_id == row.camera_id
+                            and c.basler_serial == row.serial
+                            for c in sources.cameras
+                        )
+                        for row in snapshot.cameras
+                    )
+                    if snapshot
+                    else 0
+                )
+                connected = (
+                    snapshot is not None and snapshot.state is ConnectionState.CONNECTED
+                )
+                state_text = f"{count}/{len(sources.cameras)}"
+                state_color = (
+                    colors.ok
+                    if connected and count == len(sources.cameras)
+                    else colors.warning
+                    if snapshot and snapshot.state is not ConnectionState.DISCONNECTED
+                    else colors.secondary
+                )
+                state_icon = camera_icon(state_color)
+                state_tip += "\n" + text("source_basler_status_tip", self.language)
+                state_tip += "\n" + text(
+                    "source_"
+                    + (snapshot.state.name.lower() if snapshot else "disconnected"),
+                    self.language,
+                )
+                if snapshot and snapshot.error:
+                    state_tip += "\n" + snapshot.error
+        identity = (
+            self.theme,
+            self.language,
+            state_text,
+            state_tip,
+            state_color,
+            plc,
+            web,
+            detail,
+        )
+        if identity == self._service_presentation:
+            return
+        self._service_presentation = identity
+        bar.state.setText(state_text)
+        bar.state.setToolTip(state_tip)
+        bar.state_icon.setToolTip(state_tip)
+        bar.state_icon.setAccessibleName(state_tip)
+        bar.state_icon.setPixmap(state_icon.pixmap(20, 20))
         bar.state.setStyleSheet(f"color: {state_color};")
         bar.plc.setText(f"PLC · {plc}")
         bar.plc.setToolTip(f"PLC · {plc}\n{text('plc_ack_hint', self.language)}")

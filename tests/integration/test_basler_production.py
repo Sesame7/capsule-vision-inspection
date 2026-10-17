@@ -13,7 +13,7 @@ from time import perf_counter
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.application_support import WAIT
 from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
@@ -540,8 +540,9 @@ def test_vision_capture_cancellation_and_stale_delivery(
         pending = captures[-1]
         assert pending is not None and not workspace.capture.isEnabled()
         assert workspace.cancel_capture_button.isVisible()
-        assert workspace.capture_status.text() == text(
-            "vision_capture_waiting", window.language
+        assert (
+            text("vision_capture_waiting", window.language)
+            in workspace.capture.toolTip()
         )
         until(lambda: app.source_snapshot().capture_waiting)
         geometry = workspace.draft.definition
@@ -551,25 +552,27 @@ def test_vision_capture_cancellation_and_stale_delivery(
             assert workspace.frame is not None
             assert workspace.frame.frame_id.camera_id == CameraId("CAM1")
             assert int(workspace.frame.image[0, 0, 0]) == 10
-            assert workspace.capture_status.text() == text(
-                "vision_capture_success", window.language
+            assert (
+                text("vision_capture_success", window.language)
+                in workspace.capture.toolTip()
             )
         elif action == "timeout":
             now[0] = 11.0
             until(
                 lambda: (
-                    workspace.capture_status.text()
+                    window.event_label.accessibleName()
                     == text("vision_capture_timeout", window.language)
                 )
             )
-            assert workspace.capture_status.text() == text(
+            assert window.event_label.accessibleName() == text(
                 "vision_capture_timeout", window.language
             )
         elif action == "cancel":
             workspace.cancel_capture_button.click()
             assert pending.cancelled()
-            assert workspace.capture_status.text() == text(
-                "vision_capture_cancelled", window.language
+            assert (
+                text("vision_capture_cancelled", window.language)
+                in workspace.capture.toolTip()
             )
         elif action == "late":
             # Complete without pumping Qt, then change selection before queued delivery.
@@ -599,6 +602,18 @@ def test_vision_capture_cancellation_and_stale_delivery(
             app.snapshot().counters == ProductionCounters()
             and not startup.frames.snapshot().frames
         )
+        if action == "success":
+            workspace.disconnect_source.click()
+            until(lambda: not window.parameters.busy)
+            workspace.source_modes["folder"].click()
+            until(lambda: not window.parameters.busy)
+            assert (
+                text("vision_capture_success", window.language)
+                not in workspace.capture.toolTip()
+            )
+            assert not workspace.capture.isVisible()
+            assert workspace.sources is not None
+            workspace.sources.discard()
     finally:
         window.close()
         until(lambda: window.bridge.closed)
@@ -1007,6 +1022,120 @@ def test_disconnect_marks_unready_before_waiting_for_native_cleanup(
         assert app.join(WAIT)
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("ending", ["disconnect", "source_loss"])
+def test_vision_reentry_uses_connected_metadata_without_discovery(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    language: Language,
+    ending: str,
+) -> None:
+    from vimo_demo.ui import roi_editor
+
+    original_prepare = passive.prepare
+
+    def prepare(serial: str) -> CameraSettings:
+        return replace(original_prepare(serial), model=f"Connected-{serial}")
+
+    def no_discovery() -> None:
+        raise AssertionError("Navigation/connection presentation must not scan")
+
+    monkeypatch.setattr(passive, "prepare", prepare)
+    monkeypatch.setattr(roi_editor, "discover_basler_devices", no_discovery)
+    passive.dimensions = {s: (60 + i, 20 + i) for i, s in enumerate(SERIALS)}
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    without_folders(data.sources)
+    saved = data.sources.read_bytes(), data.machine.read_bytes()
+    engine = Engine()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.set_language(language)
+    window.show()
+    try:
+        window.navigate(4)
+        until(lambda: not window.parameters.busy)
+        workspace = window.parameters.roi_workspace
+        assert workspace is not None
+        for card in workspace.camera_cards.values():
+            assert text("source_not_discovered", language) in card.device.currentText()
+        workspace.connect_source.click()
+        until(lambda: not window.parameters.busy)
+        connected = app.source_snapshot()
+        assert connected.state is ConnectionState.CONNECTED
+        assert tuple(c.serial for c in connected.cameras) == SERIALS
+        assert tuple(c.model for c in connected.cameras) == tuple(
+            f"Connected-{s}" for s in SERIALS
+        )
+        before = app.snapshot()
+        for _ in range(2):
+            window.navigate(0)
+            assert window.parameters.roi_workspace is None
+            window.navigate(4)
+            until(lambda: not window.parameters.busy)
+            current = window.parameters.roi_workspace
+            assert current is not None and current is not workspace
+            workspace = current
+            assert workspace.connection_status.text() == "6/6"
+            assert not workspace.discover.isEnabled()
+            assert tuple(workspace.camera_cards) == tuple(
+                c.camera_id for c in connected.cameras
+            )
+            for actual in connected.cameras:
+                card = workspace.camera_cards[actual.camera_id]
+                assert card.device.currentData() == actual.serial
+                assert card.device.currentText() == f"{actual.serial} · {actual.model}"
+                assert card.summary == f"{actual.width}×{actual.height}"
+                assert text("source_connected", language) in card.toolTip()
+                assert (
+                    text("source_not_discovered", language)
+                    not in card.device.currentText()
+                )
+                assert not card.device.isEnabled()
+            assert app.source_snapshot() == connected
+            assert app.snapshot() == before and not engine.calls
+            assert passive.prepared == list(SERIALS) and not passive.closed
+
+        if ending == "disconnect":
+            workspace.disconnect_source.click()
+            until(lambda: not window.parameters.busy)
+            state = ConnectionState.DISCONNECTED
+        else:
+            passive.failure = True
+            until(lambda: app.source_snapshot().state is ConnectionState.FAULT)
+            state = ConnectionState.FAULT
+        connection_status = workspace.connection_status
+        until(lambda: connection_status.text() == "0/6")
+        assert app.source_snapshot().state is state
+        assert passive.closed
+        window.navigate(0)
+        window.navigate(4)
+        until(lambda: not window.parameters.busy)
+        workspace = window.parameters.roi_workspace
+        assert workspace is not None and workspace.connection_status.text() == "0/6"
+        for card in workspace.camera_cards.values():
+            assert not card.summary
+            assert text("source_" + state.name.lower(), language) in card.toolTip()
+            assert text("source_not_discovered", language) in card.device.currentText()
+        if ending == "source_loss":
+            assert "Injected source loss" in window.event_label.toolTip()
+        assert (data.sources.read_bytes(), data.machine.read_bytes()) == saved
+        assert app.snapshot() == before and not engine.calls
+        assert app.snapshot().counters == ProductionCounters()
+    finally:
+        window.close()
+        until(lambda: window.bridge.closed)
+        assert app.join(WAIT)
+        delivery.detach()
+    assert passive.closed and not app.source_snapshot().thread_alive
+    assert not any(t.name == "BaslerSourceOwner" for t in threads())
+
+
 def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
     qapp: QApplication, tmp_path: Path, passive: PassiveBackend
 ) -> None:
@@ -1029,12 +1158,12 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         assert workspace.draft.dirty
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
-        assert not workspace.draft.dirty and not workspace.message.text()
+        assert not workspace.draft.dirty and not window.event_label.text()
         workspace.connect_source.click()
         until(lambda: not window.parameters.busy)
         assert startup.application.source_snapshot().state is ConnectionState.CONNECTED
         assert all(
-            not card.serial.isEnabled() for card in workspace.camera_cards.values()
+            not card.device.isEnabled() for card in workspace.camera_cards.values()
         )
         assert not workspace.discover.isEnabled() and workspace.editable()
         presentations: tuple[tuple[Language, Theme, tuple[int, int]], ...] = (
@@ -1047,7 +1176,13 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
             window.set_theme(theme)
             window.resize(*size)
             QApplication.processEvents()
-            assert workspace.reference.currentText() == text("roi_no_frame", language)
+            assert workspace.reference.currentText() == text(
+                "vision_dimensions_only", language
+            ).format(width=60, height=20)
+            assert workspace.canvas.model.size == (60, 20)
+            assert workspace.canvas.model.schematic_size is None
+            assert not workspace.canvas.model.can_drag
+            assert workspace.reference.isVisible()
             assert (
                 workspace.connect_source.isVisible()
                 and workspace.disconnect_source.isEnabled()
@@ -1057,12 +1192,30 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
                 str(tmp_path / f"connected-{language}-{theme}-{size[0]}.png")
             )
         saved = workspace.sources.definition
+        source_before = startup.application.source_snapshot()
+        application_before = startup.application.snapshot()
+        workspace.coordinates["X"].setText("2")
+        workspace.apply_geometry()
+        workspace.buttons["vision_discard"].click()
+        box = next(b for b in workspace.findChildren(QMessageBox) if b.isVisible())
+        next(
+            b for b in box.buttons() if b.text() == text("discard", window.language)
+        ).click()
+        until(lambda: not window.parameters.busy)
+        assert startup.application.source_snapshot() == source_before
+        assert startup.application.snapshot() == application_before
+        assert not passive.closed and workspace.frame is None
+        assert not workspace.draft.dirty and workspace.coordinates["X"].text() == "1"
         workspace.set_source_mode("folder")
-        workspace.serial_edited(CameraId("CAM1"), "999")
+        workspace.select_device(CameraId("CAM1"), 0)
         assert workspace.sources.definition == saved
         workspace.coordinates["W"].setText("61")
         workspace.apply_geometry()
-        assert not workspace.draft.dirty and workspace.message.isVisible()
+        assert (
+            not workspace.draft.dirty
+            and window.event_label.accessibleName()
+            == text("roi_geometry_error", window.language)
+        )
         window.navigate(0)
         window.navigate(4)
         until(lambda: not window.parameters.busy)

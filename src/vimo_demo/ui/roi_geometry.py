@@ -76,6 +76,11 @@ class RoiInteractionModel:
     editable: bool = False
     scale: float | None = None  # None = Fit; fixed zoom is logical pixels/source pixel.
     pan: tuple[float, float] = (0, 0)
+    schematic_size: tuple[int, int] | None = None  # Display extent, never image bounds.
+
+    @property
+    def display_size(self) -> tuple[int, int] | None:
+        return self.size or self.schematic_size
 
     @property
     def can_drag(self) -> bool:
@@ -87,10 +92,10 @@ class RoiInteractionModel:
         )
 
     def transform(self, width: float, height: float) -> ImageTransform | None:
-        if self.size is None or min(width, height) <= 0:
+        if self.display_size is None or min(width, height) <= 0:
             return None
         return image_transform(
-            *self.size, width, height, scale=self.scale, pan=self.pan
+            *self.display_size, width, height, scale=self.scale, pan=self.pan
         )
 
     def hit(self, x: float, y: float, transform: ImageTransform) -> Handle | None:

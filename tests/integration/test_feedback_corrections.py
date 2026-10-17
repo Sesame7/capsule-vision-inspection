@@ -55,8 +55,8 @@ def capture(window: ProductionWindow, directory: Path, scenario: str) -> None:
                 "strip_height": window.event_frame.height(),
                 "recipe": window.parameters.status.text(),
                 "recipe_tooltip": window.parameters.status.toolTip(),
-                "vision": workspace.message.text() if workspace else "",
-                "vision_tooltip": workspace.message.toolTip() if workspace else "",
+                "vision": window.event_label.text() if workspace else "",
+                "vision_tooltip": window.event_label.toolTip() if workspace else "",
             },
             ensure_ascii=False,
             indent=2,
@@ -341,15 +341,21 @@ def test_vision_folder_summaries_and_tooltips_preserve_configuration(
     until(lambda: not window.parameters.busy)
     workspace = window.parameters.roi_workspace
     assert workspace is not None and workspace.frame is None
-    assert workspace.message.text() == text("folder_reference_error", language)
-    assert folder in workspace.message.toolTip()
+    assert window.event_label.accessibleName() == text(
+        "folder_reference_error", language
+    )
+    assert folder in window.event_label.toolTip()
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
-    assert workspace.message.text() == text("source_validation_error", language)
-    assert (
-        folder in workspace.message.toolTip() and folder not in workspace.message.text()
+    assert window.event_label.accessibleName() == text(
+        "source_validation_error", language
     )
-    assert workspace.status.text() == text("setup_failed", language)
+    assert (
+        folder in window.event_label.toolTip()
+        and folder not in window.event_label.text()
+    )
+    assert workspace.status.accessibleName() == text("setup_failed", language)
+    assert workspace.status.text() == "" and workspace.status.pixmap() is not None
     assert (
         path.read_bytes() == original
         and window.bridge.application.snapshot() == snapshot
@@ -372,14 +378,14 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
     workspace.coordinates["X"].setText("99999")
     workspace.apply_geometry()
     assert workspace.draft.definition == geometry
-    assert workspace.message.text() == text("roi_geometry_error", language)
-    assert "rejected" in workspace.message.toolTip()
+    assert window.event_label.accessibleName() == text("roi_geometry_error", language)
+    assert "rejected" in window.event_label.toolTip()
     if language == "en":
         capture(window, sources.path.parent, "vision_invalid_roi")
     workspace.operation(
         lambda: workspace.set_rect(geometry.layout.cameras[0].slots[0].rect)
     )
-    assert not workspace.message.text() and not workspace.message.toolTip()
+    assert not window.event_label.text() and not window.event_label.toolTip()
     details = f"Write {sources.path}: [WinError 5] Access is denied"
 
     def fail() -> None:
@@ -389,15 +395,21 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
         patch.setattr(workspace.draft, "save", fail)
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
-    assert workspace.message.text() == text("vision_save_error", language)
-    assert workspace.message.toolTip() == details
+    assert window.event_label.accessibleName() == text("vision_save_error", language)
+    assert (
+        window.event_label.toolTip()
+        == f"{text('vision_save_error', language)}\nConfigurationIOError: {details}"
+    )
     with monkeypatch.context() as patch:
         patch.setattr(sources, "save", fail)
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
-    assert workspace.message.text() == text("source_partial_save", language)
-    assert workspace.message.toolTip() == details
+    assert window.event_label.accessibleName() == text("source_partial_save", language)
+    assert (
+        window.event_label.toolTip()
+        == f"{text('source_partial_save', language)}\nConfigurationIOError: {details}"
+    )
     assert window.bridge.application.snapshot().candidate == candidate
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
-    assert not workspace.message.text() and not workspace.message.toolTip()
+    assert not window.event_label.text() and not window.event_label.toolTip()
