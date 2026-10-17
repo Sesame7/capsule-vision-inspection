@@ -11,11 +11,9 @@ import numpy as np
 from PySide6.QtCore import QRectF, QSize, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
-    QIcon,
     QPainter,
     QPaintEvent,
     QPen,
-    QPixmap,
     QResizeEvent,
     QStandardItemModel,
 )
@@ -58,6 +56,7 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, FrameId
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
+from .image_tools import ImageToolbar, image_icon
 from .inference_bridge import FutureDelivery
 from .production_presentation import Indicator
 from .production_style import (
@@ -66,102 +65,11 @@ from .production_style import (
     camera_icon,
     indicator_icon,
     production_icon,
-    shell_icon,
     text,
     theme_colors,
 )
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
-
-
-def _image_icon(tool: str, color: str = Style.primary) -> QIcon:
-    """Local vector tools with DPR-aware enabled/disabled states."""
-    if tool == "capture":
-        return camera_icon(color)
-    if tool == "folder":
-        return shell_icon("folder", color)
-    icon = QIcon()
-    for checked in (False, True):
-        for dpr in (1.0, 1.25, 1.5, 2.0):
-            pixmap = QPixmap(round(24 * dpr), round(24 * dpr))
-            pixmap.setDevicePixelRatio(dpr)
-            pixmap.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(pixmap)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor(color), 1.6))
-            if tool == "refresh":
-                painter.drawArc(5, 5, 14, 14, 40 * 16, 290 * 16)
-                painter.drawLine(19, 4, 19, 10)
-                painter.drawLine(19, 10, 13, 10)
-            elif tool == "discover":
-                painter.drawEllipse(3, 3, 12, 12)
-                painter.drawLine(14, 14, 21, 21)
-            elif tool in ("connect", "disconnect"):
-                painter.drawLine(8, 3, 8, 8)
-                painter.drawLine(16, 3, 16, 8)
-                painter.drawRect(6, 8, 12, 6)
-                painter.drawLine(12, 14, 12, 21)
-                if tool == "disconnect":
-                    painter.drawLine(3, 21, 21, 3)
-            elif tool == "cancel":
-                painter.drawLine(5, 5, 19, 19)
-                painter.drawLine(19, 5, 5, 19)
-            elif tool == "runtime":
-                painter.drawRect(3, 4, 18, 13)
-                painter.drawLine(9, 20, 15, 20)
-                painter.drawLine(12, 17, 12, 20)
-                painter.drawLine(9, 7, 16, 11)
-                painter.drawLine(16, 11, 9, 14)
-                painter.drawLine(9, 14, 9, 7)
-            elif tool == "loop":
-                painter.drawLine(4, 7, 20, 7)
-                painter.drawLine(20, 7, 16, 3)
-                painter.drawLine(20, 7, 16, 11)
-                painter.drawLine(20, 17, 4, 17)
-                painter.drawLine(4, 17, 8, 13)
-                painter.drawLine(4, 17, 8, 21)
-            elif tool == "apply":
-                painter.drawLine(4, 12, 9, 17)
-                painter.drawLine(9, 17, 20, 6)
-            elif tool == "common":
-                painter.drawRect(3, 3, 12, 12)
-                painter.drawRect(8, 8, 12, 12)
-            elif tool == "distribute":
-                for x, height in ((3, 12), (10, 8), (17, 12)):
-                    painter.drawRect(x, (24 - height) // 2, 4, height)
-                painter.drawLine(3, 21, 21, 21)
-                painter.drawLine(3, 19, 3, 23)
-                painter.drawLine(21, 19, 21, 23)
-            elif tool in ("previous", "next"):
-                x, dx = (15, -7) if tool == "previous" else (9, 7)
-                painter.drawLine(x, 5, x + dx, 12)
-                painter.drawLine(x + dx, 12, x, 19)
-            elif tool in ("minus", "plus"):
-                painter.drawLine(6, 12, 18, 12)
-                if tool == "plus":
-                    painter.drawLine(12, 6, 12, 18)
-            else:
-                for x, y, dx, dy in (
-                    (4, 4, 1, 1),
-                    (20, 4, -1, 1),
-                    (4, 20, 1, -1),
-                    (20, 20, -1, -1),
-                ):
-                    painter.drawLine(x, y, x + dx * 5, y)
-                    painter.drawLine(x, y, x, y + dy * 5)
-            painter.end()
-            state = QIcon.State.On if checked else QIcon.State.Off
-            icon.addPixmap(pixmap, QIcon.Mode.Normal, state)
-            dimmed = QPixmap(pixmap.size())
-            dimmed.setDevicePixelRatio(dpr)
-            dimmed.fill(Qt.GlobalColor.transparent)
-            muted = QPainter(dimmed)
-            muted.setOpacity(0.35)
-            muted.drawPixmap(0, 0, pixmap)
-            muted.end()
-            icon.addPixmap(dimmed, QIcon.Mode.Disabled, state)
-    return icon
-
 
 type ReferenceMode = Literal["folder", "runtime", "import", "capture"]
 
@@ -349,108 +257,6 @@ class _SourceCards(QWidget):
         super().resizeEvent(event)
 
 
-class _RoiToolbar(QWidget):
-    """Align three compact groups; wrap whole groups without shrinking controls."""
-
-    def __init__(self, leading: QWidget, center: QWidget, trailing: QWidget) -> None:
-        super().__init__()
-        self._groups = leading, center, trailing
-        for group in self._groups:
-            group.setSizePolicy(
-                QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred
-            )
-        self._grid = QGridLayout(self)
-        self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setHorizontalSpacing(Style.space)
-        self._grid.setVerticalSpacing(Style.small)
-        # Equal flexible side columns center the middle group when both sides fit.
-        self._grid.setColumnStretch(0, 1)
-        self._grid.setColumnStretch(2, 1)
-        self._rows = 0
-        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
-        self._arrange(self.width())
-
-    def _sizes(self) -> tuple[QSize, ...]:
-        return tuple(
-            QSize(0, 0)
-            if group.isHidden()
-            else group.minimumSizeHint().expandedTo(group.minimumSize())
-            for group in self._groups
-        )
-
-    def _row_width(self) -> int:
-        return sum(size.width() for size in self._sizes()) + 2 * Style.space
-
-    def _row_count(self, width: int) -> int:
-        if width >= self._row_width():
-            return 1
-        remaining = sum(size.width() for size in self._sizes()[1:])
-        return 2 if width >= remaining + Style.space else 3
-
-    def minimumSizeHint(self) -> QSize:
-        sizes = self._sizes()
-        return QSize(
-            max(size.width() for size in sizes), max(size.height() for size in sizes)
-        )
-
-    def sizeHint(self) -> QSize:
-        return QSize(self._row_width(), self.heightForWidth(self._row_width()))
-
-    def heightForWidth(self, width: int) -> int:
-        heights = [size.height() for size in self._sizes()]
-        rows = self._row_count(width)
-        if rows == 1:
-            return max(heights)
-        if rows == 2:
-            return heights[0] + max(heights[1:]) + Style.small
-        return sum(heights) + 2 * Style.small
-
-    def sync_metrics(self) -> None:
-        # Recompute after localized labels/status changes.
-        for group in self._groups:
-            layout = group.layout()
-            if layout is not None:
-                layout.invalidate()
-                group.setMinimumWidth(layout.minimumSize().width())
-            else:
-                group.setMinimumWidth(group.sizeHint().width())
-        self._arrange(self.width())
-
-    def _arrange(self, width: int) -> None:
-        rows = self._row_count(width)
-        if rows != self._rows:
-            for group in self._groups:
-                self._grid.removeWidget(group)
-            leading, center, trailing = self._groups
-            left = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-            middle = Qt.AlignmentFlag.AlignCenter
-            right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            if rows == 1:
-                self._grid.addWidget(leading, 0, 0, left)
-                self._grid.addWidget(center, 0, 1, middle)
-                self._grid.addWidget(trailing, 0, 2, right)
-            elif rows == 2:
-                self._grid.addWidget(leading, 0, 0, 1, 3, left)
-                self._grid.addWidget(center, 1, 1, middle)
-                self._grid.addWidget(trailing, 1, 2, right)
-            else:
-                for row, (group, alignment) in enumerate(
-                    zip(self._groups, (left, middle, right), strict=True)
-                ):
-                    self._grid.addWidget(group, row, 0, 1, 3, alignment)
-            self._rows = rows
-        required_height = self.heightForWidth(width)
-        if self.minimumHeight() != required_height:
-            self.setMinimumHeight(required_height)
-        self.updateGeometry()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        self._arrange(event.size().width())
-        super().resizeEvent(event)
-
-
 class MachineRoiWorkspace(QWidget):
     sources_verified = Signal()
     feedback_changed = Signal()
@@ -564,7 +370,7 @@ class MachineRoiWorkspace(QWidget):
         self.status.setFixedSize(24, Style.touch)
         self.loop = QPushButton()
         self.loop.setCheckable(True)
-        self.loop.setIcon(_image_icon("loop"))
+        self.loop.setIcon(image_icon("loop"))
         self.loop.setIconSize(QSize(Style.icon, Style.icon))
         self.loop.setFixedSize(Style.touch, Style.touch)
         self.discover = self.icon_button("source_discover", "discover")
@@ -690,7 +496,7 @@ class MachineRoiWorkspace(QWidget):
             button = self.button(key)
             button.setText("")
             button.setFixedSize(Style.touch, Style.touch)
-            button.setIcon(_image_icon(tool))
+            button.setIcon(image_icon(tool))
             button.setIconSize(QSize(24, 24))
             references.addWidget(button)
         self.reference = QComboBox()
@@ -713,11 +519,11 @@ class MachineRoiWorkspace(QWidget):
             button = self.button(key)
             button.setText(symbol if key == "roi_actual" else "")
             if key != "roi_actual":
-                button.setIcon(_image_icon("fit"))
+                button.setIcon(image_icon("fit"))
                 button.setIconSize(QSize(24, 24))
             button.setFixedSize(Style.touch, Style.touch)
             display.addWidget(button)
-        self.reference_toolbar = _RoiToolbar(
+        self.reference_toolbar = ImageToolbar(
             reference_controls, self.reference, display_controls
         )
         roi.addWidget(self.reference_toolbar)
@@ -745,7 +551,7 @@ class MachineRoiWorkspace(QWidget):
             self.coordinates["H"],
         )
         apply_geometry = self.button("roi_set_rect")
-        apply_geometry.setIcon(_image_icon("apply"))
+        apply_geometry.setIcon(image_icon("apply"))
         apply_geometry.setIconSize(QSize(Style.icon, Style.icon))
         geometry.addWidget(apply_geometry)
         bulk = QHBoxLayout(actions)
@@ -761,7 +567,7 @@ class MachineRoiWorkspace(QWidget):
         primary = self.button("roi_save_apply")
         primary.setObjectName("start")
         save_row.addWidget(primary)
-        self.geometry_toolbar = _RoiToolbar(numeric, actions, saving)
+        self.geometry_toolbar = ImageToolbar(numeric, actions, saving)
         roi.addWidget(self.geometry_toolbar)
         self.buttons["roi_fit"].clicked.connect(lambda: self.canvas.zoom(None))
         self.buttons["roi_actual"].clicked.connect(lambda: self.canvas.zoom(1))
@@ -806,14 +612,14 @@ class MachineRoiWorkspace(QWidget):
         button = self.button(key)
         button.setText("")
         button.setFixedSize(Style.touch, Style.touch)
-        button.setIcon(_image_icon(tool))
+        button.setIcon(image_icon(tool))
         button.setIconSize(QSize(Style.icon, Style.icon))
         return button
 
     def refresh_theme(self) -> None:
         colors = theme_colors(self)
         for card in self.camera_cards.values():
-            card.browse.setIcon(_image_icon("folder", colors.primary))
+            card.browse.setIcon(image_icon("folder", colors.primary))
             card.update()
         for key, tool in (
             ("reference_previous", "previous"),
@@ -830,14 +636,14 @@ class MachineRoiWorkspace(QWidget):
             ("cancel", "cancel"),
             ("vision_discard", "refresh"),
         ):
-            self.buttons[key].setIcon(_image_icon(tool, colors.primary))
-        self.loop.setIcon(_image_icon("loop", colors.primary))
-        self.fps_decrease.setIcon(_image_icon("minus", colors.primary))
-        self.fps_increase.setIcon(_image_icon("plus", colors.primary))
-        self.source_modes["folder"].setIcon(_image_icon("folder", colors.primary))
+            self.buttons[key].setIcon(image_icon(tool, colors.primary))
+        self.loop.setIcon(image_icon("loop", colors.primary))
+        self.fps_decrease.setIcon(image_icon("minus", colors.primary))
+        self.fps_increase.setIcon(image_icon("plus", colors.primary))
+        self.source_modes["folder"].setIcon(image_icon("folder", colors.primary))
         self.source_modes["basler"].setIcon(camera_icon(colors.primary))
-        self.connect_source.setIcon(_image_icon("connect", colors.primary))
-        self.disconnect_source.setIcon(_image_icon("disconnect", colors.primary))
+        self.connect_source.setIcon(image_icon("connect", colors.primary))
+        self.disconnect_source.setIcon(image_icon("disconnect", colors.primary))
 
     def set_language(self, language: Language) -> None:
         self.language = language
@@ -1635,7 +1441,7 @@ class MachineRoiWorkspace(QWidget):
         )
         self.loop.setText("")
         self.loop.setIcon(
-            _image_icon(
+            image_icon(
                 "loop", colors.accent if self.loop.isChecked() else colors.secondary
             )
         )

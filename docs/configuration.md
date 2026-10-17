@@ -101,9 +101,50 @@ Save writes v2 atomically. This is source configuration, not Recipe/ROI data.
 
 ## Editing and persistence
 
-Recipe supports selection, New/Duplicate/Reload, metadata/model selection, defect
-filters, Size/Color enablement and one Tune preview entry. Hidden policies remain
-in drafts and saved data. Single-model configuration is read-only selection.
+Recipe stacks Recipe management, Model information, Inspection Rules and one
+shared Image Tuning workspace. New/Duplicate, explicit selection, metadata and
+model selection retain their drafts. Reload remains a catalog-refresh action,
+including external new/repaired files; it is distinct from Discard. Single-model
+selection is read-only. Expandable model details show configured IDs/path/hash;
+last candidate artifact verification does not claim continuous integrity or SDK
+loading. A running, warmed session is shown separately; the configured segmentation
+interface is not invented model metadata.
+Expanded model/policy details scroll within the summary area when needed, keeping
+the shared tuning canvas and Save/apply accessible.
+
+Occupancy stays always on. Size/Color enablement is independent of expansion:
+both may be enabled, with only one tuning panel visible. Switching panels reuses
+the same frozen image and cached measurement ownership. Camera selection, Fit,
+Refresh, numeric parameters and image color sampling remain draft-only, with no
+production admission, counters, source commands or activation. The former separate
+Tune page and duplicate enablement controls are removed. Advanced details expose
+existing policies/inheritance without changing hidden values or adding new policies.
+
+On first selection, Folder tuning reads the camera's first decodable image in the
+normal deterministic Folder order. Previous/Next and the image selector browse
+that Folder without wrapping; Refresh rereads the selected image, not the next.
+Basler tuning instead uses a frozen display frame matching the camera and current
+source key, without acquisition or a Folder fallback. Temporary image import is
+available in both modes. Each camera retains one selected frozen reference while
+tuning remains open; new display publications and switching Size/Color never
+replace it. Import/selection/Refresh are explicit changes. Closing tuning releases
+its references. IO and measurement share one bounded background job; stale work
+cannot attach pixels or measurements to another camera.
+The centered image selector reports actual pixel dimensions, connected camera
+dimensions on a blank canvas, or explicitly schematic ROI extents when neither
+is available. Schematic extents never become measured image bounds or evidence.
+Image tools reuse Vision's icons, whole-group wrapping, Fit and 1:1; Recipe
+management icons retain localized names/tooltips and the existing confirmations.
+
+Recipe Discard beside Save/apply confirms reloading the selected Recipe from its
+actual saved file. Read/identity/validation failure preserves the current draft;
+MachineLayout and sources are independent. Delete requires a confirmation naming
+the saved Recipe and ID, refuses active/candidate references and the normal app's
+persisted last-applied ID, and fails closed on unreadable preferences. The catalog
+only deletes the unchanged selected Recipe file inside its directory. It never
+deletes shared models/images. Success clears selection explicitly without choosing
+another Recipe or modifying application references. Runtime editing locks apply
+again when confirmed, and persistence errors stay observable.
 Vision owns source setup and canvas-first Machine ROI editing, numeric Apply,
 Common size and Distribute evenly. Those operations reject invalid bounds atomically;
 they never silently clamp.

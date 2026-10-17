@@ -7,7 +7,7 @@ from threading import Thread
 from typing import Literal
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
@@ -16,14 +16,15 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
-    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
@@ -37,9 +38,17 @@ from vimo_demo.configuration import (
     RecipeDefinition,
 )
 
+from .image_tools import image_icon
 from .inference_bridge import FutureDelivery
 from .production_bridge import QtProductionBridge, RecipeChoice
-from .production_style import Language, Style, text
+from .production_style import (
+    Language,
+    Style,
+    production_icon,
+    shell_icon,
+    text,
+    theme_colors,
+)
 from .recipe_catalog import RecipeEntry
 from .recipe_editor import RecipeDraft, RecipeEditorSession
 from .roi_editor import MachineRoiWorkspace
@@ -99,12 +108,41 @@ class ParametersPage(QWidget):
         self._monitor.setInterval(20)
         self._monitor.timeout.connect(self._finish_preparation)
 
-        self._recipe_pages = QStackedLayout(self)
-        self._recipe_form = QWidget()
-        self._recipe_pages.addWidget(self._recipe_form)
-        root = QVBoxLayout(self._recipe_form)
-        root.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
-        root.setSpacing(Style.space)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(Style.small)
+        self.buttons: dict[str, QPushButton] = {}
+        self.labels: dict[str, QLabel] = {}
+        self.summary_scroll = QScrollArea(self)
+        self.summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.summary_scroll.setWidgetResizable(True)
+        self.summary_scroll.setSizeAdjustPolicy(
+            QScrollArea.SizeAdjustPolicy.AdjustToContents
+        )
+        self.summary_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
+        summary = QWidget()
+        summary.setObjectName("recipeSummary")
+        sections = QVBoxLayout(summary)
+        sections.setContentsMargins(0, 0, 0, 0)
+        sections.setSpacing(Style.small)
+        self.summary_scroll.setWidget(summary)
+        root.addWidget(self.summary_scroll)
+        self.recipe_section = QFrame(self)
+        self.model_section = QFrame(self)
+        self.inspection_section = QFrame(self)
+        self.tuning_section = QFrame(self)
+        for section in (
+            self.recipe_section,
+            self.model_section,
+            self.inspection_section,
+            self.tuning_section,
+        ):
+            section.setObjectName("recipeSection")
+        recipe = QVBoxLayout(self.recipe_section)
+        recipe.setContentsMargins(10, 8, 10, 8)
+        recipe.setSpacing(Style.small)
         selection = QHBoxLayout()
         selection.setSpacing(Style.small)
         self.title, self.identity = QLabel(), QLabel()
@@ -112,54 +150,33 @@ class ParametersPage(QWidget):
         selection.addWidget(self.title)
         self.recipes = QComboBox()
         self.recipes.setMinimumHeight(Style.touch)
+        self.recipes.setMinimumContentsLength(18)
         self.recipes.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        self.recipes.setMinimumContentsLength(24)
         self.recipes.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         selection.addWidget(self.recipes, 1)
-        self.buttons: dict[str, QPushButton] = {}
-        for key in ("new_recipe", "duplicate_recipe", "reload"):
-            button = QPushButton()
-            button.setMinimumHeight(Style.touch)
+        for key in ("new_recipe", "duplicate_recipe", "delete_recipe", "reload"):
+            button = QPushButton(self.recipe_section)
+            button.setFixedSize(Style.touch, Style.touch)
+            button.setIconSize(QSize(Style.icon, Style.icon))
             self.buttons[key] = button
             selection.addWidget(button)
-        root.addLayout(selection)
-
-        self._sections_row = QHBoxLayout()
-        self._sections_row.setSpacing(2 * Style.space)
-        self._basic_section, self._inspection_section = QWidget(), QWidget()
-        for section in (self._basic_section, self._inspection_section):
-            section.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-            )
-            self._sections_row.addWidget(section, 1)
-        form = QVBoxLayout(self._basic_section)
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(Style.space)
-        self.basic_title = QLabel()
-        self.basic_title.setMinimumHeight(Style.touch)
-        form.addWidget(self.basic_title)
+        recipe.addLayout(selection)
         self._metadata_row = QHBoxLayout()
         self._metadata_row.setSpacing(Style.space)
         self._metadata_fields: list[QWidget] = []
         self.metadata: dict[str, QLineEdit] = {}
-        self.labels: dict[str, QLabel] = {}
         for key in ("display_name", "product_code"):
             field = QWidget()
-            field.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-            )
             column = QVBoxLayout(field)
             column.setContentsMargins(0, 0, 0, 0)
-            column.setSpacing(Style.small)
+            column.setSpacing(2)
             label, line = QLabel(), QLineEdit()
             line.setMinimumHeight(Style.touch)
-            line.setMinimumWidth(
-                line.fontMetrics().averageCharWidth() * 36 + 2 * Style.space
-            )
+            line.setMinimumWidth(180)
             line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.labels[key], self.metadata[key] = label, line
             column.addWidget(label)
@@ -167,77 +184,121 @@ class ParametersPage(QWidget):
             self._metadata_fields.append(field)
             self._metadata_row.addWidget(field, 1)
             line.textEdited.connect(self._metadata_changed)
-        form.addLayout(self._metadata_row)
+        recipe.addLayout(self._metadata_row)
+        sections.addWidget(self.recipe_section)
+        model_layout = QVBoxLayout(self.model_section)
+        model_layout.setContentsMargins(10, 8, 10, 8)
+        model_layout.setSpacing(2)
         model_row = QHBoxLayout()
-        model_row.setSpacing(Style.space)
+        self.labels["inspection_model"] = QLabel()
+        model_row.addWidget(self.labels["inspection_model"])
         self.model = QComboBox()
         self.model.setMinimumHeight(Style.touch)
         self.model.setMinimumContentsLength(18)
-        self.model.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.model.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        self.labels["inspection_model"] = QLabel()
-        model_row.addWidget(self.labels["inspection_model"])
+        self.model.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         model_row.addWidget(self.model, 1)
-        form.addLayout(model_row)
-        self.rule = QLabel()
-        self.rule.setWordWrap(True)
-        self.rule.setProperty("role", "secondary")
-        form.addWidget(self.rule)
-        self.notice = QLabel()
-        self.notice.setWordWrap(True)
-        form.addWidget(self.notice)
-        form.addStretch()
-        inspection = QVBoxLayout(self._inspection_section)
-        inspection.setContentsMargins(0, 0, 0, 0)
-        inspection.setSpacing(Style.space)
-        inspection_header = QHBoxLayout()
-        self.inspection_title = QLabel()
-        for title in (self.basic_title, self.inspection_title):
-            font = title.font()
-            font.setBold(True)
-            title.setFont(font)
-        inspection_header.addWidget(self.inspection_title)
-        inspection_header.addStretch()
-        self.tune_preview = QPushButton()
-        self.tune_preview.setMinimumHeight(Style.touch)
-        self.tune_preview.clicked.connect(lambda: self.open_preview())
-        inspection_header.addWidget(self.tune_preview)
-        inspection.addLayout(inspection_header)
+        self.model_more = QPushButton(self.model_section)
+        self.model_more.setFixedSize(Style.touch, Style.touch)
+        self.model_more.setCheckable(True)
+        self.model_more.setIcon(shell_icon("chevron"))
+        model_row.addWidget(self.model_more)
+        model_layout.addLayout(model_row)
+        self.model_status, self.model_details = QLabel(), QLabel()
+        for label in (self.model_status, self.model_details):
+            label.setWordWrap(True)
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setProperty("role", "secondary")
+            model_layout.addWidget(label)
+        self.model_details.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.model_details.hide()
+        self.model_more.toggled.connect(self.model_details.setVisible)
+        sections.addWidget(self.model_section)
+        inspection = QVBoxLayout(self.inspection_section)
+        inspection.setContentsMargins(10, 8, 10, 8)
+        inspection.setSpacing(2)
+        header = QHBoxLayout()
+        self.inspection_title, self.occupancy = QLabel(), QLabel()
+        header.addWidget(self.inspection_title)
+        header.addStretch()
+        header.addWidget(self.occupancy)
+        inspection.addLayout(header)
         inspections = QGridLayout()
         inspections.setColumnStretch(1, 1)
         inspections.setHorizontalSpacing(Style.space)
-        inspections.setVerticalSpacing(Style.small)
+        inspections.setVerticalSpacing(0)
         self.capsule_enabled: dict[PreviewMode, QCheckBox] = {}
         self.capsule_summary: dict[PreviewMode, QLabel] = {}
+        self.expand_tuning: dict[PreviewMode, QPushButton] = {}
         modes: tuple[PreviewMode, ...] = ("size", "color")
         for index, mode in enumerate(modes):
             enabled, summary = QCheckBox(), QLabel()
             enabled.setMinimumHeight(Style.touch)
-            summary.setWordWrap(True)
             summary.setProperty("role", "secondary")
-            self.capsule_enabled[mode] = enabled
-            self.capsule_summary[mode] = summary
+            summary.setWordWrap(True)
+            expand = QPushButton(self.inspection_section)
+            expand.setCheckable(True)
+            expand.setFixedSize(Style.touch, Style.touch)
+            expand.setIcon(shell_icon("chevron"))
+            (
+                self.capsule_enabled[mode],
+                self.capsule_summary[mode],
+                self.expand_tuning[mode],
+            ) = enabled, summary, expand
             inspections.addWidget(enabled, index, 0)
             inspections.addWidget(summary, index, 1)
+            inspections.addWidget(expand, index, 2)
 
             def toggle(checked: bool, m: PreviewMode = mode) -> None:
                 self._capsule_changed(m, checked)
 
+            def expand_mode(_checked: bool, m: PreviewMode = mode) -> None:
+                if self.preview is not None and self.preview.mode == m:
+                    self.leave_preview(lambda: None)
+                else:
+                    self.open_preview(m)
+
             enabled.toggled.connect(toggle)
+            expand.clicked.connect(expand_mode)
         inspection.addLayout(inspections)
-        inspection.addStretch()
-        root.addLayout(self._sections_row)
-        root.addStretch(1)
+        self.rule, self.notice = QLabel(), QLabel()
+        for label in (self.rule, self.notice):
+            label.setWordWrap(True)
+            label.setProperty("role", "secondary")
+        self.advanced = QPushButton(self.inspection_section)
+        self.advanced.setCheckable(True)
+        self.advanced.setMinimumHeight(Style.touch)
+        self.advanced.toggled.connect(self.notice.setVisible)
+        advanced_row = QHBoxLayout()
+        advanced_row.addWidget(self.rule, 1)
+        advanced_row.addWidget(self.advanced)
+        inspection.addLayout(advanced_row)
+        inspection.addWidget(self.notice)
+        sections.addWidget(self.inspection_section)
+        self._tuning_layout = QVBoxLayout(self.tuning_section)
+        self._tuning_layout.setContentsMargins(6, 4, 6, 4)
+        self._tuning_layout.setSpacing(0)
+        root.addWidget(self.tuning_section, 1)
+        self.tuning_section.hide()
+        self._empty_space = QWidget()
+        root.addWidget(self._empty_space, 1)
         actions = QHBoxLayout()
-        actions.setSpacing(Style.space)
+        actions.setSpacing(Style.small)
         actions.addWidget(self.identity)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         actions.addWidget(self.status, 1)
-        primary = QPushButton()
+        discard = QPushButton(self)
+        discard.setFixedSize(Style.touch, Style.touch)
+        discard.setIcon(production_icon("reset"))
+        self.buttons["recipe_discard"] = discard
+        actions.addWidget(discard)
+        primary = QPushButton(self)
         primary.setObjectName("start")
         primary.setMinimumHeight(Style.touch)
         self.buttons["save_apply"] = primary
@@ -258,6 +319,8 @@ class ParametersPage(QWidget):
             lambda: self.guard_dirty(lambda: self.create_dialog(True))
         )
         self.buttons["reload"].clicked.connect(lambda: self.guard_dirty(self.reload))
+        self.buttons["delete_recipe"].clicked.connect(self.request_delete)
+        self.buttons["recipe_discard"].clicked.connect(self.request_discard)
         primary.clicked.connect(lambda: self.save_and_apply())
         bridge.snapshot_changed.connect(self.refresh_state)
         bridge.source_connection_changed.connect(self.refresh_state)
@@ -292,16 +355,26 @@ class ParametersPage(QWidget):
         if self.roi_workspace is not None:
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
-        self.basic_title.setText(
-            "基本信息" if language == "zh" else "Basic information"
-        )
         self.inspection_title.setText("检测" if language == "zh" else "Inspection")
-        self.tune_preview.setText("调整预览" if language == "zh" else "Tune preview")
-        self.tune_preview.setAccessibleName(self.tune_preview.text())
+        self.occupancy.setText(
+            "● 占位检测 · 常开" if language == "zh" else "● Occupancy · Always on"
+        )
+        self.model_more.setToolTip("模型详情" if language == "zh" else "Model details")
+        self.model_more.setAccessibleName(self.model_more.toolTip())
+        self.advanced.setText("高级策略" if language == "zh" else "Advanced policies")
+        for mode, button in self.expand_tuning.items():
+            button.setToolTip(
+                ("调整尺寸" if mode == "size" else "调整颜色")
+                if language == "zh"
+                else ("Tune Size" if mode == "size" else "Tune Color")
+            )
+            button.setAccessibleName(button.toolTip())
         self.recipes.setAccessibleName(text("recipe", language))
         self.model.setAccessibleName(text("inspection_model", language))
         for key, button in self.buttons.items():
-            button.setText(text(key, language))
+            button.setText(text(key, language) if key == "save_apply" else "")
+            button.setToolTip(text(key, language))
+            button.setAccessibleName(text(key, language))
         for key, label in self.labels.items():
             label.setText(text(key, language))
         for key, line in self.metadata.items():
@@ -309,29 +382,28 @@ class ParametersPage(QWidget):
         self._arrange_fields()
         self.show_draft()
 
+    def refresh_theme(self) -> None:
+        colors = theme_colors(self)
+        self.model_more.setIcon(shell_icon("chevron", colors.primary))
+        self.buttons["recipe_discard"].setIcon(production_icon("reset", colors.primary))
+        for key, tool in (
+            ("new_recipe", "plus"),
+            ("duplicate_recipe", "copy"),
+            ("delete_recipe", "delete"),
+            ("reload", "refresh"),
+        ):
+            self.buttons[key].setIcon(image_icon(tool, colors.primary))
+        for button in self.expand_tuning.values():
+            button.setIcon(
+                shell_icon(
+                    "chevron", colors.accent if button.isChecked() else colors.primary
+                )
+            )
+
     def _arrange_fields(self) -> None:
-        available = self._recipe_form.width() - 2 * Style.space
-        # Measure the basic section with stacked fields so the two columns do not
-        # force metadata into a horizontal row when its readable widths cannot fit.
-        self._metadata_row.setDirection(QBoxLayout.Direction.TopToBottom)
-        column_minimum = max(
-            self._basic_section.minimumSizeHint().width(),
-            self._inspection_section.minimumSizeHint().width(),
-        )
-        gap = self._sections_row.spacing()
-        side_by_side = 2 * column_minimum + gap <= available
-        self._sections_row.setDirection(
-            QBoxLayout.Direction.LeftToRight
-            if side_by_side
-            else QBoxLayout.Direction.TopToBottom
-        )
-        field_space = (available - gap) // 2 if side_by_side else available
-        required = sum(
-            field.minimumSizeHint().width() for field in self._metadata_fields
-        )
         self._metadata_row.setDirection(
             QBoxLayout.Direction.LeftToRight
-            if required + Style.space <= field_space
+            if self.width() >= 560
             else QBoxLayout.Direction.TopToBottom
         )
 
@@ -408,6 +480,8 @@ class ParametersPage(QWidget):
             )
         )
         self._loading = False
+        if self.preview is not None:
+            self.preview.show_settings()
         self.refresh_state()
 
     def _metadata_changed(self) -> None:
@@ -433,6 +507,7 @@ class ParametersPage(QWidget):
         self.refresh_state()
 
     def refresh_state(self) -> None:
+        self.refresh_theme()
         session, language = self.session, self.language
         allowed = self.editable()
         if self.roi_workspace is not None:
@@ -462,12 +537,15 @@ class ParametersPage(QWidget):
                         + str(settings.color.hue_tolerance)
                     )
                 )
-        self.tune_preview.setEnabled(
-            session is not None
-            and not self.busy
-            and not self._closing
-            and not session.machine_editor.dirty
-        )
+        for mode, button in self.expand_tuning.items():
+            button.setEnabled(
+                session is not None
+                and not self.busy
+                and not self._closing
+                and not session.machine_editor.dirty
+            )
+            button.setChecked(self.preview is not None and self.preview.mode == mode)
+        self._present_model()
         for line in self.metadata.values():
             line.setEnabled(allowed)
         self.model.setEnabled(allowed and self.model.count() > 1)
@@ -478,6 +556,15 @@ class ParametersPage(QWidget):
             enabled = allowed
             if key == "reload":
                 enabled = session is not None and not self.busy and not self._closing
+            elif key == "recipe_discard":
+                enabled = allowed and session is not None and session.dirty
+            elif key == "delete_recipe":
+                enabled = (
+                    allowed
+                    and session is not None
+                    and session.entry is not None
+                    and session.entry.recipe.recipe_id not in self._protected_recipes()
+                )
             elif key == "duplicate_recipe":
                 enabled = (
                     allowed and session is not None and bool(session.draft.display_name)
@@ -498,12 +585,24 @@ class ParametersPage(QWidget):
             if session.entry
             else "new_draft"
         )
-        self.identity.setText(text(state, language))
+        self.identity.setText("" if state == "saved" else text(state, language))
+        self.identity.setToolTip(text(state, language))
+        self.identity.setAccessibleName(text(state, language))
         advanced = session is not None and bool(
             session.draft.cameras or session.draft.channels
         )
-        self.notice.setVisible(advanced)
-        self.notice.setText(text("advanced_recipe_notice", language))
+        self.advanced.setVisible(session is not None)
+        self.notice.setVisible(self.advanced.isChecked())
+        if session is not None:
+            draft = session.draft
+            self.notice.setText(
+                str(draft.defaults.vimo)
+                + "\n"
+                + "\n".join(
+                    f"{key}: {value.vimo}"
+                    for key, value in (*draft.cameras.items(), *draft.channels.items())
+                )
+            )
         # Never claim all labels participate when persisted policies say otherwise.
         if session is not None:
             simple = (
@@ -547,6 +646,133 @@ class ParametersPage(QWidget):
         # Keep the original details for diagnostics and existing completion callbacks.
         self._error, self._error_key = str(error), key
 
+    def _protected_recipes(self) -> frozenset[str]:
+        snapshot = self.bridge.application.snapshot()
+        return frozenset(
+            identity.recipe_id
+            for identity in (snapshot.active, snapshot.candidate)
+            if identity is not None
+        )
+
+    def _confirm_recipe_action(self, key: str, action: Callable[[], None]) -> None:
+        if not self.editable() or self.session is None or self._dialog is not None:
+            return
+        dialog = QMessageBox(self)
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setWindowTitle(text(key, self.language))
+        draft = self.session.draft
+        if key == "delete_recipe" and self.session.entry is not None:
+            draft = RecipeDraft.from_recipe(self.session.entry.recipe)
+        identity = (
+            f"{draft.display_name}\nID: {draft.recipe_id}"
+            if draft.recipe_id
+            else text("new_draft", self.language)
+        )
+        dialog.setText(text(key + "_question", self.language) + "\n\n" + identity)
+        accept = dialog.addButton(
+            text(key, self.language), QMessageBox.ButtonRole.AcceptRole
+        )
+        cancel = dialog.addButton(
+            text("cancel", self.language), QMessageBox.ButtonRole.RejectRole
+        )
+        dialog.setDefaultButton(cancel)
+        self._dialog = dialog
+
+        def finished() -> None:
+            chosen = dialog.clickedButton() is accept
+            self._dialog = None
+            dialog.deleteLater()
+            if chosen and self.editable():
+                action()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+
+    def request_discard(self) -> None:
+        session = self.session
+        if session is None or not session.dirty:
+            return
+        entry = session.entry
+
+        def discard() -> None:
+            if session.entry != entry:
+                self._report_error("Recipe selection changed; retry Discard")
+            else:
+                try:
+                    session.discard()
+                    self._error = self._feedback = ""
+                except ConfigurationError as exc:
+                    self._report_error(exc, "recipe_discard_error")
+            self.show_draft()
+
+        self._confirm_recipe_action("recipe_discard", discard)
+
+    def request_delete(self) -> None:
+        session = self.session
+        if not self.editable() or session is None or session.entry is None:
+            return
+        entry = session.entry
+        if entry.recipe.recipe_id in self._protected_recipes():
+            self._report_error(text("recipe_delete_protected", self.language))
+            self.refresh_state()
+            return
+
+        def delete() -> None:
+            if not self.editable() or session.entry != entry:
+                return
+            try:
+                session.delete(protected_ids=self._protected_recipes())
+                self._entries = tuple(e for e in self._entries if e.path != entry.path)
+                self.recipes.clear()
+                self.recipes.addItems([e.recipe.display_name for e in self._entries])
+                self._error = self._feedback = ""
+            except ConfigurationError as exc:
+                self._report_error(exc, "recipe_delete_error")
+            self.show_draft()
+
+        self._confirm_recipe_action("delete_recipe", lambda: self.leave_preview(delete))
+
+    def _present_model(self) -> None:
+        session = self.session
+        if session is None:
+            self.model_status.clear()
+            self.model_details.clear()
+            return
+        try:
+            model = session.registry.get(
+                session.draft.model_override_id or session.default_model_id
+            )
+        except ConfigurationError:
+            self.model_status.setText(text("unavailable_model", self.language))
+            self.model_details.clear()
+            return
+        snapshot = self.bridge.application.snapshot()
+        candidate = snapshot.candidate
+        verified = (
+            candidate is not None
+            and candidate.model_id == model.model_id
+            and candidate.model_sha256 == model.expected_sha256
+        )
+        running = (
+            snapshot.state is ApplicationState.RUNNING
+            and snapshot.active is not None
+            and snapshot.active.model_id == model.model_id
+            and snapshot.active.model_sha256 == model.expected_sha256
+        )
+        phase = text(
+            "model_running"
+            if running
+            else "model_verified"
+            if verified
+            else "model_configured",
+            self.language,
+        )
+        self.model_status.setText(f"{model.model_id} · {phase}")
+        self.model_details.setText(
+            f"ID {model.model_id} · {text('model_module', self.language)} {model.module_id}\n{text('model_interface', self.language)}\n{model.model_path}\nSHA-256: {model.expected_sha256}\n{text('model_verification_tip', self.language)}"
+        )
+        self.model_status.setToolTip(text("model_verification_tip", self.language))
+
     def _capsule_changed(self, mode: PreviewMode, enabled: bool) -> None:
         if self.session is None or not self.editable():
             return
@@ -557,15 +783,21 @@ class ParametersPage(QWidget):
             else replace(settings, color=replace(settings.color, enabled=enabled))
         )
         self.changed()
+        if self.preview is not None:
+            self.preview.show_settings()
 
     def open_preview(self, mode: PreviewMode | None = None) -> None:
         if (
             self.session is None
-            or self.preview is not None
             or self.busy
             or self._closing
             or self.session.machine_editor.dirty
         ):
+            return
+        if self.preview is not None:
+            if mode is not None:
+                self.preview.set_mode(mode)
+            self.refresh_state()
             return
         if mode is None:
             settings = self.session.draft.capsule
@@ -583,9 +815,13 @@ class ParametersPage(QWidget):
             mode=mode,
             language=self.language,
             parent=self,
+            connection=self.bridge.source_connection,
         )
-        self._recipe_pages.addWidget(self.preview)
-        self._recipe_pages.setCurrentWidget(self.preview)
+        self._tuning_layout.addWidget(self.preview)
+        self.preview.mode_changed.connect(self.refresh_state)
+        self.tuning_section.show()
+        self._empty_space.hide()
+        self.refresh_state()
         self.preview_changed.emit()
 
     def leave_preview(self, after: Callable[[], None]) -> None:
@@ -601,8 +837,9 @@ class ParametersPage(QWidget):
     def _preview_closed(self) -> None:
         if self.preview is not None:
             workspace, self.preview = self.preview, None
-            self._recipe_pages.setCurrentWidget(self._recipe_form)
-            self._recipe_pages.removeWidget(workspace)
+            self._tuning_layout.removeWidget(workspace)
+            self.tuning_section.hide()
+            self._empty_space.show()
             workspace.deleteLater()
         self.preview_changed.emit()
         self.show_draft()

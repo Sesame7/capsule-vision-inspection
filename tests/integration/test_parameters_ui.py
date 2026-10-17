@@ -11,14 +11,12 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
-    QLabel,
     QLineEdit,
     QMessageBox,
     QScrollArea,
 )
-from tests.capsule_support import SETTINGS
 from tests.qt_support import until
-from tests.recipe_ui_support import Screen, assert_inside, demo_recipe_window, edit
+from tests.recipe_ui_support import Screen, assert_inside, edit
 from tests.recipe_ui_support import configured_screen as configured_screen
 
 from vimo_demo.application import (
@@ -49,12 +47,15 @@ def test_compact_recipe_layout(
     assert page.recipes.count() == 2 and not session.dirty and not runtimes
     assert set(page.metadata) == {"display_name", "product_code"}
     assert page.findChildren(QComboBox) == [page.recipes, page.model]
-    assert not page.findChildren(QScrollArea) and not page.findChildren(QGroupBox)
+    assert page.findChildren(QScrollArea) == [page.summary_scroll]
+    assert not page.findChildren(QGroupBox)
     assert len(page.findChildren(QLineEdit)) == 2
     assert set(page.buttons) == {
         "new_recipe",
         "duplicate_recipe",
+        "delete_recipe",
         "reload",
+        "recipe_discard",
         "save_apply",
     }
     assert window.navigation[1].text() == text("parameters", language)
@@ -65,16 +66,14 @@ def test_compact_recipe_layout(
         )
     assert session.entry is not None
     model = session.registry.get(session.default_model_id)
-    visible_text = " ".join(label.text() for label in page.findChildren(QLabel))
-    for technical in (
-        model.model_path,
-        model.expected_sha256,
-        "SHA-256",
-        "module_id",
-        "required",
-        session.entry.recipe.recipe_id,
-    ):
-        assert technical not in visible_text
+    assert not page.model_details.isVisible()
+    assert model.model_id in page.model_status.text()
+    page.model_more.click()
+    assert (
+        page.model_details.isVisible()
+        and model.expected_sha256 in page.model_details.text()
+    )
+    page.model_more.click()
     assert page.roi_workspace is None
     window.navigate(4)
     assert (
@@ -98,6 +97,8 @@ def test_metadata_model_and_hidden_overrides_preserved(
     page.recipes.activated.emit(index)
     assert session.entry is not None
     original = session.entry.recipe
+    assert not page.notice.isVisible()
+    page.advanced.click()
     assert page.notice.isVisible()
     edit(page.metadata["display_name"], "新产品")
     edit(page.metadata["product_code"], "SKU-中文")
@@ -125,7 +126,7 @@ def test_metadata_model_and_hidden_overrides_preserved(
         if not e.recipe.channel_overrides
     )
     page.recipes.activated.emit(index)
-    assert not page.notice.isVisible()
+    assert page.notice.isVisible() and "required" in page.notice.text()
 
 
 def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> None:
@@ -140,11 +141,15 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     assert app.snapshot().active is None
     assert "next successful Start" in text("roi_applied", "en")
     assert page.status.text() == text("roi_applied", page.language)
+    assert text("model_verified", page.language) in page.model_status.text()
     window.bridge.start()
     until(lambda: len(runtimes) == 1)
+    window.bridge.refresh()
+    assert text("model_running", page.language) not in page.model_status.text()
     runtimes[0].ready.set_result(None)
     until(lambda: app.snapshot().state is ApplicationState.RUNNING)
     window.bridge.refresh()
+    assert text("model_running", page.language) in page.model_status.text()
     active = app.snapshot().active
     assert active is not None and active.recipe_id == original.recipe_id
     assert not page.buttons["save_apply"].isEnabled()
@@ -154,6 +159,142 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     assert session.draft.to_recipe() == before
     window.bridge.stop()
     until(lambda: app.snapshot().state is ApplicationState.READY)
+    window.bridge.refresh()
+    assert text("model_running", page.language) not in page.model_status.text()
+
+
+@pytest.mark.parametrize(
+    "outcome", ["cancel", "delete", "candidate_changed", "failure"]
+)
+def test_recipe_delete_confirmation_identity_and_live_protection(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    window, session, runtimes = configured_screen
+    page = window.parameters
+    assert not page.buttons["delete_recipe"].isEnabled()  # Current candidate.
+    index = next(
+        i
+        for i, e in enumerate(session.catalog.discover().entries)
+        if e.recipe.channel_overrides
+    )
+    page.recipes.activated.emit(index)
+    entry = session.entry
+    assert entry is not None
+    original = entry.path.read_bytes()
+    before = window.bridge.application.snapshot()
+    page.buttons["delete_recipe"].click()
+    dialog = next(d for d in page.findChildren(QMessageBox) if d.isVisible())
+    assert (
+        entry.recipe.recipe_id in dialog.text()
+        and entry.recipe.display_name in dialog.text()
+    )
+    assert dialog.defaultButton() is not None and dialog.defaultButton().text() == text(
+        "cancel", page.language
+    )
+    if outcome == "candidate_changed":
+        window.bridge.application.configure(session.prepare(entry.recipe))
+    if outcome == "failure":
+
+        def denied(*, protected_ids: frozenset[str]) -> None:
+            raise ConfigurationIOError("Delete denied")
+
+        monkeypatch.setattr(session, "delete", denied)
+    caption = text("cancel" if outcome == "cancel" else "delete_recipe", page.language)
+    next(b for b in dialog.buttons() if b.text() == caption).click()
+    if outcome == "delete":
+        assert not entry.path.exists() and session.entry is None
+        assert page.recipes.currentIndex() == -1 and not session.dirty
+        assert window.bridge.application.snapshot() == before
+    else:
+        assert entry.path.read_bytes() == original and session.entry == entry
+        if outcome != "cancel":
+            assert page.status.text() == text("recipe_delete_error", page.language)
+    assert not runtimes
+
+
+@pytest.mark.parametrize("outcome", ["cancel", "reload", "failure"])
+def test_recipe_discard_reads_disk_and_preserves_other_domains(
+    configured_screen: Screen, outcome: str
+) -> None:
+    window, session, runtimes = configured_screen
+    page = window.parameters
+    assert session.entry is not None
+    entry = session.entry
+    assert not page.buttons["recipe_discard"].isEnabled()
+    edit(page.metadata["display_name"], "Unsaved")
+    page.capsule_enabled["size"].click()
+    draft = replace(session.draft)
+    machine = session.machine_editor.definition
+    before = window.bridge.application.snapshot()
+    persisted = replace(
+        entry.recipe, display_name="Changed on disk", product_code="disk-code"
+    )
+    save_recipe(entry.path, persisted)
+    if outcome == "failure":
+        entry.path.write_text("{", encoding="utf8")
+    payload = entry.path.read_bytes()
+    page.buttons["recipe_discard"].click()
+    dialog = next(d for d in page.findChildren(QMessageBox) if d.isVisible())
+    assert entry.recipe.recipe_id in dialog.text()
+    caption = text("cancel" if outcome == "cancel" else "recipe_discard", page.language)
+    next(b for b in dialog.buttons() if b.text() == caption).click()
+    if outcome == "reload":
+        assert session.entry.recipe == persisted and not session.dirty
+        assert page.metadata["display_name"].text() == "Changed on disk"
+    else:
+        assert session.draft == draft and session.entry == entry
+        if outcome == "failure":
+            assert page.status.text() == text("recipe_discard_error", page.language)
+            save_recipe(
+                entry.path, entry.recipe
+            )  # Restore this test's file for teardown.
+    if outcome != "failure":
+        assert entry.path.read_bytes() == payload
+    assert session.machine_editor.definition == machine
+    assert window.bridge.application.snapshot() == before and not runtimes
+
+
+def test_active_recipe_stays_protected_without_candidate(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, session, _ = configured_screen
+    assert session.entry is not None
+    snapshot = window.bridge.application.snapshot()
+    assert snapshot.candidate is not None
+    payload = session.entry.path.read_bytes()
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            window.bridge.application,
+            "snapshot",
+            lambda: replace(snapshot, active=snapshot.candidate, candidate=None),
+        )
+        window.parameters.refresh_state()
+        assert not window.parameters.buttons["delete_recipe"].isEnabled()
+        window.parameters.request_delete()
+        assert not any(
+            d.isVisible() for d in window.parameters.findChildren(QMessageBox)
+        )
+    assert session.entry.path.read_bytes() == payload
+
+
+def test_expanded_model_details_preserve_canvas_and_save_access(
+    configured_screen: Screen,
+) -> None:
+    window, session, _ = configured_screen
+    window.resize(1920, 1080)
+    page = window.parameters
+    page.open_preview("size")
+    page.model_more.click()
+    page.advanced.click()
+    QApplication.processEvents()
+    assert window.size().height() == 1080
+    assert page.model_details.isVisible() and page.notice.isVisible()
+    assert page.preview is not None and page.preview.canvas.height() >= 240
+    assert_inside(page.buttons["save_apply"], page)
+    assert_inside(page.buttons["recipe_discard"], page)
+    assert not session.dirty
+    page.leave_preview(lambda: None)
+    until(lambda: page.preview is None)
 
 
 @pytest.mark.parametrize("duplicate", [False, True])
@@ -348,8 +489,17 @@ def test_locked_state_mapping(
         assert not page.metadata["display_name"].isEnabled()
         assert all(
             not page.buttons[k].isEnabled()
-            for k in ("save_apply", "new_recipe", "duplicate_recipe")
+            for k in (
+                "save_apply",
+                "new_recipe",
+                "duplicate_recipe",
+                "recipe_discard",
+                "delete_recipe",
+            )
         )
+        page.request_discard()
+        page.request_delete()
+        assert not any(box.isVisible() for box in page.findChildren(QMessageBox))
     page.refresh_state()
 
 
@@ -466,236 +616,49 @@ def test_failed_preparation_blocks_dirty_switch(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1920, 1080), (1080, 1920), (900, 1200)])
-def test_full_width_recipe_columns_and_long_text(
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
+def test_vertical_sections_and_responsive_fields(
     configured_screen: Screen, language: Language, size: tuple[int, int]
 ) -> None:
     window, session, runtimes = configured_screen
-    page = window.parameters
     window.set_language(language)
     window.resize(*size)
     QApplication.processEvents()
-    basic, inspection = (
-        page.basic_title.parentWidget(),
-        page.inspection_title.parentWidget(),
-    )
-    assert basic is not None and inspection is not None
-    assert abs(basic.width() - inspection.width()) <= 1
-    if (
-        size[0] >= 1080
-        or inspection.mapTo(page, QPoint(0, 0)).y()
-        == basic.mapTo(page, QPoint(0, 0)).y()
-    ):
-        assert (
-            inspection.mapTo(page, QPoint(0, 0)).x()
-            > basic.mapTo(page, QPoint(0, 0)).x()
-        )
-        assert (
-            basic.mapTo(page, QPoint(0, 0)).y()
-            == inspection.mapTo(page, QPoint(0, 0)).y()
-        )
-    else:
-        assert (
-            inspection.mapTo(page, QPoint(0, 0)).y()
-            >= basic.mapTo(page, QPoint(0, basic.height())).y()
-        )
-    save = page.buttons["save_apply"]
-    assert (
-        inspection.mapTo(page, QPoint(inspection.width(), 0)).x()
-        == save.mapTo(page, QPoint(save.width(), 0)).x()
-    )
-    assert_inside(basic, page)
-    assert_inside(inspection, page)
-    before = window.bridge.application.snapshot()
-    # Long translated summaries wrap within their section; identifiers stay intact
-    # in the existing line edits without enlarging the window or other controls.
-    identity = "长配方名称-Long-Recipe-Identity-" * 8
-    page.metadata["display_name"].setText(identity)
-    page.rule.setText(page.rule.text() * 12)
-    page.capsule_summary["size"].setText("W 1000000 ± 1000000 · H 1000000 ± 1000000 px")
-    QApplication.processEvents()
-    assert window.size().width() == size[0]
-    assert page.metadata["display_name"].text() == identity
+    page = window.parameters
+    sections = (page.recipe_section, page.model_section, page.inspection_section)
+    for above, below in zip(sections, sections[1:], strict=False):
+        assert above.geometry().bottom() < below.y()
     for control in (
-        *page.metadata.values(),
+        *sections,
+        page.recipes,
         page.model,
-        page.rule,
-        page.tune_preview,
-        *page.capsule_summary.values(),
-        save,
+        *page.metadata.values(),
+        *page.buttons.values(),
     ):
         assert_inside(control, page)
-    assert page.model.mapTo(basic, QPoint(page.model.width(), 0)).x() == basic.width()
-    assert window.event_frame.height() == 44
-    assert (
-        window.bridge.application.snapshot() == before
-        and not session.dirty
-        and not runtimes
-    )
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
-def test_fields_follow_available_width_without_stretching_actions(
-    configured_screen: Screen, language: Language
-) -> None:
-    window, session, runtimes = configured_screen
-    page = window.parameters
-    display_name = (
-        "胶囊分割检测 — 本地验证模型"
-        if language == "zh"
-        else "Capsule segmentation — local reference"
-    )
-    session.registry = ModelRegistry(
-        (
-            replace(
-                session.registry.get(session.default_model_id),
-                display_name=display_name,
-            ),
-        )
-    )
-    window.set_language(language)
-    page.show_draft()
-    QApplication.processEvents()
-    basic = page.basic_title.parentWidget()
-    assert basic is not None
     name, product = page.metadata.values()
-    actions = [page.buttons[k] for k in ("new_recipe", "duplicate_recipe", "reload")]
-    action_sizes = [b.size() for b in actions + [page.tune_preview]]
-    heights = [c.height() for c in (page.recipes, name, product, page.model)]
+    assert abs(name.width() - product.width()) <= 1
+    assert page.model.width() > page.width() // 2
+    assert (
+        page.buttons["save_apply"].geometry().right() >= page.width() - 2 * Style.space
+    )
     before = window.bridge.application.snapshot()
-    widths: list[tuple[int, ...]] = []
-    for size in ((1920, 1080), (1080, 1920), (900, 1200), (1920, 1080)):
-        window.resize(*size)
-        QApplication.processEvents()
-        assert abs(name.width() - product.width()) <= 1
-        assert name.mapTo(basic, QPoint(0, 0)).x() == 0
-        assert product.mapTo(basic, QPoint(product.width(), 0)).x() == basic.width()
-        assert (
-            product.mapTo(basic, QPoint(0, 0)).x()
-            - name.mapTo(basic, QPoint(name.width(), 0)).x()
-            == Style.space
-        )
-        assert (
-            page.model.mapTo(basic, QPoint(page.model.width(), 0)).x() == basic.width()
-        )
-        assert page.model.currentText() == display_name and not page.model.isEnabled()
-        assert (
-            page.model.fontMetrics().horizontalAdvance(display_name)
-            + 2 * Style.space
-            + Style.icon
-            <= page.model.width()
-        )
-        assert (
-            actions[0].mapTo(page, QPoint(0, 0)).x()
-            - page.recipes.mapTo(page, QPoint(page.recipes.width(), 0)).x()
-            == Style.small
-        )
-        assert actions[-1].mapTo(page, QPoint(actions[-1].width(), 0)).x() == (
-            page.buttons["save_apply"]
-            .mapTo(page, QPoint(page.buttons["save_apply"].width(), 0))
-            .x()
-        )
-        assert [b.size() for b in actions + [page.tune_preview]] == action_sizes
-        assert [
-            c.height() for c in (page.recipes, name, product, page.model)
-        ] == heights
-        for control in (page.recipes, name, product, page.model, *actions):
-            assert_inside(control, page)
-        widths.append(
-            tuple(c.width() for c in (page.recipes, name, product, page.model))
-        )
-    assert all(wide > narrow for wide, narrow in zip(widths[0], widths[1], strict=True))
-    assert widths[-1] == widths[0]
+    page.expand_tuning["size"].click()
+    preview = page.preview
+    assert preview is not None and page.tuning_section.isVisible()
     assert (
-        window.bridge.application.snapshot() == before
-        and not session.dirty
+        page.expand_tuning["size"].isChecked()
+        and not page.expand_tuning["color"].isChecked()
+    )
+    assert_inside(preview, page)
+    assert preview.canvas.height() >= 240
+    assert window.size().width() == size[0]
+    page.expand_tuning["color"].click()
+    assert page.preview is preview and preview.mode == "color"
+    assert (
+        not session.dirty
         and not runtimes
+        and window.bridge.application.snapshot() == before
     )
-
-
-def test_recipe_metadata_groups_wrap(configured_screen: Screen) -> None:
-    window, _, _ = configured_screen
-    page = window.parameters
-    for line in page.metadata.values():
-        line.setMinimumWidth(450)
-    window.resize(900, 1200)
-    QApplication.processEvents()
-    name, product = page.metadata.values()
-    assert product.mapTo(page, QPoint(0, 0)).y() > name.mapTo(page, QPoint(0, 0)).y()
-    assert_inside(name, page)
-    assert_inside(product, page)
-    window.resize(1920, 1080)
-    QApplication.processEvents()
-    assert product.mapTo(page, QPoint(0, 0)).y() == name.mapTo(page, QPoint(0, 0)).y()
-
-
-@pytest.mark.parametrize(
-    "language,size,workspace",
-    [
-        ("zh", (1920, 1080), "recipe"),
-        ("zh", (1080, 1920), "recipe"),
-        ("en", (1920, 1080), "recipe"),
-    ],
-)
-def test_recipe_page_screenshots(
-    configured_screen: Screen,
-    qapp: QApplication,
-    tmp_path: Path,
-    language: Language,
-    size: tuple[int, int],
-    workspace: str,
-) -> None:
-    from run_production_ui import compose, demo_images
-
-    composition = compose(demo_images(), tmp_path / "demo", "normal", 0.001)
-    composition.editor.registry = ModelRegistry(
-        tuple(
-            replace(
-                m,
-                display_name=(
-                    "胶囊分割检测 — 本地验证模型"
-                    if language == "zh"
-                    else "Capsule segmentation — local reference"
-                ),
-            )
-            for m in composition.editor.registry.models
-        )
-    )
-    with demo_recipe_window(composition, language=language, size=size) as window:
-        window.navigate(1)
-        page = window.parameters
-        composition.editor.draft.capsule = replace(
-            SETTINGS,
-            size=replace(
-                SETTINGS.size,
-                target_width=65,
-                width_tolerance=10,
-                target_height=181,
-                height_tolerance=3,
-            ),
-            color=replace(SETTINGS.color, target_hue=27, hue_tolerance=8),
-        )
-        page.show_draft()
-        before = composition.application.snapshot()
-        qapp.processEvents()
-        for control in (
-            page.recipes,
-            *page.buttons.values(),
-            *page.metadata.values(),
-            page.model,
-            page.tune_preview,
-            page.identity,
-        ):
-            assert_inside(control, page)
-        name, product = page.metadata.values()
-        assert (
-            name.mapTo(page, QPoint(0, 0)).y() == product.mapTo(page, QPoint(0, 0)).y()
-        )
-        assert name.width() < page.width() // 2
-        assert page.model.width() < page.width() // 2
-        assert page.identity.mapTo(page, QPoint(0, 0)).y() > page.height() * 0.8
-        assert composition.application.snapshot() == before
-        assert window.event_frame.height() == 44 and not window.event_label.text()
-        assert window.grab().save(
-            str(tmp_path / f"recipe-{language}-{size[0]}x{size[1]}-{workspace}.png")
-        )
+    page.expand_tuning["color"].click()
+    until(lambda: page.preview is None)

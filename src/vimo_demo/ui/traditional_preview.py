@@ -3,11 +3,13 @@
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
+from pathlib import Path
 from threading import Thread
+from time import monotonic
 from typing import Literal
 
 import numpy as np
-from PySide6.QtCore import QRectF, QSize, QSizeF, Qt, QTimer
+from PySide6.QtCore import QRectF, QSize, QSizeF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -15,11 +17,10 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPen,
-    QResizeEvent,
 )
 from PySide6.QtWidgets import (
-    QBoxLayout,
-    QCheckBox,
+    QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -32,7 +33,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from vimo_demo.application.basler_connection import (
+    ConnectionState,
+    SourceConnectionCommands,
+)
+from vimo_demo.application.folder_replay import (
+    FolderSourceError,
+    decode_image,
+    folder_images,
+)
 from vimo_demo.inference import BoundingRect
+from vimo_demo.inspection import CameraId, CycleId, FrameId
 from vimo_demo.inspection.production import (
     CameraLayout,
     ChannelROI,
@@ -48,11 +59,22 @@ from vimo_demo.inspection.production.capsule import (
 )
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
+from .image_tools import ImageToolbar, image_icon
 from .production_style import Language, Style, camera_icon, text, theme_colors
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
 
 type PreviewMode = Literal["size", "color"]
+type ReferenceKind = Literal["folder", "runtime", "import"]
+
+
+@dataclass(frozen=True, slots=True)
+class _Reference:
+    frame: DisplayFrame
+    kind: ReferenceKind
+    path: Path | None = None
+    paths: tuple[Path, ...] = ()
+    index: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +135,7 @@ class PreviewCanvas(RoiCanvas):
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
         transform = self.model.transform(self.width(), self.height())
-        if transform is None:
+        if transform is None or self._image.isNull():
             return
         painter = QPainter(self)
         painter.setClipRect(
@@ -202,6 +224,8 @@ class TraditionalPreview(QWidget):
     job termination before releasing the workspace.
     """
 
+    mode_changed = Signal()
+
     def __init__(
         self,
         session: RecipeEditorSession,
@@ -213,29 +237,45 @@ class TraditionalPreview(QWidget):
         mode: PreviewMode,
         language: Language,
         parent: QWidget,
+        connection: SourceConnectionCommands | None = None,
     ) -> None:
         super().__init__(parent)
         self.session, self.frames = session, frames
         self.allowed, self.changed, self.leave = allowed, changed, leave
-        self.language = language
+        self.language: Language = language
+        self.connection = connection
+        self.mode: PreviewMode = mode
         self.frame: DisplayFrame | None = None
         self.measurements: tuple[PreviewMeasurement, ...] = ()
         self.results: tuple[CheckResult | None, ...] = ()
         self._measurement_flags: tuple[bool, bool] | None = None
         self._revision = 0
         self._thread: Thread | None = None
-        self._future: Future[tuple[PreviewMeasurement, ...]] | None = None
+        self._future: Future[tuple[PreviewMeasurement, ...] | _Reference] | None = None
         self._job_revision = 0
+        # One frozen reference per configured camera, one current measurement cache,
+        # one IO/measurement job and at most one latest pending read.
+        self._references: dict[CameraId, _Reference] = {}
+        self._folder_paths: dict[CameraId, tuple[Path, ...]] = {}
+        self._positions: dict[CameraId, int] = {}
+        self._load_revision = 0
+        self._job_load: int | None = None
+        self._pending_read: tuple[int, Callable[[], _Reference]] | None = None
+        self._reference_error = ""
         self._close: Callable[[], None] | None = None
         self._loading = False
         root = QVBoxLayout(self)
         root.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
         root.setSpacing(Style.small)
-        header = QHBoxLayout()
+        camera_controls = QWidget()
+        header = QHBoxLayout(camera_controls)
+        header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(Style.small)
+        self.title = QLabel()
         self.back = QPushButton()
         self.camera_tabs = QTabBar()
         self.camera_tabs.setExpanding(False)
+        self.camera_tabs.setUsesScrollButtons(False)
         self.camera_tabs.setDrawBase(False)
         self.camera_tabs.setIconSize(QSize(Style.icon, Style.icon))
         for camera in session.machine.layout.cameras:
@@ -243,32 +283,55 @@ class TraditionalPreview(QWidget):
                 camera_icon(), str(camera.camera_id).removeprefix("CAM")
             )
         self.refresh_button = QPushButton()
-        self.fit_button = QPushButton("Fit")
-        for button in (self.back, self.refresh_button, self.fit_button):
-            button.setMinimumSize(Style.touch, Style.touch)
+        self.fit_button = QPushButton()
+        self.actual_button = QPushButton("1:1")
+        self.import_button, self.runtime_button = QPushButton(), QPushButton()
+        self.previous_button, self.next_button = QPushButton(), QPushButton()
+        self.reference = QComboBox()
+        self.reference.setMinimumContentsLength(12)
+        self.reference.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.reference.setMaximumWidth(300)
+        self.reference.setMinimumHeight(Style.touch)
+        for button in (
+            self.back,
+            self.refresh_button,
+            self.fit_button,
+            self.actual_button,
+            self.import_button,
+            self.runtime_button,
+            self.previous_button,
+            self.next_button,
+        ):
+            button.setFixedSize(Style.touch, Style.touch)
+            button.setIconSize(QSize(Style.icon, Style.icon))
         header.addWidget(self.back)
         header.addWidget(self.camera_tabs)
-        header.addStretch()
-        header.addWidget(self.fit_button)
-        header.addWidget(self.refresh_button)
-        root.addLayout(header)
+        reference_controls, display_controls = QWidget(), QWidget()
+        reference_row, display_row = (
+            QHBoxLayout(reference_controls),
+            QHBoxLayout(display_controls),
+        )
+        for row in (reference_row, display_row):
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(Style.small)
+        for control in (
+            self.import_button,
+            self.runtime_button,
+            self.previous_button,
+            self.reference,
+            self.next_button,
+            self.refresh_button,
+        ):
+            reference_row.addWidget(control)
+        display_row.addWidget(self.fit_button)
+        display_row.addWidget(self.actual_button)
+        self.image_toolbar = ImageToolbar(
+            camera_controls, reference_controls, display_controls
+        )
+        root.addWidget(self.image_toolbar)
         self.canvas = PreviewCanvas()
-        root.addWidget(self.canvas, 1)
-        self.mode_tabs = QTabBar()
-        self.mode_tabs.setDrawBase(False)
-        self.mode_tabs.setExpanding(False)
-        self.mode_tabs.setUsesScrollButtons(False)
-        self.mode_tabs.addTab("")
-        self.mode_tabs.addTab("")
-        self.mode_tabs.setCurrentIndex(0 if mode == "size" else 1)
-        self._mode_group = QWidget()
-        mode_column = QVBoxLayout(self._mode_group)
-        mode_column.setContentsMargins(0, 0, 0, 0)
-        mode_column.setSpacing(Style.small)
-        mode_column.addWidget(self.mode_tabs)
-        self.enabled = QCheckBox()
-        self.enabled.setMinimumHeight(Style.touch)
-        mode_column.addWidget(self.enabled)
         self.controls = QStackedWidget()
         size_page, color_page = QWidget(), QWidget()
         size_row, color_row = QHBoxLayout(size_page), QHBoxLayout(color_page)
@@ -320,10 +383,11 @@ class TraditionalPreview(QWidget):
         )
         self._controls_row = QHBoxLayout()
         self._controls_row.setSpacing(Style.space)
-        self._controls_row.addWidget(self._mode_group)
+        self._controls_row.addWidget(self.title)
         self._controls_row.addWidget(self.controls)
         self._controls_row.addStretch()
         root.addLayout(self._controls_row)
+        root.addWidget(self.canvas, 1)
         self.message = QLabel()
         self.message.setWordWrap(True)
         self.message.setTextFormat(Qt.TextFormat.PlainText)
@@ -331,20 +395,25 @@ class TraditionalPreview(QWidget):
         self.back.clicked.connect(lambda: self.request_close(self.leave))
         self.refresh_button.clicked.connect(self.refresh_reference)
         self.fit_button.clicked.connect(lambda: self.canvas.zoom(None))
-        self.camera_tabs.currentChanged.connect(self.refresh_reference)
-        self.mode_tabs.currentChanged.connect(self.show_settings)
-        self.enabled.toggled.connect(self.update_settings)
+        self.actual_button.clicked.connect(lambda: self.canvas.zoom(1.0))
+        self.import_button.clicked.connect(self.import_image)
+        self.runtime_button.clicked.connect(self.use_runtime)
+        self.previous_button.clicked.connect(lambda: self.browse_reference(-1))
+        self.next_button.clicked.connect(lambda: self.browse_reference(1))
+        self.reference.activated.connect(self.choose_image)
+        self.camera_tabs.currentChanged.connect(self.select_camera)
         self.tolerance.valueChanged.connect(self.update_settings)
         self.sample.clicked.connect(self.sample_color)
         self._timer = QTimer(self)
         self._timer.setInterval(15)
         self._timer.timeout.connect(self._poll)
         self.set_language(language)
-        self.refresh_reference()
+        self.select_camera()
 
-    @property
-    def mode(self) -> PreviewMode:
-        return "size" if self.mode_tabs.currentIndex() == 0 else "color"
+    def set_mode(self, mode: PreviewMode) -> None:
+        self.mode = mode
+        self.show_settings()
+        self.mode_changed.emit()
 
     @property
     def busy(self) -> bool:
@@ -354,19 +423,37 @@ class TraditionalPreview(QWidget):
         return zh if self.language == "zh" else en
 
     def refresh_theme(self) -> None:
+        color = theme_colors(self).primary
         for index in range(self.camera_tabs.count()):
-            self.camera_tabs.setTabIcon(index, camera_icon(theme_colors(self).primary))
+            self.camera_tabs.setTabIcon(index, camera_icon(color))
+        for button, tool in (
+            (self.back, "minus"),
+            (self.import_button, "folder"),
+            (self.runtime_button, "runtime"),
+            (self.previous_button, "previous"),
+            (self.next_button, "next"),
+            (self.refresh_button, "refresh"),
+            (self.fit_button, "fit"),
+        ):
+            button.setIcon(image_icon(tool, color))
 
     def set_language(self, language: Language) -> None:
         self.language = self.canvas.language = language
         self.refresh_theme()
-        self.back.setText(self.tr_pair("返回配方", "Back to Recipe"))
-        self.refresh_button.setText(self.tr_pair("刷新", "Refresh"))
-        self.refresh_button.setToolTip(text("roi_refresh", language))
-        self.refresh_button.setAccessibleName(self.refresh_button.toolTip())
-        self.fit_button.setToolTip(text("roi_fit", language))
-        self.fit_button.setAccessibleName(self.fit_button.toolTip())
-        self.back.setAccessibleName(self.back.text())
+        for button, key in (
+            (self.import_button, "vision_import"),
+            (self.runtime_button, "vision_runtime"),
+            (self.previous_button, "reference_previous"),
+            (self.next_button, "reference_next"),
+            (self.refresh_button, "roi_refresh"),
+            (self.fit_button, "roi_fit"),
+            (self.actual_button, "roi_actual"),
+        ):
+            button.setToolTip(text(key, language))
+            button.setAccessibleName(button.toolTip())
+        self.back.setToolTip(self.tr_pair("收起", "Collapse"))
+        self.back.setAccessibleName(self.back.toolTip())
+        self.reference.setAccessibleName(text("vision_image_select", language))
         self.camera_tabs.setAccessibleName(text("camera_setup", language))
         for index, camera in enumerate(self.session.machine.layout.cameras):
             name = text("camera_number", language).format(
@@ -374,9 +461,6 @@ class TraditionalPreview(QWidget):
             )
             self.camera_tabs.setTabToolTip(index, f"{name} ({camera.camera_id})")
             self.camera_tabs.setAccessibleTabName(index, f"{name} ({camera.camera_id})")
-        self.mode_tabs.setTabText(0, self.tr_pair("尺寸", "Size"))
-        self.mode_tabs.setTabText(1, self.tr_pair("颜色", "Color"))
-        self.mode_tabs.setAccessibleName(self.tr_pair("检测项目", "Inspection mode"))
         for key, zh, en in (
             ("target_width", "目标宽度 (px)", "Target W (px)"),
             ("width_tolerance", "宽度容差", "W tolerance"),
@@ -389,7 +473,7 @@ class TraditionalPreview(QWidget):
                 caption += " (px)"
             self.spins[key].setAccessibleName(caption)
             self.spins[key].setToolTip(caption)
-        self.sample.setText(self.tr_pair("画面取色", "Sample image color"))
+        self.sample.setText(self.tr_pair("取色", "Sample"))
         self.sample.setToolTip(
             self.tr_pair("从当前画面取色", "Use current image color")
         )
@@ -398,12 +482,14 @@ class TraditionalPreview(QWidget):
 
     def show_settings(self) -> None:
         self._loading = True
-        settings = self.session.draft.capsule
-        self.controls.setCurrentIndex(self.mode_tabs.currentIndex())
-        self.canvas.mode = self.mode
-        self.enabled.setChecked(
-            settings.size.enabled if self.mode == "size" else settings.color.enabled
+        self.title.setText(
+            self.tr_pair("尺寸调参", "Size tuning")
+            if self.mode == "size"
+            else self.tr_pair("颜色调参", "Color tuning")
         )
+        settings = self.session.draft.capsule
+        self.controls.setCurrentIndex(0 if self.mode == "size" else 1)
+        self.canvas.mode = self.mode
         for key, spin in self.spins.items():
             value = {
                 "target_width": settings.size.target_width,
@@ -424,48 +510,14 @@ class TraditionalPreview(QWidget):
             self.tr_pair("颜色容差", "Color tolerance")
             + f" {settings.color.hue_tolerance}"
         )
-        self.enabled.setText(
-            self.tr_pair("已启用", "Enabled")
-            if self.enabled.isChecked()
-            else self.tr_pair("未启用", "Disabled")
-        )
-        self.enabled.setAccessibleName(
-            self.mode_tabs.tabText(self.mode_tabs.currentIndex())
-            + " · "
-            + self.enabled.text()
-        )
-        self.enabled.setToolTip(
-            self.tr_pair(
-                "通道 OK/NG 为所有已启用检测的组合结果",
-                "Channel OK/NG combines all enabled checks",
-            )
-        )
-        self._arrange_controls()
         self._loading = False
         self.ensure_measurement()
         self.refresh_state()
         self.evaluate()
 
-    def _arrange_controls(self) -> None:
-        required = (
-            self._mode_group.minimumSizeHint().width()
-            + self.controls.minimumSizeHint().width()
-            + Style.space
-        )
-        self._controls_row.setDirection(
-            QBoxLayout.Direction.LeftToRight
-            if required <= self.width() - 2 * Style.space
-            else QBoxLayout.Direction.TopToBottom
-        )
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        self._arrange_controls()
-        super().resizeEvent(event)
-
     def refresh_state(self) -> None:
         allowed = self.allowed() and self._close is None
         self.controls.setEnabled(allowed)
-        self.enabled.setEnabled(allowed)
         self.sample.setEnabled(
             allowed
             and not self.busy
@@ -475,6 +527,11 @@ class TraditionalPreview(QWidget):
                 for row in self.measurements
             )
         )
+        viewing = not self.busy and self._close is None
+        self.import_button.setEnabled(viewing)
+        self.runtime_button.setEnabled(viewing and self._runtime_frame() is not None)
+        self.refresh_button.setEnabled(viewing)
+        self._present_reference()
 
     def update_settings(self) -> None:
         if self._loading or not self.allowed() or self._close is not None:
@@ -485,7 +542,6 @@ class TraditionalPreview(QWidget):
                 settings,
                 size=replace(
                     settings.size,
-                    enabled=self.enabled.isChecked(),
                     target_width=self.spins["target_width"].value(),
                     width_tolerance=self.spins["width_tolerance"].value(),
                     target_height=self.spins["target_height"].value(),
@@ -497,7 +553,6 @@ class TraditionalPreview(QWidget):
                 settings,
                 color=replace(
                     settings.color,
-                    enabled=self.enabled.isChecked(),
                     hue_tolerance=self.tolerance.value(),
                 ),
             )
@@ -551,28 +606,294 @@ class TraditionalPreview(QWidget):
         if not self.busy:
             self._start_measurement()
 
-    def refresh_reference(self) -> None:
-        if self._close is not None:
-            return
-        self._revision += 1
-        self.measurements = ()
-        self.results = ()
-        camera = self.session.machine.layout.cameras[self.camera_tabs.currentIndex()]
-        self.frame = next(
+    @property
+    def camera(self) -> CameraLayout:
+        return self.session.machine.layout.cameras[self.camera_tabs.currentIndex()]
+
+    def _runtime_frame(self) -> DisplayFrame | None:
+        sources = self.session.camera_sources
+        key = (
+            sources.definition.source_key(self.camera.camera_id, sources.path.parent)
+            if sources
+            else None
+        )
+        return next(
             (
                 f
                 for f in self.frames.snapshot().frames
-                if f.frame_id.camera_id == camera.camera_id
+                if f.frame_id.camera_id == self.camera.camera_id
+                and (sources is None or (key and f.source_key == key))
             ),
             None,
         )
+
+    def _project_blank(self) -> None:
+        if self.frame is not None:
+            return
+        size = None
+        sources = self.session.camera_sources
+        if (
+            self.connection is not None
+            and sources is not None
+            and sources.definition.mode == "basler"
+        ):
+            snapshot = self.connection.source_snapshot()
+            serial = sources.definition.camera(self.camera.camera_id).basler_serial
+            if snapshot.state is ConnectionState.CONNECTED:
+                size = next(
+                    (
+                        (c.width, c.height)
+                        for c in snapshot.cameras
+                        if c.camera_id == self.camera.camera_id and c.serial == serial
+                    ),
+                    None,
+                )
+        self.canvas.rois = self.camera.slots
+        self.canvas.set_projection(size)
+
+    def _set_reference(self, reference: _Reference | None) -> None:
+        self._revision += 1
+        self.measurements, self.results = (), ()
+        self.canvas.rows, self.canvas.results = (), ()
+        self.canvas.setToolTip("")
+        self.frame = reference.frame if reference else None
+        if reference is not None:
+            assert reference.frame.frame_id.camera_id == self.camera.camera_id
+            self._references[self.camera.camera_id] = reference
+            if reference.kind == "folder":
+                self._folder_paths[self.camera.camera_id] = reference.paths
+                self._positions[self.camera.camera_id] = reference.index
+        else:
+            self._references.pop(self.camera.camera_id, None)
         self.canvas.set_frame(self.frame)
-        self.canvas.slots = camera.slots
-        self.canvas.rows = ()
-        self.canvas.results = ()
+        self.canvas.slots = self.camera.slots
+        self.canvas.rois = ()
+        self._project_blank()
         self.evaluate()
+        self.refresh_state()
+
+    def select_camera(self) -> None:
+        if self._close is not None:
+            return
+        self._load_revision += 1
+        self._pending_read = None
+        self._reference_error = ""
+        reference = self._references.get(self.camera.camera_id)
+        self._set_reference(reference)
+        if reference is None:
+            self.refresh_reference()
+        elif not self.busy:
+            self._start_measurement()
+
+    def use_runtime(self) -> None:
+        if self.busy or self._close is not None:
+            return
+        self._reference_error = ""
+        frame = self._runtime_frame()
+        self._set_reference(_Reference(frame, "runtime") if frame else None)
         if not self.busy:
             self._start_measurement()
+
+    def refresh_reference(self) -> None:
+        if self._close is not None:
+            return
+        selected = self._references.get(self.camera.camera_id)
+        if selected is not None and selected.kind == "import":
+            assert selected.path is not None
+            self.load_image(selected.path)
+        elif selected is not None and selected.kind == "runtime":
+            # A measurement may be finishing; its stale completion is rejected.
+            self._load_revision += 1
+            self._pending_read = None
+            self._reference_error = ""
+            frame = self._runtime_frame()
+            self._set_reference(_Reference(frame, "runtime") if frame else None)
+            if not self.busy:
+                self._start_measurement()
+        elif (
+            self.session.camera_sources is not None
+            and self.session.camera_sources.definition.mode == "folder"
+        ):
+            self._read_folder(
+                selected.path if selected and selected.kind == "folder" else None
+            )
+        else:
+            # No Folder source is fabricated for Basler or developer-only sessions.
+            self._reference_error = ""
+            frame = self._runtime_frame()
+            self._set_reference(_Reference(frame, "runtime") if frame else None)
+            if not self.busy:
+                self._start_measurement()
+
+    def import_image(self) -> None:
+        if self.busy or self._close is not None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            text("vision_import", self.language),
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+        )
+        if path:
+            self.load_image(Path(path))
+
+    def load_image(self, path: Path) -> None:
+        camera = self.camera.camera_id
+
+        def read() -> _Reference:
+            return _Reference(
+                self._local_frame(path, camera, 0, str(path)), "import", path
+            )
+
+        self._queue_read(read)
+
+    @staticmethod
+    def _local_frame(
+        path: Path, camera: CameraId, index: int, key: str
+    ) -> DisplayFrame:
+        pixels = decode_image(path)
+        owned = np.frombuffer(pixels.tobytes(), dtype=np.uint8).reshape(pixels.shape)
+        return DisplayFrame(
+            FrameId(CycleId(0), camera, index), 0, monotonic(), 0, owned, key
+        )
+
+    def _read_folder(self, path: Path | None) -> None:
+        sources = self.session.camera_sources
+        if sources is None or sources.definition.mode != "folder":
+            return
+        camera = self.camera.camera_id
+        source = sources.definition.camera(camera)
+        folder, key = source.path(sources.path.parent), source.key(sources.path.parent)
+
+        def read() -> _Reference:
+            if not source.folder.strip():
+                raise FolderSourceError(f"{camera}: no Folder source configured")
+            paths = folder_images(folder)
+            if path is not None:
+                if path not in paths:
+                    raise FolderSourceError(f"Reference image no longer exists: {path}")
+                index = paths.index(path)
+                return _Reference(
+                    self._local_frame(path, camera, index, key),
+                    "folder",
+                    path,
+                    paths,
+                    index,
+                )
+            last_error = ""
+            for index, candidate in enumerate(paths):
+                try:
+                    return _Reference(
+                        self._local_frame(candidate, camera, index, key),
+                        "folder",
+                        candidate,
+                        paths,
+                        index,
+                    )
+                except FolderSourceError as exc:
+                    last_error = str(exc)
+            raise FolderSourceError(last_error)
+
+        self._queue_read(read)
+
+    def choose_image(self, index: int) -> None:
+        selected = self._references.get(self.camera.camera_id)
+        offset = int(selected is None or selected.kind != "folder")
+        paths = self._folder_paths.get(self.camera.camera_id, ())
+        if not self.busy and 0 <= index - offset < len(paths):
+            self._read_folder(paths[index - offset])
+
+    def browse_reference(self, delta: int) -> None:
+        paths = self._folder_paths.get(self.camera.camera_id, ())
+        index = self._positions.get(self.camera.camera_id, 0) + delta
+        if not self.busy and 0 <= index < len(paths):
+            self._read_folder(paths[index])
+
+    def _queue_read(self, read: Callable[[], _Reference]) -> None:
+        if self._close is not None:
+            return
+        self._load_revision += 1
+        self._revision += 1
+        self._reference_error = ""
+        self._pending_read = self._load_revision, read
+        if not self.busy:
+            self._start_read()
+
+    def _start_read(self) -> None:
+        request, self._pending_read = self._pending_read, None
+        assert request is not None
+        self._job_load, read = request
+        self._start_job(read)
+
+    def _present_reference(self) -> None:
+        self._project_blank()
+        selected = self._references.get(self.camera.camera_id)
+        folder = (
+            self.session.camera_sources is not None
+            and self.session.camera_sources.definition.mode == "folder"
+        )
+        paths = self._folder_paths.get(self.camera.camera_id, ()) if folder else ()
+        offset = int(not selected or selected.kind != "folder")
+        index = self._positions.get(self.camera.camera_id, 0)
+        position = (
+            f"{index + 1}/{len(paths)}"
+            if paths and not offset
+            else text(
+                "vision_imported"
+                if selected and selected.kind == "import"
+                else "reference_runtime",
+                self.language,
+            )
+        )
+        if self.frame is not None:
+            info = (
+                f"{position} · {self.frame.image.shape[1]}×{self.frame.image.shape[0]}"
+            )
+            tip = (
+                str(selected.path)
+                if selected and selected.path
+                else text("reference_runtime_tip", self.language)
+            )
+        else:
+            size = self.canvas.model.size
+            info = (
+                text("vision_dimensions_only", self.language).format(
+                    width=size[0], height=size[1]
+                )
+                if size
+                else text("vision_schematic", self.language)
+            )
+            tip = text(
+                "roi_no_frame_tip" if size else "vision_schematic_tip", self.language
+            )
+        # Programmatic item changes never navigate or load an image.
+        captions = ([info] if offset or not paths else []) + [
+            f"{i + 1}/{len(paths)} · {p.name}" for i, p in enumerate(paths)
+        ]
+        target = index if paths and not offset else 0
+        captions[target] = info
+        if captions != [
+            self.reference.itemText(i) for i in range(self.reference.count())
+        ]:
+            self.reference.clear()
+            self.reference.addItems(captions)
+        if self.reference.currentIndex() != target:
+            self.reference.setCurrentIndex(target)
+        self.reference.setToolTip(tip)
+        self.reference.setAccessibleDescription(info)
+        # Size from the localized status, including combo padding/arrow; otherwise
+        # "Imported · W×H" can lose the final dimension without an ellipsis.
+        self.reference.setMinimumWidth(
+            self.reference.fontMetrics().horizontalAdvance(info)
+            + 2 * Style.space
+            + Style.touch
+        )
+        self.canvas.setAccessibleDescription(info)
+        viewing = not self.busy and self._close is None
+        self.reference.setEnabled(viewing and bool(paths))
+        self.previous_button.setEnabled(viewing and bool(paths) and index > 0)
+        self.next_button.setEnabled(viewing and bool(paths) and index + 1 < len(paths))
+        self.image_toolbar.sync_metrics()
 
     def _start_measurement(self) -> None:
         frame = self.frame
@@ -586,13 +907,19 @@ class TraditionalPreview(QWidget):
         settings = (
             self.session.draft.capsule
         )  # Immutable capability snapshot for this job.
-        future: Future[tuple[PreviewMeasurement, ...]] = Future()
-        self._future = future
         self._job_revision = self._revision
+        self._job_load = None
+        self._start_job(lambda: measure_reference(frame, camera, settings))
+
+    def _start_job(
+        self, work: Callable[[], tuple[PreviewMeasurement, ...] | _Reference]
+    ) -> None:
+        future: Future[tuple[PreviewMeasurement, ...] | _Reference] = Future()
+        self._future = future
 
         def run() -> None:
             try:
-                future.set_result(measure_reference(frame, camera, settings))
+                future.set_result(work())
             except BaseException as exc:
                 future.set_exception(exc)
 
@@ -612,19 +939,28 @@ class TraditionalPreview(QWidget):
         if self._close is not None:
             callback = self._close
             self.frame = None
+            self._references.clear()
+            self._pending_read = None
             callback()
-            return
-        if self._job_revision != self._revision:
-            self._start_measurement()
-            self.refresh_state()
             return
         assert future is not None and future.done()
         try:
-            self.measurements = future.result()
+            value = future.result()
         except BaseException as exc:
-            self.show_message(f"{type(exc).__name__}: {exc}")
-            self.refresh_state()
-            return
+            if self._job_load == self._load_revision or (
+                self._job_load is None and self._job_revision == self._revision
+            ):
+                self._reference_error = f"{type(exc).__name__}: {exc}"
+        else:
+            if isinstance(value, _Reference):
+                if self._job_load == self._load_revision:
+                    self._set_reference(value)
+            elif self._job_revision == self._revision:
+                self.measurements = value
+        if self._pending_read is not None:
+            self._start_read()
+        elif self._job_load is not None or self._job_revision != self._revision:
+            self._start_measurement()
         self.evaluate()
         self.refresh_state()
 
@@ -637,10 +973,10 @@ class TraditionalPreview(QWidget):
         )
         self.canvas.rows, self.canvas.results = self.measurements, self.results
         self.canvas.update()
-        if self.frame is None:
-            self.show_message(
-                self.tr_pair("参考图不可用", "Reference image unavailable")
-            )
+        if self._reference_error:
+            self.show_message(self._reference_error)
+        elif self.frame is None:
+            self.show_message("")  # The toolbar owns blank/schematic image status.
         elif not self.session.draft.capsule.enabled:
             self.show_message(
                 self.tr_pair("两项检测均未启用", "Both inspections are disabled")
@@ -679,4 +1015,6 @@ class TraditionalPreview(QWidget):
         self.setEnabled(False)
         if not self.busy:
             self.frame = None
+            self._references.clear()
+            self._pending_read = None
             after()
