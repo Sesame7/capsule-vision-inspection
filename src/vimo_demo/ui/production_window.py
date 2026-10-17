@@ -988,6 +988,20 @@ class ProductionWindow(QMainWindow):
                 for part in (self._command_detail, self.configuration_issue)
                 if part
             )
+        workspace = self.parameters.roi_workspace
+        vision_feedback = (
+            workspace.feedback
+            if workspace is not None and self.pages.currentIndex() == 4
+            else None
+        )
+        if vision_feedback is not None and not (
+            fault or self._closing or snapshot.last_issue or self._source_issue
+        ):
+            key, detail = vision_feedback
+            message, warning = text(key, language), True
+            if detail == message:
+                detail = ""
+            self._event_message = message
         self.event_label.setToolTip(
             "\n".join(part for part in (message, detail) if part)
         )

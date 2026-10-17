@@ -13,7 +13,7 @@ from time import perf_counter
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.application_support import WAIT
 from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
@@ -540,8 +540,9 @@ def test_vision_capture_cancellation_and_stale_delivery(
         pending = captures[-1]
         assert pending is not None and not workspace.capture.isEnabled()
         assert workspace.cancel_capture_button.isVisible()
-        assert workspace.capture_status.text() == text(
-            "vision_capture_waiting", window.language
+        assert (
+            text("vision_capture_waiting", window.language)
+            in workspace.capture.toolTip()
         )
         until(lambda: app.source_snapshot().capture_waiting)
         geometry = workspace.draft.definition
@@ -551,25 +552,27 @@ def test_vision_capture_cancellation_and_stale_delivery(
             assert workspace.frame is not None
             assert workspace.frame.frame_id.camera_id == CameraId("CAM1")
             assert int(workspace.frame.image[0, 0, 0]) == 10
-            assert workspace.capture_status.text() == text(
-                "vision_capture_success", window.language
+            assert (
+                text("vision_capture_success", window.language)
+                in workspace.capture.toolTip()
             )
         elif action == "timeout":
             now[0] = 11.0
             until(
                 lambda: (
-                    workspace.capture_status.text()
+                    window.event_label.accessibleName()
                     == text("vision_capture_timeout", window.language)
                 )
             )
-            assert workspace.capture_status.text() == text(
+            assert window.event_label.accessibleName() == text(
                 "vision_capture_timeout", window.language
             )
         elif action == "cancel":
             workspace.cancel_capture_button.click()
             assert pending.cancelled()
-            assert workspace.capture_status.text() == text(
-                "vision_capture_cancelled", window.language
+            assert (
+                text("vision_capture_cancelled", window.language)
+                in workspace.capture.toolTip()
             )
         elif action == "late":
             # Complete without pumping Qt, then change selection before queued delivery.
@@ -604,7 +607,10 @@ def test_vision_capture_cancellation_and_stale_delivery(
             until(lambda: not window.parameters.busy)
             workspace.source_modes["folder"].click()
             until(lambda: not window.parameters.busy)
-            assert not workspace.capture_status.isVisible()
+            assert (
+                text("vision_capture_success", window.language)
+                not in workspace.capture.toolTip()
+            )
             assert not workspace.capture.isVisible()
             assert workspace.sources is not None
             workspace.sources.discard()
@@ -1038,7 +1044,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         assert workspace.draft.dirty
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
-        assert not workspace.draft.dirty and not workspace.message.text()
+        assert not workspace.draft.dirty and not window.event_label.text()
         workspace.connect_source.click()
         until(lambda: not window.parameters.busy)
         assert startup.application.source_snapshot().state is ConnectionState.CONNECTED
@@ -1056,7 +1062,13 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
             window.set_theme(theme)
             window.resize(*size)
             QApplication.processEvents()
-            assert workspace.reference.currentText() == text("roi_no_frame", language)
+            assert workspace.reference.currentText() == text(
+                "vision_dimensions_only", language
+            ).format(width=60, height=20)
+            assert workspace.canvas.model.size == (60, 20)
+            assert workspace.canvas.model.schematic_size is None
+            assert not workspace.canvas.model.can_drag
+            assert workspace.reference.isVisible()
             assert (
                 workspace.connect_source.isVisible()
                 and workspace.disconnect_source.isEnabled()
@@ -1066,12 +1078,30 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
                 str(tmp_path / f"connected-{language}-{theme}-{size[0]}.png")
             )
         saved = workspace.sources.definition
+        source_before = startup.application.source_snapshot()
+        application_before = startup.application.snapshot()
+        workspace.coordinates["X"].setText("2")
+        workspace.apply_geometry()
+        workspace.buttons["vision_discard"].click()
+        box = next(b for b in workspace.findChildren(QMessageBox) if b.isVisible())
+        next(
+            b for b in box.buttons() if b.text() == text("discard", window.language)
+        ).click()
+        until(lambda: not window.parameters.busy)
+        assert startup.application.source_snapshot() == source_before
+        assert startup.application.snapshot() == application_before
+        assert not passive.closed and workspace.frame is None
+        assert not workspace.draft.dirty and workspace.coordinates["X"].text() == "1"
         workspace.set_source_mode("folder")
         workspace.select_device(CameraId("CAM1"), 0)
         assert workspace.sources.definition == saved
         workspace.coordinates["W"].setText("61")
         workspace.apply_geometry()
-        assert not workspace.draft.dirty and workspace.message.isVisible()
+        assert (
+            not workspace.draft.dirty
+            and window.event_label.accessibleName()
+            == text("roi_geometry_error", window.language)
+        )
         window.navigate(0)
         window.navigate(4)
         until(lambda: not window.parameters.busy)

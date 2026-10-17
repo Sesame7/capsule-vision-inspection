@@ -212,10 +212,28 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "source_discover": ("刷新设备", "Refresh devices"),
     "source_discovering": ("正在读取设备信息…", "Reading device information…"),
-    "source_discovered_short": ("{count} 台设备", "{count} devices"),
     "source_duplicate": (
         "该设备已分配给其他相机，请先解除原分配。",
         "Device already assigned to another camera; clear that assignment first.",
+    ),
+    "vision_schematic": ("ROI 示意", "ROI schematic"),
+    "vision_schematic_tip": (
+        "仅按 ROI 几何绘制示意；不代表相机或图像尺寸。",
+        "Illustrative ROI extents only; not camera dimensions or valid image bounds.",
+    ),
+    "vision_discard": ("放弃视觉配置修改", "Discard Vision changes"),
+    "vision_reloading": ("正在恢复…", "Restoring…"),
+    "vision_discard_question": (
+        "放弃全部未保存的来源和 ROI 修改，并从已保存文件重新加载？不会应用到检测会话。",
+        "Discard all unsaved source and ROI changes and reload saved files? This will not apply to the inspection session.",
+    ),
+    "vision_reload_error": (
+        "无法恢复已保存配置；草稿保留，请检查配置文件和详情。",
+        "Could not reload saved configuration; draft kept. Check the files and details.",
+    ),
+    "vision_dimensions_only": (
+        "无图像 · {width}×{height}",
+        "No pixels · {width}×{height}",
     ),
     "source_discovery_failed": (
         "设备读取失败；请检查 pypylon/pylon 安装及相机连接，再刷新。原分配保持不变。",
@@ -746,11 +764,11 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLabel[role="number"] {{ font-size: {Style.number}px; font-weight: 600; }}
     QLabel[role="state"] {{ font-size: {Style.title}px; font-weight: 600; }}
     QLabel[role="error"] {{ color: {c.warning}; }}
-    QFrame#visionModeSwitch {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 9px; }}
-    QFrame#visionModeSwitch QPushButton {{ background: transparent; border: none; padding: 0; }}
-    QFrame#visionModeSwitch QPushButton:checked {{ background: {c.selected}; border: 1px solid {c.accent}; }}
-    QFrame#visionModeSwitch QPushButton:focus:enabled {{ border: 2px solid {c.accent}; }}
-    QFrame#visionDivider {{ background: {c.border}; border: none; }}
+    QFrame#visionSources {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
+    QFrame#visionRoi {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
+    QFrame#visionModeSwitch QPushButton {{ background: transparent; border: none; border-radius: 20px; padding: 0; }}
+    QFrame#visionModeSwitch QPushButton:checked, QFrame#visionModeSwitch QPushButton:hover, QFrame#visionModeSwitch QPushButton:disabled {{ background: transparent; border: none; }}
+    QFrame#visionModeSwitch QPushButton:focus:enabled {{ border: 1px dotted {c.accent}; }}
     QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}

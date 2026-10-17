@@ -107,8 +107,9 @@ in drafts and saved data. Single-model configuration is read-only selection.
 Vision owns source setup and canvas-first Machine ROI editing, numeric Apply,
 Common size and Distribute evenly. Those operations reject invalid bounds atomically;
 they never silently clamp.
-Vision stacks an icon-based Folder/Camera segmented switch, six camera cards,
-and a separated image/ROI workspace. Cards retain configured row-major order:
+Vision stacks two subtly contrasted source and ROI containers. One rounded
+Folder/Camera track moves its selected thumb without animation; contextual Loop/FPS
+or connection/discovery controls align right. Cards retain configured row-major order:
 two columns on narrow workspaces, three when at least 1092 logical pixels are
 available for cards. Camera headers use the same icon + numeric identity as
 Production, with full localized names in accessibility text/tooltips. Card headers
@@ -125,24 +126,37 @@ connection status or live preview. Connect all/Disconnect are stopped operations
 off Qt dispatch, owned by the application rather than the widget. Source fields
 are locked until Disconnect; ROI editing remains subject to inspection locks.
 There is no separate source dialog. Folder Loop and integer FPS choices 1–10 are
-directly accessible beside the mode switch. Existing fractional or out-of-range
+directly accessible on the source toolbar. Existing fractional or out-of-range
 FPS values are retained as display-only entries, with the full value in a tooltip;
 only an explicit 1–10 selection replaces the draft value. This UI range does not
 change the persisted positive/finite FPS contract. Basler does not use these pacing
 settings. Connection/discovery actions are compact icons with localized tooltips;
-the global connection summary is numeric, while faults remain explicit.
+the connection summary is numeric. Routine device/status prose is omitted;
+Vision errors use the existing bottom feedback strip with full diagnostic tooltips.
+That feedback is page-scoped and never supersedes application FAULT or shutdown.
 The image selector and previous/next browse Folder inputs. Import loads a temporary
 image; Use runtime image freezes the latest eligible same-camera/source display
 frame, with explicit refresh. Neither tracks live pixels. Fit and 1:1 retain their
-canvas transforms. ROI channel selection changes
+canvas transforms. The image toolbar center always describes the current canvas:
+real pixels show dimensions and the Folder index where applicable; a blank view
+shows known dimensions; an unbounded view says ROI schematic, with its illustrative
+meaning in a tooltip. The chooser list is separate from this current caption;
+source changes and asynchronous image delivery cannot reuse an old schematic caption.
+The canvas does not repeat status text. ROI channel selection changes
 the displayed slot; numeric Apply edits only the machine draft until Save/apply.
 Mode selection edits the same CameraSources draft and requires explicit Save/apply;
 selecting a card never changes saved sources or geometry. Runtime editing locks remain.
 Save/apply permits structurally valid ROIs without canvas images; numeric
 editing does not require image pixels. Available connected dimensions supply bounds
-checks, always repeated before Start. Folder mode still validates all configured
-inputs at Save/Start. Drawing needs an actual image; synthetic warm-up images are
-never published. Images are temporary canvas content, not independent persisted
+checks, always repeated before Start. Without pixels, known dimensions display a
+blank bounded canvas with the saved/draft ROIs. Without trustworthy dimensions,
+ROI extents provide a dashed, explicitly labeled schematic only: they never become
+camera dimensions, draft bounds, Frames or persisted data. Selection/Fit/zoom and
+numeric editing remain available; real bounds reject incompatible geometry without
+repair when an image or connected dimensions become available.
+Folder mode still validates all configured inputs at Save/Start. Drawing needs an
+actual image; synthetic warm-up images are never published. Images are temporary
+canvas content, not independent persisted
 reference configuration. Replacing an image never rescales, repairs or saves ROIs.
 
 With Basler connected and inspection stopped, **Capture image** waits for the
@@ -165,6 +179,18 @@ activation. Recipe saves its Recipe file; Vision saves MachineLayout/source file
 appropriate to its draft; the manifest records successfully applied selection and
 language preferences. Model binaries and source images are never edited by these UIs.
 Dirty navigation/close asks to save/discard/cancel; runtime lifecycle locks editing.
+
+Vision's restore icon beside Save/apply confirms discarding all unsaved source,
+Loop/FPS and machine geometry edits together. It reloads and validates the current
+files off Qt dispatch before replacing either draft/baseline, including partially
+saved multi-file outcomes. Read/validation failure keeps both drafts and reports
+details in the bottom strip. It neither writes files nor prepares/activates a
+candidate, commands sources or resets counters. Viewing pixels, selection and zoom
+remain temporary viewing state. The action is disabled when clean, editing is locked,
+IO is busy or a capture is pending. Changed saved camera identities/order require
+reopening the application; connected sources must be disconnected explicitly before
+reloading an externally changed source mapping. Navigation's Discard uses the same
+file reload and waits for its completion.
 
 Files use same-directory temporary write, fsync and atomic replace. Failures retain
 the previous file where replacement did not succeed, and preserve distinct partial

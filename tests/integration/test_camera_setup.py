@@ -29,6 +29,7 @@ from vimo_demo.configuration import (
     load_camera_sources,
     load_machine_layout,
     save_camera_sources,
+    save_machine_layout,
 )
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
@@ -198,7 +199,7 @@ def test_source_change_invalidates_reference_no_geometry_repair(
     workspace.refresh_frame()
     until(lambda: not window.parameters.busy)
     assert workspace.frame is not None and workspace.frame.image.shape == (8, 15, 3)
-    assert workspace.draft.definition == saved and workspace.message.text()
+    assert workspace.draft.definition == saved and window.event_label.text()
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
     assert (
@@ -210,7 +211,7 @@ def test_source_change_invalidates_reference_no_geometry_repair(
         if workspace.draft.path is not None
         else False
     )
-    assert "CAM1" in workspace.message.toolTip()
+    assert "CAM1" in window.event_label.toolTip()
 
 
 @pytest.mark.parametrize("bad", ["empty", "corrupt"])
@@ -229,7 +230,7 @@ def test_reference_error_no_substitution(
     workspace.source_edited(str(directory))
     workspace.refresh_frame()
     until(lambda: not window.parameters.busy)
-    assert workspace.frame is None and workspace.message.text()
+    assert workspace.frame is None and window.event_label.text()
     assert workspace.editable() and not workspace.canvas.model.can_drag
     assert not window.bridge.application.snapshot().counters.cycles_started
 
@@ -260,7 +261,7 @@ def test_save_reload_partial_failure_and_running_guards(
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
     assert source.dirty and not workspace.draft.dirty
-    assert text("source_partial_save", window.language) in workspace.message.text()
+    assert text("source_partial_save", window.language) in window.event_label.text()
     assert window.bridge.application.snapshot().candidate == candidate
     monkeypatch.setattr(source, "save", original)
     workspace.save_and_apply()
@@ -355,6 +356,7 @@ def test_source_dirty_navigation(
     ).click()
     QApplication.processEvents()
     if decision == "discard":
+        until(lambda: window.parameters.roi_workspace is None)
         assert window.parameters.roi_workspace is None and not workspace.sources.dirty
     else:
         assert (
@@ -562,7 +564,7 @@ def test_explicit_cli_precedence_and_reference_provenance(
     assert workspace is not None
     try:
         until(lambda: not window.parameters.busy)
-        assert workspace.source_notice.isVisible()
+        assert workspace.mode_switch.toolTip() == text("cli_sources", window.language)
         assert (
             workspace.frame is not None
             and workspace.frame.source_key
@@ -626,15 +628,328 @@ def test_setup_save_waits_for_actual_prepare_and_reports_failure(
         until(entered.is_set)
         assert window.parameters.busy
         assert workspace.status.text() == text("setup_saving", window.language)
-        assert workspace.message.text() != text("roi_applied", window.language)
+        assert window.event_label.text() != text("roi_applied", window.language)
         assert not workspace.buttons["roi_save_apply"].isEnabled()
     finally:
         release.set()
     until(lambda: not window.parameters.busy)
     assert not source.dirty and load_camera_sources(source.path) == source.definition
-    assert "post-save preparation failed" in workspace.message.toolTip()
+    assert "post-save preparation failed" in window.event_label.toolTip()
     assert workspace.status.text() == text("setup_failed", window.language)
     assert window.bridge.application.snapshot().candidate == candidate
+
+
+def test_folder_status_is_derived_from_pixels_after_source_round_trip(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    assert workspace.frame is not None
+    workspace.source_modes["basler"].click()
+    until(lambda: not window.parameters.busy)
+    assert workspace.frame is None
+    workspace.source_modes["folder"].click()
+    until(lambda: not window.parameters.busy)
+    assert workspace.frame is not None
+    assert (
+        text("vision_schematic", window.language)
+        not in workspace.reference.currentText()
+    )
+    assert "60×20" in workspace.reference.currentText()
+    assert workspace.reference.currentText().startswith("1/2")
+    assert workspace.canvas.model.schematic_size is None and not engine.calls
+
+
+def confirm_vision_discard(
+    workspace: MachineRoiWorkspace, *, accept: bool = True
+) -> None:
+    workspace.buttons["vision_discard"].click()
+    dialog = next(box for box in workspace.findChildren(QMessageBox) if box.isVisible())
+    choice = text("discard" if accept else "cancel", workspace.language)
+    next(button for button in dialog.buttons() if button.text() == choice).click()
+
+
+def test_async_image_status_follows_current_camera_not_stale_delivery(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, workspace, _ = camera_screen
+    entered, release = Event(), Event()
+    read = decode_image
+
+    def blocked(path: Path):
+        entered.set()
+        assert release.wait(WAIT)
+        return read(path)
+
+    monkeypatch.setattr(roi_editor, "decode_image", blocked)
+    workspace.refresh_frame()
+    until(entered.is_set)
+    try:
+        assert workspace.frame is None
+        assert workspace.reference.currentText() == text(
+            "vision_schematic", window.language
+        )
+        workspace.camera_cards[CameraId("CAM2")].click()
+    finally:
+        release.set()
+    until(lambda: not window.parameters.busy)
+    assert (
+        workspace.frame is not None
+        and workspace.frame.frame_id.camera_id == CameraId("CAM2")
+    )
+    assert int(workspace.frame.image[0, 0, 0]) == 11
+    assert workspace.reference.currentText() == "1/3 · 60×20"
+    assert (
+        workspace.canvas.model.size == (60, 20)
+        and workspace.canvas.model.schematic_size is None
+    )
+
+
+@pytest.mark.parametrize("edits", ["source", "roi", "mixed"])
+def test_vision_discard_restores_all_configuration_but_keeps_view_and_application(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    edits: str,
+) -> None:
+    window, workspace, engine = camera_screen
+    source = workspace.sources
+    assert source is not None and workspace.draft.path is not None
+    files = source.path.read_bytes(), workspace.draft.path.read_bytes()
+    button = workspace.buttons["vision_discard"]
+    assert button.isVisible() and not button.isEnabled()
+    workspace.request_discard()
+    assert not any(box.isVisible() for box in workspace.findChildren(QMessageBox))
+    workspace.camera_cards[CameraId("CAM2")].click()
+    until(lambda: not window.parameters.busy)
+    workspace.select_roi(3)
+    workspace.canvas.zoom(2)
+    frame = workspace.frame
+    view = (
+        workspace.camera,
+        workspace.selected_index,
+        workspace.canvas.model.scale,
+        workspace.canvas.model.pan,
+    )
+    if edits in ("source", "mixed"):
+        workspace.source_edited("unused-draft-folder", CameraId("CAM3"))
+        workspace.loop.setChecked(not source.saved.loop)
+        workspace.fps.activated.emit(8)
+    if edits in ("roi", "mixed"):
+        workspace.coordinates["X"].setText("31")
+        workspace.apply_geometry()
+    before = source.definition, workspace.draft.definition
+    snapshot = window.bridge.application.snapshot()
+    assert button.isEnabled()
+    QApplication.processEvents()
+    location = button.mapTo(workspace, QPoint()), button.size()
+    confirm_vision_discard(workspace, accept=False)
+    assert (source.definition, workspace.draft.definition) == before
+    assert button.isEnabled()
+    confirm_vision_discard(workspace)
+    until(lambda: not window.parameters.busy)
+    assert source.saved == source.definition == load_camera_sources(source.path)
+    assert (
+        workspace.draft.saved
+        == workspace.draft.definition
+        == load_machine_layout(workspace.draft.path)
+    )
+    assert (source.path.read_bytes(), workspace.draft.path.read_bytes()) == files
+    QApplication.processEvents()
+    assert not button.isEnabled()
+    assert (button.mapTo(workspace, QPoint()), button.size()) == location
+    assert workspace.frame is frame
+    assert (
+        workspace.camera,
+        workspace.selected_index,
+        workspace.canvas.model.scale,
+        workspace.canvas.model.pan,
+    ) == view
+    assert window.bridge.application.snapshot() == snapshot and not engine.calls
+
+
+def test_vision_discard_uses_current_disk_files_not_initial_memory(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    source = workspace.sources
+    assert source is not None and workspace.draft.path is not None
+    initial = workspace.draft.saved
+    workspace.loop.setChecked(not source.saved.loop)
+    workspace.coordinates["X"].setText("1")
+    workspace.apply_geometry()
+    disk = replace(
+        initial,
+        layout=replace(
+            initial.layout,
+            cameras=tuple(
+                replace(
+                    c,
+                    slots=(
+                        replace(c.slots[0], rect=BoundingRect(2, 0, 8, 10)),
+                        *c.slots[1:],
+                    ),
+                )
+                if c.camera_id == workspace.camera
+                else c
+                for c in initial.layout.cameras
+            ),
+        ),
+    )
+    sources = replace(source.saved, target_fps=3.5)
+    save_machine_layout(workspace.draft.path, disk)
+    save_camera_sources(source.path, sources)
+    files = source.path.read_bytes(), workspace.draft.path.read_bytes()
+    candidate = window.bridge.application.snapshot().candidate
+    confirm_vision_discard(workspace)
+    until(lambda: not window.parameters.busy)
+    assert workspace.draft.saved == workspace.draft.definition == disk != initial
+    assert source.saved == source.definition == sources
+    assert workspace.fps.currentText() == "3.5"
+    assert (source.path.read_bytes(), workspace.draft.path.read_bytes()) == files
+    assert (
+        window.bridge.application.snapshot().candidate == candidate and not engine.calls
+    )
+
+
+def test_vision_discard_mode_and_discovered_serial_without_connecting(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    device_inventory: tuple[BaslerDevice, ...],
+) -> None:
+    window, workspace, engine = camera_screen
+    source = workspace.sources
+    assert source is not None
+    saved = source.definition
+    before = window.bridge.application.snapshot()
+    workspace.source_modes["basler"].click()
+    workspace.discover.click()
+    until(lambda: not window.parameters.busy)
+    card = workspace.camera_cards[CameraId("CAM1")]
+    card.device.activated.emit(card.device.findData("1001"))
+    assert (
+        source.definition.mode == "basler"
+        and source.definition.camera(CameraId("CAM1")).basler_serial == "1001"
+    )
+    confirm_vision_discard(workspace)
+    until(lambda: not window.parameters.busy)
+    assert source.saved == source.definition == saved
+    assert workspace.source_modes["folder"].isChecked()
+    assert (
+        not workspace.vision_dirty
+        and not workspace.buttons["vision_discard"].isEnabled()
+    )
+    assert window.bridge.application.snapshot() == before and not engine.calls
+
+
+def test_vision_discard_reload_is_bounded_and_preserves_draft_if_edit_lock_changes(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, workspace, _ = camera_screen
+    source = workspace.sources
+    assert source is not None
+    workspace.loop.setChecked(not source.saved.loop)
+    draft = source.definition, workspace.draft.definition
+    entered, release = Event(), Event()
+    read = load_camera_sources
+    gui_thread = get_ident()
+
+    def blocked(path: Path):
+        assert get_ident() != gui_thread
+        entered.set()
+        assert release.wait(WAIT)
+        return read(path)
+
+    monkeypatch.setattr(roi_editor, "load_camera_sources", blocked)
+    confirm_vision_discard(workspace)
+    until(entered.is_set)
+    try:
+        assert window.parameters.busy
+        assert workspace.status.text() == text("vision_reloading", window.language)
+        assert not workspace.buttons["vision_discard"].isEnabled()
+        assert not workspace.buttons["roi_save_apply"].isEnabled()
+        workspace.request_discard()
+        assert not any(box.isVisible() for box in workspace.findChildren(QMessageBox))
+        monkeypatch.setattr(workspace, "_allowed", lambda: False)
+    finally:
+        release.set()
+    until(lambda: not window.parameters.busy)
+    assert (source.definition, workspace.draft.definition) == draft
+    assert window.event_label.accessibleName() == text(
+        "vision_reload_error", window.language
+    )
+
+
+@pytest.mark.parametrize("broken", ["machine", "sources"])
+def test_vision_discard_reload_failure_preserves_both_drafts_and_baselines(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    broken: str,
+) -> None:
+    window, workspace, _ = camera_screen
+    source = workspace.sources
+    assert source is not None and workspace.draft.path is not None
+    workspace.loop.setChecked(not source.saved.loop)
+    workspace.coordinates["X"].setText("1")
+    workspace.apply_geometry()
+    before = (
+        source.definition,
+        source.saved,
+        workspace.draft.definition,
+        workspace.draft.saved,
+    )
+    path = workspace.draft.path if broken == "machine" else source.path
+    path.write_text("{broken", encoding="utf-8")
+    confirm_vision_discard(workspace)
+    until(lambda: not window.parameters.busy)
+    assert (
+        source.definition,
+        source.saved,
+        workspace.draft.definition,
+        workspace.draft.saved,
+    ) == before
+    assert path.read_text(encoding="utf-8") == "{broken"
+    assert window.event_label.accessibleName() == text(
+        "vision_reload_error", window.language
+    )
+    assert str(path) in window.event_label.toolTip()
+    assert workspace.buttons["vision_discard"].isEnabled()
+
+
+def test_vision_discard_preserves_partial_persistence_and_respects_locks(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, workspace, engine = camera_screen
+    source = workspace.sources
+    assert source is not None and workspace.draft.path is not None
+    workspace.loop.setChecked(not source.saved.loop)
+    workspace.coordinates["X"].setText("1")
+    workspace.apply_geometry()
+    snapshot = window.bridge.application.snapshot()
+
+    def fail() -> None:
+        raise ConfigurationIOError("source save rejected after machine persisted")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(source, "save", fail)
+        workspace.save_and_apply()
+        until(lambda: not window.parameters.busy)
+    persisted = load_machine_layout(workspace.draft.path)
+    assert persisted == workspace.draft.saved
+    assert persisted.layout.cameras[0].slots[0].rect.x == 1
+    assert not workspace.draft.dirty and source.dirty
+    workspace.coordinates["X"].setText("2")
+    workspace.apply_geometry()
+    with monkeypatch.context() as patch:
+        patch.setattr(workspace, "_allowed", lambda: False)
+        workspace.refresh()
+        assert not workspace.buttons["vision_discard"].isEnabled()
+        workspace.request_discard()
+        assert not any(box.isVisible() for box in workspace.findChildren(QMessageBox))
+    workspace.refresh()
+    confirm_vision_discard(workspace)
+    until(lambda: not window.parameters.busy)
+    assert workspace.draft.definition == persisted and not workspace.draft.dirty
+    assert source.definition == load_camera_sources(source.path) and not source.dirty
+    assert window.bridge.application.snapshot() == snapshot and not engine.calls
 
 
 def test_folder_navigation_refresh_and_camera_positions(
@@ -761,7 +1076,7 @@ def test_removed_reference_refresh_and_explicit_corrupt_navigation(
     current.write_bytes(b"broken")
     workspace.refresh_frame()
     until(lambda: not window.parameters.busy)
-    assert workspace.frame is None and workspace.message.isVisible()
+    assert workspace.frame is None and window.event_label.isVisible()
     assert workspace.editable() and workspace.buttons["reference_next"].isEnabled()
     workspace.buttons[
         "reference_next"
@@ -773,7 +1088,7 @@ def test_removed_reference_refresh_and_explicit_corrupt_navigation(
     workspace.refresh_frame()
     until(lambda: not window.parameters.busy)
     assert workspace.frame is None
-    assert "no longer exists" in workspace.message.toolTip()
+    assert "no longer exists" in window.event_label.toolTip()
     assert workspace.editable() and not workspace.canvas.model.can_drag
 
 
@@ -806,7 +1121,7 @@ def test_selected_xywh_edit_and_atomic_rejection(
         field.setText(value)
     workspace.buttons["roi_set_rect"].click()
     assert workspace.draft.camera(workspace.camera).slots == after
-    assert workspace.message.isVisible() and workspace.message.text()
+    assert window.event_label.isVisible() and window.event_label.text()
     assert (
         not engine.calls
         and window.bridge.application.snapshot().counters == ProductionCounters()
@@ -877,7 +1192,7 @@ def test_settings_representative_screenshot(
         button = workspace.buttons[key]
         parent = button.parentWidget()
         assert parent is not None and parent.rect().contains(button.geometry())
-    assert not workspace.message.isVisible()
+    assert not window.event_label.text()
     assert workspace.reference_toolbar.height() <= Style.touch + Style.small
     assert workspace.geometry_toolbar.height() == Style.touch
     save = workspace.buttons["roi_save_apply"]
@@ -892,7 +1207,7 @@ def test_settings_representative_screenshot(
         assert right_control.mapTo(toolbar, right_control.rect().topRight()).x() == (
             toolbar.width() - 1
         )
-        if size[0] == 1920:
+        if size[0] == 1920 and center_control.isVisible():
             center = (
                 center_control
                 if center_control is workspace.reference
@@ -1071,7 +1386,7 @@ def test_scanned_mapping_prevents_duplicates_and_saves_existing_draft(
     )  # Even a synthetic activation cannot bypass validation.
     assert sources.definition == before
     assert card.device.currentData() == "1006"
-    assert workspace.message.text() == text("source_duplicate", window.language)
+    assert window.event_label.text() == text("source_duplicate", window.language)
     assert sources.path.read_bytes() == saved
     # Explicit unassignment is permitted; incomplete Basler Save remains invalid.
     card.device.setCurrentIndex(0)
@@ -1083,7 +1398,7 @@ def test_scanned_mapping_prevents_duplicates_and_saves_existing_draft(
     )
     workspace.save_and_apply()
     until(lambda: not window.parameters.busy)
-    assert "six distinct" in workspace.message.toolTip()
+    assert "six distinct" in window.event_label.toolTip()
     assert (
         sources.path.read_bytes() == saved
         and workspace.draft.path.read_bytes() == machine
@@ -1177,7 +1492,7 @@ def test_roi_toolbar_wraps_without_shrinking_fields(
     assert save.mapTo(toolbar, QPoint()).y() == numeric.mapTo(toolbar, QPoint()).y()
     assert upper.height() <= Style.touch + Style.small
     narrow = toolbar.minimumSizeHint().width() + Style.small
-    workspace.setFixedWidth(narrow)
+    workspace.setFixedWidth(narrow + workspace.width() - toolbar.width())
     QApplication.processEvents()
     assert bulk.mapTo(toolbar, QPoint()).y() > numeric.mapTo(toolbar, QPoint()).y()
     assert toolbar.height() >= numeric.height() + bulk.height()
@@ -1306,7 +1621,7 @@ def test_basler_mode_draft_reference_identity_and_explicit_save(
     next(
         b for b in box.buttons() if b.text() == text("discard", window.language)
     ).click()
-    QApplication.processEvents()
+    until(lambda: window.parameters.roi_workspace is None)
     assert source.definition == source.saved and source.saved.mode == "basler"
     assert source.saved.camera(CameraId("CAM1")).basler_serial == "1001"
 
@@ -1340,7 +1655,7 @@ def test_incomplete_basler_mapping_save_rejects_before_machine_or_source_write(
     assert source.dirty and workspace.status.text() == text(
         "setup_failed", window.language
     )
-    assert "six distinct" in workspace.message.toolTip()
+    assert "six distinct" in window.event_label.toolTip()
     assert (
         not engine.calls
         and window.bridge.application.snapshot().counters == ProductionCounters()
@@ -1362,9 +1677,8 @@ def test_inline_discovery_mapping_validation_and_explicit_save(
     until(lambda: not window.parameters.busy)
     assert workspace.camera == CameraId("CAM1")
     assert not engine.calls
-    assert workspace.discovery_status.text() == text(
-        "source_discovered_short", window.language
-    ).format(count=6)
+    assert not workspace.feedback and not window.event_label.text()
+    assert text("source_mapping_hint", window.language) in workspace.discover.toolTip()
     assert all(
         not c.basler_serial for c in source.definition.cameras
     )  # Discovery never auto-assigns.
@@ -1417,10 +1731,10 @@ def test_inline_discovery_retains_offline_assignments_and_errors(
     assert workspace.camera_cards[CameraId("CAM3")].device.currentData() == "1003"
     assert not source.dirty
     if sdk_failure:
-        assert workspace.discovery_status.text() == text(
+        assert window.event_label.accessibleName() == text(
             "source_discovery_failed", window.language
         )
-        assert "ModuleNotFoundError" in workspace.discovery_status.toolTip()
+        assert "ModuleNotFoundError" in window.event_label.toolTip()
     else:
         card = workspace.camera_cards[CameraId("CAM3")]
         assert text("source_not_discovered", window.language) in card.device.itemText(
@@ -1471,6 +1785,155 @@ def test_vision_cards_reflow_by_usable_width_without_changing_pixels_or_identity
     assert workspace.source_cards.columns == 2
     assert (workspace.sources.definition, workspace.draft.definition) == before
     assert not engine.calls
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_unified_source_thumb_and_right_aligned_context(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    language: Language,
+    theme: Theme,
+) -> None:
+    window, workspace, engine = camera_screen
+    assert workspace.sources is not None
+    original = workspace.sources.path.read_bytes(), workspace.draft.definition
+    window.set_language(language)
+    window.set_theme(theme)
+    for size in ((1080, 1920), (1920, 1080)):
+        window.resize(*size)
+        QApplication.processEvents()
+        source, roi = workspace.source_area, workspace.roi_area
+        assert source.geometry().bottom() < roi.y()
+        assert workspace.canvas.parentWidget() is roi
+        assert workspace.geometry_toolbar.parentWidget() is roi
+        for mode in ("basler", "folder"):
+            workspace.source_modes[mode].click()
+            until(lambda: not window.parameters.busy)
+            switch = workspace.mode_switch
+            selected = workspace.source_modes[mode]
+            other = workspace.source_modes["folder" if mode == "basler" else "basler"]
+            assert selected.isChecked() and not other.isChecked()
+            # The single parent paints the thumb; transparent child hit targets
+            # retain distinct localized accessibility and keyboard activation.
+            pixels = switch.grab().toImage()
+            active = pixels.pixelColor(
+                selected.x() + 8, selected.y() + selected.height() // 2
+            )
+            inactive = pixels.pixelColor(other.x() + 8, other.y() + other.height() // 2)
+            assert active != inactive
+            assert selected.accessibleName() and selected.toolTip()
+            context = (
+                workspace.playback_options if mode == "folder" else workspace.discover
+            )
+            assert (
+                context.mapTo(source, context.rect().topRight()).x()
+                >= source.width() - 12
+            )
+            assert (
+                context.mapTo(source, QPoint()).x()
+                > switch.mapTo(source, switch.rect().topRight()).x()
+            )
+            assert workspace.playback_options.isVisible() == (mode == "folder")
+            assert workspace.discover.isVisible() == (mode == "basler")
+            assert not workspace.feedback and not window.event_label.text()
+    assert (workspace.sources.path.read_bytes(), workspace.draft.definition) == original
+    assert not engine.calls
+
+
+def test_no_image_schematic_is_not_camera_bounds_or_persisted_geometry(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    assert workspace.draft.path is not None
+    saved = workspace.draft.path.read_bytes()
+    geometry = workspace.draft.definition
+    workspace.source_modes["basler"].click()
+    until(lambda: not window.parameters.busy)
+    canvas = workspace.canvas
+    assert workspace.frame is None and canvas.model.size is None
+    assert workspace.reference.isVisible()
+    assert workspace.camera not in workspace.draft.bounds
+    assert canvas.model.schematic_size is not None
+    assert workspace.reference.currentText() == text(
+        "vision_schematic", window.language
+    )
+    assert workspace.reference.toolTip() == text(
+        "vision_schematic_tip", window.language
+    )
+    assert canvas.model.transform(canvas.width(), canvas.height()) is not None
+    assert not canvas.model.can_drag
+    # A no-pixel schematic still supports selection/Fit/zoom, never ROI dragging.
+    rect = canvas.rois[2].rect
+    transform = canvas.model.transform(canvas.width(), canvas.height())
+    assert transform is not None
+    x, y, w, h = transform.rectangle(rect)
+    QTest.mouseClick(
+        canvas,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(round(x + w / 2), round(y + h / 2)),
+    )
+    assert workspace.selected_index == 2
+    canvas.zoom(2)
+    assert canvas.model.scale == 2 and not canvas.grab().isNull()
+    workspace.buttons["roi_fit"].click()
+    assert canvas.model.scale is None
+    assert (
+        workspace.draft.definition == geometry
+        and workspace.draft.path.read_bytes() == saved
+    )
+    # Schematic edges are not input bounds: numeric editing may extend them.
+    workspace.coordinates["X"].setText("999")
+    workspace.apply_geometry()
+    changed = workspace.draft.definition
+    assert workspace.draft.camera(workspace.camera).slots[2].rect.x == 999
+    assert canvas.model.size is None and workspace.camera not in workspace.draft.bounds
+    assert workspace.draft.path.read_bytes() == saved
+    workspace.source_modes["folder"].click()
+    until(lambda: not window.parameters.busy)
+    assert workspace.frame is not None and canvas.model.schematic_size is None
+    assert canvas.model.size == (60, 20)
+    assert workspace.reference.isVisible()
+    assert window.event_label.accessibleName() == text(
+        "roi_geometry_error", window.language
+    )
+    assert workspace.draft.definition == changed  # Real bounds report, never repair.
+    workspace.coordinates["X"].setText("998")
+    workspace.apply_geometry()
+    assert workspace.draft.definition == changed  # Atomic real-bounds rejection.
+    assert (
+        not engine.calls
+        and window.bridge.application.snapshot().counters == ProductionCounters()
+    )
+
+
+def test_vision_feedback_is_page_scoped_and_cannot_hide_application_fault(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+) -> None:
+    window, workspace, _ = camera_screen
+    workspace.coordinates["X"].setText("99999")
+    workspace.apply_geometry()
+    assert window.event_label.accessibleName() == text(
+        "roi_geometry_error", window.language
+    )
+    assert "rejected" in window.event_label.toolTip()
+    original = window.snapshot
+    try:
+        window.pages.setCurrentIndex(0)
+        window.parameters.setup_changed.emit()
+        assert not window.event_label.text()
+        window.pages.setCurrentIndex(4)
+        window.snapshot = replace(original, state=ApplicationState.FAULT)
+        window.parameters.setup_changed.emit()
+        assert window.event_label.accessibleName() == text(
+            "runtime_error", window.language
+        )
+        assert "rejected" not in window.event_label.toolTip()
+    finally:
+        window.snapshot = original
+        window.parameters.setup_changed.emit()
+    assert window.event_label.accessibleName() == text(
+        "roi_geometry_error", window.language
+    )
 
 
 def test_discovery_close_waits_for_actual_io_owner(

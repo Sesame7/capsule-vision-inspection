@@ -631,6 +631,7 @@ class ParametersPage(QWidget):
         )
         self.roi_workspace = workspace
         workspace.sources_verified.connect(self.sources_verified.emit)
+        workspace.feedback_changed.connect(self.setup_changed.emit)
         self._settings_layout.addWidget(workspace, 1)
 
     def _roi_closed(self) -> None:

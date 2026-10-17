@@ -8,7 +8,7 @@ from time import monotonic
 from typing import Literal, cast
 
 import numpy as np
-from PySide6.QtCore import QSize, Qt, Signal, Slot
+from PySide6.QtCore import QRectF, QSize, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QIcon,
@@ -47,7 +47,13 @@ from vimo_demo.application.folder_replay import (
     decode_image,
     folder_images,
 )
-from vimo_demo.configuration import ConfigurationError
+from vimo_demo.configuration import (
+    CameraSources,
+    ConfigurationError,
+    MachineLayoutDefinition,
+    load_camera_sources,
+    load_machine_layout,
+)
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, FrameId
 
@@ -161,12 +167,41 @@ def _image_icon(tool: str, color: str = Style.primary) -> QIcon:
 type ReferenceMode = Literal["folder", "runtime", "import", "capture"]
 
 
+class _SourceModeSwitch(QFrame):
+    """One painted track/thumb; child buttons retain native keyboard/accessibility."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        colors = theme_colors(self)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(colors.border), 1))
+        painter.setBrush(QColor(colors.background))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 24, 24)
+        for button in self.findChildren(QPushButton):
+            if button.isChecked():
+                painter.setBrush(QColor(colors.selected))
+                painter.setPen(
+                    QPen(
+                        QColor(colors.accent if button.isEnabled() else colors.border),
+                        1,
+                    )
+                )
+                painter.drawRoundedRect(QRectF(button.geometry()), 20, 20)
+                break
+
+
 @dataclass(frozen=True, slots=True)
 class _FolderReference:
     frame: DisplayFrame | None
     paths: tuple[Path, ...]
     index: int
     error: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _SavedVision:
+    machine: MachineLayoutDefinition
+    sources: CameraSources | None
 
 
 class _SourceCard(QPushButton):
@@ -279,6 +314,18 @@ class _SourceCards(QWidget):
         self.grid.addWidget(card, index // self.columns, index % self.columns)
         for column in range(self.columns):
             self.grid.setColumnStretch(column, 1)
+        self._sync_height()
+
+    def _sync_height(self) -> None:
+        rows = (len(self._cards) + self.columns - 1) // self.columns
+        height = max(
+            (
+                c.sizeHint().expandedTo(c.minimumSizeHint()).height()
+                for c in self._cards
+            ),
+            default=0,
+        )
+        self.setFixedHeight(rows * height + max(0, rows - 1) * Style.small)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         # Three cards need useful space for a Windows path or model + serial.
@@ -292,6 +339,7 @@ class _SourceCards(QWidget):
             for index, card in enumerate(self._cards):
                 self.grid.addWidget(card, index // columns, index % columns)
             self.grid.invalidate()
+            self._sync_height()
             self.updateGeometry()
         super().resizeEvent(event)
 
@@ -321,7 +369,9 @@ class _RoiToolbar(QWidget):
 
     def _sizes(self) -> tuple[QSize, ...]:
         return tuple(
-            group.minimumSizeHint().expandedTo(group.minimumSize())
+            QSize(0, 0)
+            if group.isHidden()
+            else group.minimumSizeHint().expandedTo(group.minimumSize())
             for group in self._groups
         )
 
@@ -398,6 +448,7 @@ class _RoiToolbar(QWidget):
 
 class MachineRoiWorkspace(QWidget):
     sources_verified = Signal()
+    feedback_changed = Signal()
 
     def __init__(
         self,
@@ -437,21 +488,23 @@ class MachineRoiWorkspace(QWidget):
         self._folder_paths: dict[CameraId, tuple[Path, ...]] = {}
         self._positions: dict[CameraId, int] = {}
         self._reference_modes: dict[CameraId, ReferenceMode] = {}
-        self._selector_paths: tuple[Path, ...] = ()
-        self._selector_mode: ReferenceMode | None = None
+        self._selector_key: tuple[bool, tuple[Path, ...], ReferenceMode] | None = None
+        self._selector_index = -1
         self.language: Language = language
         self.simulation = simulation
         self.frame: DisplayFrame | None = None
         self.selected_index = 0
         self._error = ""
         self._error_key = "vision_error"
+        self._bounds_issue = ""
+        self._last_feedback: tuple[str, str] | None = None
         self._feedback = ""
         self._preparing = False
+        self._reloading = False
         self._save_failed = False
         self._decision: QMessageBox | None = None
         self._devices: tuple[BaslerDevice, ...] = ()
         self._discovering = False
-        self._discovery_feedback = ""
         self._capture_future: Future[CameraSnapshot] | None = None
         self._capture_token = 0
         self._capture_feedback = ""
@@ -462,7 +515,13 @@ class MachineRoiWorkspace(QWidget):
         self.buttons: dict[str, QPushButton] = {}
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(Style.small)
+        root.setSpacing(Style.space)
+        self.source_area = QFrame()
+        self.source_area.setObjectName("visionSources")
+        source_layout = QVBoxLayout(self.source_area)
+        source_layout.setContentsMargins(10, 10, 10, 10)
+        source_layout.setSpacing(Style.small)
+        root.addWidget(self.source_area)
         self._cameras = QButtonGroup(self)
         self.camera_cards: dict[CameraId, _SourceCard] = {}
         self.source_cards = _SourceCards()
@@ -502,13 +561,8 @@ class MachineRoiWorkspace(QWidget):
         self.loop.setIcon(_image_icon("loop"))
         self.loop.setIconSize(QSize(Style.icon, Style.icon))
         self.loop.setFixedSize(Style.touch, Style.touch)
-        self.source_notice = QLabel()
-        self.source_notice.setWordWrap(True)
         self.discover = self.icon_button("source_discover", "discover")
         self.discover.clicked.connect(self.discover_devices)
-        self.discovery_status = QLabel()
-        self.discovery_status.setWordWrap(True)
-        self.discovery_status.setTextFormat(Qt.TextFormat.PlainText)
         self.playback_options = QWidget()
         playback_options = QHBoxLayout(self.playback_options)
         playback_options.setContentsMargins(0, 0, 0, 0)
@@ -525,7 +579,7 @@ class MachineRoiWorkspace(QWidget):
         mode_row = QHBoxLayout()
         mode_row.setSpacing(Style.small)
         self._source_modes = QButtonGroup(self)
-        self.mode_switch = QFrame()
+        self.mode_switch = _SourceModeSwitch()
         self.mode_switch.setObjectName("visionModeSwitch")
         switch = QHBoxLayout(self.mode_switch)
         switch.setContentsMargins(3, 3, 3, 3)
@@ -537,6 +591,11 @@ class MachineRoiWorkspace(QWidget):
             button.setCheckable(True)
             button.setFixedSize(54, Style.touch)
             button.setIconSize(QSize(Style.icon, Style.icon))
+
+            def repaint_switch(_checked: bool) -> None:
+                self.mode_switch.update()
+
+            button.toggled.connect(repaint_switch)
             self._source_modes.addButton(button)
             self.source_modes[mode] = button
 
@@ -548,10 +607,8 @@ class MachineRoiWorkspace(QWidget):
             button.clicked.connect(choose_source)
             switch.addWidget(button)
         mode_row.addWidget(self.mode_switch)
-        mode_row.addWidget(self.playback_options)
-        mode_row.addWidget(self.discovery_status)
         mode_row.addStretch(1)
-        mode_row.addWidget(self.source_notice)
+        mode_row.addWidget(self.playback_options)
         self.connection_status = QLabel()
         self.connect_source = QPushButton()
         self.disconnect_source = QPushButton()
@@ -572,23 +629,19 @@ class MachineRoiWorkspace(QWidget):
             lambda: self.connection_operation(connect=False)
         )
         mode_row.addWidget(self.discover)
-        root.addLayout(mode_row)
-        root.addWidget(self.source_cards)
+        source_layout.addLayout(mode_row)
+        source_layout.addWidget(self.source_cards)
         self.loop.setMinimumHeight(Style.touch)
         if self.sources is None:
             for widget in (
-                self.source_notice,
                 self.discover,
                 self.playback_options,
             ):
                 widget.hide()  # Fake demo keeps its synthetic source; no real folder execution.
-        self.divider = QFrame()
-        self.divider.setObjectName("visionDivider")
-        self.divider.setFixedHeight(1)
-        root.addWidget(self.divider)
-        self.roi_area = QWidget()
+        self.roi_area = QFrame()
+        self.roi_area.setObjectName("visionRoi")
         roi = QVBoxLayout(self.roi_area)
-        roi.setContentsMargins(0, 0, 0, 0)
+        roi.setContentsMargins(10, 10, 10, 10)
         roi.setSpacing(4)
         root.addWidget(self.roi_area, 1)
         reference_controls = QWidget()
@@ -607,8 +660,6 @@ class MachineRoiWorkspace(QWidget):
         self.buttons["vision_runtime"].clicked.connect(
             lambda: self.set_reference_mode("runtime")
         )
-        self.capture_status = QLabel()
-        self.capture_status.setTextFormat(Qt.TextFormat.PlainText)
         for key, tool in (
             ("reference_previous", "previous"),
             ("reference_next", "next"),
@@ -647,7 +698,6 @@ class MachineRoiWorkspace(QWidget):
             reference_controls, self.reference, display_controls
         )
         roi.addWidget(self.reference_toolbar)
-        roi.addWidget(self.capture_status)
         self.canvas = RoiCanvas(self.editable)
         roi.addWidget(self.canvas, 1)
         numeric, actions, saving = QWidget(), QWidget(), QWidget()
@@ -684,16 +734,12 @@ class MachineRoiWorkspace(QWidget):
         save_row.setContentsMargins(0, 0, 0, 0)
         save_row.setSpacing(Style.small)
         save_row.addWidget(self.status)
+        save_row.addWidget(self.icon_button("vision_discard", "refresh"))
         primary = self.button("roi_save_apply")
         primary.setObjectName("start")
         save_row.addWidget(primary)
         self.geometry_toolbar = _RoiToolbar(numeric, actions, saving)
         roi.addWidget(self.geometry_toolbar)
-        self.message = QLabel()
-        self.message.setWordWrap(True)
-        self.message.setTextFormat(Qt.TextFormat.PlainText)
-        # Error text stays explicit; hidden when empty rather than reserving a prose row.
-        roi.addWidget(self.message)
         self.buttons["roi_fit"].clicked.connect(lambda: self.canvas.zoom(None))
         self.buttons["roi_actual"].clicked.connect(lambda: self.canvas.zoom(1))
         self.buttons["roi_refresh"].clicked.connect(self.refresh_frame)
@@ -707,6 +753,7 @@ class MachineRoiWorkspace(QWidget):
             lambda: self.operation(lambda: self.draft.distribute(self.camera))
         )
         self.buttons["roi_save_apply"].clicked.connect(lambda: self.save_and_apply())
+        self.buttons["vision_discard"].clicked.connect(self.request_discard)
         self._cameras.idToggled.connect(self._camera_selected)
         self.canvas.selected.connect(self.select_roi)
         self.canvas.geometry_changed.connect(self.commit_geometry)
@@ -758,6 +805,7 @@ class MachineRoiWorkspace(QWidget):
             ("source_discover", "discover"),
             ("vision_capture", "capture"),
             ("cancel", "cancel"),
+            ("vision_discard", "refresh"),
         ):
             self.buttons[key].setIcon(_image_icon(tool, colors.primary))
         self.loop.setIcon(_image_icon("loop", colors.primary))
@@ -781,10 +829,9 @@ class MachineRoiWorkspace(QWidget):
             button.setText("")
             button.setAccessibleName(text(key, language))
             button.setToolTip(text(key, language))
-        self.source_notice.setText(text("cli_sources_short", language))
-        self.source_notice.setToolTip(text("cli_sources", language))
-        self.source_notice.setAccessibleName(text("cli_sources", language))
-        self.source_notice.setVisible(self.session.cli_sources)
+        self.mode_switch.setToolTip(
+            text("cli_sources", language) if self.session.cli_sources else ""
+        )
         for mode, button in self.source_modes.items():
             key = "vision_folder_mode" if mode == "folder" else "vision_basler_mode"
             button.setText("")
@@ -808,6 +855,7 @@ class MachineRoiWorkspace(QWidget):
                 "source_discover",
                 "vision_capture",
                 "cancel",
+                "vision_discard",
             ):
                 button.setText(text(key, language))
         numeric_apply = self.buttons["roi_set_rect"]
@@ -1009,7 +1057,6 @@ class MachineRoiWorkspace(QWidget):
         if not self.source_editable() or self._run_io is None or self._discovering:
             return
         self._discovering = True
-        self._discovery_feedback = "source_discovering"
 
         def completed(value: object, error: BaseException | None) -> None:
             self._discovering = False
@@ -1020,14 +1067,10 @@ class MachineRoiWorkspace(QWidget):
             ):
                 error = TypeError("Invalid device discovery result")
             if error is not None:
-                self._discovery_feedback = "source_discovery_failed"
-                self.discovery_status.setToolTip(f"{type(error).__name__}: {error}")
+                self._report_error(error, "source_discovery_failed")
             else:
                 self._devices = tuple(d for d in rows if isinstance(d, BaslerDevice))
-                self._discovery_feedback = "source_discovered"
-                self.discovery_status.setToolTip(
-                    text("source_mapping_hint", self.language)
-                )
+                self._error = ""
             self._populate_devices()
             self.refresh()
 
@@ -1208,6 +1251,8 @@ class MachineRoiWorkspace(QWidget):
         self.refresh()
 
     def _set_reference(self, frame: DisplayFrame | None) -> None:
+        if self._capture_future is None:
+            self._capture_feedback = ""
         self.frame = frame
         self.canvas.set_frame(frame)
         self.draft.bounds.pop(self.camera, None)
@@ -1409,10 +1454,13 @@ class MachineRoiWorkspace(QWidget):
             self.cancel_capture()
         self._connection_bounds()
         self.canvas.rois = self.draft.camera(self.camera).slots
+        if self.frame is None:
+            size = self.draft.bounds.get(self.camera)
+            self.canvas.set_projection(size)
         slot = self.canvas.rois[self.selected_index]
         rect = slot.rect
         self.canvas.model.rect = rect
-        self.canvas.model.editable = self.editable()
+        self.canvas.model.editable = self.editable() and self.frame is not None
         if not self.canvas.model.can_drag:
             self.canvas.cancel_roi_drag()
         channels = tuple(f"CH{row.channel_id:02d}" for row in self.canvas.rois)
@@ -1456,12 +1504,16 @@ class MachineRoiWorkspace(QWidget):
         self.capture.setVisible(not folder_mode and self.connection is not None)
         self.capture.setEnabled(self._can_capture())
         self.cancel_capture_button.setVisible(self._capture_future is not None)
-        self.capture_status.setText(
-            text(self._capture_feedback, self.language)
-            if self._capture_feedback
-            else ""
+        self.capture.setToolTip(
+            "\n".join(
+                (
+                    text("vision_capture", self.language),
+                    text(self._capture_feedback, self.language),
+                )
+                if self._capture_feedback
+                else (text("vision_capture", self.language),)
+            )
         )
-        self.capture_status.setVisible(not folder_mode and bool(self._capture_feedback))
         self.buttons["reference_previous"].setEnabled(
             viewing and folder_mode and index > 0
         )
@@ -1477,25 +1529,18 @@ class MachineRoiWorkspace(QWidget):
             and not self.session.dirty
             and self.session.entry is not None
         )
+        self.buttons["vision_discard"].setEnabled(self._can_discard())
         source_editable = self.sources is not None and self.source_editable()
         for key in ("reference_previous", "reference_next"):
             self.buttons[key].setVisible(folder_mode)
         self.discover.setVisible(self.sources is not None and not folder_mode)
         self.discover.setEnabled(source_editable and not self._discovering)
-        self.discovery_status.setText(
-            text(
-                "source_discovered_short"
-                if self._discovery_feedback == "source_discovered"
-                else self._discovery_feedback,
-                self.language,
-            ).format(count=len(self._devices))
-            if self._discovery_feedback
-            else ""
-        )
-        if self._discovery_feedback == "source_discovered":
-            self.discovery_status.setToolTip(text("source_mapping_hint", self.language))
-        self.discovery_status.setVisible(
-            not folder_mode and bool(self.discovery_status.text())
+        self.discover.setToolTip(
+            text("source_discovering", self.language)
+            if self._discovering
+            else text("source_discover", self.language)
+            + "\n"
+            + text("source_mapping_hint", self.language)
         )
         self.playback_options.setVisible(self.sources is not None and folder_mode)
         folder_options = (
@@ -1522,7 +1567,9 @@ class MachineRoiWorkspace(QWidget):
         )
         self.status.setText(
             text(
-                "setup_saving"
+                "vision_reloading"
+                if self._reloading
+                else "setup_saving"
                 if self._preparing
                 else "setup_failed"
                 if self._save_failed
@@ -1533,25 +1580,13 @@ class MachineRoiWorkspace(QWidget):
             )
         )
         bounds_issue = ""
-        if self.frame is not None:
+        size = self.draft.bounds.get(self.camera)
+        if size is not None:
             try:
-                self.draft.camera(self.camera).validate_shape(
-                    (self.frame.image.shape[0], self.frame.image.shape[1], 3)
-                )
+                self.draft.camera(self.camera).validate_shape((size[1], size[0], 3))
             except ValueError as exc:
                 bounds_issue = str(exc)
-        self.message.setText(
-            (text(self._error_key, self.language) if self._error else "")
-            or (text("roi_geometry_error", self.language) if bounds_issue else "")
-            or (text("roi_recipe_save", self.language) if self.session.dirty else "")
-            or (
-                text("read_only", self.language)
-                if not self._allowed() and not self._preparing
-                else ""
-            )
-        )
-        self.message.setToolTip(self._error or bounds_issue)
-        self.message.setVisible(bool(self.message.text()))
+        self._bounds_issue = bounds_issue
         self.status.setToolTip(
             text("roi_applied", self.language) if self._feedback else ""
         )
@@ -1570,44 +1605,220 @@ class MachineRoiWorkspace(QWidget):
             else ""
         )
         info = (
-            (position + " · " if position else "") + text("roi_no_frame", self.language)
+            (
+                text("vision_dimensions_only", self.language).format(
+                    width=self.canvas.model.size[0], height=self.canvas.model.size[1]
+                )
+                if self.canvas.model.size is not None
+                else text("vision_schematic", self.language)
+            )
             if self.frame is None
             else f"{position} · {self.frame.image.shape[1]}×{self.frame.image.shape[0]}"
         )
         self.reference.setToolTip(
             str(paths[index])
-            if paths and index < len(paths) and self.reference_mode == "folder"
+            if self.frame is not None
+            and folder_mode
+            and paths
+            and index < len(paths)
+            and self.reference_mode == "folder"
             else self.frame.source_key or info
             if self.frame is not None and self.reference_mode == "import"
             else text(
-                "roi_no_frame_tip" if self.frame is None else "reference_runtime_tip",
+                "vision_schematic_tip"
+                if self.frame is None and self.canvas.model.size is None
+                else "roi_no_frame_tip"
+                if self.frame is None
+                else "reference_runtime_tip",
                 self.language,
             )
         )
-        if paths != self._selector_paths or self.reference_mode != self._selector_mode:
-            self._selector_paths, self._selector_mode = paths, self.reference_mode
+        key = folder_mode, paths, self.reference_mode
+        chooser = folder_mode and bool(paths)
+        offset = int(self.reference_mode != "folder") if chooser else 0
+        target = index + offset if chooser and self.reference_mode == "folder" else 0
+        if key != self._selector_key:
+            self._selector_key = key
             self.reference.clear()
-            if folder_mode and paths:
-                if self.reference_mode != "folder":
-                    self.reference.addItem(info)
+            if not chooser or offset:
+                self.reference.addItem("")
+            if chooser:
                 self.reference.addItems(
                     [f"{i + 1}/{len(paths)} · {p.name}" for i, p in enumerate(paths)]
                 )
-        if not folder_mode or not paths:
-            if self.reference.count() == 0:
-                self.reference.addItem(info)
-            else:
-                self.reference.setItemText(0, info)
-        elif self.reference_mode != "folder":
-            self.reference.setItemText(0, info)
-        self.reference.setCurrentIndex(
-            index if folder_mode and paths and self.reference_mode == "folder" else 0
-        )
-        self.reference.setEnabled(viewing and folder_mode and bool(paths))
+        elif chooser and self._selector_index != target:
+            old = self._selector_index - offset
+            if 0 <= old < len(paths):
+                self.reference.setItemText(
+                    self._selector_index, f"{old + 1}/{len(paths)} · {paths[old].name}"
+                )
+        # The selected caption is always derived from current pixels/dimensions,
+        # never a reused Folder-list placeholder from another source mode.
+        self.reference.setItemText(target, info)
+        self.reference.setCurrentIndex(target)
+        self._selector_index = target
+        self.reference.setEnabled(viewing and chooser)
+        self.reference.setVisible(True)
         self.reference.setAccessibleDescription(info)
+        self.canvas.setAccessibleDescription(info)
+        self.canvas.setToolTip(info)
         self.reference_toolbar.sync_metrics()
         self.geometry_toolbar.sync_metrics()
         self.canvas.update()
+        feedback = self.feedback
+        if feedback != self._last_feedback:
+            self._last_feedback = feedback
+            self.feedback_changed.emit()
+
+    @property
+    def feedback(self) -> tuple[str, str] | None:
+        """Page-scoped error evidence for the existing global status presenter."""
+        if self._error:
+            return self._error_key, self._error
+        if self._bounds_issue:
+            return "roi_geometry_error", self._bounds_issue
+        if self.connection is not None:
+            snapshot = self.connection.source_snapshot()
+            if snapshot.state is ConnectionState.FAULT:
+                return "source_connection_error", snapshot.error
+        if self._capture_feedback == "vision_capture_timeout":
+            return "vision_capture_timeout", text(
+                "vision_capture_timeout", self.language
+            )
+        return None
+
+    @property
+    def vision_dirty(self) -> bool:
+        return self.draft.dirty or bool(self.sources is not None and self.sources.dirty)
+
+    def _can_discard(self) -> bool:
+        return (
+            self.editable()
+            and self.vision_dirty
+            and self.draft.path is not None
+            and self._decision is None
+            and self._capture_future is None
+        )
+
+    def request_discard(self) -> None:
+        if not self._can_discard():
+            return
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(text("vision_discard", self.language))
+        dialog.setText(text("vision_discard_question", self.language))
+        discard = dialog.addButton(
+            text("discard", self.language), QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel = dialog.addButton(
+            text("cancel", self.language), QMessageBox.ButtonRole.RejectRole
+        )
+        dialog.setDefaultButton(cancel)
+        self._decision = dialog
+
+        def finished() -> None:
+            self._decision = None
+            chosen = dialog.clickedButton()
+            dialog.deleteLater()
+            if chosen is discard:
+                self._reload_vision()
+            else:
+                self.refresh()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+        self.refresh()
+
+    def _reload_vision(self, after: Callable[[], None] | None = None) -> None:
+        if not self.editable() or self._capture_future is not None:
+            return
+        machine_path = self.draft.path
+        source_path = self.sources.path if self.sources is not None else None
+        cameras = tuple(self.camera_cards)
+        if machine_path is None or self._run_io is None:
+            self._report_error(
+                "Saved Vision paths or configuration loader unavailable",
+                "vision_reload_error",
+            )
+            self.refresh()
+            return
+
+        def read() -> _SavedVision:
+            machine = load_machine_layout(machine_path)
+            if machine.layout.camera_ids != cameras:
+                raise ConfigurationError(
+                    "Saved camera order/identities changed; reopen the application before reloading"
+                )
+            sources = (
+                load_camera_sources(source_path) if source_path is not None else None
+            )
+            if sources is not None:
+                sources.validate_cameras(cameras)
+            return _SavedVision(machine, sources)
+
+        def completed(value: object, error: BaseException | None) -> None:
+            self._preparing = self._reloading = False
+            if (
+                error is not None
+                or not isinstance(value, _SavedVision)
+                or not self._allowed()
+            ):
+                self._report_error(
+                    error
+                    or "Configuration reload unavailable in the current editing state",
+                    "vision_reload_error",
+                )
+                self.refresh()
+                return
+            if (
+                self.sources is not None
+                and self.connection is not None
+                and self.connection.source_snapshot().locked
+                and value.sources != self.sources.saved
+            ):
+                self._report_error(
+                    "Disconnect before reloading externally changed camera sources",
+                    "vision_reload_error",
+                )
+                self.refresh()
+                return
+            # All files validate before either draft/baseline is replaced. No save,
+            # preparation, source command or application activation is performed.
+            if self.sources is not None and value.sources is not None:
+                old = self.sources.definition
+                for row in value.sources.cameras:
+                    if old.camera(row.camera_id).folder != row.folder:
+                        self._folder_paths.pop(row.camera_id, None)
+                        self._positions.pop(row.camera_id, None)
+                if (
+                    self.frame is not None
+                    and self.reference_mode == "folder"
+                    and self.frame.source_key
+                    != value.sources.source_key(self.camera, self.sources.path.parent)
+                ):
+                    self._reference_modes[self.camera] = (
+                        "import"  # Keep frozen pixels/provenance, not a stale Folder-list association.
+                    )
+                self.sources.saved = self.sources.definition = value.sources
+            self.draft.saved = self.draft.definition = value.machine
+            self._save_failed = False
+            self._error = self._feedback = ""
+            self._selector_key = None
+            self._populate_devices()
+            self.sync_size()
+            scale, pan = self.canvas.model.scale, self.canvas.model.pan
+            self._changed()
+            self.refresh()
+            self.canvas.model.scale, self.canvas.model.pan = scale, pan
+            self.canvas.update()
+            if after is not None:
+                after()
+
+        self._preparing = self._reloading = True
+        if not self._run_io(read, completed):
+            completed(
+                None, RuntimeError("Configuration IO is busy; retry after it completes")
+            )
+        self.refresh()
 
     def _refresh_source_cards(self) -> None:
         connection = self.connection.source_snapshot() if self.connection else None
@@ -1627,11 +1838,7 @@ class MachineRoiWorkspace(QWidget):
                 widget.setVisible(basler_mode)
             state_text = text("source_" + connection.state.name.lower(), self.language)
             count = len(actual) if connection.state is ConnectionState.CONNECTED else 0
-            self.connection_status.setText(
-                state_text
-                if connection.state is ConnectionState.FAULT
-                else f"{count}/6"
-            )
+            self.connection_status.setText(f"{count}/6")
             self.connection_status.setToolTip(
                 state_text + ("\n" + connection.error if connection.error else "")
             )
@@ -1762,7 +1969,12 @@ class MachineRoiWorkspace(QWidget):
     def _report_error(
         self, error: BaseException | str, key: str = "vision_error"
     ) -> None:
-        self._error, self._error_key = str(error), key
+        self._error, self._error_key = (
+            f"{type(error).__name__}: {error}"
+            if isinstance(error, BaseException)
+            else error,
+            key,
+        )
 
     def set_rect(self, rect: BoundingRect) -> None:
         rects = [s.rect for s in self.draft.camera(self.camera).slots]
@@ -1926,11 +2138,7 @@ class MachineRoiWorkspace(QWidget):
             if chosen is save:
                 self.save_and_apply(leave)
             elif chosen is discard:
-                self.draft.discard()
-                if self.sources is not None:
-                    self.sources.discard()
-                self._changed()
-                leave()
+                self._reload_vision(leave)
 
         dialog.finished.connect(finished)
         dialog.open()
