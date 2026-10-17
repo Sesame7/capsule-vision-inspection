@@ -386,6 +386,7 @@ def test_complete_order_metadata_and_owned_pixels(sdk: SDK) -> None:
     group = source.acquire(on_armed=sdk.trigger)
     assert tuple(image.serial for image in group.images) == SERIALS
     assert tuple(row.serial for row in group.report.settings) == SERIALS
+    assert all(row.model == "acA-test" for row in group.report.settings)
     assert group.report.armed is not None
     assert all(row.ready for row in group.report.armed.readiness)
     assert group.report.finished_at >= group.report.armed.deadline

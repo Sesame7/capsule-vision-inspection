@@ -38,6 +38,7 @@ class CameraSettings:
     serial: str
     features: Mapping[str, FeatureValue]
     triggers: Mapping[str, Mapping[str, FeatureValue]]
+    model: str = ""  # Read-only device identity, never a feature to restore.
 
 
 @dataclass(frozen=True, slots=True)

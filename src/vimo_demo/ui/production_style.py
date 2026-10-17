@@ -255,7 +255,7 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Discovery failed. Check pypylon/pylon and camera connections, then Refresh. Assignments are retained.",
     ),
     "source_unconfigured": ("未配置", "Unconfigured"),
-    "source_not_discovered": ("未发现 / 离线", "Not discovered / offline"),
+    "source_not_discovered": ("未发现", "Not discovered"),
     "source_mode_tip": (
         "六台相机统一使用此模式；切换只修改草稿，保存并应用后生效。",
         "One mode for all six cameras; changes edit the draft until Save and apply.",

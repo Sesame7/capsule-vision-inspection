@@ -1125,22 +1125,46 @@ class MachineRoiWorkspace(QWidget):
 
     def _populate_devices(self) -> None:
         devices = {d.serial: d.model for d in self._devices}
+        snapshot = self.connection.source_snapshot() if self.connection else None
+        connected = (
+            {row.camera_id: row for row in snapshot.cameras}
+            if snapshot is not None and snapshot.state is ConnectionState.CONNECTED
+            else {}
+        )
         for camera, card in self.camera_cards.items():
             selected = (
                 self.sources.definition.camera(camera).basler_serial
                 if self.sources
                 else ""
             )
-            card.device.blockSignals(True)
-            card.device.clear()
-            card.device.addItem(text("source_unconfigured", self.language), "")
-            for serial, model in sorted(devices.items()):
-                card.device.addItem(f"{serial} · {model}", serial)
-            if selected and selected not in devices:
-                card.device.addItem(
-                    f"{selected} · {text('source_not_discovered', self.language)}",
-                    selected,
+            labels = {
+                serial: f"{serial} · {model}" for serial, model in devices.items()
+            }
+            actual = connected.get(camera)
+            if actual is not None and actual.serial == selected:
+                # The application connection survives this workspace. Discovery
+                # is only a page-local list of assignable devices, not liveness.
+                labels[selected] = " · ".join(
+                    part
+                    for part in (selected, actual.model or devices.get(selected, ""))
+                    if part
                 )
+            elif selected and selected not in devices:
+                labels[selected] = (
+                    f"{selected} · {text('source_not_discovered', self.language)}"
+                )
+            choices = [
+                ("", text("source_unconfigured", self.language)),
+                *sorted(labels.items()),
+            ]
+            card.device.blockSignals(True)
+            if choices != [
+                (card.device.itemData(i), card.device.itemText(i))
+                for i in range(card.device.count())
+            ]:
+                card.device.clear()
+                for serial, label in choices:
+                    card.device.addItem(label, serial)
             card.device.setCurrentIndex(card.device.findData(selected))
             model = card.device.model()
             used: set[str] = (
@@ -1929,12 +1953,7 @@ class MachineRoiWorkspace(QWidget):
             self.disconnect_source.setEnabled(
                 self._allowed() and not self._preparing and connection.locked
             )
-        if self.sources is not None and any(
-            card.device.findData(self.sources.definition.camera(camera).basler_serial)
-            < 0
-            for camera, card in self.camera_cards.items()
-        ):
-            self._populate_devices()
+        self._populate_devices()
         for camera, card in self.camera_cards.items():
             card.title = str(camera).removeprefix("CAM")
             name = text("camera_number", self.language).format(number=card.title)
@@ -1951,6 +1970,8 @@ class MachineRoiWorkspace(QWidget):
                 ) or text("source_unconfigured", self.language)
                 hint = card.detail
                 if basler:
+                    row = actual.get(camera)
+                    matched = row is not None and row.serial == source.basler_serial
                     hint += "\n" + (
                         card.device.currentText()
                         or text("source_unconfigured", self.language)
@@ -1961,7 +1982,7 @@ class MachineRoiWorkspace(QWidget):
                         )
                         card.status_color = (
                             colors.ok
-                            if connection.state is ConnectionState.CONNECTED
+                            if connection.state is ConnectionState.CONNECTED and matched
                             else colors.warning
                             if connection.state
                             in (
@@ -1973,9 +1994,9 @@ class MachineRoiWorkspace(QWidget):
                         )
                         if (
                             connection.state is ConnectionState.CONNECTED
-                            and camera in actual
+                            and row is not None
+                            and matched
                         ):
-                            row = actual[camera]
                             card.summary = f"{row.width}×{row.height}"
                             hint += " · " + card.summary
                     else:

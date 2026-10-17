@@ -41,6 +41,7 @@ class ConnectedCamera:
     serial: str
     width: int
     height: int
+    model: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,7 +395,7 @@ class BaslerConnection:
                 or min(width, height) <= 0
             ):
                 raise ValueError(f"Actual camera dimensions unavailable: {serial}")
-            rows.append(ConnectedCamera(camera, serial, width, height))
+            rows.append(ConnectedCamera(camera, serial, width, height, setting.model))
         with self._lock:
             self._cameras = tuple(rows)
 

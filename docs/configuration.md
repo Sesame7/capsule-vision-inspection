@@ -120,6 +120,10 @@ Undiscovered saved assignments remain visible and unchanged; discovery never
 auto-assigns or clears them. Devices used by another card cannot be assigned twice;
 clear the previous assignment explicitly before moving one. Device model/serial,
 connection state and actual dimensions are shown only where observed.
+Connected serial/model/dimensions come from the application-owned connection
+snapshot and survive leaving/reopening Vision. An empty page-local discovery
+list means no discovery evidence, never disconnection; only discovered devices
+are newly assignable. Actual Disconnect/source FAULT still determines status.
 Discovery reads device information off Qt dispatch without opening cameras or
 assigning them by enumeration order. Cards show explicit connection state; assignment alone is not
 connection status or live preview. Connect all/Disconnect are stopped operations
