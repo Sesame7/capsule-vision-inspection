@@ -10,9 +10,9 @@ from threading import enumerate as threads
 import cv2
 import numpy as np
 import pytest
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 from run_local_production_ui import SourceNotifications, compose
 from run_production_ui import demo_images
 from tests.application_support import WAIT
@@ -101,6 +101,57 @@ def device_inventory(monkeypatch: pytest.MonkeyPatch) -> tuple[BaslerDevice, ...
 
     monkeypatch.setattr(roi_editor, "discover_basler_devices", discover)
     return devices
+
+
+@pytest.mark.parametrize("mode", ["folder", "basler"])
+def test_vision_connection_buttons_never_show_as_top_level_windows(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    qapp: QApplication,
+    mode: str,
+) -> None:
+    window, workspace, engine = camera_screen
+    sources = workspace.sources
+    assert sources is not None
+    if mode == "basler":
+        for i, camera in enumerate(workspace.camera_cards):
+            sources.set_serial(camera, f"100{i}")
+        workspace.set_source_mode("basler")
+        sources.save()
+        workspace.refresh()
+        until(lambda: not window.parameters.busy)
+    window.navigate(0)
+    unexpected: list[str] = []
+
+    class ButtonShows(QObject):
+        def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+            if (
+                isinstance(watched, QPushButton)
+                and event.type() is QEvent.Type.Show
+                and watched.isWindow()
+            ):
+                unexpected.append(repr(watched))
+            return False
+
+    watch = ButtonShows()
+    qapp.installEventFilter(watch)
+    before = window.bridge.application.snapshot()
+    try:
+        for _ in range(2):
+            window.navigate(4)
+            until(lambda: not window.parameters.busy)
+            current = window.parameters.roi_workspace
+            assert current is not None
+            for button in (current.connect_source, current.disconnect_source):
+                assert button.parentWidget() is current.source_area
+                assert button.size().toTuple() == (Style.touch, Style.touch)
+                assert button.minimumSize() == button.maximumSize() == button.size()
+                assert not button.isWindow() and button.windowHandle() is None
+                assert button.isVisible() == (mode == "basler")
+            window.navigate(0)
+        assert not unexpected  # Must catch transient shows during construction too.
+        assert window.bridge.application.snapshot() == before and not engine.calls
+    finally:
+        qapp.removeEventFilter(watch)
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])

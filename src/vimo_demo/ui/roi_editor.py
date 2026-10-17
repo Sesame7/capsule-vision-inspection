@@ -630,9 +630,11 @@ class MachineRoiWorkspace(QWidget):
         mode_row.addWidget(self.mode_switch)
         mode_row.addStretch(1)
         mode_row.addWidget(self.playback_options)
-        self.connection_status = QLabel()
-        self.connect_source = QPushButton()
-        self.disconnect_source = QPushButton()
+        # Visibility is set before mode_row is attached: own these as children
+        # now so they can never briefly show as native top-level windows.
+        self.connection_status = QLabel(self.source_area)
+        self.connect_source = QPushButton(self.source_area)
+        self.disconnect_source = QPushButton(self.source_area)
         for widget in (
             self.connection_status,
             self.connect_source,
