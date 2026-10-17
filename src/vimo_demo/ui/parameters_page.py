@@ -260,6 +260,7 @@ class ParametersPage(QWidget):
         self.buttons["reload"].clicked.connect(lambda: self.guard_dirty(self.reload))
         primary.clicked.connect(lambda: self.save_and_apply())
         bridge.snapshot_changed.connect(self.refresh_state)
+        bridge.source_connection_changed.connect(self.refresh_state)
         bridge.frames_changed.connect(
             self.refresh_state
         )  # Eligibility only; references stay frozen.
@@ -626,6 +627,7 @@ class ParametersPage(QWidget):
             simulation=self.simulation,
             parent=self.settings,
             run_io=self.run_setup_io,
+            connection=self.bridge.source_connection,
         )
         self.roi_workspace = workspace
         workspace.sources_verified.connect(self.sources_verified.emit)

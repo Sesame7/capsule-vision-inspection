@@ -1,6 +1,6 @@
 """Passive continuous Basler acquisition, with no PLC connection or trigger writes.
 
-One source thread owns pylon. Session-local acquisition ordinals associate the
+One source thread owns pylon. Connection-lifetime acquisition ordinals associate the
 six cameras under the verified no-loss external-trigger condition; they are NOT
 hardware trigger IDs. Observed gaps/duplicates/late inputs fail closed.
 """
@@ -17,6 +17,7 @@ from .basler import (
     BaslerAcquisitionSource,
     CameraCleanup,
     CameraReadiness,
+    CameraSettings,
 )
 from .basler_control import BaslerAdmissionControl
 
@@ -46,6 +47,7 @@ class ContinuousBaslerSource:
         self.frames = 0
         self.received_frames = self.discarded_frames = 0
         self.control: BaslerAdmissionControl | None = None
+        self.admission_ready: Callable[[], bool] = lambda: True
         self._backend = None
         self._identity_lock = Lock()
         self._ambiguous_from: int | None = None
@@ -60,6 +62,12 @@ class ContinuousBaslerSource:
             self._ambiguous_from = int(cycle) if cycle is not None else 1
         return RuntimeError(message)
 
+    def retry_cleanup(self) -> None:
+        """Explicit retry on the original acquisition owner only."""
+        if self._backend is not None:
+            self.cleanup = self._backend.cleanup()
+            self.cleanup_safe = all(row.safe for row in self.cleanup)
+
     def run(
         self,
         stop: Event,
@@ -70,6 +78,8 @@ class ContinuousBaslerSource:
         on_frame: Callable[
             [CycleId, AcquisitionMetadata], None
         ] = lambda _cycle, _event: None,
+        on_prepared: Callable[[tuple[CameraSettings, ...]], None] = lambda _: None,
+        on_poll: Callable[[Callable[[], bool]], bool] = lambda _: False,
     ) -> None:
         from ._basler_sdk import PylonBackend
 
@@ -82,6 +92,11 @@ class ContinuousBaslerSource:
         seen: set[str] = set()
         sequence: dict[str, tuple[int, int]] = {}
         admitted = False
+
+        def clean_boundary() -> bool:
+            return (cycle is None or len(seen) == 6) and not any(
+                backend.available(serial, 0) for serial in self.serials
+            )
 
         def expire_capture() -> None:
             nonlocal admitted
@@ -105,10 +120,12 @@ class ContinuousBaslerSource:
 
         try:
             backend.inventory(self.serials)
+            settings: list[CameraSettings] = []
             for serial in self.serials:
                 if stop.is_set():
                     return
-                backend.prepare(serial)
+                settings.append(backend.prepare(serial))
+            on_prepared(tuple(settings))
             if stop.is_set():
                 return
             readiness = backend.arm()
@@ -123,6 +140,10 @@ class ContinuousBaslerSource:
             on_armed(ContinuousArmedAcquisition(self.serials, self._clock(), readiness))
             cursor = 0
             while not stop.is_set():
+                if on_poll(clean_boundary):
+                    # A stopped/detached session cannot consume late peers. Keep
+                    # SDK ordinal continuity, but discard the rest of that group.
+                    admitted = False
                 found = False
                 for index, serial in enumerate(self.serials):
                     if stop.is_set():
@@ -170,7 +191,9 @@ class ContinuousBaslerSource:
                         # Admission occurs only after actual valid, independently owned
                         # pixels exist. Idle armed time creates no cycles/deadlines.
                         seen.clear()
-                        admitted = self.control is None or self.control.claim(cycle)
+                        admitted = self.admission_ready() and (
+                            self.control is None or self.control.claim(cycle)
+                        )
                         if admitted:
                             begin(cycle)
                             deadline = self._clock() + 0.100

@@ -1,16 +1,14 @@
-"""Developer single-cycle and saved passive sources, using controlled fake owners."""
+"""Independent source/inspection lifetimes using the real scheduler and fake SDK."""
 
-import subprocess
 import sys
 from collections import deque
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
-from threading import Condition, Event, get_ident
+from threading import Condition, Event, Thread, get_ident
 from threading import enumerate as threads
 from time import perf_counter
-from typing import Never
 
 import numpy as np
 import pytest
@@ -19,7 +17,6 @@ from PySide6.QtWidgets import QApplication
 from tests.application_support import WAIT
 from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
-from tests.local_input_support import input_files
 from tests.qt_support import until
 from tests.reporting_support import seed, server
 
@@ -31,45 +28,36 @@ from vimo_demo.application import (
     _basler_sdk,
 )
 from vimo_demo.application.basler import (
-    AcquiredImage,
-    AcquisitionGroup,
-    AcquisitionIssue,
     AcquisitionMetadata,
-    AcquisitionReport,
-    ArmedAcquisition,
-    BaslerAcquisitionCancelled,
-    BaslerAcquisitionError,
     BaslerAcquisitionSource,
     CameraCleanup,
     CameraReadiness,
+    CameraSettings,
+)
+from vimo_demo.application.basler_connection import (
+    ConnectionState,
+    SourceConnectionCommands,
 )
 from vimo_demo.application.basler_control import BaslerControlSnapshot
-from vimo_demo.application.continuous_basler import (
-    ContinuousArmedAcquisition,
-    ContinuousBaslerSource,
-)
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.communication.reporting import (
     LocalReportingSettings,
+    ProductionReportingCommands,
     ReportingSelection,
     ReportStage,
 )
 from vimo_demo.configuration import (
-    CameraFolder,
-    CameraSources,
     load_camera_sources,
-    load_machine_layout,
     save_camera_sources,
 )
 from vimo_demo.inference import ImageResult
 from vimo_demo.inference._validation import uint8_array
-from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
+from vimo_demo.inspection import CameraId
 from vimo_demo.ui import local_production
 from vimo_demo.ui.bootstrap import create_window, load_startup
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.production_bridge import QtProductionBridge
-from vimo_demo.ui.production_presentation import matching_camera
-from vimo_demo.ui.production_style import text
+from vimo_demo.ui.production_style import Language, Theme, text
 
 # Provisional field mapping in configured CAM1..CAM6 order; explicitly includes
 # the CAM5/CAM6 order that differs from sorting serials. This is test data only.
@@ -84,10 +72,16 @@ class Engine:
         self.calls: list[tuple[int, int]] = []
         self.closed = False
         self.fail_warmup = False
+        self.created_on = get_ident()
+        self.closed_on: int | None = None
+        self.shapes: list[tuple[int, ...]] = []
+        self.zeros: list[bool] = []
 
     def infer(self, image_bgr: NDArray[np.generic]) -> ImageResult:
         image = uint8_array(image_bgr)
         self.calls.append((int(image[0, 0, 0]), get_ident()))
+        self.shapes.append(image.shape)
+        self.zeros.append(not bool(np.any(image)))
         if len(self.calls) == 1:
             self.warm.set()
             assert self.release_warm.wait(WAIT)
@@ -101,521 +95,7 @@ class Engine:
 
     def close(self) -> None:
         self.closed = True
-
-
-class Acquisition(BaslerAcquisitionSource):
-    def __init__(self, serials: Sequence[str], *, timeout: float = 30.0) -> None:
-        super().__init__(serials, timeout=timeout)
-        self.entered, self.release, self.cleaned = Event(), Event(), Event()
-        self.called = self.running = self.unsafe = self.ignore_cancel = False
-        self.problem = ""
-        self.wrong_order = self.wrong_shape = False
-        self.owner: int | None = None
-
-    @property
-    def cleanup_safe(self) -> bool:
-        return not self.running and not self.unsafe
-
-    def acquire(
-        self,
-        *,
-        on_armed: Callable[[ArmedAcquisition], None] | None = None,
-        cancel: Event | None = None,
-    ) -> AcquisitionGroup:
-        self.called, self.running, self.owner = True, True, get_ident()
-        now = perf_counter()
-        armed = ArmedAcquisition(
-            self.serials,
-            now,
-            now + self.timeout,
-            tuple(CameraReadiness(s, True, True, now) for s in self.serials),
-        )
-        try:
-            if on_armed is not None:
-                on_armed(armed)
-            self.entered.set()
-            assert self.release.wait(
-                WAIT
-            )  # Controlled native-call boundary, no sleeps.
-            images: list[AcquiredImage] = []
-            for index, serial in enumerate(self.serials):
-                pixels = np.full(
-                    (10, 30, 3) if self.wrong_shape else (20, 60, 3),
-                    100 + index,
-                    dtype=np.uint8,
-                )
-                pixels.setflags(write=False)
-                metadata = AcquisitionMetadata(
-                    serial,
-                    now,
-                    True,
-                    0,
-                    "",
-                    60,
-                    20,
-                    123,
-                    1200,
-                    9000 + index,
-                    87,
-                    777777,
-                    0,
-                )
-                images.append(AcquiredImage(serial, pixels, metadata))
-            if self.problem == "missing":
-                images.pop()
-            issue = (
-                (AcquisitionIssue("acquisition", None, self.problem),)
-                if self.problem
-                else ()
-            )
-            cleanup = tuple(
-                CameraCleanup(s, True, not self.unsafe, True, True)
-                for s in self.serials
-            )
-            report = AcquisitionReport(
-                self.serials,
-                now,
-                armed,
-                perf_counter(),
-                (),
-                tuple(i.metadata for i in images),
-                issue,
-                cleanup,
-            )
-            if self.unsafe or self.problem:
-                raise BaslerAcquisitionError(report)
-            if cancel is not None and cancel.is_set() and not self.ignore_cancel:
-                raise BaslerAcquisitionCancelled(report)
-            if self.wrong_order:
-                images.reverse()
-            return AcquisitionGroup(tuple(images), report)
-        finally:
-            self.running = False
-            self.cleaned.set()
-
-
-@pytest.fixture
-def acquisitions(monkeypatch: pytest.MonkeyPatch) -> list[Acquisition]:
-    sources: list[Acquisition] = []
-
-    def factory(serials: Sequence[str], *, timeout: float = 30.0) -> Acquisition:
-        source = Acquisition(serials, timeout=timeout)
-        sources.append(source)
-        return source
-
-    monkeypatch.setattr(local_production, "BaslerAcquisitionSource", factory)
-    return sources
-
-
-def cleanup(
-    composition: local_production.LocalComposition,
-    engines: list[Engine],
-    sources: list[Acquisition],
-) -> None:
-    for source in sources:
-        source.release.set()
-        source.unsafe = False  # Fake recovery control only, no native API calls.
-    for engine in engines:
-        engine.release_warm.set()
-        engine.release_active.set()
-    composition.application.close().result(WAIT)
-    assert composition.application.join(WAIT)
-
-
-@pytest.mark.parametrize("saved_folders", [False, True])
-def test_one_cycle_warmup_mapping_accounting_and_matching_display(
-    qapp: QApplication,
-    tmp_path: Path,
-    acquisitions: list[Acquisition],
-    saved_folders: bool,
-) -> None:
-    engine = Engine()
-    sources: list[Future[None]] = []
-    original = {t.ident for t in threads()}
-    notices: list[
-        ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport
-    ] = []
-    model, machine, recipe, paths = input_files(tmp_path)
-    if saved_folders:
-        save_camera_sources(
-            tmp_path / "camera_sources.json",
-            CameraSources(
-                tuple(
-                    CameraFolder(camera, str(tmp_path))
-                    for camera in load_machine_layout(machine).layout.camera_ids
-                )
-            ),
-        )
-    composition = local_production.compose(
-        model,
-        machine,
-        recipe,
-        () if saved_folders else paths,
-        engine_factory=lambda _: engine,
-        observe_source=sources.append,
-        basler_serials=SERIALS,
-        observe_acquisition=notices.append,
-    )
-    app = composition.application
-    bridge = QtProductionBridge(app, composition.store, poll_ms=5)
-    try:
-        assert not composition.store.snapshot().frames
-        startup = app.start()
-        until(engine.warm.is_set)
-        assert app.snapshot().state is ApplicationState.STARTING
-        assert app.snapshot().counters == ProductionCounters()
-        assert not any(source.called for source in acquisitions)
-        assert not composition.store.snapshot().frames
-        engine.release_warm.set()
-        until(lambda: acquisitions[-1].entered.is_set())
-        source = acquisitions[-1]
-        assert startup.done() and startup.exception() is None
-        assert app.snapshot().state is ApplicationState.RUNNING
-        assert app.snapshot().latest_production_result is None
-        assert app.snapshot().counters == ProductionCounters()
-        assert [value for value, _ in engine.calls] == [1, 1]
-        assert source.serials == SERIALS and source.owner != get_ident()
-        source.release.set()
-        until(lambda: app.snapshot().state is ApplicationState.READY)
-        snapshot = app.snapshot()
-        result = snapshot.latest_production_result
-        assert result is not None and result.cycle_id == CycleId(1)
-        assert len(result.channels) == 36
-        assert (
-            snapshot.counters.cycles_started == snapshot.counters.cycles_completed == 1
-        )
-        assert (
-            snapshot.counters.channel_ok
-            + snapshot.counters.channel_ng
-            + snapshot.counters.channel_unknown
-            + snapshot.counters.channel_disabled
-            == 36
-        )
-        assert [value for value, _ in engine.calls] == [1, 1, *range(100, 106)]
-        assert len({owner for _, owner in engine.calls}) == 1
-        assert engine.calls[0][1] not in (get_ident(), source.owner)
-        assert engine.closed and source.cleaned.is_set()
-        frames = composition.store.snapshot().frames
-        assert (
-            tuple(row.frame_id.camera_id for row in frames) == composition.store.cameras
-        )
-        assert [int(row.image[0, 0, 0]) for row in frames] == list(range(100, 106))
-        assert all(
-            row.frame_id.sequence == 0 and row.frame_id.cycle_id == 1 for row in frames
-        )
-        assert all(matching_camera(row, snapshot) is not None for row in frames)
-        bridge.refresh()
-        qapp.processEvents()
-        assert (
-            app.snapshot().counters.cycles_completed == 1
-        )  # No automatic second attempt.
-        assert sources[0].done() and sources[0].exception() is None
-        assert sum(isinstance(n, ArmedAcquisition) for n in notices) == 1
-        assert sum(isinstance(n, AcquisitionReport) for n in notices) == 1
-    finally:
-        cleanup(composition, [engine], acquisitions)
-        bridge.detach()
-    assert not {t.ident for t in threads()} - original
-
-
-@pytest.mark.parametrize(
-    "problem", ["missing", "unexpected extra frame", "ambiguous trigger"]
-)
-def test_failed_acquisition_has_no_cycle_judgments_or_fake_ng(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition], problem: str
-) -> None:
-    engine = Engine()
-    engine.release_warm.set()
-    sources: list[Future[None]] = []
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=lambda _: engine,
-        basler_serials=SERIALS,
-        observe_source=sources.append,
-        observe_acquisition=lambda _: None,
-    )
-    try:
-        composition.application.start().result(WAIT)
-        until(lambda: acquisitions[-1].entered.is_set())
-        source = acquisitions[-1]
-        source.problem = problem
-        source.release.set()
-        until(
-            lambda: composition.application.snapshot().state is ApplicationState.READY
-        )
-        snapshot = composition.application.snapshot()
-        assert snapshot.counters == ProductionCounters()
-        assert snapshot.latest_production_result is None
-        assert not composition.store.snapshot().frames
-        assert len(engine.calls) == 2 and engine.closed
-        assert isinstance(sources[0].exception(), BaslerAcquisitionError)
-        assert source.cleaned.is_set()
-    finally:
-        cleanup(composition, [engine], acquisitions)
-
-
-@pytest.mark.parametrize("close", [False, True])
-@pytest.mark.parametrize("late_group", [False, True])
-def test_stop_close_wait_for_actual_source_exit_and_drop_late_groups(
-    qapp: QApplication,
-    tmp_path: Path,
-    acquisitions: list[Acquisition],
-    close: bool,
-    late_group: bool,
-) -> None:
-    engine = Engine()
-    engine.release_warm.set()
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=lambda _: engine,
-        basler_serials=SERIALS,
-        observe_acquisition=lambda _: None,
-    )
-    app = composition.application
-    try:
-        app.start().result(WAIT)
-        until(lambda: acquisitions[-1].entered.is_set())
-        source = acquisitions[-1]
-        source.ignore_cancel = late_group
-        stopped = app.close() if close else app.stop()
-        assert app.snapshot().state is ApplicationState.STOPPING
-        assert not stopped.done() and not source.cleaned.is_set()
-        with pytest.raises(ApplicationStateError):
-            app.start()
-        source.release.set()
-        stopped.result(WAIT)
-        assert app.snapshot().state is (
-            ApplicationState.CLOSED if close else ApplicationState.READY
-        )
-        assert app.snapshot().counters == ProductionCounters()
-        assert not composition.store.snapshot().frames
-        assert source.cleaned.is_set() and engine.closed and len(engine.calls) == 2
-    finally:
-        cleanup(composition, [engine], acquisitions)
-
-
-def test_stop_after_acquisition_cleanup_before_admission_drops_group(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
-) -> None:
-    engine = Engine()
-    engine.release_warm.set()
-
-    def observation(
-        row: ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport,
-    ) -> None:
-        if isinstance(row, AcquisitionReport):
-            composition.application.stop()
-
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=lambda _: engine,
-        basler_serials=SERIALS,
-        observe_acquisition=observation,
-    )
-    try:
-        composition.application.start().result(WAIT)
-        until(lambda: acquisitions[-1].entered.is_set())
-        acquisitions[-1].release.set()
-        until(
-            lambda: composition.application.snapshot().state is ApplicationState.READY
-        )
-        assert composition.application.snapshot().counters == ProductionCounters()
-        assert not composition.store.snapshot().frames
-    finally:
-        cleanup(composition, [engine], acquisitions)
-
-
-def test_generation_isolation_and_counters_retained_on_explicit_restart(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
-) -> None:
-    engines: list[Engine] = []
-
-    def factory(_: object) -> Engine:
-        engine = Engine()
-        engine.release_warm.set()
-        engines.append(engine)
-        return engine
-
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=factory,
-        basler_serials=SERIALS,
-        observe_acquisition=lambda _: None,
-    )
-    app = composition.application
-    try:
-        for generation in (1, 2):
-            app.start().result(WAIT)
-            until(lambda: acquisitions[-1].entered.is_set())
-            acquisitions[-1].release.set()
-            until(lambda: app.snapshot().state is ApplicationState.READY)
-            assert app.snapshot().generation == generation
-            assert app.snapshot().counters.cycles_completed == generation
-            assert all(
-                row.generation == generation
-                for row in composition.store.snapshot().frames
-            )
-            latest = app.snapshot().latest_production_result
-            assert latest is not None and latest.cycle_id == 1
-        assert len(engines) == 2 and all(engine.closed for engine in engines)
-        assert sum(source.called for source in acquisitions) == 2
-    finally:
-        cleanup(composition, engines, acquisitions)
-
-
-def test_unsafe_device_cleanup_remains_fault_owned(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
-) -> None:
-    engine = Engine()
-    engine.release_warm.set()
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=lambda _: engine,
-        basler_serials=SERIALS,
-        observe_acquisition=lambda _: None,
-    )
-    app = composition.application
-    try:
-        app.start().result(WAIT)
-        until(lambda: acquisitions[-1].entered.is_set())
-        source = acquisitions[-1]
-        source.unsafe = True
-        source.release.set()
-        until(lambda: app.snapshot().state is ApplicationState.FAULT)
-        assert app.snapshot().runtime_owned and source.cleaned.is_set()
-        assert app.snapshot().counters == ProductionCounters()
-        with pytest.raises(ApplicationError, match="Stop failed"):
-            app.stop().result(WAIT)
-        assert app.snapshot().runtime_owned
-    finally:
-        cleanup(composition, [engine], acquisitions)
-
-
-@pytest.mark.parametrize("close", [False, True])
-def test_stop_close_after_admission_finishes_active_inspection(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition], close: bool
-) -> None:
-    engine = Engine()
-    engine.release_warm.set()
-    engine.release_active.clear()
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=lambda _: engine,
-        basler_serials=SERIALS,
-        observe_acquisition=lambda _: None,
-    )
-    app = composition.application
-    try:
-        app.start().result(WAIT)
-        until(lambda: acquisitions[-1].entered.is_set())
-        acquisitions[-1].release.set()
-        until(engine.active.is_set)
-        assert acquisitions[-1].cleaned.is_set()
-        stopped = app.close() if close else app.stop()
-        assert not stopped.done() and not engine.closed
-        engine.release_active.set()
-        stopped.result(WAIT)
-        assert app.snapshot().counters.cycles_completed == 1
-        assert len(engine.calls) == 8 and engine.closed
-        assert len(composition.store.snapshot().frames) == 6
-    finally:
-        cleanup(composition, [engine], acquisitions)
-
-
-def test_cli_requires_mapping_confirmation_and_rejects_plc_reporting() -> None:
-    script = Path(__file__).resolve().parents[2] / "scripts/run_local_production_ui.py"
-    base = [
-        sys.executable,
-        str(script),
-        "--model-config",
-        "unused",
-        "--machine-config",
-        "unused",
-        "--recipe",
-        "unused",
-        "--basler-serials",
-        *SERIALS,
-    ]
-    for extra, message in (
-        ([], "--basler-mapping-confirmed"),
-        (
-            ["--basler-mapping-confirmed", "--report-first-station"],
-            "cannot perform PLC reporting",
-        ),
-    ):
-        result = subprocess.run(
-            [*base, *extra], capture_output=True, text=True, timeout=20
-        )
-        assert result.returncode == 2 and message in result.stderr
-
-
-@pytest.mark.parametrize("option", ["replay", "reporting"])
-def test_programmatic_composition_rejects_incompatible_modes(
-    tmp_path: Path, option: str
-) -> None:
-    with pytest.raises(ValueError, match="cannot replay or report"):
-        local_production.compose(
-            *input_files(tmp_path),
-            basler_serials=SERIALS,
-            replay_controls=option == "replay",
-            reporting=LocalReportingSettings() if option == "reporting" else None,
-        )
-
-
-@pytest.mark.parametrize("problem", ["order", "shape"])
-def test_invalid_acquired_group_is_not_admitted(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition], problem: str
-) -> None:
-    engine = Engine()
-    engine.release_warm.set()
-    futures: list[Future[None]] = []
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=lambda _: engine,
-        basler_serials=SERIALS,
-        observe_source=futures.append,
-        observe_acquisition=lambda _: None,
-    )
-    try:
-        composition.application.start().result(WAIT)
-        until(lambda: acquisitions[-1].entered.is_set())
-        acquisitions[-1].wrong_order = problem == "order"
-        acquisitions[-1].wrong_shape = problem == "shape"
-        acquisitions[-1].release.set()
-        until(
-            lambda: composition.application.snapshot().state is ApplicationState.READY
-        )
-        assert isinstance(futures[0].exception(), ValueError)
-        assert composition.application.snapshot().counters == ProductionCounters()
-        assert not composition.store.snapshot().frames
-    finally:
-        cleanup(composition, [engine], acquisitions)
-
-
-def test_failed_warmup_never_calls_hardware_source(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
-) -> None:
-    engine = Engine()
-    engine.fail_warmup = True
-    engine.release_warm.set()
-    composition = local_production.compose(
-        *input_files(tmp_path),
-        engine_factory=lambda _: engine,
-        basler_serials=SERIALS,
-        observe_acquisition=lambda _: None,
-    )
-    try:
-        ready = composition.application.start()
-        until(ready.done)
-        assert ready.exception() is not None
-        assert composition.application.snapshot().state is ApplicationState.READY
-        assert composition.application.snapshot().active is None
-        assert composition.application.snapshot().counters == ProductionCounters()
-        assert not composition.store.snapshot().frames
-        assert not any(source.called for source in acquisitions)
-        assert engine.closed
-    finally:
-        cleanup(composition, [engine], acquisitions)
+        self.closed_on = get_ident()
 
 
 def save_basler(path: Path) -> None:
@@ -633,331 +113,13 @@ def save_basler(path: Path) -> None:
     )
 
 
-class ContinuousAcquisition(ContinuousBaslerSource):
-    def __init__(self, cameras: tuple[CameraId, ...], serials: tuple[str, ...]):
-        super().__init__(cameras, serials)
-        self.entered, self.release, self.cleaned = Event(), Event(), Event()
-        self.problem = ""
-        self.camera_count = 6
-        self.ignore_cancel = False
-
-    def run(
-        self,
-        stop: Event,
-        *,
-        begin: Callable[[CycleId], None],
-        submit: Callable[[Frame], None],
-        on_armed: Callable[[ContinuousArmedAcquisition], None],
-        on_frame: Callable[[CycleId, AcquisitionMetadata], None] = lambda _c, _m: None,
-    ) -> None:
-        self.cleanup_safe = False
-        now = perf_counter()
-        try:
-            on_armed(
-                ContinuousArmedAcquisition(
-                    self.serials,
-                    now,
-                    tuple(CameraReadiness(s, True, True, now) for s in self.serials),
-                )
-            )
-            self.entered.set()
-            assert self.release.wait(WAIT)
-            if stop.is_set():
-                return
-            if self.problem:
-                raise RuntimeError(self.problem)
-            cycle = CycleId(1)
-            begin(cycle)
-            for index, camera in enumerate(self.cameras[: self.camera_count]):
-                submit(
-                    Frame(
-                        FrameId(cycle, camera, 10 + index),
-                        perf_counter(),
-                        np.full((20, 60, 3), 100 + index, np.uint8),
-                    )
-                )
-            assert stop.wait(WAIT)
-        finally:
-            self.cleanup_safe = True
-            self.cleaned.set()
-
-
-@pytest.fixture
-def continuous_acquisitions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> list[ContinuousAcquisition]:
-    sources: list[ContinuousAcquisition] = []
-
-    def factory(
-        cameras: tuple[CameraId, ...], serials: tuple[str, ...]
-    ) -> ContinuousAcquisition:
-        source = ContinuousAcquisition(cameras, serials)
-        sources.append(source)
-        return source
-
-    monkeypatch.setattr(local_production, "ContinuousBaslerSource", factory)
-    return sources
-
-
-@pytest.mark.parametrize(
-    "problem",
-    ["", "missing", "unexpected extra frame", "ambiguous trigger", "idle_stop"],
-)
-def test_normal_persistent_basler_start_one_cycle_or_explicit_source_failure(
-    qapp: QApplication,
-    tmp_path: Path,
-    continuous_acquisitions: list[ContinuousAcquisition],
-    problem: str,
-) -> None:
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-    # Persisted entry ordering is not wiring or execution ordering.
-    definition = load_camera_sources(data.sources)
-    save_camera_sources(
-        data.sources, replace(definition, cameras=tuple(reversed(definition.cameras)))
-    )
-    original = data.sources.read_bytes()
-    engine = Engine()
-    delivery = FutureDelivery()
-    startup = load_startup(
-        data,
-        engine_factory=lambda _: engine,
-        observe_source=lambda f: delivery.watch("folder_source", f),
-        observe_acquisition=lambda n: (
-            local_production.SourceNotifications.watch_acquisition(
-                delivery, startup.application.snapshot().generation, n
-            )
-        ),
-    )
-    window = create_window(startup, delivery)
-    window.show()
-    progress: list[str] = []
-
-    def record_progress(_generation: int, phase: str) -> None:
-        progress.append(phase)
-
-    window.bridge.source_progress_changed.connect(record_progress)
-    before = {t.ident for t in threads()}
-    try:
-        assert not startup.issues and not continuous_acquisitions and not engine.calls
-        assert data.sources.read_bytes() == original
-        assert not window.bridge.replay_enabled
-        assert not window.buttons["secondary"].isVisible()
-        window.buttons["operation"].click()
-        until(engine.warm.is_set)
-        assert window.snapshot.state is ApplicationState.STARTING
-        assert not window.event_label.text()
-        assert "Basler" in window.state_label.toolTip()
-        assert (
-            not any(source.entered.is_set() for source in continuous_acquisitions)
-            and startup.application.snapshot().counters == ProductionCounters()
-        )
-        engine.release_warm.set()
-        until(
-            lambda: (
-                bool(continuous_acquisitions)
-                and continuous_acquisitions[-1].entered.is_set()
-            )
-        )
-        source = continuous_acquisitions[-1]
-        until(lambda: progress == ["basler_armed"])
-        assert not window.event_label.text()
-        assert window.state_label.toolTip().startswith("ARMED")
-        assert source.serials == SERIALS
-        assert startup.application.snapshot().counters == ProductionCounters()
-        assert not startup.frames.snapshot().frames
-        assert (
-            not window.bridge.replay_enabled
-            and not window.buttons["secondary"].isVisible()
-        )
-        assert (
-            window.buttons["stop"].isEnabled() and window.buttons["pause"].isEnabled()
-        )
-        assert window.bridge.controls_enabled
-        assert startup.local_replay is not None
-        with pytest.raises(ApplicationStateError):
-            startup.local_replay.step_replay()
-        source.problem = "" if problem == "idle_stop" else problem
-        if problem == "idle_stop":
-            window.buttons["stop"].click()
-            assert startup.application.snapshot().state is ApplicationState.STOPPING
-            assert startup.application.snapshot().runtime_owned
-            assert not source.cleaned.is_set()  # Still waiting for the owned SDK path.
-        source.release.set()
-        if not problem:
-            until(lambda: startup.application.snapshot().counters.cycles_completed == 1)
-            assert startup.application.snapshot().state is ApplicationState.RUNNING
-            startup.application.stop().result(WAIT)
-        until(lambda: startup.application.snapshot().state is ApplicationState.READY)
-        window.bridge.refresh()
-        if problem:
-            assert startup.application.snapshot().counters == ProductionCounters()
-            assert not startup.frames.snapshot().frames
-            if problem == "idle_stop":
-                assert startup.application.snapshot().last_issue is None
-                assert not startup.application.snapshot().runtime_owned
-                assert not window.event_label.text()
-            else:
-                until(lambda: "RuntimeError" in window.event_label.accessibleName())
-            assert progress == ["basler_armed"]
-        else:
-            snapshot = startup.application.snapshot()
-            result = snapshot.latest_production_result
-            assert result is not None and len(result.channels) == 36
-            assert (
-                snapshot.counters.cycles_started
-                == snapshot.counters.cycles_completed
-                == 1
-            )
-            assert [
-                int(f.image[0, 0, 0]) for f in startup.frames.snapshot().frames
-            ] == list(range(100, 106))
-            for index, frame in enumerate(startup.frames.snapshot().frames):
-                assert frame.frame_id == result.cameras[index].frame_id
-                assert frame.source_key == f"basler:{SERIALS[index]}"
-                assert matching_camera(frame, snapshot) is not None
-            assert (
-                not window.event_label.accessibleName()
-            )  # ARMED is not stale after Stop.
-            assert progress == ["basler_armed"]
-        assert (
-            source.cleaned.is_set()
-            and engine.closed
-            and len(continuous_acquisitions) == 1
-        )
-        assert data.sources.read_bytes() == original
-    finally:
-        engine.release_warm.set()
-        engine.release_active.set()
-        for source in continuous_acquisitions:
-            source.release.set()
-        window.close()
-        until(lambda: window.bridge.closed)
-        assert startup.application.join(0)
-        delivery.detach()
-    assert not {t.ident for t in threads()} - before
-
-
-@pytest.mark.parametrize("close", [False, True])
-def test_normal_basler_stop_close_waits_for_source_and_drops_late_group(
-    qapp: QApplication,
-    tmp_path: Path,
-    continuous_acquisitions: list[ContinuousAcquisition],
-    close: bool,
-) -> None:
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-    engine = Engine()
-    engine.release_warm.set()
-    startup = load_startup(data, engine_factory=lambda _: engine)
-    try:
-        startup.application.start().result(WAIT)
-        until(
-            lambda: (
-                bool(continuous_acquisitions)
-                and continuous_acquisitions[-1].entered.is_set()
-            )
-        )
-        source = continuous_acquisitions[-1]
-        source.ignore_cancel = True
-        stopped = startup.application.close() if close else startup.application.stop()
-        until(lambda: startup.application.snapshot().state is ApplicationState.STOPPING)
-        assert not stopped.done()
-        source.release.set()
-        stopped.result(WAIT)
-        assert startup.application.snapshot().state is (
-            ApplicationState.CLOSED if close else ApplicationState.READY
-        )
-        assert startup.application.snapshot().counters == ProductionCounters()
-        assert not startup.frames.snapshot().frames and source.cleaned.is_set()
-        assert engine.closed
-    finally:
-        for source in continuous_acquisitions:
-            source.release.set()
-        startup.application.close().result(WAIT)
-        assert startup.application.join(WAIT)
-
-
-def test_normal_basler_requires_folder_warmup_before_engine_or_hardware(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
-) -> None:
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-    source = load_camera_sources(data.sources)
-    save_camera_sources(
-        data.sources,
-        replace(
-            source, cameras=tuple(replace(c, folder="missing") for c in source.cameras)
-        ),
-    )
-    engine = Engine()
-    startup = load_startup(data, engine_factory=lambda _: engine)
-    try:
-        assert startup.application.snapshot().state is ApplicationState.READY
-        assert any(i.key == "startup_source_unavailable" for i in startup.issues)
-        with pytest.raises(ApplicationError):
-            startup.application.start().result(WAIT)
-        assert not acquisitions and not engine.calls
-        assert startup.application.snapshot().state is ApplicationState.READY
-        assert startup.application.snapshot().active is None
-        assert startup.application.snapshot().counters == ProductionCounters()
-    finally:
-        startup.application.close().result(WAIT)
-        assert startup.application.join(WAIT)
-
-
-def test_normal_continuous_stop_start_keeps_counters_and_replaces_owners(
-    qapp: QApplication,
-    tmp_path: Path,
-    continuous_acquisitions: list[ContinuousAcquisition],
-) -> None:
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-    original = data.sources.read_bytes()
-    engines: list[Engine] = []
-
-    def factory(_: object) -> Engine:
-        engine = Engine()
-        engine.release_warm.set()
-        engines.append(engine)
-        return engine
-
-    startup = load_startup(data, engine_factory=factory)
-    app = startup.application
-    try:
-        for generation in (1, 2):
-            app.start().result(WAIT)
-            until(lambda: continuous_acquisitions[-1].entered.is_set())
-            assert app.snapshot().counters.cycles_completed == generation - 1
-            continuous_acquisitions[-1].release.set()
-            until(
-                lambda expected=generation: (
-                    app.snapshot().counters.cycles_completed == expected
-                )
-            )
-            assert app.snapshot().state is ApplicationState.RUNNING
-            assert all(
-                f.generation == generation for f in startup.frames.snapshot().frames
-            )
-            assert app.snapshot().latest_production_result is not None
-            app.stop().result(WAIT)
-            assert app.snapshot().state is ApplicationState.READY
-            assert continuous_acquisitions[-1].cleaned.is_set() and engines[-1].closed
-        assert len(engines) == len(continuous_acquisitions) == 2
-        assert data.sources.read_bytes() == original
-    finally:
-        for source in continuous_acquisitions:
-            source.release.set()
-        app.close().result(WAIT)
-        assert app.join(WAIT)
-
-
 def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
+    qapp: QApplication, tmp_path: Path
 ) -> None:
     data = saved_data(tmp_path)
     engine = Engine()
     startup = load_startup(data, engine_factory=lambda _: engine)
+    assert isinstance(startup.application, SourceConnectionCommands)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -981,7 +143,9 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         assert (
             not window.bridge.replay_enabled and window.buttons["secondary"].isHidden()
         )
-        assert not engine.calls and not acquisitions
+        assert (
+            not engine.calls and not startup.application.source_snapshot().thread_alive
+        )
         workspace.open_source_settings()
         workspace.source_dialog.mode.setCurrentIndex(0)
         workspace.source_dialog.accept()
@@ -992,7 +156,9 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         assert (
             workspace.sources.saved.camera(CameraId("CAM5")).basler_serial == SERIALS[4]
         )
-        assert not engine.calls and not acquisitions
+        assert (
+            not engine.calls and not startup.application.source_snapshot().thread_alive
+        )
         window.navigate(0)
         assert window.buttons["secondary"].isHidden()
     finally:
@@ -1000,37 +166,6 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         until(lambda: window.bridge.closed)
         assert startup.application.join(0)
         delivery.detach()
-
-
-def test_normal_basler_optional_sdk_failure_is_source_error_without_folder_fallback(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from vimo_demo.application import _basler_sdk
-
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-
-    def missing(*, continuous: bool = False) -> Never:
-        raise ModuleNotFoundError("pypylon deliberately unavailable")
-
-    monkeypatch.setattr(_basler_sdk, "PylonBackend", missing)
-    engine = Engine()
-    engine.release_warm.set()
-    completions: list[Future[None]] = []
-    startup = load_startup(
-        data, engine_factory=lambda _: engine, observe_source=completions.append
-    )
-    try:
-        assert not engine.calls and not completions  # Restore does not touch SDK.
-        startup.application.start().result(WAIT)
-        until(lambda: startup.application.snapshot().state is ApplicationState.READY)
-        assert startup.application.snapshot().counters == ProductionCounters()
-        assert not startup.frames.snapshot().frames and len(engine.calls) == 2
-        assert isinstance(completions[0].exception(), ModuleNotFoundError)
-        assert engine.closed
-    finally:
-        startup.application.close().result(WAIT)
-        assert startup.application.join(WAIT)
 
 
 def test_normal_folder_runtime_needs_no_pypylon(
@@ -1043,11 +178,12 @@ def test_normal_folder_runtime_needs_no_pypylon(
     ) -> BaslerAcquisitionSource:
         raise AssertionError("Folder runtime must not construct a hardware source")
 
-    monkeypatch.setattr(local_production, "BaslerAcquisitionSource", no_hardware)
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", no_hardware)
     data = saved_data(tmp_path)
     engine = Engine()
     engine.release_warm.set()
     startup = load_startup(data, engine_factory=lambda _: engine)
+    assert isinstance(startup.application, SourceConnectionCommands)
     original = data.sources.read_bytes()
     try:
         startup.application.start().result(WAIT)
@@ -1061,7 +197,7 @@ def test_normal_folder_runtime_needs_no_pypylon(
 
 
 def test_developer_fixed_images_override_saved_basler_without_false_status(
-    qapp: QApplication, tmp_path: Path, acquisitions: list[Acquisition]
+    qapp: QApplication, tmp_path: Path
 ) -> None:
     from vimo_demo.application.folder_replay import folder_images
     from vimo_demo.ui.production_window import ProductionWindow
@@ -1096,7 +232,10 @@ def test_developer_fixed_images_override_saved_basler_without_false_status(
         assert "Basler" not in window.event_label.accessibleName()
         engine.release_warm.set()
         until(engine.active.is_set)
-        assert bridge.replay_enabled and not acquisitions
+        assert (
+            bridge.replay_enabled
+            and not composition.application.source_snapshot().thread_alive
+        )
         assert "Basler" not in window.event_label.accessibleName()
         assert data.sources.read_bytes() == original
     finally:
@@ -1105,110 +244,6 @@ def test_developer_fixed_images_override_saved_basler_without_false_status(
         window.close()
         until(lambda: bridge.closed)
         assert composition.application.join(0)
-
-
-@pytest.mark.parametrize("mode", ["complete", "timeout", "shutdown", "ambiguous"])
-def test_normal_basler_reports_full_and_partial_cycles_and_drains_stop(
-    qapp: QApplication,
-    tmp_path: Path,
-    continuous_acquisitions: list[ContinuousAcquisition],
-    monkeypatch: pytest.MonkeyPatch,
-    mode: str,
-) -> None:
-    from tests.fins_tcp_support import TcpPeer
-
-    from vimo_demo.communication import FinsTransport, first_station_reject_words
-    from vimo_demo.communication.reporting import (
-        ProductionReportingCommands,
-        ReportingSelection,
-    )
-
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-    engine = Engine()
-    engine.release_warm.set()
-    if mode in ("shutdown", "ambiguous"):
-        engine.release_active.clear()
-    with TcpPeer(65534) as peer:
-        startup = load_startup(data, engine_factory=lambda _: engine)
-        app = startup.application
-        assert isinstance(app, ProductionReportingCommands)
-        try:
-            assert app.reporting_selection().settings.host == "192.168.251.1"
-            assert app.reporting_selection().settings.transport is FinsTransport.TCP
-            assert not app.reporting_selection().enabled
-            app.set_reporting_selection(
-                ReportingSelection(
-                    True,
-                    LocalReportingSettings(port=peer.port, transport=FinsTransport.TCP),
-                )
-            )
-            app.start().result(WAIT)
-            until(
-                lambda: (
-                    bool(continuous_acquisitions)
-                    and continuous_acquisitions[-1].entered.is_set()
-                )
-            )
-            source = continuous_acquisitions[-1]
-            source.camera_count = 6 if mode == "complete" else 1
-            assert not peer.packets and app.snapshot().counters == ProductionCounters()
-            source.release.set()
-            assert engine.active.wait(WAIT)
-            if mode in ("shutdown", "ambiguous"):
-                if mode == "ambiguous":
-
-                    def ambiguous(_cycle: CycleId) -> bool:
-                        return False
-
-                    monkeypatch.setattr(source, "attributable", ambiguous)
-                stopped = app.stop()
-                assert not stopped.done()
-                engine.release_active.set()
-                stopped.result(WAIT)
-            else:
-                until(lambda: app.snapshot().counters.cycles_completed == 1)
-                until(
-                    lambda: (
-                        (r := app.reporting_snapshot()) is not None
-                        and r.acknowledged_count == 1
-                    )
-                )
-                app.stop().result(WAIT)
-            report = app.reporting_snapshot()
-            assert report is not None and not report.thread_alive
-            assert (
-                report.pending == 0
-                and report.failed_count == report.rejected_count == 0
-            )
-            if mode == "ambiguous":
-                assert (
-                    report.skipped_count == 1
-                    and report.acknowledged_count == 0
-                    and not peer.packets
-                )
-            else:
-                assert report.acknowledged_count == 1 and report.skipped_count == 0
-                result = app.snapshot().latest_production_result
-                assert result is not None
-                words = first_station_reject_words(
-                    (c.channel_id, c.business_status) for c in result.channels
-                )
-                assert peer.words(49, 4) == (65535, *words)
-                if mode != "complete":
-                    assert words[0] & 0xFFC0 == 0xFFC0 and words[1:] == (0xFFFF, 15)
-                assert (
-                    report.last_acknowledged is not None
-                    and report.last_acknowledged.completion_to_ack_ms is not None
-                )
-            assert engine.closed and source.cleaned.is_set()
-            assert app.snapshot().state is ApplicationState.READY
-        finally:
-            engine.release_active.set()
-            for source in continuous_acquisitions:
-                source.release.set()
-            app.close().result(WAIT)
-            assert app.join(WAIT)
 
 
 class PassiveBackend:
@@ -1222,18 +257,38 @@ class PassiveBackend:
         self.armed = Event()
         self.closed = False
         self.prepared: list[str] = []
+        self.dimensions = {serial: (60, 20) for serial in SERIALS}
+        self.fail_prepare = ""
+        self.failure = self.unsafe = False
+        self.owner_ids: list[int] = []
+        self.cleanup_calls = 0
+        self.cleanup_entered, self.release_cleanup = Event(), Event()
+        self.release_cleanup.set()
+        self.prepare_entered, self.release_prepare = Event(), Event()
+        self.release_prepare.set()
 
     def inventory(self, serials: tuple[str, ...]) -> None:
+        self.owner_ids.append(get_ident())
         assert serials == SERIALS
 
-    def prepare(self, serial: str) -> None:
+    def prepare(self, serial: str) -> CameraSettings:
         self.prepared.append(serial)
+        self.owner_ids.append(get_ident())
+        self.prepare_entered.set()
+        assert self.release_prepare.wait(WAIT)
+        if serial == self.fail_prepare:
+            raise RuntimeError("Injected partial Open failure")
+        width, height = self.dimensions[serial]
+        return CameraSettings(serial, {"Width": width, "Height": height}, {})
 
     def arm(self) -> tuple[CameraReadiness, ...]:
+        self.owner_ids.append(get_ident())
         self.armed.set()
         return tuple(CameraReadiness(s, True, True, perf_counter()) for s in SERIALS)
 
     def available(self, serial: str, timeout_ms: int) -> bool:
+        if self.failure:
+            raise RuntimeError("Injected source loss")
         with self.condition:
             if timeout_ms:
                 self.condition.wait_for(
@@ -1242,13 +297,17 @@ class PassiveBackend:
             return bool(self.queues[serial])
 
     def retrieve(self, serial: str) -> tuple[AcquisitionMetadata, NDArray[np.uint8]]:
+        self.owner_ids.append(get_ident())
         with self.condition:
             return self.queues[serial].popleft()
 
     def expose(self, ordinal: int, cameras: tuple[int, ...] = tuple(range(6))) -> None:
         with self.condition:
             for index in cameras:
-                pixels = np.full((20, 60, 3), ordinal * 10 + index, dtype=np.uint8)
+                width, height = self.dimensions[SERIALS[index]]
+                pixels = np.full(
+                    (height, width, 3), ordinal * 10 + index, dtype=np.uint8
+                )
                 pixels.setflags(write=False)
                 self.queues[SERIALS[index]].append(
                     (
@@ -1258,8 +317,8 @@ class PassiveBackend:
                             True,
                             0,
                             "",
-                            60,
-                            20,
+                            width,
+                            height,
                             1,
                             3600,
                             ordinal - 1,
@@ -1273,8 +332,588 @@ class PassiveBackend:
             self.condition.notify_all()
 
     def cleanup(self) -> tuple[CameraCleanup, ...]:
-        self.closed = True
-        return tuple(CameraCleanup(s, True, True, True, True) for s in self.prepared)
+        self.owner_ids.append(get_ident())
+        self.cleanup_calls += 1
+        self.cleanup_entered.set()
+        assert self.release_cleanup.wait(WAIT)
+        self.closed = not self.unsafe
+        return tuple(
+            CameraCleanup(s, True, not self.unsafe, not self.unsafe, not self.unsafe)
+            for s in self.prepared
+        )
+
+
+@pytest.fixture
+def passive(monkeypatch: pytest.MonkeyPatch) -> PassiveBackend:
+    backend = PassiveBackend()
+
+    def sdk(*, continuous: bool = False) -> PassiveBackend:
+        assert continuous
+        return backend
+
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", sdk)
+    return backend
+
+
+def without_folders(path: Path) -> None:
+    source = load_camera_sources(path)
+    save_camera_sources(
+        path,
+        replace(source, cameras=tuple(replace(c, folder="") for c in source.cameras)),
+    )
+
+
+def test_synthetic_warmup_uses_actual_distinct_shapes_on_single_engine_owner(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    without_folders(data.sources)
+    passive.dimensions[SERIALS[4]] = 64, 24
+    engines: list[Engine] = []
+
+    def factory(_prepared: object) -> Engine:
+        engine = Engine()
+        engine.release_warm.set()
+        engines.append(engine)
+        return engine
+
+    startup = load_startup(data, engine_factory=factory)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    try:
+        app.connect_source()
+        app.start().result(WAIT)
+        engine = engines[0]
+        assert engine.shapes == [(20, 60, 3)] * 2 + [(24, 64, 3)] * 2
+        assert all(engine.zeros)
+        assert (
+            app.snapshot().counters == ProductionCounters()
+            and not startup.frames.snapshot().frames
+        )
+        app.stop().result(WAIT)
+        assert {
+            engine.created_on,
+            engine.closed_on,
+            *[owner for _, owner in engine.calls],
+        } == {engine.created_on}
+        assert engine.created_on != get_ident() and not passive.closed
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+def test_source_lifetime_idle_discard_restart_recipe_and_batch(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    without_folders(data.sources)
+    engines: list[Engine] = []
+
+    def factory(_prepared: object) -> Engine:
+        engine = Engine()
+        engine.release_warm.set()
+        engines.append(engine)
+        return engine
+
+    startup = load_startup(data, engine_factory=factory)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    original = data.sources.read_bytes(), data.machine.read_bytes()
+    try:
+        assert not startup.issues and not passive.prepared and not engines
+        with pytest.raises(ApplicationStateError, match="Connect"):
+            app.start()
+        app.connect_source()
+        connected = app.source_snapshot()
+        assert connected.state is ConnectionState.CONNECTED and connected.thread_alive
+        assert [
+            (c.camera_id, c.serial, c.width, c.height) for c in connected.cameras
+        ] == [(f"CAM{i + 1}", serial, 60, 20) for i, serial in enumerate(SERIALS)]
+        with pytest.raises(ApplicationStateError, match="Disconnect"):
+            app.connect_source()
+        passive.expose(1)
+        until(lambda: app.source_snapshot().discarded_frames == 6)
+        assert (
+            app.snapshot().counters == ProductionCounters()
+            and not startup.frames.snapshot().frames
+        )
+        assert not engines
+        for ordinal in (2, 4):
+            app.start().result(WAIT)
+            assert app.source_snapshot().state is ConnectionState.CONNECTED
+            assert [value for value, _ in engines[-1].calls] == [0, 0]
+            passive.expose(ordinal, (5, 2, 4, 0, 3, 1))
+            until(
+                lambda ordinal=ordinal: (
+                    app.snapshot().counters.cycles_completed == ordinal // 2
+                )
+            )
+            result = app.snapshot().latest_production_result
+            assert (
+                result is not None
+                and result.cycle_id == ordinal
+                and len(result.channels) == 36
+            )
+            assert [c.camera_id for c in result.cameras] == [
+                f"CAM{i}" for i in range(1, 7)
+            ]
+            assert all(
+                c.frame_id is not None and c.frame_id.sequence == ordinal
+                for c in result.cameras
+            )
+            assert {value for value, _ in engines[-1].calls[2:]} == {
+                ordinal * 10 + i for i in range(6)
+            }
+            with pytest.raises(ApplicationStateError):
+                app.disconnect_source()
+            app.stop().result(WAIT)
+            assert engines[-1].closed and not passive.closed
+            assert app.source_snapshot().inspection_generation is None
+            if ordinal == 2:
+                passive.expose(3)
+                until(lambda: app.source_snapshot().discarded_frames == 12)
+                assert app.snapshot().counters.cycles_completed == 1
+                assert startup.choice is not None
+                app.configure(
+                    replace(
+                        startup.choice.prepared,
+                        configuration=replace(
+                            startup.choice.prepared.configuration, recipe_id="next"
+                        ),
+                    )
+                )
+                assert app.source_snapshot().state is ConnectionState.CONNECTED
+        app.start_batch("new-batch")
+        assert app.snapshot().counters == ProductionCounters() and not passive.closed
+        assert len(passive.prepared) == 6
+        assert all(len({owner for _, owner in engine.calls}) == 1 for engine in engines)
+        assert len(set(passive.owner_ids)) == 1 and passive.owner_ids[0] != get_ident()
+        assert not set(passive.owner_ids) & {
+            owner for engine in engines for _, owner in engine.calls
+        }
+        app.disconnect_source()
+        assert passive.closed and not app.source_snapshot().thread_alive
+        assert app.source_snapshot().state is ConnectionState.DISCONNECTED
+        assert original == (data.sources.read_bytes(), data.machine.read_bytes())
+    finally:
+        for engine in engines:
+            engine.release_warm.set()
+            engine.release_active.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+        assert not any(t.name == "BaslerSourceOwner" for t in threads())
+
+
+@pytest.mark.parametrize("problem", ["partial_open", "dimensions", "sdk"])
+def test_failed_connect_is_explicit_and_never_creates_an_engine(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    problem: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    if problem == "partial_open":
+        passive.fail_prepare = SERIALS[2]
+    elif problem == "dimensions":
+        passive.dimensions[SERIALS[1]] = 0, 20
+    else:
+        monkeypatch.setitem(sys.modules, "pypylon", None)
+
+        def unavailable(*, continuous: bool = False) -> PassiveBackend:
+            raise ImportError("pypylon unavailable")
+
+        monkeypatch.setattr(_basler_sdk, "PylonBackend", unavailable)
+    engine = Engine()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    assert isinstance(startup.application, SourceConnectionCommands)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    try:
+        with pytest.raises((RuntimeError, ValueError, ImportError)):
+            app.connect_source()
+        state = app.source_snapshot()
+        assert (
+            state.state is ConnectionState.FAULT
+            and not state.thread_alive
+            and state.cleanup_safe
+        )
+        assert state.error and not engine.calls
+        with pytest.raises(ApplicationStateError):
+            app.start()
+        app.disconnect_source()
+        assert app.source_snapshot().state is ConnectionState.DISCONNECTED
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+def test_failed_cleanup_keeps_original_sdk_owner_until_explicit_retry(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    startup = load_startup(data)
+    assert isinstance(startup.application, SourceConnectionCommands)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    try:
+        app.connect_source()
+        passive.unsafe = True
+        with pytest.raises(ApplicationStateError, match="cleanup"):
+            app.disconnect_source()
+        state = app.source_snapshot()
+        assert (
+            state.state is ConnectionState.FAULT
+            and state.thread_alive
+            and not state.cleanup_safe
+        )
+        attempts = passive.cleanup_calls
+        with pytest.raises(ApplicationStateError):
+            app.connect_source()
+        assert passive.cleanup_calls == attempts  # No automatic reconnect/cleanup loop.
+        with pytest.raises(ApplicationError, match="Close failed"):
+            app.close().result(WAIT)
+        assert app.snapshot().state is ApplicationState.FAULT and not app.join(0)
+        passive.unsafe = False
+        app.close().result(WAIT)
+        assert app.join(WAIT) and passive.closed
+        assert len(set(passive.owner_ids)) == 1
+    finally:
+        passive.unsafe = False
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+@pytest.mark.parametrize("problem", ["roi", "warmup", "loss_during_warmup"])
+def test_start_failure_retains_connected_source_and_last_active_configuration(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, problem: str
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    without_folders(data.sources)
+    if problem == "roi":
+        passive.dimensions[SERIALS[3]] = 57, 20
+    engine = Engine()
+    engine.fail_warmup = problem == "warmup"
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    assert isinstance(startup.application, SourceConnectionCommands)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    try:
+        app.connect_source()
+        started = app.start()
+        if problem != "roi":
+            assert engine.warm.wait(WAIT)
+            if problem == "loss_during_warmup":
+                passive.failure = True
+                until(lambda: app.source_snapshot().state is ConnectionState.FAULT)
+            engine.release_warm.set()
+        with pytest.raises(ApplicationError):
+            started.result(WAIT)
+        assert (
+            app.snapshot().state is ApplicationState.READY
+            and app.snapshot().active is None
+        )
+        assert app.snapshot().counters == ProductionCounters()
+        if problem != "loss_during_warmup":
+            assert (
+                app.source_snapshot().state is ConnectionState.CONNECTED
+                and not passive.closed
+            )
+        if problem == "roi":
+            assert not engine.calls
+        else:
+            assert engine.closed
+    finally:
+        engine.release_warm.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+def test_source_loss_during_inspection_stops_session_without_reconnect(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    engine = Engine()
+    engine.release_warm.set()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    assert isinstance(startup.application, SourceConnectionCommands)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    try:
+        app.connect_source()
+        app.start().result(WAIT)
+        passive.failure = True
+        until(lambda: app.snapshot().state is ApplicationState.READY)
+        state = app.source_snapshot()
+        assert state.state is ConnectionState.FAULT and state.error
+        assert engine.closed and app.snapshot().counters == ProductionCounters()
+        assert len(passive.prepared) == 6
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+def test_stop_during_native_warmup_keeps_source_and_discards_arrivals(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    engine = Engine()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    assert isinstance(startup.application, SourceConnectionCommands)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    try:
+        app.connect_source()
+        started = app.start()
+        assert engine.warm.wait(WAIT)
+        passive.expose(1)
+        until(lambda: app.source_snapshot().discarded_frames == 6)
+        stopped = app.stop()
+        assert not stopped.done() and not engine.closed and not passive.closed
+        engine.release_warm.set()
+        stopped.result(WAIT)
+        with pytest.raises(ApplicationError):
+            started.result(WAIT)
+        assert app.snapshot().counters == ProductionCounters()
+        assert (
+            app.source_snapshot().state is ConnectionState.CONNECTED and engine.closed
+        )
+    finally:
+        engine.release_warm.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+def test_close_during_connect_cancels_before_arm_and_joins_actual_owner(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    passive.release_prepare.clear()
+    startup = load_startup(data)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    connected: Future[None] = Future()
+
+    def connect() -> None:
+        try:
+            app.connect_source()
+            connected.set_result(None)
+        except BaseException as exc:
+            connected.set_exception(exc)
+
+    caller = Thread(target=connect, name="TestConnectCaller")
+    caller.start()
+    try:
+        assert passive.prepare_entered.wait(WAIT)
+        assert app.source_snapshot().state is ConnectionState.CONNECTING
+        with pytest.raises(ApplicationStateError):
+            app.start()
+        closed = app.close()
+        assert not closed.done() and not app.join(0)
+        passive.release_prepare.set()
+        closed.result(WAIT)
+        assert app.join(WAIT)
+        caller.join(WAIT)
+        assert not caller.is_alive() and not passive.armed.is_set()
+        with pytest.raises(ApplicationStateError, match="cancelled"):
+            connected.result(WAIT)
+        assert not app.source_snapshot().thread_alive and passive.closed
+    finally:
+        passive.release_prepare.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+        caller.join(WAIT)
+
+
+def test_disconnect_marks_unready_before_waiting_for_native_cleanup(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    startup = load_startup(data)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    app.connect_source()
+    passive.release_cleanup.clear()
+    caller = Thread(target=app.disconnect_source, name="TestDisconnectCaller")
+    caller.start()
+    try:
+        assert passive.cleanup_entered.wait(WAIT)
+        assert app.source_snapshot().state is ConnectionState.DISCONNECTING
+        with pytest.raises(ApplicationStateError):
+            app.start()
+        assert app.source_snapshot().thread_alive
+        passive.release_cleanup.set()
+        caller.join(WAIT)
+        assert (
+            not caller.is_alive()
+            and app.source_snapshot().state is ConnectionState.DISCONNECTED
+        )
+    finally:
+        passive.release_cleanup.set()
+        caller.join(WAIT)
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    without_folders(data.sources)
+    startup = load_startup(data)
+    assert isinstance(startup.application, SourceConnectionCommands)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    try:
+        window.navigate(4)
+        workspace = window.parameters.roi_workspace
+        assert workspace is not None and workspace.sources is not None
+        until(lambda: not window.parameters.busy)
+        assert workspace.frame is None and workspace.editable()
+        workspace.coordinates["X"].setText("1")
+        workspace.apply_geometry()
+        assert workspace.draft.dirty
+        workspace.save_and_apply()
+        until(lambda: not window.parameters.busy)
+        assert not workspace.draft.dirty and not workspace.message.text()
+        workspace.connect_source.click()
+        until(lambda: not window.parameters.busy)
+        assert startup.application.source_snapshot().state is ConnectionState.CONNECTED
+        assert all(
+            not card.serial.isEnabled() for card in workspace.camera_cards.values()
+        )
+        assert not workspace.source_settings.isEnabled() and workspace.editable()
+        presentations: tuple[tuple[Language, Theme, tuple[int, int]], ...] = (
+            ("zh", "dark", (1080, 1920)),
+            ("zh", "light", (1080, 1920)),
+            ("en", "dark", (1920, 1080)),
+        )
+        for language, theme, size in presentations:
+            window.set_language(language)
+            window.set_theme(theme)
+            window.resize(*size)
+            QApplication.processEvents()
+            assert workspace.reference.currentText() == text("roi_no_frame", language)
+            assert (
+                workspace.connect_source.isVisible()
+                and workspace.disconnect_source.isEnabled()
+            )
+            assert not workspace.connect_source.isEnabled()
+            assert window.grab().save(
+                str(tmp_path / f"connected-{language}-{theme}-{size[0]}.png")
+            )
+        saved = workspace.sources.definition
+        workspace.set_source_mode("folder")
+        workspace.serial_edited(CameraId("CAM1"), "999")
+        assert workspace.sources.definition == saved
+        workspace.coordinates["W"].setText("61")
+        workspace.apply_geometry()
+        assert not workspace.draft.dirty and workspace.message.isVisible()
+        window.navigate(0)
+        window.navigate(4)
+        until(lambda: not window.parameters.busy)
+        workspace = window.parameters.roi_workspace
+        assert workspace is not None
+        assert startup.application.source_snapshot().state is ConnectionState.CONNECTED
+        workspace.disconnect_source.click()
+        until(lambda: not window.parameters.busy)
+        assert (
+            startup.application.source_snapshot().state is ConnectionState.DISCONNECTED
+        )
+        assert workspace.source_modes["folder"].isEnabled()
+    finally:
+        window.close()
+        until(lambda: window.bridge.closed)
+        assert startup.application.join(WAIT)
+        delivery.detach()
+
+
+@pytest.mark.parametrize(
+    "kind", ["complete", "partial", "native", "report", "ambiguous"]
+)
+def test_persistent_source_stop_settles_admitted_results_and_reports(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, kind: str
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    engine = Engine()
+    engine.release_warm.set()
+    if kind == "native":
+        engine.release_active.clear()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    assert isinstance(app, ProductionReportingCommands)
+    with server() as peer:
+        seed(peer, 199)
+        app.set_reporting_selection(
+            ReportingSelection(True, LocalReportingSettings(port=peer.port, timeout=2))
+        )
+        try:
+            app.connect_source()
+            app.start().result(WAIT)
+            if kind == "report":
+                peer.hold_next(ReportStage.BITMAP)
+            passive.expose(
+                2 if kind == "ambiguous" else 1,
+                (0,) if kind in ("partial", "native") else tuple(range(6)),
+            )
+            if kind == "ambiguous":
+                until(lambda: app.snapshot().state is ApplicationState.READY)
+                observed = app.reporting_snapshot()
+                assert (
+                    observed is not None
+                    and observed.queued_count == 0
+                    and observed.acknowledged_count == 0
+                )
+                assert app.snapshot().counters == ProductionCounters()
+                assert app.source_snapshot().state is ConnectionState.FAULT
+                return
+            until(lambda: app.snapshot().counters.cycles_started == 1)
+            if kind == "native":
+                assert engine.active.wait(WAIT)
+            if kind == "report":
+                assert peer.entered.wait(WAIT)
+            stopped = app.stop()
+            if kind in ("report", "native"):
+                assert not stopped.done()
+            peer.release.set()
+            engine.release_active.set()
+            stopped.result(WAIT)
+            assert app.snapshot().state is ApplicationState.READY
+            result = app.snapshot().latest_production_result
+            assert (
+                result is not None
+                and result.cycle_id == 1
+                and len(result.channels) == 36
+            )
+            assert app.snapshot().counters.cycles_completed == 1
+            if kind in ("partial", "native"):
+                assert all(camera.frame_id is None for camera in result.cameras[1:])
+            observed = app.reporting_snapshot()
+            assert (
+                observed is not None
+                and observed.acknowledged_count == 1
+                and not observed.thread_alive
+            )
+            assert engine.closed and not passive.closed
+            assert app.source_snapshot().state is ConnectionState.CONNECTED
+        finally:
+            peer.release.set()
+            engine.release_active.set()
+            app.close().result(WAIT)
+            assert app.join(WAIT) and passive.closed
 
 
 def test_normal_basler_player_drains_paused_frames_and_settles_reports(
@@ -1303,6 +942,7 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
     window = create_window(startup, delivery)
     window.show()
     app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
     assert startup.local_replay is not None
 
     def control() -> BaslerControlSnapshot:
@@ -1319,10 +959,18 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
             ReportingSelection(True, LocalReportingSettings(port=peer.port, timeout=2))
         )
         try:
+            app.connect_source()
             window.buttons["operation"].click()
-            until(lambda: bool(backends) and backends[0].armed.is_set())
+            until(
+                lambda: (
+                    bool(backends)
+                    and backends[0].armed.is_set()
+                    and app.source_snapshot().inspection_generation is not None
+                )
+            )
             window.bridge.refresh()
             middle = window.buttons["pause"]
+            assert text("basler_armed", window.language) in window.state_label.toolTip()
             window.buttons["pause"].click()
             until(lambda: control().state is ReplayState.PAUSED)
             window.bridge.refresh()
@@ -1393,10 +1041,16 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
             window.bridge.refresh()
             window.buttons["stop"].click()
             until(lambda: app.snapshot().state is ApplicationState.READY)
-            assert backends[0].closed and engines[0].closed
+            assert not backends[0].closed and engines[0].closed
             window.bridge.refresh()
             window.buttons["operation"].click()
-            until(lambda: len(backends) == 2 and backends[1].armed.is_set())
+            until(
+                lambda: (
+                    len(engines) == 2
+                    and app.source_snapshot().inspection_generation is not None
+                )
+            )
+            assert len(backends) == 1 and backends[0].armed.is_set()
             window.bridge.refresh()
             middle.click()
             until(lambda: control().state is ReplayState.PAUSED)
@@ -1407,7 +1061,9 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
             until(lambda: app.snapshot().state is ApplicationState.READY)
             assert app.snapshot().counters.cycles_completed == 5
             assert app.snapshot().last_issue is None
-            assert all(e.closed for e in engines) and all(b.closed for b in backends)
+            assert all(e.closed for e in engines) and all(
+                not b.closed for b in backends
+            )
         finally:
             peer.release.set()
             for engine in engines:
@@ -1447,10 +1103,12 @@ def test_basler_partial_step_waits_for_late_native_return_before_paused(
 
     monkeypatch.setattr(_basler_sdk, "PylonBackend", sdk)
     startup = load_startup(data, engine_factory=lambda _: engine)
+    assert isinstance(startup.application, SourceConnectionCommands)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
     app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
 
     def state() -> ReplayState:
         value = window.bridge.control_snapshot()
@@ -1458,8 +1116,14 @@ def test_basler_partial_step_waits_for_late_native_return_before_paused(
         return value.state
 
     try:
+        app.connect_source()
         window.buttons["operation"].click()
-        until(backend.armed.is_set)
+        until(
+            lambda: (
+                backend.armed.is_set()
+                and app.source_snapshot().inspection_generation is not None
+            )
+        )
         window.bridge.refresh()
         window.buttons["pause"].click()
         until(lambda: state() is ReplayState.PAUSED)
@@ -1491,7 +1155,7 @@ def test_basler_partial_step_waits_for_late_native_return_before_paused(
         assert (
             app.snapshot().counters.cycles_completed == 1
             and engine.closed
-            and backend.closed
+            and not backend.closed
         )
     finally:
         engine.release_active.set()

@@ -88,8 +88,11 @@ Mappings are resolved by CameraId into MachineLayout order. Incomplete drafts
 cannot be saved or executed as Basler.
 
 `loop` is boolean; FPS is finite/positive. They pace Folder Replay only. Basler
-uses Folder images for references and readiness warm-up, then waits passively for
-external hardware triggers. Switching mode preserves both folders and serials.
+Folder references are optional strings (including empty), used only for offline
+image workflows. Connect all explicitly uses saved/applied mappings; Start requires
+the connected source, validates actual dimensions and warms ViMo with synthetic BGR.
+Switching mode preserves both folders and serials. Disconnect before changing
+source mapping/mode; Recipe/Batch/page changes do not disconnect cameras.
 Live source keys are `basler:<serial>`; Folder keys are lexical normalized paths.
 
 Strict v1 Folder-only files are still in operational use and remain readable.
@@ -104,6 +107,26 @@ in drafts and saved data. Single-model configuration is read-only selection.
 Vision owns source setup and canvas-first Machine ROI editing, numeric Apply,
 Common size and Distribute evenly. Those operations reject invalid bounds atomically;
 they never silently clamp. Folder/Runtime references are explicit frozen images.
+Vision stacks the global source-mode selector, six camera cards in configured
+order (two columns), reference controls/canvas and ROI controls. Card headers select
+the displayed camera; inline path/browse and Basler serial fields edit that camera's
+existing source draft without selecting it. Basler cards retain optional Folder
+references and show explicit connection state; serial assignment alone is not
+connection status or live preview. Connect all/Disconnect are stopped operations
+off Qt dispatch, owned by the application rather than the widget. Source fields
+are locked until Disconnect; ROI editing remains subject to inspection locks.
+The source dialog remains available for existing device discovery/mapping. Compact
+Folder playback options edit Loop/FPS; Basler does not use these pacing settings.
+The image selector and previous/next browse frozen Folder references; Runtime,
+Refresh, Fit and 1:1 keep their existing meanings. ROI channel selection changes
+the displayed slot; numeric Apply edits only the machine draft until Save/apply.
+Mode selection edits the same CameraSources draft and requires explicit Save/apply;
+selecting a card never changes saved sources or geometry. Runtime editing locks remain.
+Basler Save/apply permits structurally valid ROIs without reference images; numeric
+editing does not require image pixels. Available connected dimensions supply bounds
+checks, always repeated before Start. Folder mode still validates all configured
+inputs at Save/Start. Drawing and image navigation need an actual Folder or eligible
+Runtime reference; synthetic warm-up images are never published as references.
 
 Tune preview measures the current draft without Production admission, accounting,
 candidate activation or source reconfiguration. Frozen-reference ownership,

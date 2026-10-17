@@ -88,13 +88,22 @@ PAUSED at the safe boundary, and Step produces one formal result. This is still
 application RUNNING, with editing locks retained. The Stop control requests actual
 shutdown.
 
-Saved Basler mode first uses Folder references for worker warm-up, then opens/arms
-six explicitly mapped cameras once. **RUNNING is not ARMED.** An idle armed source
-produces no cycles, counters, timeouts or reports and never generates W10.7 writes.
-Each accepted frame is copied before SDK buffer Release and immediately enters
-early serial inspection without waiting for its peers.
+Vision's explicit Connect all opens/arms six saved/applied Basler mappings on one
+application-owned SDK thread. Connection survives page/Recipe/Batch changes and
+Production Stop. CONNECTED/ARMED is independent of inspection RUNNING; there is no
+automatic connection/retry. Idle connected frames are retrieved, validated and
+released without cycles, counters, display publication or PLC reports.
 
-Current Basler membership uses per-session SDK ImageNumber ordinals and validates
+Basler Start requires CONNECTED, checks every saved ROI against current camera
+Width/Height and warms one ViMo worker with black uint8 BGR inputs, twice per
+distinct shape. Folder references are optional. Only after warm-up and an idle,
+complete SDK boundary is the session bound; production admission additionally
+requires RUNNING. Start inspection before external triggering: mid-stream takeover
+is unsupported. Buffered/partial pre-session frames are never retroactively admitted.
+Each admitted frame is copied before SDK buffer Release and immediately enters
+early serial inspection without waiting for its peers. Production never writes W10.7.
+
+Current Basler membership uses connection-lifetime SDK ImageNumber ordinals and validates
 consecutive BlockID/ImageNumber per serial. A new ordinal cannot start before the
 previous capture group completes. Observed gaps, duplicates, unsupported/late
 metadata stop the source; no shifted reassociation or software-trigger fallback.
@@ -167,12 +176,20 @@ failed activation preserves last-known-good active identity and returns READY if
 cleanup is safe. Stop/Start or a Recipe change retains counters; explicit Batch
 resets them. Accounting describes cycle/channel occurrences, not physical products.
 
-Stop prevents admission, finalizes incomplete collection and explicitly rejects
+Stop prevents inspection admission, finalizes incomplete collection and explicitly rejects
 unclaimed inspection work. A claimed native call finishes naturally. Owners are
 retained until source/runtime/worker/report threads actually exit and SDK cleanup
-is safe. Notification or timeout is not successful termination. Unsafe cleanup
-remains visible as ownership/failure; native calls are never forcibly cancelled.
-Qt Close is asynchronous; the final joins occur outside GUI dispatch.
+is safe. Basler session shutdown detaches its callbacks and drains reports but
+keeps the SDK connection grabbing/discarding. Vision Disconnect is available only
+with inspection stopped; it releases cameras and joins their actual owner.
+Application Close first settles inspection, then disconnects application-owned
+sources on the lifecycle thread. Partial connection failures remain source FAULT
+with explicit ownership/error observations; a failed application Close remains
+application FAULT. Unresolved SDK cleanup retains its
+original owner for an explicit Disconnect/Close retry. There is no automatic
+reconnection. Source loss stops the bound session and remains visible in Vision;
+it does not fabricate results. Notification or timeout is not termination, and
+native calls are never forcibly cancelled. Qt Close stays asynchronous.
 
 ## Display and Web
 

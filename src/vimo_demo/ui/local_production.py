@@ -1,11 +1,11 @@
-"""Real ViMo developer composition: Folder inputs or an opt-in Basler cycle."""
+"""Real ViMo composition: independent sources and disposable inspection sessions."""
 
 import json
 import sys
 import traceback
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
@@ -24,17 +24,15 @@ from vimo_demo.application import (
     ProductionRuntimeSession,
     prepare_configuration,
 )
-from vimo_demo.application.basler import (
-    AcquisitionReport,
-    ArmedAcquisition,
-    BaslerAcquisitionCancelled,
-    BaslerAcquisitionError,
-    BaslerAcquisitionSource,
+from vimo_demo.application.basler_connection import (
+    BaslerConnection,
+    ConnectionState,
+    InspectionBinding,
+    SourceConnectionSnapshot,
 )
 from vimo_demo.application.basler_control import BaslerAdmissionControl
 from vimo_demo.application.continuous_basler import (
     ContinuousArmedAcquisition,
-    ContinuousBaslerSource,
 )
 from vimo_demo.application.folder_cache import (
     CacheState,
@@ -74,7 +72,7 @@ from vimo_demo.configuration import (
 )
 from vimo_demo.inference import VimoSegmentationEngine
 from vimo_demo.inference._validation import uint8_array
-from vimo_demo.inspection import CycleId, Frame, FrameId
+from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.inspection.production import ProductionInspectionResult
 from vimo_demo.runtime import CoordinatorStoppedError, InferenceEngine
 from vimo_demo.runtime.early_inspection import EarlyInspectionCoordinator
@@ -117,39 +115,20 @@ def _wait_for_source_interval(stop: Event, started: float, fps: float) -> bool:
     return True
 
 
-def basler_notice(
-    observation: ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport,
-) -> None:
-    """Source-thread console evidence; no widgets or PLC operations."""
-    if isinstance(observation, (ArmedAcquisition, ContinuousArmedAcquisition)):
-        print(json.dumps({"event": "ARMED", **asdict(observation)}), flush=True)
-        print(
-            "Camera acquisition is ARMED; waiting for external hardware triggers.",
-            flush=True,
-        )
-    else:
-        print(
-            json.dumps(
-                {
-                    "event": "basler_acquisition",
-                    "serials": observation.serials,
-                    "missing": observation.missing_serials,
-                    "extra": observation.extra_serials,
-                    "observations": [asdict(row) for row in observation.observations],
-                    "issues": [asdict(row) for row in observation.issues],
-                    "cleanup": [asdict(row) for row in observation.cleanup],
-                    "cleanup_safe": observation.cleanup_safe,
-                }
-            ),
-            flush=True,
-        )
+def basler_notice(observation: ContinuousArmedAcquisition) -> None:
+    """Source-thread connection evidence; no widgets or PLC operations."""
+    print(json.dumps({"event": "ARMED", **asdict(observation)}), flush=True)
+    print(
+        "Camera acquisition is ARMED; waiting for external hardware triggers.",
+        flush=True,
+    )
 
 
 class LocalRuntimeSession(ProductionRuntimeSession):
     """Launcher composition only: the existing session also joins its local source.
 
     No engine calls here: construction, warm-up, inference and close remain on
-    InferenceWorker. Source waits never run on Qt. READY cannot precede source exit.
+    InferenceWorker. Source waits never run on Qt. READY requires session-binding exit, not camera disconnection.
     """
 
     def __init__(
@@ -166,16 +145,10 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         source_base: Path = Path("."),
         reporting: FirstStationReportingWorker | None = None,
         replay_control: LocalReplayControl | None = None,
-        basler_source: BaslerAcquisitionSource | None = None,
-        continuous_source: ContinuousBaslerSource | None = None,
+        continuous_source: BaslerConnection | None = None,
         basler_control: BaslerAdmissionControl | None = None,
-        observe_acquisition: Callable[
-            [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
-        ] = basler_notice,
     ) -> None:
-        if (
-            basler_source is not None or continuous_source is not None
-        ) and replay_control is not None:
+        if continuous_source is not None and replay_control is not None:
             raise ValueError("Basler acquisition cannot use Folder replay controls")
 
         def warmup(config: PreparedConfiguration) -> Sequence[NDArray[np.generic]]:
@@ -198,20 +171,16 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         self._application, self._images, self._store = application, images, store
         self._layout = prepared.configuration.layout
         self._replay, self._sources, self._source_base = replay, sources, source_base
-        self._basler_source, self._observe_acquisition = (
-            basler_source,
-            observe_acquisition,
-        )
         self._continuous_source = continuous_source
         self.basler_control = basler_control
-        if continuous_source is not None:
-            continuous_source.control = basler_control
         self._source_stop = Event()
         self.replay_control = replay_control
         self.reporting = reporting
         self._reporting_overload: RuntimeError | None = None
         self.source_done: Future[None] = Future()
         self.source_done.set_running_or_notify_cancel()
+        self._inspection_ready: Future[None] = Future()
+        self._runtime_ready: Future[None] | None = None
         self._source = Thread(
             target=self._produce,
             name=f"LocalProductionSource-{generation}",
@@ -222,8 +191,9 @@ class LocalRuntimeSession(ProductionRuntimeSession):
         if self.reporting is not None:
             self.reporting.start()
         ready = super().start()
+        self._runtime_ready = ready
         self._source.start()
-        return ready
+        return self._inspection_ready if self._continuous_source is not None else ready
 
     def request_stop(self) -> None:
         self._source_stop.set()
@@ -311,13 +281,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
 
     @property
     def cleanup_safe(self) -> bool:
-        return (
-            super().cleanup_safe
-            and (self.reporting is None or self.reporting.cleanup_safe)
-            and (self._basler_source is None or self._basler_source.cleanup_safe)
-            and (
-                self._continuous_source is None or self._continuous_source.cleanup_safe
-            )
+        return super().cleanup_safe and (
+            self.reporting is None or self.reporting.cleanup_safe
         )
 
     @property
@@ -330,6 +295,13 @@ class LocalRuntimeSession(ProductionRuntimeSession):
 
     def _produce(self) -> None:
         try:
+            if self._continuous_source is not None:
+                assert self._runtime_ready is not None
+                self._runtime_ready.result()
+                if self._source_stop.is_set():
+                    return
+                self._produce_continuous()
+                return
             while not self._source_stop.is_set():
                 snapshot = self._application.snapshot()
                 if snapshot.state is ApplicationState.RUNNING:
@@ -340,13 +312,7 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                     return
             if self._source_stop.is_set():
                 return
-            if self._continuous_source is not None:
-                self._produce_continuous()
-                return
             ingress = LocalCycleIngress(self._application, self._layout)
-            if self._basler_source is not None:
-                self._produce_basler(ingress)
-                return
             started: float | None = None
             first = True
             while not self._source_stop.is_set():
@@ -411,6 +377,8 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                         self._application.stop()
                         return
         except BaseException as exc:
+            if not self._inspection_ready.done():
+                self._inspection_ready.set_exception(exc)
             if not (
                 (
                     self._source_stop.is_set()
@@ -419,16 +387,21 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                 )
                 and isinstance(exc, (ApplicationStateError, CoordinatorStoppedError))
             ):
-                if (
-                    isinstance(exc, BaslerAcquisitionCancelled)
-                    and self._source_stop.is_set()
-                    and exc.report.cleanup_safe
-                ):
-                    return
                 self.source_done.set_exception(exc)
                 # Stop a partially admitted cycle; never retry or fabricate NG.
-                self._application.stop()
+                try:
+                    self._application.stop()
+                except ApplicationStateError:
+                    if self._application.snapshot().state not in (
+                        ApplicationState.STOPPING,
+                        ApplicationState.CLOSED,
+                    ):
+                        raise
         finally:
+            if not self._inspection_ready.done():
+                self._inspection_ready.set_exception(
+                    ApplicationStateError("Inspection startup stopped")
+                )
             if not self.source_done.done():
                 with self._lock:
                     reporting_error = self._reporting_overload
@@ -474,63 +447,32 @@ class LocalRuntimeSession(ProductionRuntimeSession):
                 else None,
             )
 
-        source.run(
-            self._source_stop,
-            begin=begin,
-            submit=submit,
-            on_armed=self._observe_acquisition,
-        )
+        failure: list[BaseException] = []
 
-    def _produce_basler(self, ingress: LocalCycleIngress) -> None:
-        source = self._basler_source
-        assert source is not None
-        print(
-            json.dumps(
-                {
-                    "event": "basler_mapping",
-                    "generation": self.generation,
-                    "mapping": dict(
-                        zip(self._layout.camera_ids, source.serials, strict=True)
-                    ),
-                    "note": "Explicit provisional developer mapping; not calibrated configuration",
-                }
+        def failed(error: BaseException) -> None:
+            failure.append(error)
+            self._source_stop.set()
+
+        assert self.basler_control is not None
+        binding = InspectionBinding(
+            self.basler_control,
+            self._source_stop,
+            begin,
+            submit,
+            failed,
+            lambda: (
+                not self._source_stop.is_set()
+                and self._application.snapshot().state is ApplicationState.RUNNING
             ),
-            flush=True,
         )
         try:
-            group = source.acquire(
-                on_armed=self._observe_acquisition, cancel=self._source_stop
-            )
-        except BaslerAcquisitionError as exc:
-            self._observe_acquisition(exc.report)
-            raise
-        self._observe_acquisition(group.report)
-        if self._source_stop.is_set():
-            return  # Stop during cleanup/report notification never admits a late group.
-        if tuple(image.serial for image in group.images) != source.serials:
-            raise ValueError("Basler image serial order differs from explicit mapping")
-        images = tuple(image.pixels for image in group.images)
-        for camera, image in zip(self._layout.cameras, images, strict=True):
-            camera.validate_shape((image.shape[0], image.shape[1], 3))
-        if self._source_stop.is_set():
-            return
-        captured = monotonic()  # Admission metadata, not SDK timestamp conversion.
-        result = ingress.submit(images).result.result()
-        for camera, image in zip(result.cameras, images, strict=True):
-            if camera.frame_id is not None:
-                self._store.publish_pixels(
-                    camera.frame_id,
-                    captured,
-                    image,
-                    generation=self.generation,
-                    source_key=self._sources.source_key(
-                        camera.camera_id, self._source_base
-                    )
-                    if self._sources
-                    else None,
-                )
-        # Existing accounting has observed the terminal Future before Stop/READY.
-        self._application.stop()
+            source.command(binding, attach=True).result()
+            self._inspection_ready.set_result(None)
+            self._source_stop.wait()
+            if failure:
+                raise failure[0]
+        finally:
+            source.command(binding, attach=False).result()
 
 
 class _LocalApplication(ProductionApplication):
@@ -545,6 +487,10 @@ class _LocalApplication(ProductionApplication):
         reporting: LocalReportingSettings | None = None,
         reporting_editable: bool = False,
         source_draft: CameraSourceDraft | None = None,
+        source_cameras: tuple[CameraId, ...] = (),
+        observe_acquisition: Callable[
+            [ContinuousArmedAcquisition], None
+        ] = basler_notice,
     ) -> None:
         self.replay_cache = cache
         self._reporting_lock = Lock()
@@ -568,7 +514,40 @@ class _LocalApplication(ProductionApplication):
         self._source_draft = source_draft
         self._replay_control: LocalReplayControl | None = None
         self._basler_control: BaslerAdmissionControl | None = None
+        self.connection = BaslerConnection()
+        self._source_cameras = source_cameras
+        self._observe_acquisition = observe_acquisition
         super().__init__(factory)
+
+    def source_snapshot(self) -> SourceConnectionSnapshot:
+        return self.connection.snapshot()
+
+    def connect_source(self) -> None:
+        with self._condition:
+            self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+            draft = self._source_draft
+            if draft is None or draft.dirty or draft.saved.mode != "basler":
+                raise ApplicationStateError("Save/apply Basler mappings before Connect")
+            saved = load_camera_sources(draft.path)
+            if saved != draft.saved:
+                raise ApplicationStateError("Sources changed on disk; apply or restart")
+            serials = saved.basler_serials(self._source_cameras)
+            # Register ownership under the same lock as Start/Close, then wait
+            # outside it so GUI commands never wait for native camera startup.
+            self.connection.begin_connect(
+                self._source_cameras, serials, self._observe_acquisition
+            )
+        self.connection.wait_connected()
+
+    def disconnect_source(self) -> None:
+        with self._condition:
+            self._require(
+                ApplicationState.READY,
+                ApplicationState.UNCONFIGURED,
+                ApplicationState.FAULT,
+            )
+            self.connection.request_disconnect()
+        self.connection.wait_disconnected()
 
     def start(self) -> Future[None]:
         return self._start_replay(single_step=False)
@@ -578,6 +557,10 @@ class _LocalApplication(ProductionApplication):
             if single_step:
                 raise ApplicationStateError("Start Basler before requesting Pause/Step")
             with self._replay_lock:
+                if self.connection.snapshot().state is not ConnectionState.CONNECTED:
+                    raise ApplicationStateError(
+                        "Connect the Basler source in Vision before Start"
+                    )
                 control = BaslerAdmissionControl(self.snapshot().generation + 1)
                 startup = self._start_reporting_session()
                 self._basler_control = control
@@ -787,16 +770,9 @@ class _LocalApplication(ProductionApplication):
             worker = self._reporting_worker
         return worker.snapshot() if worker else None
 
-    def close(self) -> Future[None]:
-        completed = super().close()
-        completed.add_done_callback(self._release_cache)
-        return completed
-
-    def _release_cache(self, completed: Future[None]) -> None:
-        # Close success follows safe source/native/runtime joins. A failed Close
-        # keeps ownership/cache; application.join still proves lifecycle-thread exit.
-        if completed.exception(timeout=0) is None:
-            self.replay_cache.clear()
+    def _close_resources(self) -> None:
+        self.connection.disconnect()
+        self.replay_cache.clear()
 
 
 def _cache_notice(status: FolderCacheStatus) -> None:
@@ -835,11 +811,7 @@ def compose(
     reporting: LocalReportingSettings | None = None,
     replay_controls: bool = False,
     reporting_editable: bool = False,
-    basler_serials: Sequence[str] | None = None,
-    basler_timeout: float = 30.0,
-    observe_acquisition: Callable[
-        [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
-    ] = basler_notice,
+    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = basler_notice,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
@@ -893,8 +865,6 @@ def compose(
         reporting=reporting,
         replay_controls=replay_controls,
         reporting_editable=reporting_editable,
-        basler_serials=basler_serials,
-        basler_timeout=basler_timeout,
         observe_acquisition=observe_acquisition,
     )
     app.configure(prepared)
@@ -913,22 +883,11 @@ def local_application(
     reporting: LocalReportingSettings | None = None,
     replay_controls: bool = False,
     reporting_editable: bool = False,
-    basler_serials: Sequence[str] | None = None,
-    basler_timeout: float = 30.0,
-    observe_acquisition: Callable[
-        [ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport], None
-    ] = basler_notice,
+    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = basler_notice,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != 6:
         raise ValueError("Exactly six local image paths are required")
-    if basler_serials is not None:
-        if replay_controls or reporting is not None or reporting_editable:
-            raise ValueError("Basler acquisition cannot replay or report to PLC")
-        # Validate without SDK access; create a fresh source for each generation.
-        basler_serials = BaslerAcquisitionSource(
-            basler_serials, timeout=basler_timeout
-        ).serials
     if editor.camera_sources is None:
         raise ValueError("Local production requires camera sources")
     source_draft = editor.camera_sources
@@ -942,29 +901,24 @@ def local_application(
     ):
         camera.validate_shape((image.shape[0], image.shape[1], 3))
         image.setflags(write=False)
-        if basler_serials is None:
-            store.publish(
-                Frame(FrameId(CycleId(0), camera.camera_id, 0), monotonic(), image),
-                generation=0,
-                source_key=CameraFolder(
-                    camera.camera_id,
-                    str(
-                        paths[editor.machine.layout.camera_ids.index(camera.camera_id)]
-                        .resolve()
-                        .parent
-                    ),
-                ).key(sources_file.parent),
-            )
+        store.publish(
+            Frame(FrameId(CycleId(0), camera.camera_id, 0), monotonic(), image),
+            generation=0,
+            source_key=CameraFolder(
+                camera.camera_id,
+                str(
+                    paths[editor.machine.layout.camera_ids.index(camera.camera_id)]
+                    .resolve()
+                    .parent
+                ),
+            ).key(sources_file.parent),
+        )
 
     def factory(config: PreparedConfiguration, generation: int) -> LocalRuntimeSession:
         try:
             saved_sources = load_camera_sources(sources_file) if not paths else sources
             saved_sources.validate_cameras(config.configuration.layout.camera_ids)
-            if (
-                not paths
-                and basler_serials is None
-                and saved_sources.mode != source_draft.saved.mode
-            ):
+            if not paths and saved_sources.mode != source_draft.saved.mode:
                 raise ConfigurationError(
                     "Source mode changed on disk; apply in Vision or restart"
                 )
@@ -984,54 +938,55 @@ def local_application(
             )
         )
         snapshot.validate_cameras(config.configuration.layout.camera_ids)
-        if basler_serials is not None:
-            serial_map = dict(
-                zip(config.configuration.layout.camera_ids, basler_serials, strict=True)
-            )
-            snapshot = replace(
-                snapshot,
-                mode="basler",
-                cameras=tuple(
-                    replace(c, basler_serial=serial_map[c.camera_id])
-                    for c in snapshot.cameras
-                ),
-            )
         serials = (
             snapshot.basler_serials(config.configuration.layout.camera_ids)
             if snapshot.mode == "basler"
             else None
         )
-        replay = (
-            None
-            if paths
-            else FolderReplay(
-                config.configuration.layout, snapshot, sources_file.parent
+        continuous_source = app.connection if serials is not None else None
+        if continuous_source is not None:
+            assert serials is not None
+            connected = continuous_source.snapshot()
+            if connected.state is not ConnectionState.CONNECTED or tuple(
+                (row.camera_id, row.serial) for row in connected.cameras
+            ) != tuple(
+                zip(config.configuration.layout.camera_ids, serials, strict=True)
+            ):
+                raise ApplicationStateError(
+                    "Connected cameras differ from the saved source"
+                )
+            staged: list[NDArray[np.uint8]] = []
+            for camera, actual in zip(
+                config.configuration.layout.cameras, connected.cameras, strict=True
+            ):
+                camera.validate_shape((actual.height, actual.width, 3))
+                image = np.zeros((actual.height, actual.width, 3), dtype=np.uint8)
+                image.setflags(write=False)
+                staged.append(image)
+            group = tuple(staged)
+            replay = None
+        else:
+            replay = (
+                None
+                if paths
+                else cache.replay(
+                    config.configuration.layout,
+                    snapshot,
+                    sources_file.parent,
+                    cancelled=lambda: (
+                        app.snapshot().state
+                        in (
+                            ApplicationState.STOPPING,
+                            ApplicationState.CLOSED,
+                            ApplicationState.FAULT,
+                        )
+                    ),
+                )
             )
-            if serials is not None
-            else cache.replay(
-                config.configuration.layout,
-                snapshot,
-                sources_file.parent,
-                cancelled=lambda: (
-                    app.snapshot().state
-                    in (
-                        ApplicationState.STOPPING,
-                        ApplicationState.CLOSED,
-                        ApplicationState.FAULT,
-                    )
-                ),
-            )
-        )
-        group = images if replay is None else replay.next_group()
-        if group is None:
-            raise ValueError("No complete image group")
+            group = images if replay is None else replay.next_group()
+            if group is None:
+                raise ValueError("No complete image group")
         session_reporting = app.reporting_for_generation(generation)
-        continuous = serials is not None and basler_serials is None and not paths
-        continuous_source = (
-            ContinuousBaslerSource(config.configuration.layout.camera_ids, serials)
-            if continuous and serials is not None
-            else None
-        )
         report_worker = (
             FirstStationReportingWorker(
                 generation,
@@ -1056,12 +1011,10 @@ def local_application(
             source_base=sources_file.parent,
             reporting=report_worker,
             replay_control=app.replay_control_for(generation),
-            basler_source=BaslerAcquisitionSource(serials, timeout=basler_timeout)
-            if serials is not None and not continuous
-            else None,
             continuous_source=continuous_source,
-            basler_control=app.basler_control_for(generation) if continuous else None,
-            observe_acquisition=observe_acquisition,
+            basler_control=app.basler_control_for(generation)
+            if continuous_source is not None
+            else None,
         )
         app.set_reporting_owner(report_worker)
         observe_source(session.source_done)
@@ -1073,7 +1026,9 @@ def local_application(
         replay_controls=replay_controls,
         reporting=reporting,
         reporting_editable=reporting_editable,
-        source_draft=source_draft if not paths and basler_serials is None else None,
+        source_draft=source_draft if not paths else None,
+        source_cameras=editor.machine.layout.camera_ids,
+        observe_acquisition=observe_acquisition,
     )
     return app, store
 
@@ -1104,23 +1059,12 @@ class SourceNotifications(QObject):
     def watch_acquisition(
         delivery: FutureDelivery,
         generation: int,
-        observation: ArmedAcquisition | ContinuousArmedAcquisition | AcquisitionReport,
+        observation: ContinuousArmedAcquisition,
     ) -> None:
         """Source-thread notification through the existing queued delivery gate."""
         basler_notice(observation)
-        if isinstance(observation, AcquisitionReport) and (
-            observation.issues
-            or observation.missing_serials
-            or observation.extra_serials
-            or not observation.cleanup_safe
-        ):
-            return  # The source Future reports failure; never announce successful capture.
         notice: Future[str] = Future()
-        notice.set_result(
-            "basler_armed"
-            if isinstance(observation, (ArmedAcquisition, ContinuousArmedAcquisition))
-            else "basler_processing"
-        )
+        notice.set_result("basler_armed")
         delivery.watch(f"basler_source:{generation}", notice)
 
     @Slot(str, object, object)

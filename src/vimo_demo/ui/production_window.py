@@ -26,6 +26,7 @@ from vimo_demo.application import (
     ConfigurationIdentity,
     ProductionApplicationSnapshot,
 )
+from vimo_demo.application.basler_connection import ConnectionState
 from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.application.local_replay import ReplayState
 from vimo_demo.communication.reporting import ReportOutcome
@@ -963,6 +964,12 @@ class ProductionWindow(QMainWindow):
                 )
             ):
                 progress = self._acquisition_progress
+                if (
+                    self.bridge.source_connection is not None
+                    and self.bridge.source_connection.source_snapshot().state
+                    is ConnectionState.CONNECTED
+                ):
+                    progress = snapshot.generation, "basler_armed"
                 acquisition_detail = text(
                     progress[1]
                     if progress and progress[0] == snapshot.generation

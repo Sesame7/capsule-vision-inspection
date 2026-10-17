@@ -87,12 +87,13 @@ judgments survive. No observed cycle means no report. The source's ambiguity fen
 is checked at admission and again after bitmap ACK, before W49. A known ambiguous
 cycle gets no commit; an already in-flight sequence write cannot be recalled.
 
-Basler Stop first stops source/runtime admission, settles admitted cycles and lets
+Basler Stop first stops inspection/runtime admission, settles admitted cycles and lets
 active native work finish, then drains already accepted reports in order. Folder
 Stop keeps its existing active-attempt completion and explicit pending skips.
 No new reports start from rejected work. Session release additionally requires
 report-thread exit and safe socket cleanup; notification/timeout alone is not exit.
-Basler Pause/Step keeps the reporting owner alive and waits for accepted reports
+The separately connected Basler source keeps grabbing/discarding after Stop; only
+Vision Disconnect or application Close releases cameras. Basler Pause/Step keeps the reporting owner alive and waits for accepted reports
 to settle before PAUSED. Discarded paused captures send no report or sequence write.
 These controls do not pause the PLC or mechanical equipment.
 

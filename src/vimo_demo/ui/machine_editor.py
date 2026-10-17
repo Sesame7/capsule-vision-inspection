@@ -29,9 +29,9 @@ class MachineLayoutDraft:
     def replace_rects(self, camera: CameraId, rects: tuple[BoundingRect, ...]) -> None:
         current = self.camera(camera)
         size = self.bounds.get(camera)
-        if size is None or len(rects) != len(current.slots):
-            raise ValueError("A reference image and every configured slot are required")
-        if any(not fits(r, size) for r in rects):
+        if len(rects) != len(current.slots):
+            raise ValueError("Every configured slot is required")
+        if size is not None and any(not fits(r, size) for r in rects):
             raise ValueError("ROI exceeds reference bounds; operation rejected")
         updated = replace(
             current,

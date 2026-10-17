@@ -298,6 +298,9 @@ class ProductionApplication:
                 )
             self._condition.notify_all()
 
+    def _close_resources(self) -> None:
+        """Application-lifetime resources; called only by the lifecycle owner."""
+
     def _run(self) -> None:
         while True:
             with self._condition:
@@ -346,6 +349,8 @@ class ProductionApplication:
                 self._condition.wait_for(lambda: self._stop_requested or self._closing)
                 session = self._session
             cleanup_error: BaseException | None = None
+            resource_error = False
+            resources_checked = False
             try:
                 if session is not None:
                     session.request_stop()
@@ -365,6 +370,13 @@ class ProductionApplication:
                         self._session = None
             except BaseException as exc:
                 cleanup_error = exc
+            if self._closing and self._session is None:
+                resources_checked = True
+                try:
+                    self._close_resources()
+                except BaseException as exc:
+                    cleanup_error = exc
+                    resource_error = True
             with self._condition:
                 if self._pending:
                     cleanup_error = cleanup_error or ApplicationError(
@@ -385,9 +397,14 @@ class ProductionApplication:
                     )
                 self._stop_requested = False
                 stopped = self._stopped
-                closing = self._closing
+                # Close may arrive after the resource check above. In that case
+                # leave its request pending for the next owner iteration; never
+                # announce CLOSED without running application-resource cleanup.
+                closing = self._closing and (
+                    resources_checked or self._session is not None
+                )
                 closed = self._closed
-                if closing and self._session is None:
+                if closing and self._session is None and not resource_error:
                     self._state = ApplicationState.CLOSED
                 elif closing:
                     self._closing = False
@@ -409,7 +426,7 @@ class ProductionApplication:
                 else:
                     stopped.set_result(None)
             if closing and closed is not None:
-                if self._session is None:
+                if self._session is None and not resource_error:
                     closed.set_result(None)
                     return
                 closed.set_exception(
