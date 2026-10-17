@@ -136,13 +136,7 @@ def test_normal_app_native_close_exits_process_tree(
             record["stage"] == "close_return" and record["accepted"]
         ):
             assert record["application_closed"] and record["communication_closed"]
-        if record["stage"] == "exec_return" and web_started:
-            assert record["threads"] == [
-                "MainThread",
-                "ProductionSnapshotPublisher",
-                "ProductionSnapshotHTTP",
-            ]
-        elif record["stage"] in ("exec_return", "atexit"):
+        if record["stage"] in ("exec_return", "atexit"):
             assert record["threads"] == ["MainThread"]
     if scenario == "pending":
         assert next(r for r in records if r["stage"] == "native_close")["busy"]

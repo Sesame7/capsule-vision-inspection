@@ -55,8 +55,9 @@ endpoint. Each endpoint contains `transport` (`udp`/`tcp`), numeric IPv4 `host`,
 `network`/`node`/`unit`, with existing FINS ranges). TCP retains inactive UDP route
 values but negotiates its nodes. Queue limits and W49–W52 mapping are not settings.
 `web` contains `enabled`, `host`, `port` and `interval_ms` (500/1000/2000). Only
-127.0.0.1 or a specific local unicast IPv4 is supported; Save and service launch
-also verify local assignment/subnet validity, without DNS or adapter selection UI.
+127.0.0.1 or a specific unicast IPv4 is supported. Saving/reloading preserves
+unavailable adapter addresses; actual service startup checks local assignment and
+subnet validity. There is no DNS, wildcard fallback or automatic IP substitution.
 
 A missing file retains earlier defaults: reporting disabled, source-specific
 Production endpoint, independent localhost/UDP diagnostics, and Web enabled on
@@ -68,9 +69,13 @@ without changing the file or invalidating Production readiness.
 
 Restored reporting selection is frozen at the next Production Start, never a
 connection or authorization to transmit at startup/warm-up. Runtime observations,
-ACKs, watches, counters and results are not persisted. Web is a process-lifetime
-owner: saved changes require restart and do not alter the currently running
-service. Developer launchers retain their independent CLI settings.
+ACKs, watches, counters and results are not persisted. Saving does not alter the
+running Web service. Communication's explicit Start and Apply/Restart use only
+saved settings; dirty drafts must first be saved or discarded. Saved disabled
+plus Apply stops Web; enabled allows Start/Restart. Stop does not change saved
+enablement. The next process launch restores that preference. Runtime settings
+and URL are presented separately from edited/saved values. Developer launchers
+retain their independent CLI settings.
 
 ## MachineLayout
 

@@ -107,9 +107,23 @@ STRINGS: dict[str, tuple[str, str]] = {
     "web_live": ("当前服务运行中", "Current service running"),
     "web_failed": ("当前服务不可用", "Current service unavailable"),
     "web_off": ("当前服务未启用", "Current service off"),
+    "web_starting": ("正在启动", "Starting"),
+    "web_running": ("运行中", "Running"),
+    "web_stopping": ("正在停止", "Stopping"),
+    "web_stopped": ("已停止", "Stopped"),
+    "web_action_start": ("启动", "Start"),
+    "web_action_stop": ("停止", "Stop"),
+    "web_action_apply": ("应用 / 重启", "Apply / Restart"),
+    "web_open": ("打开运行地址", "Open running URL"),
+    "web_addresses": ("刷新本机 IPv4", "Refresh local IPv4 addresses"),
+    "web_save_first": ("请先保存或放弃未保存的设置", "Save or discard settings first"),
+    "web_restored": (
+        "已恢复先前运行设置；新设置未能启动",
+        "Previous running settings restored; new settings failed to start",
+    ),
     "web_restart": (
-        "Web 更改保存后需重启应用",
-        "Save Web changes, then restart the application",
+        "设置与当前服务不同",
+        "Settings differ from the current service",
     ),
     "web_boundary": (
         "只读且无身份验证；仅绑定一个本机 IPv4，请仅用于可信网络。",
@@ -919,6 +933,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
     QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
     QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
+    QTableWidget#commWatchTable::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
     QCheckBox {{ background: transparent; spacing: 8px; }}
     QCheckBox::indicator {{ width: 20px; height: 20px; }}

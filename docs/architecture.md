@@ -289,20 +289,35 @@ delivery. A frame already buffered at request processing is not substituted for 
 new capture. The boundary is an SDK observation, not proof of physical exposure time.
 Capture success is temporary canvas data, never inspection admission or accounting.
 
-Normal startup owns one Web publisher and one serial HTTP thread across Stop/Start.
+Normal startup owns a Qt-independent `WebRuntime` control thread and at most one
+Web publisher/serial HTTP pair. Production Stop/Start leaves Web independent.
+Communication can explicitly Start, Stop or Apply/Restart saved settings. Admission
+allows one operation, with no restart backlog or completed-result history. The
+control owner constructs/binds off Qt; Stop interrupts HTTP I/O and joins both
+actual service threads/socket before releasing ownership or rebinding. Close
+fences new operations, waits for in-progress startup/cleanup and terminates the
+control thread before the native window closes. A caller's timeout is not release;
+incomplete cleanup retains ownership and prevents replacement. No thread is
+forcibly cancelled. On failed replacement, one restoration of the previous running
+configuration is attempted only after failed-owner cleanup; success/failure remains
+explicit and does not change saved settings or Production state.
+
 It keeps one current publication plus a replacement being built; JPEGs are at
 most 640 pixels on the longest side, quality 70, with unchanged frame bytes reused.
 Application/display snapshots are sampled separately, not atomic six-camera capture.
 Publisher ID, revision and source identities prevent old bytes/new evidence aliasing.
 
 Default server/browser interval is 500 ms (saved Communication preferences also
-allow 1000/2000 ms; Web changes require application restart). The publisher
+allow 1000/2000 ms; Save is separate from explicit runtime application). The publisher
 waits after each publication; the browser never overlaps polls, fetches JPEGs
 sequentially and owns at most six displayed object URLs plus one decode. Requests
 have a five-second poll deadline; 410 waits for the next observation, without an
 immediate retry loop. Publication age beyond six seconds is stale, separate from
 application FAULT. HTTP uses one serial handler, backlog four and one-second I/O
-timeouts. All service threads/socket ownership must exit on process Close.
+timeouts. Each replacement gets a fresh publisher identity/revision sequence;
+old URLs cannot alias new observations, even at the same address. STARTING,
+RUNNING, STOPPING, STOPPED and FAILED describe service observations, not Production
+readiness. All service threads/socket ownership must exit on process Close.
 
 Routes are `/`, `/observer.js`, `/observer.css`, `/api/snapshot`, exact returned
 `/api/cameras/<CameraId>.jpg?publisher=...&revision=...`, and `/health`. Snapshot is

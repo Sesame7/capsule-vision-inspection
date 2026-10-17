@@ -111,7 +111,8 @@ access control.
 
 The page has three content-driven sections: **Production reporting**, **Web
 observer**, and **Diagnostics**. Production protocol, endpoint, timeout and enabled
-selection are inline; FINS routing expands separately (TCP negotiates nodes).
+selection are inline; UDP FINS routing expands separately. TCP negotiates nodes
+and hides inapplicable routing controls without deleting saved UDP values.
 Diagnostics has its own independently saved endpoint and routing, grouped DM/WR
 watches and serialized manual/auto refresh, plus explicit one-shot writes.
 Requests always snapshot the saved/effective diagnostic endpoint, identified above
@@ -137,13 +138,30 @@ It does not persist, restart/stop any owner or undo earlier network operations.
 The default settings can be explicitly saved before any edits. Portrait stacks
 cards; landscape places Production/Web side by side only when their actual content
 fits. Expanded routing/diagnostics grow in the outer scroll area.
-Web enabled/bind/port/interval preferences apply only at the next process launch;
-concise actual service status sits at the card header's right edge. Detailed
-URLs/errors are in its tooltip. Reporting has a separate header status and compact
-generation counters. The restart notice remains separate from edited values.
-There is no runtime Web start/stop/rebind action. Binding still requires one
-assigned local IPv4 (default 127.0.0.1:8765, 500 ms), and the observer remains
-read-only and unauthenticated; use only trusted networks. See
+Web has explicit **Start**, **Stop** and **Apply / Restart**, independent of
+Production and reporting. Start/Apply use successfully saved settings, never draft
+text; first Save or Discard any dirty Communication edits. Stop remains available
+with dirty drafts and does not persist them. Apply with saved enablement off stops
+the service; enabled settings allow startup/restart, including unchanged settings.
+Saving alone never starts/rebinds Web or changes an active session.
+
+Actual service state is at the Web header's right edge; its tooltip retains errors,
+running interval and any failed-rebind/restoration observation. Open Browser uses
+the actual running URL, not the edited endpoint. An explicit address refresh lists
+assigned local IPv4s without network scanning; 127.0.0.1 and manual entry are always
+available. An unavailable saved IP survives Save/Discard but fails actual startup;
+there is no wildcard or alternative-address fallback. Restart stops/joins the old
+HTTP/publisher/socket owner before starting a replacement. Failed binding attempts
+one safe restoration of the previous running configuration; the failed saved
+configuration remains saved for review. A failed restoration stays FAILED. Close
+waits asynchronously for actual Web and diagnostic termination; it does not
+abandon blocked work or claim socket release on timeout. Web errors never fault
+Production. Reporting retains separate header status and compact ACK/failure
+observations, without a duplicate endpoint footer.
+
+The default remains 127.0.0.1:8765 at 500 ms. Saved enablement is restored on the
+next application launch. The observer remains read-only and unauthenticated;
+use only trusted networks. See
 [configuration](configuration.md#communication-preferences) for validation/recovery.
 
 Automatic reporting presents current/last-generation ACK/failure/skip/rejection

@@ -153,7 +153,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class ProductionSnapshotService:
-    """Best-effort process-lifetime observation; Stop/Start does not restart it.
+    """Best-effort single-use observation service, independent of Production.
 
     request_stop() never waits. join() is for a non-GUI owner and confirms actual
     exit, including an in-progress encoder/request; timeout retains ownership.

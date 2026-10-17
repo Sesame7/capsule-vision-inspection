@@ -54,7 +54,6 @@ class ReportingPanel(QFrame):
         self.enabled = QCheckBox()
         self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.enabled)
-        self.endpoint = QLabel()
         header.addStretch()
         self.service_status = QLabel()
         header.addWidget(self.service_status)
@@ -113,14 +112,13 @@ class ReportingPanel(QFrame):
                 grid.addWidget(field, row, column)
         settings.addWidget(self.advanced)
         self.advanced.hide()
-        self.advanced_button.toggled.connect(self.advanced.setVisible)
+        self.advanced_button.toggled.connect(self.refresh)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.error = QLabel()
         self.error.setWordWrap(True)
         status_row = QHBoxLayout()
         status_row.addWidget(self.status, 1)
-        status_row.addWidget(self.endpoint)
         status_row.addWidget(self.error)
         root.addLayout(status_row)
         self._fields = (self.port, self.timeout, *self.destination, *self.source)
@@ -240,13 +238,11 @@ class ReportingPanel(QFrame):
         udp = self.protocol.currentIndex() == 0
         self.advanced.setEnabled(editable and udp)
         self.advanced_button.setEnabled(editable and udp)
+        self.advanced_button.setVisible(udp)
+        self.advanced.setVisible(udp and self.advanced_button.isChecked())
         self.protocol.setToolTip(
             text("comm_protocol" if udp else "comm_tcp_nodes", self.language)
         )
-        self.endpoint.setText(
-            f"FINS/{selected.settings.transport.name} · {selected.settings.host}:{selected.settings.port}"
-        )
-        self.endpoint.setToolTip(text("plc_next_start", self.language))
         snapshot = self.controller.reporting_snapshot()
         key = "plc_disabled" if not selected.enabled else "plc_enabled"
         if snapshot is not None and snapshot.thread_alive:

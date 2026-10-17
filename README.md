@@ -90,8 +90,11 @@ without blocking Production.
 
 Use **Communication → Web observer** to edit enablement, bind IPv4, port and
 500/1000/2000 ms refresh. **Save settings** persists all three Communication
-sections in `data/communication.json`; Web changes take effect after application
-restart. The page shows the actual service separately. A trusted-LAN bind must be
+sections in `data/communication.json`; explicit Start, Stop and Apply/Restart
+control Web independently of Production. Save/Discard drafts before applying;
+Save alone does not restart Web. Saved enablement is restored on the next launch.
+The page lists local IPv4s and shows the actual running URL with Open Browser.
+A trusted-LAN bind must be
 one assigned local IPv4; wildcard/DNS/broadcast bindings remain unsupported.
 Normal `app.py` accepts only `--help`, with no operator Web flags. Developer
 launchers retain their own explicit options. Access/firewall configuration remains
@@ -149,8 +152,9 @@ uv run --no-sync pytest tests/integration/test_reference.py tests/integration/te
   dark decoded frames are different from unavailable frames.
 - **PLC reports fail:** verify transport, endpoint, node negotiation and reporting
   enablement before Start. ACK is not PLC scan consumption or physical rejection.
-- **Web unavailable:** inspect startup stderr and port ownership. Stop/Start does
-  not restart the process-owned observer; close releases its socket/threads.
+- **Web unavailable:** inspect Communication's service tooltip and port ownership.
+  Save reviewed settings, then Start or Apply/Restart Web there. Production
+  Stop/Start leaves Web independent; Close waits for its socket/threads.
 - **Close waits:** a native call cannot be force-cancelled. A timeout is not proof
   of thread exit; preserve ownership and diagnose rather than terminating silently.
 

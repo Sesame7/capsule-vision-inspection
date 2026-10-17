@@ -56,6 +56,29 @@ def local_interfaces() -> tuple[IPv4Interface, ...]:
     return tuple(result)
 
 
+def local_ipv4_addresses() -> tuple[str, ...]:
+    """Assigned selectable unicast addresses, without probing the network."""
+    addresses = {
+        interface.ip
+        for interface in local_interfaces()
+        if not (
+            interface.ip.is_multicast
+            or interface.ip.is_reserved
+            or interface.ip.is_loopback
+            or int(interface.ip) >> 24 == 0
+        )
+        and (
+            interface.network.prefixlen >= 31
+            or interface.ip
+            not in (
+                interface.network.network_address,
+                interface.network.broadcast_address,
+            )
+        )
+    }
+    return ("127.0.0.1", *(str(address) for address in sorted(addresses)))
+
+
 def validate_host(host: str) -> str:
     address = IPv4Address(host)  # Strict numeric IPv4, never hostname resolution.
     if host == "127.0.0.1":

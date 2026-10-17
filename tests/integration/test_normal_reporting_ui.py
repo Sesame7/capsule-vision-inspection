@@ -245,7 +245,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         assert panel.controller.reporting_selection() is selected
         assert not panel.port.isEnabled() and window.communication.host.isEnabled()
         window.communication.host.setText("192.0.2.10")
-        assert panel.endpoint.text() == f"FINS/UDP · 127.0.0.1:{peer.port}"
+        assert panel.controller.reporting_selection().settings.port == peer.port
         window.communication.host.setText("127.0.0.1")
 
         page = window.communication

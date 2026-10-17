@@ -61,7 +61,7 @@ from vimo_demo.communication.reporting import (
     ReportingWriteProtectedError,
 )
 from vimo_demo.configuration import ConfigurationError
-from vimo_demo.web.hosts import validate_host
+from vimo_demo.web.runtime import WebRuntime
 
 from .inference_bridge import FutureDelivery
 from .production_style import (
@@ -185,8 +185,14 @@ class CommunicationPage(QWidget):
         self.service_layout.setSpacing(Style.space)
         if reporting is not None and reporting.reporting_editable:
             self.reporting_panel = ReportingPanel(reporting)
-            self.service_layout.addWidget(self.reporting_panel, 0, 0)
+            self.service_layout.addWidget(
+                self.reporting_panel, 0, 0, Qt.AlignmentFlag.AlignTop
+            )
         self.web_panel = WebSettingsPanel()
+        self.web_panel.requested.connect(self._web_action)
+        self._web_close_monitor = QTimer(self)
+        self._web_close_monitor.setInterval(20)
+        self._web_close_monitor.timeout.connect(self._check_closed)
         self.service_layout.addWidget(self.web_panel, 1, 0)
         layout.addWidget(self.service_cards)
         diagnostics = self._panel(layout, "comm_diagnostics")
@@ -308,6 +314,7 @@ class CommunicationPage(QWidget):
         self.watch_status.setTextFormat(Qt.TextFormat.PlainText)
         watch.addWidget(self.watch_status)
         self.watch_table = QTableWidget(0, 5)
+        self.watch_table.setObjectName("commWatchTable")
         self.watch_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.watch_table.verticalHeader().hide()
         self.watch_table.horizontalHeader().setSectionResizeMode(
@@ -547,6 +554,7 @@ class CommunicationPage(QWidget):
         self._settings_missing = not path.exists()
         self._show_preferences(value)
         self.web_panel.launched = value.web
+        self.web_panel.saved_available = not (self._settings_missing or error)
         self.web_panel.refresh()
         self._settings_message = "comm_settings_failed" if error else ""
         self._settings_detail = error
@@ -574,6 +582,10 @@ class CommunicationPage(QWidget):
 
     def _render_preferences(self) -> None:
         dirty = self.dirty
+        self.web_panel.saved = self._preferences.web
+        self.web_panel.dirty = dirty
+        self.web_panel.editable = not (self._closing or self._disposed)
+        self.web_panel.refresh()
         key = self._settings_message or (
             "comm_settings_dirty"
             if dirty
@@ -634,7 +646,6 @@ class CommunicationPage(QWidget):
             return
         try:
             value = self._draft_preferences()
-            validate_host(value.web.host)
             path = self._preferences_path
             self._commit_preferences(
                 value, lambda: save_communication_preferences(path, value)
@@ -646,6 +657,7 @@ class CommunicationPage(QWidget):
             )
         else:
             self._settings_missing = False
+            self.web_panel.saved_available = True
             self._settings_message, self._settings_detail = "comm_settings_saved", ""
         self._refresh()
         if self.reporting_panel is not None:
@@ -690,7 +702,6 @@ class CommunicationPage(QWidget):
             return
         try:
             value = load_communication_preferences(self._preferences_path)
-            validate_host(value.web.host)
             self._commit_preferences(value, lambda: None)
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self._settings_message, self._settings_detail = (
@@ -699,6 +710,7 @@ class CommunicationPage(QWidget):
             )
         else:
             self._show_preferences(value)
+            self.web_panel.saved_available = True
             self._settings_missing = False
             self._settings_message, self._settings_detail = "comm_settings_saved", ""
         self._refresh()
@@ -733,7 +745,35 @@ class CommunicationPage(QWidget):
 
     @property
     def closed(self) -> bool:
-        return self._disposed or (self._closing and not self.busy)
+        return self._disposed or (
+            self._closing
+            and not self.busy
+            and (self.web_panel.runtime is None or self.web_panel.runtime.closed)
+        )
+
+    def bind_web_runtime(self, runtime: WebRuntime) -> None:
+        if self.web_panel.runtime is not None:
+            raise RuntimeError("Web runtime already attached")
+        self.web_panel.runtime = runtime
+        self._render_preferences()
+
+    @Slot(str)
+    def _web_action(self, action: str) -> None:
+        runtime = self.web_panel.runtime
+        if runtime is None or self._closing or self._disposed:
+            return
+        if action != "stop" and (self.dirty or not self.web_panel.saved_available):
+            return
+        try:
+            if action == "start":
+                runtime.start(self._preferences.web)
+            elif action == "apply":
+                runtime.apply(self._preferences.web)
+            elif action == "stop":
+                runtime.stop()
+        except (ValueError, RuntimeError) as exc:
+            self.web_panel.actual.setToolTip(str(exc))
+        self.web_panel.refresh()
 
     @property
     def log_count(self) -> int:
@@ -741,7 +781,9 @@ class CommunicationPage(QWidget):
 
     @Slot()
     def _toggle_advanced(self) -> None:
-        self.advanced.setVisible(self.advanced_button.isChecked())
+        self.advanced.setVisible(
+            self.protocol.currentIndex() == 0 and self.advanced_button.isChecked()
+        )
 
     def set_language(self, language: Language) -> None:
         self.language = language
@@ -1206,10 +1248,7 @@ class CommunicationPage(QWidget):
                     self._auto_timer.stop()
                     self._watch_state = "comm_watch_failed"
         self._refresh()
-        if self._closing:
-            callback, self._after_close = self._after_close, None
-            if callback is not None:
-                callback()
+        self._check_closed()
 
     def _finish_watch(self, outcome: _WatchOutcome) -> None:
         for index, response in enumerate(outcome.responses):
@@ -1316,6 +1355,8 @@ class CommunicationPage(QWidget):
         udp = self.protocol.currentIndex() == 0
         self.advanced.setEnabled(editable and udp)
         self.advanced_button.setEnabled(editable and udp)
+        self.advanced_button.setVisible(udp)
+        self.advanced.setVisible(udp and self.advanced_button.isChecked())
         self.protocol.setToolTip(
             text("comm_protocol" if udp else "comm_tcp_nodes", self.language)
         )
@@ -1413,17 +1454,27 @@ class CommunicationPage(QWidget):
             self._discard_dialog.reject()
         self._closing = True
         self._after_close = after
+        if self.web_panel.runtime is not None:
+            self.web_panel.runtime.request_close()
         self._refresh()
         self.save_settings.setEnabled(False)
-        if not self.busy:
-            self._after_close = None
-            after()
+        self._web_close_monitor.start()
+        self._check_closed()
+
+    def _check_closed(self) -> None:
+        self.web_panel.refresh()
+        if self.closed:
+            self._web_close_monitor.stop()
+            callback, self._after_close = self._after_close, None
+            if callback is not None:
+                callback()
 
     def resume(self) -> None:
         """Keep the live workspace usable if the application's close fails."""
         if self._disposed:
             raise RuntimeError("Communication workspace is disposed")
         self._closing = False
+        self._web_close_monitor.stop()
         self.save_settings.setEnabled(True)
         self._after_close = None
         if not self.busy:
@@ -1432,14 +1483,18 @@ class CommunicationPage(QWidget):
 
     def dispose(self) -> None:
         """Delivery revocation is allowed only after owned work actually exits."""
-        if self.busy:
+        if self.busy or (
+            self.web_panel.runtime is not None and not self.web_panel.runtime.closed
+        ):
             raise RuntimeError("Cannot dispose an active communication owner")
         if not self._disposed:
             self._disposed = True
             self._auto_timer.stop()
             self._monitor.stop()
+            self._web_close_monitor.stop()
             self._delivery.detach()
 
     def hideEvent(self, event: QHideEvent) -> None:
-        self.stop_monitoring()
+        if not self._disposed:
+            self.stop_monitoring()
         super().hideEvent(event)
