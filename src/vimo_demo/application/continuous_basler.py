@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from threading import Event, Lock
 from time import monotonic
 
+import numpy as np
+from numpy.typing import NDArray
+
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 
 from .basler import (
@@ -80,6 +83,9 @@ class ContinuousBaslerSource:
         ] = lambda _cycle, _event: None,
         on_prepared: Callable[[tuple[CameraSettings, ...]], None] = lambda _: None,
         on_poll: Callable[[Callable[[], bool]], bool] = lambda _: False,
+        on_idle_frame: Callable[
+            [CameraId, AcquisitionMetadata, NDArray[np.uint8]], None
+        ] = lambda _camera, _metadata, _pixels: None,
     ) -> None:
         from ._basler_sdk import PylonBackend
 
@@ -210,6 +216,7 @@ class ContinuousBaslerSource:
                         self.control.received(discarded=not admitted)
                     if not admitted:
                         self.discarded_frames += 1
+                        on_idle_frame(self.cameras[index], row, pixels)
                         continue
                     frame = Frame(
                         FrameId(cycle, self.cameras[index], ordinal),

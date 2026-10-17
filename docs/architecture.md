@@ -92,7 +92,9 @@ Vision's explicit Connect all opens/arms six saved/applied Basler mappings on on
 application-owned SDK thread. Connection survives page/Recipe/Batch changes and
 Production Stop. CONNECTED/ARMED is independent of inspection RUNNING; there is no
 automatic connection/retry. Idle connected frames are retrieved, validated and
-released without cycles, counters, display publication or PLC reports.
+released without cycles, counters, display publication or PLC reports. One optional
+idle capture request copies only the selected camera's next matching frame into a
+Future for Vision; it does not enter the Production path.
 
 Basler Start requires CONNECTED, checks every saved ROI against current camera
 Width/Height and warms one ViMo worker with black uint8 BGR inputs, twice per
@@ -213,8 +215,15 @@ results draw defect boxes.
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,
 dimensions and source key. Only matching evidence may overlay those pixels.
-Vision Runtime references are frozen snapshots; explicit refresh/camera selection
-chooses a new eligible reference rather than tracking every live frame.
+Vision uses temporary browsed/imported/captured images or eligible frozen Runtime
+pixels; no separate persisted reference library exists. Recipe preview retains its
+internal frozen-image contract. Capture uses the same SDK owner, accepts one pending
+request with a monotonic deadline and first requires an empty complete SDK boundary.
+It never sends software/PLC triggers or opens another camera. Camera/source changes,
+Disconnect, Start and Close cancel pending capture; a Qt request token rejects stale
+delivery. A frame already buffered at request processing is not substituted for a
+new capture. The boundary is an SDK observation, not proof of physical exposure time.
+Capture success is temporary canvas data, never inspection admission or accounting.
 
 Normal startup owns one Web publisher and one serial HTTP thread across Stop/Start.
 It keeps one current publication plus a replacement being built; JPEGs are at

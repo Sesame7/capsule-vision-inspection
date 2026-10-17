@@ -35,6 +35,8 @@ from vimo_demo.application.basler import (
     CameraSettings,
 )
 from vimo_demo.application.basler_connection import (
+    BaslerConnection,
+    CameraSnapshot,
     ConnectionState,
     SourceConnectionCommands,
 )
@@ -131,10 +133,7 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         until(lambda: not window.parameters.busy)
         for i in range(1, 7):
             workspace.sources.set_serial(CameraId(f"CAM{i}"), SERIALS[i - 1])
-        workspace.open_source_settings()
-        assert workspace.source_dialog is not None
-        workspace.source_dialog.mode.setCurrentIndex(1)
-        workspace.source_dialog.accept()
+        workspace.source_modes["basler"].click()
         assert window.bridge.replay_enabled  # Draft is not the saved source selection.
         assert not window.buttons["operation"].isEnabled()
         workspace.save_and_apply()
@@ -146,9 +145,8 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         assert (
             not engine.calls and not startup.application.source_snapshot().thread_alive
         )
-        workspace.open_source_settings()
-        workspace.source_dialog.mode.setCurrentIndex(0)
-        workspace.source_dialog.accept()
+        workspace.source_modes["folder"].click()
+        until(lambda: not window.parameters.busy)
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
         window.bridge.refresh()
@@ -361,6 +359,251 @@ def without_folders(path: Path) -> None:
         path,
         replace(source, cameras=tuple(replace(c, folder="") for c in source.cameras)),
     )
+
+
+def test_idle_capture_is_one_shot_owned_and_never_enters_production(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    without_folders(data.sources)
+    engines: list[Engine] = []
+    producer_pixels: list[NDArray[np.uint8]] = []
+    retrieve = passive.retrieve
+
+    def observe(serial: str) -> tuple[AcquisitionMetadata, NDArray[np.uint8]]:
+        metadata, pixels = retrieve(serial)
+        if serial == SERIALS[4]:
+            producer_pixels.append(pixels)
+        return metadata, pixels
+
+    monkeypatch.setattr(passive, "retrieve", observe)
+
+    def factory(_prepared: object) -> Engine:
+        engine = Engine()
+        engine.release_warm.set()
+        engines.append(engine)
+        return engine
+
+    startup = load_startup(data, engine_factory=factory)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    original = data.sources.read_bytes(), data.machine.read_bytes()
+    assert isinstance(app, ProductionReportingCommands)
+    try:
+        app.connect_source()
+        with pytest.raises(ValueError, match="Unknown"):
+            app.capture_image(CameraId("unknown"))
+        capture = app.capture_image(CameraId("CAM5"))
+        with pytest.raises(RuntimeError, match="pending"):
+            app.capture_image(CameraId("CAM1"))
+        until(lambda: app.source_snapshot().capture_waiting)
+        passive.expose(1, (2, 0))
+        until(lambda: app.source_snapshot().received_frames == 2)
+        assert not capture.done()
+        passive.expose(1, (4,))
+        snapshot = capture.result(WAIT)
+        assert snapshot.camera_id == CameraId("CAM5")
+        assert (
+            snapshot.metadata.serial == SERIALS[4]
+            and snapshot.metadata.image_number == 1
+        )
+        assert (
+            snapshot.pixels.shape == (20, 60, 3) and snapshot.pixels.dtype == np.uint8
+        )
+        assert int(snapshot.pixels[0, 0, 0]) == 14
+        assert not snapshot.pixels.flags.writeable
+        with pytest.raises(ValueError):
+            snapshot.pixels.setflags(write=True)
+        passive.expose(1, (1, 3, 5))
+        until(lambda: app.source_snapshot().discarded_frames == 6)
+        # Idle source storage has no Frame/inference lease. Reusing that producer
+        # storage after retrieval cannot change the independently owned snapshot.
+        producer_pixels[0].setflags(write=True)
+        producer_pixels[0].fill(255)
+        assert int(snapshot.pixels[0, 0, 0]) == 14
+        passive.expose(2)
+        until(lambda: app.source_snapshot().discarded_frames == 12)
+        assert int(snapshot.pixels[0, 0, 0]) == 14 and capture.result() is snapshot
+        assert not engines and not startup.frames.snapshot().frames
+        assert app.snapshot().counters == ProductionCounters()
+        assert (
+            app.snapshot().latest_production_result is None
+            and app.reporting_snapshot() is None
+        )
+        assert (data.sources.read_bytes(), data.machine.read_bytes()) == original
+        # Start cancels the idle request before warm-up and preserves later inspection.
+        pending = app.capture_image(CameraId("CAM1"))
+        app.start().result(WAIT)
+        assert pending.cancelled()
+        with pytest.raises(ApplicationStateError):
+            app.capture_image(CameraId("CAM1"))
+        passive.expose(3)
+        until(lambda: app.snapshot().counters.cycles_completed == 1)
+        app.stop().result(WAIT)
+        assert app.source_snapshot().state is ConnectionState.CONNECTED
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+    assert passive.closed and not any(t.name == "BaslerSourceOwner" for t in threads())
+
+
+def test_capture_timeout_cancel_and_busy_boundary_are_deterministic(
+    qapp: QApplication,
+    passive: PassiveBackend,
+) -> None:
+    now = [1.0]
+    source = BaslerConnection(clock=lambda: now[0])
+    source.begin_connect(
+        tuple(CameraId(f"CAM{i}") for i in range(1, 7)), SERIALS, lambda _: None
+    )
+    source.wait_connected()
+    try:
+        for timeout in (0, -1, float("inf"), float("nan"), 121):
+            with pytest.raises(ValueError):
+                source.capture_image(CameraId("CAM1"), timeout=timeout)
+        future = source.capture_image(CameraId("CAM1"), timeout=2)
+        until(lambda: source.snapshot().capture_waiting)
+        now[0] = 3.0
+        with pytest.raises(TimeoutError):
+            future.result(WAIT)
+        cancelled = source.capture_image(CameraId("CAM2"))
+        assert cancelled.cancel()
+        pending = source.capture_image(CameraId("CAM3"))
+        source.cancel_capture()
+        assert pending.cancelled()
+        # A partial old group is never reused as the "next" capture.
+        passive.expose(1, (0,))
+        until(lambda: source.snapshot().received_frames == 1)
+        unsafe = source.capture_image(CameraId("CAM2"))
+        with pytest.raises(ApplicationStateError, match="boundary"):
+            unsafe.result(WAIT)
+        passive.expose(1, (1, 2, 3, 4, 5))
+        until(lambda: source.snapshot().received_frames == 6)
+        pending = source.capture_image(CameraId("CAM1"))
+        source.disconnect()
+        assert pending.cancelled()
+    finally:
+        source.disconnect()
+    assert passive.closed and not source.snapshot().thread_alive
+
+
+@pytest.mark.parametrize(
+    "action",
+    ["success", "timeout", "cancel", "switch", "disconnect", "close", "start", "late"],
+)
+def test_vision_capture_cancellation_and_stale_delivery(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    action: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    without_folders(data.sources)
+    engine = Engine()
+    engine.release_warm.set()
+    now = [1.0]
+    connection = BaslerConnection(clock=lambda: now[0])
+    monkeypatch.setattr(local_production, "BaslerConnection", lambda: connection)
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceConnectionCommands)
+    captures: list[Future[CameraSnapshot]] = []
+    original_capture = app.capture_image
+
+    def capture(camera: CameraId, *, timeout: float = 10) -> Future[CameraSnapshot]:
+        future = original_capture(camera, timeout=timeout)
+        captures.append(future)
+        return future
+
+    monkeypatch.setattr(app, "capture_image", capture)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    window.navigate(4)
+    workspace = window.parameters.roi_workspace
+    assert workspace is not None
+    try:
+        workspace.connect_source.click()
+        until(lambda: not window.parameters.busy)
+        assert not workspace.discover.isEnabled()
+        assert all(
+            not c.device.isEnabled() and not c.folder.isVisible()
+            for c in workspace.camera_cards.values()
+        )
+        workspace.capture.click()
+        pending = captures[-1]
+        assert pending is not None and not workspace.capture.isEnabled()
+        assert workspace.cancel_capture_button.isVisible()
+        assert workspace.capture_status.text() == text(
+            "vision_capture_waiting", window.language
+        )
+        until(lambda: app.source_snapshot().capture_waiting)
+        geometry = workspace.draft.definition
+        if action == "success":
+            passive.expose(1)
+            until(lambda: workspace.frame is not None)
+            assert workspace.frame is not None
+            assert workspace.frame.frame_id.camera_id == CameraId("CAM1")
+            assert int(workspace.frame.image[0, 0, 0]) == 10
+            assert workspace.capture_status.text() == text(
+                "vision_capture_success", window.language
+            )
+        elif action == "timeout":
+            now[0] = 11.0
+            until(
+                lambda: (
+                    workspace.capture_status.text()
+                    == text("vision_capture_timeout", window.language)
+                )
+            )
+            assert workspace.capture_status.text() == text(
+                "vision_capture_timeout", window.language
+            )
+        elif action == "cancel":
+            workspace.cancel_capture_button.click()
+            assert pending.cancelled()
+            assert workspace.capture_status.text() == text(
+                "vision_capture_cancelled", window.language
+            )
+        elif action == "late":
+            # Complete without pumping Qt, then change selection before queued delivery.
+            passive.expose(1)
+            pending.result(WAIT)
+            workspace.camera_cards[CameraId("CAM3")].click()
+        elif action == "switch":
+            workspace.camera_cards[CameraId("CAM3")].click()
+            assert pending.cancelled()
+            passive.expose(1)
+        elif action == "disconnect":
+            workspace.disconnect_source.click()
+            until(lambda: not window.parameters.busy)
+            assert pending.cancelled() and passive.closed
+        elif action == "start":
+            app.start().result(WAIT)
+            assert pending.cancelled()
+            app.stop().result(WAIT)
+        else:
+            window.close()
+            until(lambda: window.bridge.closed)
+            assert pending.cancelled() and passive.closed
+        QApplication.processEvents()
+        assert (workspace.frame is not None) == (action == "success")
+        assert workspace.draft.definition == geometry
+        assert (
+            app.snapshot().counters == ProductionCounters()
+            and not startup.frames.snapshot().frames
+        )
+    finally:
+        window.close()
+        until(lambda: window.bridge.closed)
+        assert app.join(WAIT)
+        delivery.detach()
 
 
 def test_synthetic_warmup_uses_actual_distinct_shapes_on_single_engine_owner(
@@ -793,7 +1036,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         assert all(
             not card.serial.isEnabled() for card in workspace.camera_cards.values()
         )
-        assert not workspace.source_settings.isEnabled() and workspace.editable()
+        assert not workspace.discover.isEnabled() and workspace.editable()
         presentations: tuple[tuple[Language, Theme, tuple[int, int]], ...] = (
             ("zh", "dark", (1080, 1920)),
             ("zh", "light", (1080, 1920)),
