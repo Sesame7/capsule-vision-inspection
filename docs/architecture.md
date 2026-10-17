@@ -62,6 +62,26 @@ and SDK cleanup. Initialization/inference/normalization errors use the small
 `VimoError` boundary and preserve original exception chaining. Cleanup follows the
 SDK's actual lifecycle; failures remain observable rather than being suppressed.
 
+`ProductionApplication.prepare_model_cache(ModelPreparationRequest(...))` admits
+one immutable Model/path/module/device identity while READY or UNCONFIGURED.
+Its existing lifecycle thread waits for a disposable `InferenceWorker`; hashing,
+construction, optional inference and close stay off Qt. The real factory uses the
+same default SHA staging/cache location and SDK settings as Production. GPU module
+creation lets the SDK generate/reuse opaque TensorRT artifacts. No source, Recipe,
+counter, cycle or reporting session is created. No image/dimensions are required;
+an explicitly supplied known `sample_shape` adds two immutable black BGR calls.
+
+Preparation and Production Start are mutually exclusive under the application's
+command lock, including construction and cleanup. Its noncancellable result Future
+completes after worker join, reporting initialization separately from sample calls.
+The application retains only the latest preparation observation. Clean failures
+release admission; incomplete SDK cleanup retains the owner, faults the application
+and blocks reset/Start. Close requests worker stop and waits for native work and
+actual termination; a GUI timeout does not release ownership. No native operation
+is forcibly cancelled. A terminal native cleanup failure can require process-level
+recovery; no second thread retries SDK close. Production still does its actual-shape
+warm-up and does not require prior preparation or cache-file checks.
+
 ## Cycles and sources
 
 `CycleId`, `CameraId` and complete `FrameId` identify membership explicitly.

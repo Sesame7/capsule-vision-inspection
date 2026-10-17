@@ -3,12 +3,23 @@
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import replace
+from pathlib import Path
 from threading import Thread
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
     QCheckBox,
@@ -20,6 +31,8 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -29,14 +42,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from vimo_demo.application import ApplicationState, PreparedConfiguration
+from vimo_demo.application import (
+    ApplicationState,
+    ModelPreparationRequest,
+    ModelPreparationState,
+    PreparedConfiguration,
+)
 from vimo_demo.configuration import (
     CheckConfiguration,
     ConfigurationError,
     ConfigurationIOError,
     ModelArtifactError,
+    ModelDefinition,
     RecipeDefinition,
 )
+from vimo_demo.inference import read_model_labels
 
 from .image_tools import image_icon
 from .inference_bridge import FutureDelivery
@@ -55,6 +75,87 @@ from .roi_editor import MachineRoiWorkspace
 from .traditional_preview import PreviewMode, TraditionalPreview
 
 type DirtyDecision = Literal["save", "discard", "cancel"]
+
+
+class _RecipeSummary(QScrollArea):
+    """Recompute the preferred height when inline content changes/wraps."""
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        content = self.widget()
+        if content is not None:
+            height = content.heightForWidth(self.viewport().width())
+            hint.setHeight(
+                (height if height >= 0 else content.sizeHint().height())
+                + 2 * self.frameWidth()
+            )
+        return hint
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()
+        return super().eventFilter(watched, event)
+
+
+class _LabelFlow(QLayout):
+    """Natural-width label controls; height follows the available row width."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(Style.small)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+        self.invalidate()
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:
+        if 0 <= index < len(self._items):
+            item = self._items.pop(index)
+            self.invalidate()
+            return item
+        return None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._arrange(QRect(0, 0, width, 0), measure=True)
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._arrange(rect, measure=False)
+
+    def _arrange(self, rect: QRect, *, measure: bool) -> int:
+        x, y, height = rect.x(), rect.y(), 0
+        for item in self._items:
+            size = item.sizeHint()
+            if x > rect.x() and x + size.width() > rect.x() + rect.width():
+                x, y, height = rect.x(), y + height + self.spacing(), 0
+            if not measure:
+                item.setGeometry(QRect(QPoint(x, y), size))
+            x += size.width() + self.spacing()
+            height = max(height, size.height())
+        return y + height - rect.y()
 
 
 class ParametersPage(QWidget):
@@ -97,6 +198,11 @@ class ParametersPage(QWidget):
         self._closing = False
         self._after_busy: Callable[[], None] | None = None
         self._dialog: QDialog | None = None
+        self._labels_model: ModelDefinition | None = None
+        self._labels_thread: Thread | None = None
+        self._labels_completion: tuple[object, object] | None = None
+        self._labels_error = ""
+        self.label_checks: dict[str, QCheckBox] = {}
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
             self._prepared, Qt.ConnectionType.QueuedConnection
@@ -107,13 +213,14 @@ class ParametersPage(QWidget):
         self._monitor = QTimer(self)
         self._monitor.setInterval(20)
         self._monitor.timeout.connect(self._finish_preparation)
+        self._monitor.timeout.connect(self._finish_label_read)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(Style.small)
         self.buttons: dict[str, QPushButton] = {}
         self.labels: dict[str, QLabel] = {}
-        self.summary_scroll = QScrollArea(self)
+        self.summary_scroll = _RecipeSummary(self)
         self.summary_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.summary_scroll.setWidgetResizable(True)
         self.summary_scroll.setSizeAdjustPolicy(
@@ -127,7 +234,9 @@ class ParametersPage(QWidget):
         sections = QVBoxLayout(summary)
         sections.setContentsMargins(0, 0, 0, 0)
         sections.setSpacing(Style.small)
+        sections.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.summary_scroll.setWidget(summary)
+        summary.installEventFilter(self.summary_scroll)
         root.addWidget(self.summary_scroll)
         self.recipe_section = QFrame(self)
         self.model_section = QFrame(self)
@@ -140,6 +249,14 @@ class ParametersPage(QWidget):
             self.tuning_section,
         ):
             section.setObjectName("recipeSection")
+        for section in (
+            self.recipe_section,
+            self.model_section,
+            self.inspection_section,
+        ):
+            section.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+            )
         recipe = QVBoxLayout(self.recipe_section)
         recipe.setContentsMargins(10, 8, 10, 8)
         recipe.setSpacing(Style.small)
@@ -200,58 +317,56 @@ class ParametersPage(QWidget):
         )
         self.model.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         model_row.addWidget(self.model, 1)
-        self.model_more = QPushButton(self.model_section)
-        self.model_more.setFixedSize(Style.touch, Style.touch)
-        self.model_more.setCheckable(True)
-        self.model_more.setIcon(shell_icon("chevron"))
-        model_row.addWidget(self.model_more)
+        self.cache_status = QLabel(self.model_section)
+        self.cache_status.setFixedSize(Style.icon, Style.touch)
+        self.cache_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        model_row.addWidget(self.cache_status)
+        cache_prepare = QPushButton(self.model_section)
+        cache_prepare.setFixedSize(Style.touch, Style.touch)
+        cache_prepare.setIconSize(QSize(Style.icon, Style.icon))
+        self.buttons["cache_prepare"] = cache_prepare
+        cache_prepare.clicked.connect(self.prepare_model_cache)
+        model_row.addWidget(cache_prepare)
         model_layout.addLayout(model_row)
-        self.model_status, self.model_details = QLabel(), QLabel()
-        for label in (self.model_status, self.model_details):
-            label.setWordWrap(True)
-            label.setTextFormat(Qt.TextFormat.PlainText)
-            label.setProperty("role", "secondary")
-            model_layout.addWidget(label)
-        self.model_details.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+        self.label_choices = QWidget(self.model_section)
+        self.label_choices.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
-        self.model_details.hide()
-        self.model_more.toggled.connect(self.model_details.setVisible)
+        self._label_flow = _LabelFlow(self.label_choices)
+        model_layout.addWidget(self.label_choices)
+        self.label_choices.hide()
         sections.addWidget(self.model_section)
         inspection = QVBoxLayout(self.inspection_section)
         inspection.setContentsMargins(10, 8, 10, 8)
         inspection.setSpacing(2)
         header = QHBoxLayout()
-        self.inspection_title, self.occupancy = QLabel(), QLabel()
+        self.inspection_title = QLabel()
         header.addWidget(self.inspection_title)
         header.addStretch()
-        header.addWidget(self.occupancy)
         inspection.addLayout(header)
         inspections = QGridLayout()
         inspections.setColumnStretch(1, 1)
         inspections.setHorizontalSpacing(Style.space)
         inspections.setVerticalSpacing(0)
         self.capsule_enabled: dict[PreviewMode, QCheckBox] = {}
-        self.capsule_summary: dict[PreviewMode, QLabel] = {}
         self.expand_tuning: dict[PreviewMode, QPushButton] = {}
         modes: tuple[PreviewMode, ...] = ("size", "color")
         for index, mode in enumerate(modes):
-            enabled, summary = QCheckBox(), QLabel()
+            enabled = QCheckBox()
             enabled.setMinimumHeight(Style.touch)
-            summary.setProperty("role", "secondary")
-            summary.setWordWrap(True)
+            enabled.setFixedWidth(Style.touch)
             expand = QPushButton(self.inspection_section)
             expand.setCheckable(True)
-            expand.setFixedSize(Style.touch, Style.touch)
+            expand.setMinimumHeight(Style.touch)
+            expand.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            expand.setObjectName("recipeRule")
             expand.setIcon(shell_icon("chevron"))
             (
                 self.capsule_enabled[mode],
-                self.capsule_summary[mode],
                 self.expand_tuning[mode],
-            ) = enabled, summary, expand
+            ) = enabled, expand
             inspections.addWidget(enabled, index, 0)
-            inspections.addWidget(summary, index, 1)
-            inspections.addWidget(expand, index, 2)
+            inspections.addWidget(expand, index, 1)
 
             def toggle(checked: bool, m: PreviewMode = mode) -> None:
                 self._capsule_changed(m, checked)
@@ -265,19 +380,6 @@ class ParametersPage(QWidget):
             enabled.toggled.connect(toggle)
             expand.clicked.connect(expand_mode)
         inspection.addLayout(inspections)
-        self.rule, self.notice = QLabel(), QLabel()
-        for label in (self.rule, self.notice):
-            label.setWordWrap(True)
-            label.setProperty("role", "secondary")
-        self.advanced = QPushButton(self.inspection_section)
-        self.advanced.setCheckable(True)
-        self.advanced.setMinimumHeight(Style.touch)
-        self.advanced.toggled.connect(self.notice.setVisible)
-        advanced_row = QHBoxLayout()
-        advanced_row.addWidget(self.rule, 1)
-        advanced_row.addWidget(self.advanced)
-        inspection.addLayout(advanced_row)
-        inspection.addWidget(self.notice)
         sections.addWidget(self.inspection_section)
         self._tuning_layout = QVBoxLayout(self.tuning_section)
         self._tuning_layout.setContentsMargins(6, 4, 6, 4)
@@ -324,6 +426,7 @@ class ParametersPage(QWidget):
         primary.clicked.connect(lambda: self.save_and_apply())
         bridge.snapshot_changed.connect(self.refresh_state)
         bridge.source_connection_changed.connect(self.refresh_state)
+        bridge.model_preparation_changed.connect(self.refresh_state)
         bridge.frames_changed.connect(
             self.refresh_state
         )  # Eligibility only; references stay frozen.
@@ -356,12 +459,7 @@ class ParametersPage(QWidget):
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
         self.inspection_title.setText("检测" if language == "zh" else "Inspection")
-        self.occupancy.setText(
-            "● 占位检测 · 常开" if language == "zh" else "● Occupancy · Always on"
-        )
-        self.model_more.setToolTip("模型详情" if language == "zh" else "Model details")
-        self.model_more.setAccessibleName(self.model_more.toolTip())
-        self.advanced.setText("高级策略" if language == "zh" else "Advanced policies")
+        self.label_choices.setAccessibleName(text("recipe_labels", language))
         for mode, button in self.expand_tuning.items():
             button.setToolTip(
                 ("调整尺寸" if mode == "size" else "调整颜色")
@@ -384,8 +482,8 @@ class ParametersPage(QWidget):
 
     def refresh_theme(self) -> None:
         colors = theme_colors(self)
-        self.model_more.setIcon(shell_icon("chevron", colors.primary))
         self.buttons["recipe_discard"].setIcon(production_icon("reset", colors.primary))
+        self.buttons["cache_prepare"].setIcon(production_icon("cycles", colors.primary))
         for key, tool in (
             ("new_recipe", "plus"),
             ("duplicate_recipe", "copy"),
@@ -410,6 +508,14 @@ class ParametersPage(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:
         self._arrange_fields()
         super().resizeEvent(event)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if not self.labels_loading:
+            self._labels_model = (
+                None  # Re-entry reads the artifact, never a timer loop.
+            )
+        self._ensure_model_labels()
 
     def reload(self) -> None:
         if self.session is None:
@@ -461,7 +567,12 @@ class ParametersPage(QWidget):
             None if m.model_id == session.default_model_id else m.model_id
             for m in session.registry.models
         )
-        self.model.addItems([m.display_name for m in session.registry.models])
+        self.model.addItems(
+            [
+                f"{m.display_name} · {m.expected_sha256[:8]}"
+                for m in session.registry.models
+            ]
+        )
         effective = draft.model_override_id
         if effective == session.default_model_id:
             effective = None
@@ -516,11 +627,14 @@ class ParametersPage(QWidget):
             self.preview.refresh_state()
         for mode in ("size", "color"):
             check = self.capsule_enabled[mode]
-            check.setText(
+            caption = (
                 ("尺寸检测" if mode == "size" else "颜色检测")
                 if language == "zh"
                 else ("Size inspection" if mode == "size" else "Color inspection")
             )
+            check.setText("")
+            check.setAccessibleName(caption)
+            check.setToolTip(caption)
             check.setEnabled(allowed)
             if session is not None:
                 settings = session.draft.capsule
@@ -529,14 +643,12 @@ class ParametersPage(QWidget):
                     settings.size.enabled if mode == "size" else settings.color.enabled
                 )
                 check.blockSignals(False)
-                self.capsule_summary[mode].setText(
+                summary = (
                     f"W {settings.size.target_width} ± {settings.size.width_tolerance} · H {settings.size.target_height} ± {settings.size.height_tolerance} px"
                     if mode == "size"
-                    else (
-                        ("颜色容差 " if language == "zh" else "Color tolerance ")
-                        + str(settings.color.hue_tolerance)
-                    )
+                    else f"H {settings.color.target_hue} ± {settings.color.hue_tolerance}"
                 )
+                self.expand_tuning[mode].setText(caption + " · " + summary)
         for mode, button in self.expand_tuning.items():
             button.setEnabled(
                 session is not None
@@ -573,6 +685,13 @@ class ParametersPage(QWidget):
                 enabled = (
                     allowed and session is not None and not session.machine_editor.dirty
                 )
+            elif key == "cache_prepare":
+                enabled = (
+                    allowed
+                    and self._selected_model() is not None
+                    and not self.bridge.closing
+                    and not self.bridge.application.preparation_snapshot().owns_resources
+                )
             button.setEnabled(enabled)
         state = (
             "preparing"
@@ -588,35 +707,6 @@ class ParametersPage(QWidget):
         self.identity.setText("" if state == "saved" else text(state, language))
         self.identity.setToolTip(text(state, language))
         self.identity.setAccessibleName(text(state, language))
-        advanced = session is not None and bool(
-            session.draft.cameras or session.draft.channels
-        )
-        self.advanced.setVisible(session is not None)
-        self.notice.setVisible(self.advanced.isChecked())
-        if session is not None:
-            draft = session.draft
-            self.notice.setText(
-                str(draft.defaults.vimo)
-                + "\n"
-                + "\n".join(
-                    f"{key}: {value.vimo}"
-                    for key, value in (*draft.cameras.items(), *draft.channels.items())
-                )
-            )
-        # Never claim all labels participate when persisted policies say otherwise.
-        if session is not None:
-            simple = (
-                session.draft.defaults.vimo == RecipeDraft("", "").defaults.vimo
-                and not advanced
-            )
-            self.rule.setText(
-                text(
-                    "all_model_labels" if simple else "configured_detection_rule",
-                    language,
-                )
-            )
-        else:
-            self.rule.clear()
         startup_message = " · ".join(
             text(key, language) for key in self.configuration_messages
         )
@@ -635,9 +725,19 @@ class ParametersPage(QWidget):
                 if session and session.machine_editor.dirty
                 else ""
             )
+            or (text("recipe_labels_error", language) if self._labels_error else "")
         )
         self.status.setToolTip(
-            self._error or self.configuration_details or self._catalog_error
+            "\n".join(
+                part
+                for part in (
+                    self._error,
+                    self.configuration_details,
+                    self._catalog_error,
+                    self._labels_error,
+                )
+                if part
+            )
         )
 
     def _report_error(
@@ -732,46 +832,210 @@ class ParametersPage(QWidget):
 
         self._confirm_recipe_action("delete_recipe", lambda: self.leave_preview(delete))
 
-    def _present_model(self) -> None:
-        session = self.session
-        if session is None:
-            self.model_status.clear()
-            self.model_details.clear()
-            return
+    def _selected_model(self) -> ModelDefinition | None:
+        if self.session is None:
+            return None
         try:
-            model = session.registry.get(
-                session.draft.model_override_id or session.default_model_id
+            return self.session.registry.get(
+                self.session.draft.model_override_id or self.session.default_model_id
             )
         except ConfigurationError:
-            self.model_status.setText(text("unavailable_model", self.language))
-            self.model_details.clear()
+            return None
+
+    @property
+    def labels_loading(self) -> bool:
+        return self._labels_thread is not None
+
+    def _present_model(self) -> None:
+        model = self._selected_model()
+        preparation = self.bridge.application.preparation_snapshot()
+        matches = (
+            model is not None
+            and preparation.request is not None
+            and replace(preparation.request, sample_shape=None) == self._cache_request()
+        )
+        state = preparation.state if matches else ModelPreparationState.UNKNOWN
+        key = {
+            ModelPreparationState.UNKNOWN: "cache_unknown",
+            ModelPreparationState.PREPARING: "cache_preparing",
+            ModelPreparationState.SUCCEEDED: (
+                "cache_sampled"
+                if preparation.result and preparation.result.sample_inferences
+                else "cache_initialized"
+            ),
+            ModelPreparationState.FAILED: "cache_failed",
+        }[state]
+        status = text(key, self.language)
+        if matches and preparation.issue is not None:
+            status += "\n" + preparation.issue.message
+        self.cache_status.setToolTip(status)
+        self.cache_status.setAccessibleName(status)
+        colors = theme_colors(self)
+        icon = production_icon(
+            {
+                ModelPreparationState.UNKNOWN: "unknown",
+                ModelPreparationState.PREPARING: "STARTING",
+                ModelPreparationState.SUCCEEDED: "READY",
+                ModelPreparationState.FAILED: "FAULT",
+            }[state],
+            colors.secondary if state is ModelPreparationState.UNKNOWN else None,
+        )
+        self.cache_status.setPixmap(icon.pixmap(Style.icon, Style.icon))
+        tooltip = (
+            f"{model.display_name}\nID: {model.model_id}\n{text('configured_hash', self.language)}: {model.expected_sha256}"
+            if model
+            else text("unavailable_model", self.language)
+        )
+        self.model.setToolTip(tooltip)
+        self.model.setAccessibleDescription(tooltip)
+        if model != self._labels_model:
+            self._clear_label_choices()
+            self._labels_error = ""
+            if self.isVisible() and not self._closing:
+                QTimer.singleShot(0, self._ensure_model_labels)
+        session = self.session
+        disabled = session.draft.defaults.vimo.disabled_labels if session else ()
+        retained = tuple(label for label in disabled if label not in self.label_checks)
+        self.label_choices.setToolTip(
+            text("recipe_labels_retained", self.language) + " " + ", ".join(retained)
+            if retained
+            else text("recipe_labels", self.language)
+        )
+        for label, check in self.label_checks.items():
+            check.blockSignals(True)
+            check.setChecked(label not in disabled)
+            check.blockSignals(False)
+            check.setEnabled(self.editable() and model == self._labels_model)
+            check.setToolTip(text("recipe_default_label", self.language) + " " + label)
+
+    def _cache_request(self) -> ModelPreparationRequest | None:
+        model, session = self._selected_model(), self.session
+        if model is None or session is None:
+            return None
+        path = Path(model.model_path)
+        if not path.is_absolute():
+            path = session.base_directory / path
+        # Initialization needs no camera/image/dimensions. No guessed sample shape.
+        return ModelPreparationRequest(model, path.absolute())
+
+    def prepare_model_cache(self) -> None:
+        request = self._cache_request()
+        if request is None or not self.editable() or self.bridge.closing:
             return
-        snapshot = self.bridge.application.snapshot()
-        candidate = snapshot.candidate
-        verified = (
-            candidate is not None
-            and candidate.model_id == model.model_id
-            and candidate.model_sha256 == model.expected_sha256
+        try:
+            future = self.bridge.application.prepare_model_cache(request)
+        except Exception as exc:
+            self._report_error(exc, "cache_failed")
+        else:
+            self._delivery.watch("model_cache", future)
+        self.refresh_state()
+        self.bridge.refresh()
+
+    def _clear_label_choices(self) -> None:
+        while (item := self._label_flow.takeAt(0)) is not None:
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.deleteLater()
+        self.label_checks.clear()
+        self.label_choices.hide()
+
+    def _ensure_model_labels(self) -> None:
+        model, session = self._selected_model(), self.session
+        if (
+            model is None
+            or session is None
+            or self._closing
+            or not self.isVisible()
+            or self.labels_loading
+            or self._labels_model == model
+        ):
+            return
+        self._labels_model = model
+        self._labels_error = ""
+        self._clear_label_choices()
+        path = Path(model.model_path)
+        if not path.is_absolute():
+            path = session.base_directory / path
+        future: Future[tuple[str, ...]] = Future()
+
+        def read() -> None:
+            try:
+                future.set_result(
+                    read_model_labels(
+                        path,
+                        module_id=model.module_id,
+                        expected_sha256=model.expected_sha256,
+                    )
+                )
+            except BaseException as exc:
+                future.set_exception(exc)
+
+        # One bounded metadata job and one current catalog. This does not occupy
+        # the setup/preparation slot or gate Production readiness/Start.
+        self._delivery.watch("model_labels", future)
+        self._labels_thread = Thread(
+            target=read, name="RecipeModelLabels", daemon=False
         )
-        running = (
-            snapshot.state is ApplicationState.RUNNING
-            and snapshot.active is not None
-            and snapshot.active.model_id == model.model_id
-            and snapshot.active.model_sha256 == model.expected_sha256
-        )
-        phase = text(
-            "model_running"
-            if running
-            else "model_verified"
-            if verified
-            else "model_configured",
-            self.language,
-        )
-        self.model_status.setText(f"{model.model_id} · {phase}")
-        self.model_details.setText(
-            f"ID {model.model_id} · {text('model_module', self.language)} {model.module_id}\n{text('model_interface', self.language)}\n{model.model_path}\nSHA-256: {model.expected_sha256}\n{text('model_verification_tip', self.language)}"
-        )
-        self.model_status.setToolTip(text("model_verification_tip", self.language))
+        self._labels_thread.start()
+        self._monitor.start()
+
+    def _finish_label_read(self) -> None:
+        thread = self._labels_thread
+        if thread is None or thread.is_alive() or self._labels_completion is None:
+            return
+        thread.join(0)
+        self._labels_thread = None
+        value, error = self._labels_completion
+        self._labels_completion = None
+        if not self.busy:
+            self._monitor.stop()
+        if not self._closing and self._labels_model == self._selected_model():
+            rows = cast(tuple[object, ...], value) if isinstance(value, tuple) else ()
+            labels = tuple(label for label in rows if isinstance(label, str))
+            if isinstance(error, BaseException):
+                self._labels_error = str(error)
+            elif (
+                not labels
+                or len(labels) != len(rows)
+                or len(set(labels)) != len(labels)
+            ):
+                self._labels_error = "Missing complete model label catalog"
+            else:
+                for label in labels:
+                    check = QCheckBox(label.replace("&", "&&"), self.label_choices)
+                    check.setAccessibleName(label)
+                    check.setMinimumHeight(Style.touch)
+                    self._label_flow.addWidget(check)
+                    self.label_checks[label] = check
+
+                    def toggled(checked: bool, name: str = label) -> None:
+                        self._label_toggled(name, checked)
+
+                    check.toggled.connect(toggled)
+                self.label_choices.show()
+        self.refresh_state()
+        self._continue_after_io()
+
+    def _label_toggled(self, label: str, included: bool) -> None:
+        session = self.session
+        if (
+            session is not None
+            and self.editable()
+            and self._labels_model == self._selected_model()
+            and label in self.label_checks
+        ):
+            defaults = session.draft.defaults
+            disabled = tuple(
+                item for item in defaults.vimo.disabled_labels if item != label
+            )
+            if not included:
+                disabled += (label,)
+            session.draft.defaults = replace(
+                defaults, vimo=replace(defaults.vimo, disabled_labels=disabled)
+            )
+            self.changed()
+        self.refresh_state()
 
     def _capsule_changed(self, mode: PreviewMode, enabled: bool) -> None:
         if self.session is None or not self.editable():
@@ -1110,6 +1374,16 @@ class ParametersPage(QWidget):
 
     @Slot(str, object, object)
     def _prepared(self, name: str, value: object, error: object) -> None:
+        if name == "model_cache":
+            # Application owns cleanup and exact-identity evidence. This callback
+            # only refreshes presentation, including after model/page changes.
+            self.bridge.refresh()
+            self.refresh_state()
+            return
+        if name == "model_labels":
+            self._labels_completion = (value, error)
+            self._finish_label_read()
+            return
         self._completion = (value, error)
         self._finish_preparation()
 
@@ -1118,7 +1392,8 @@ class ParametersPage(QWidget):
             return
         self._thread.join(0)
         self._thread = None
-        self._monitor.stop()
+        if not self.labels_loading:
+            self._monitor.stop()
         value, error = self._completion
         self._completion = None
         setup, self._setup_finished = self._setup_finished, None
@@ -1158,7 +1433,10 @@ class ParametersPage(QWidget):
                 text("read_only", self.language) if self._closing else self._error
             )
         self.setup_changed.emit()
-        if self._after_busy is not None:
+        self._continue_after_io()
+
+    def _continue_after_io(self) -> None:
+        if self._after_busy is not None and not self.busy and not self.labels_loading:
             callback, self._after_busy = self._after_busy, None
             self._closing = False
             callback()
@@ -1209,7 +1487,7 @@ class ParametersPage(QWidget):
 
             self.guard_machine(finalized)
 
-        if self.busy:
+        if self.busy or self.labels_loading:
             self._closing = True  # Do not apply a late preparation while closing.
             self._after_busy = lambda: self.request_close(final)
             self.refresh_state()

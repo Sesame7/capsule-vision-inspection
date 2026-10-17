@@ -41,6 +41,7 @@ class QtProductionBridge(QObject):
     source_progress_changed = Signal(int, str)
     reporting_changed = Signal(object)
     source_connection_changed = Signal(object)
+    model_preparation_changed = Signal(object)
     command_finished = Signal(str)
     command_failed = Signal(str, object)
     shutdown_finished = Signal()
@@ -77,6 +78,7 @@ class QtProductionBridge(QObject):
         self._replay_enabled = self.controls_enabled
         self.replay_snapshot: ReplaySnapshot | None = None
         self._snapshot: ProductionApplicationSnapshot | None = None
+        self._preparation_snapshot = application.preparation_snapshot()
         self._revision = -1
         self._refreshing = False
         self._closing = False
@@ -249,6 +251,10 @@ class QtProductionBridge(QObject):
             if changed:
                 self._snapshot = snapshot
                 self.snapshot_changed.emit(snapshot)
+            preparation = self.application.preparation_snapshot()
+            if preparation != self._preparation_snapshot:
+                self._preparation_snapshot = preparation
+                self.model_preparation_changed.emit(preparation)
             if replay_changed:
                 self.replay_changed.emit(replay)
             reporting = (

@@ -291,11 +291,7 @@ class CameraCard(QFrame):
             f"{text('technical_status', language)}: {text('technical_' + assessment.technical_status.name.lower(), language)}",
         ]
         occupancy = channel.occupancy
-        if occupancy is None:
-            lines.append(
-                f"{text('occupancy', language)}: {text('occupancy_unavailable', language)}"
-            )
-        else:
+        if occupancy is not None:
             lines.append(
                 f"{text('occupancy', language)}: {text('occupancy_' + occupancy.state.name.lower(), language)}"
             )

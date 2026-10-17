@@ -357,7 +357,9 @@ def compose(
         folder,
         machine_path=folder / "machine.json",
     )
-    app = ProductionApplication(factory)
+    app = ProductionApplication(
+        factory, preparation_factory=lambda _: DemoEngine("normal", 0, delay)
+    )
     app.configure(choices[0].prepared)
     return DemoComposition(app, store, choices, DemoSource(app, store, images), editor)
 

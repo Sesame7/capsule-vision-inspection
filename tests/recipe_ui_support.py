@@ -28,6 +28,7 @@ def configured_screen(
     qapp: QApplication, tmp_path: Path
 ) -> Iterator[tuple[ProductionWindow, RecipeEditorSession, list[FakeSession]]]:
     ensure_test_fonts()
+
     session = editor(tmp_path)
     assert session.entry is not None
     ready = session.prepare(session.entry.recipe)
@@ -49,6 +50,12 @@ def configured_screen(
     window.resize(1080, 1920)
     window.show()
     window.navigate(1)
+    until(
+        lambda: (
+            bool(window.parameters.label_checks)
+            and not window.parameters.labels_loading
+        )
+    )
     yield window, session, runtimes
     for runtime in runtimes:
         if not runtime.ready.done():
