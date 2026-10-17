@@ -332,6 +332,7 @@ class ProductionWindow(QMainWindow):
         root.addWidget(self.event_frame)
         self.parameters.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
+        bridge.model_preparation_changed.connect(self._replay_changed)
         bridge.replay_changed.connect(self._replay_changed)
         bridge.source_progress_changed.connect(self._source_progress_changed)
         bridge.frames_changed.connect(self._frames_changed)
@@ -528,6 +529,7 @@ class ProductionWindow(QMainWindow):
         )
         draft_locked = bool(
             self.parameters.busy
+            or self.bridge.application.preparation_snapshot().owns_resources
             or self.parameters.session
             and (
                 self.parameters.session.machine_editor.dirty

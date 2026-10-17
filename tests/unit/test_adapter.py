@@ -1,5 +1,6 @@
 """Exercise the SDK boundary with stand-ins, never import the real SDK/GPU."""
 
+import hashlib
 import sys
 from dataclasses import dataclass
 from enum import IntFlag
@@ -18,6 +19,7 @@ from vimo_demo.inference import (
     VimoInitializationError,
     VimoResponseError,
     VimoSegmentationEngine,
+    read_model_labels,
 )
 
 
@@ -121,6 +123,49 @@ def sdk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> StandIn:
     }.items():
         monkeypatch.setitem(sys.modules, name, value)
     return StandIn(model, tmp_path / "cache", solution, module, params, response, exits)
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "hash", "module", "duplicate", "empty", "load", "close"]
+)
+def test_complete_label_metadata_never_creates_an_engine(
+    sdk: StandIn, failure: str | None
+) -> None:
+    digest = hashlib.sha256(sdk.model.read_bytes()).hexdigest()
+    if failure == "module":
+        sdk.solution.module_info_list = []
+    elif failure == "duplicate":
+        sdk.solution.module_info_list[0].features = ["Dent", "Dent"]
+    elif failure == "empty":
+        sdk.solution.module_info_list[0].features = []
+    else:
+        sdk.solution.module_info_list[0].features = ["Dent", "dent", "压痕"]
+    if failure == "load":
+        sdk.solution.load_from_memory.side_effect = RuntimeError("bad metadata")
+    if failure == "close":
+        sdk.solution.__exit__.side_effect = RuntimeError("cleanup failed")
+    if failure:
+        with pytest.raises(VimoInitializationError) as error:
+            read_model_labels(
+                sdk.model,
+                module_id="2",
+                expected_sha256="0" * 64 if failure == "hash" else digest,
+            )
+        assert error.value.__cause__ is not None
+    else:
+        assert read_model_labels(sdk.model, module_id="2", expected_sha256=digest) == (
+            "Dent",
+            "dent",
+            "压痕",
+        )
+        sdk.solution.load_from_memory.assert_called_once_with(
+            bytearray(sdk.model.read_bytes())
+        )
+    sdk.solution.create_module.assert_not_called()
+    sdk.module.run.assert_not_called()
+    if failure != "hash":
+        sdk.solution.__exit__.assert_called_once()
+    assert not sdk.cache.exists()
 
 
 def test_reuses_module_preserves_settings_and_detaches_response(sdk: StandIn) -> None:

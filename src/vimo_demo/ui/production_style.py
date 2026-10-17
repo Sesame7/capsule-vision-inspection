@@ -15,6 +15,17 @@ type Theme = Literal["dark", "light"]
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "configured_hash": ("配置 SHA-256", "Configured SHA-256"),
+    "recipe_labels": ("缺陷标签", "Defect labels"),
+    "recipe_default_label": ("默认缺陷标签：", "Default defect label:"),
+    "recipe_labels_error": (
+        "完整模型标签不可用；请检查模型与 SDK，草稿未变。",
+        "Complete model labels unavailable; check the model/SDK. Draft unchanged.",
+    ),
+    "recipe_labels_retained": (
+        "保留其他已保存的排除项：",
+        "Other saved exclusions retained:",
+    ),
     "delete_recipe": ("删除", "Delete"),
     "delete_recipe_question": (
         "删除此配方及其未保存修改？仅删除该配方文件。",
@@ -36,21 +47,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "recipe_discard_error": (
         "恢复失败，草稿已保留；请检查已保存文件。",
         "Restore failed; draft kept. Check the saved file.",
-    ),
-    "model_module": ("模块", "Module"),
-    "model_configured": ("已配置 · 未运行", "Configured · Not running"),
-    "model_verified": (
-        "上次候选校验通过 · 未运行",
-        "Last candidate verified · Not running",
-    ),
-    "model_running": ("运行中 · 已预热", "Running · Warmed up"),
-    "model_interface": (
-        "接口：ViMo 分割；实际模块类型在 Start 初始化时确认。",
-        "Interface: ViMo segmentation; actual module type is checked during Start initialization.",
-    ),
-    "model_verification_tip": (
-        "校验指已有候选的文件哈希校验；不代表已加载 SDK 或文件持续未变。Start 才加载并预热运行时。",
-        "Verification refers to the existing candidate artifact hash, not SDK loading or continuous file integrity. Start loads and warms the runtime.",
     ),
     "production_stop": ("停止", "Stop"),
     "pause_unsupported": (
@@ -103,6 +99,24 @@ STRINGS: dict[str, tuple[str, str]] = {
         "模型文件不可用或校验失败；请检查模型文件。",
         "Model artifact unavailable or verification failed; check the model file.",
     ),
+    "cache_prepare": ("准备 TensorRT 缓存", "Prepare TensorRT cache"),
+    "cache_unknown": (
+        "尚未在本次应用会话中准备",
+        "Not prepared in this application session",
+    ),
+    "cache_preparing": (
+        "正在初始化模型；首次构建可能需要数分钟，不能强制取消",
+        "Initializing model; first build may take minutes and cannot be force-cancelled",
+    ),
+    "cache_initialized": (
+        "模型初始化及清理成功；未执行样本推理。不是永久缓存有效性证明",
+        "Initialization and cleanup succeeded; no sample inference. Not permanent cache validation",
+    ),
+    "cache_sampled": (
+        "模型初始化、样本推理及清理成功；不是永久缓存有效性证明",
+        "Initialization, sample inference and cleanup succeeded; not permanent cache validation",
+    ),
+    "cache_failed": ("模型缓存准备失败", "Model cache preparation failed"),
     "vision_error": (
         "相机配置操作失败；请查看详情。",
         "Camera configuration operation failed; see details.",
@@ -356,18 +370,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "save_apply": ("保存并应用", "Save and apply"),
     "inspection_model": ("检测模型", "Inspection model"),
     "unavailable_model": ("模型不可用", "Model unavailable"),
-    "all_model_labels": (
-        "检测规则：所有模型缺陷标签",
-        "Detection rule: all model defect labels",
-    ),
-    "configured_detection_rule": (
-        "检测规则：使用已保存的检测配置",
-        "Detection rule: saved inspection configuration",
-    ),
-    "advanced_recipe_notice": (
-        "此配方含相机或通道专用配置，本页不可编辑。",
-        "This Recipe has camera/channel configuration not editable on this page.",
-    ),
     "save_machine_first": (
         "请先在设置中保存机器 ROI。",
         "Save machine ROI in Settings first.",
@@ -512,7 +514,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "occupancy_empty": ("空位", "EMPTY"),
     "occupancy_present": ("有料", "PRESENT"),
     "occupancy_unknown": ("未知", "UNKNOWN"),
-    "occupancy_unavailable": ("无可用证据", "Unavailable"),
     "upper_view": ("上视图", "Upper"),
     "lower_view": ("下视图", "Lower"),
     "product_judgment": ("原始产品判断", "Original product judgment"),
@@ -825,6 +826,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}
+    QPushButton#recipeRule {{ text-align: left; }}
     QPushButton:checked {{ color: {c.accent}; background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:focus:enabled {{ border: 2px solid {c.accent}; }}
     QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}

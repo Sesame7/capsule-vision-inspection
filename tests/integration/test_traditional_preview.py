@@ -9,8 +9,8 @@ from threading import enumerate as threads
 import cv2
 import numpy as np
 import pytest
-from PySide6.QtCore import QPoint, QRectF, QSizeF
-from PySide6.QtGui import QFont, QFontMetricsF
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLabel
 from tests.capsule_support import SETTINGS, bodies
 from tests.qt_support import until
@@ -46,15 +46,19 @@ from vimo_demo.ui.production_style import Language
 from vimo_demo.ui.traditional_preview import (
     PreviewMode,
     TraditionalPreview,
-    measurement_label_rect,
 )
+
+
+def collapse(preview: TraditionalPreview, screen: Screen) -> None:
+    assert screen[0].parameters.preview is preview
+    screen[0].parameters.expand_tuning[preview.mode].click()
 
 
 def source_preview(
     screen: Screen, root: Path, *, basler: bool = False
 ) -> CameraSourceDraft:
     preview = setup(screen)
-    preview.back.click()
+    collapse(preview, screen)
     session = screen[1]
     mappings: list[CameraFolder] = []
     for index, camera in enumerate(session.machine.layout.camera_ids):
@@ -337,7 +341,7 @@ def test_async_decode_camera_change_and_close_discard_stale_work(
         )
         assert sum(t.name == "CapsulePreview" for t in threads()) == 1
         if close:
-            preview.back.click()
+            collapse(preview, configured_screen)
             assert window.parameters.preview is preview
     finally:
         release.set()
@@ -446,7 +450,7 @@ def test_cached_judgment_and_isolation_and_save(
         and load_recipe(session.entry.path).capsule != session.draft.capsule
     )
     expected = session.draft.capsule
-    preview.back.click()
+    collapse(preview, configured_screen)
     assert window.parameters.preview is None
     window.parameters.save_and_apply()
     until(lambda: not window.parameters.busy)
@@ -477,7 +481,6 @@ def test_camera_refresh_and_layout(
         assert preview.camera_tabs.rect().contains(preview.camera_tabs.tabRect(index))
     assert preview.canvas.width() > 500 and preview.canvas.height() > 240
     for widget in (
-        preview.back,
         preview.refresh_button,
         preview.controls,
     ):
@@ -508,7 +511,7 @@ def test_camera_refresh_and_layout(
     preview.sample.click()
     assert session.draft.capsule.color.target_hue == 32
     assert "unchanged" in preview.message.text() or "未更改" in preview.message.text()
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 def test_unavailable_reference_no_invented_measurement(
@@ -520,7 +523,11 @@ def test_unavailable_reference_no_invented_measurement(
     assert preview is not None and preview.frame is None
     assert preview.measurements == () and preview.results == () and not preview.busy
     assert not preview.sample.isEnabled()
-    preview.back.click()
+    preview.select_view(0, 0)
+    assert (
+        preview.canvas.selection is None and "W " not in preview.selection_detail.text()
+    )
+    collapse(preview, configured_screen)
 
 
 def test_stale_job_and_observable_close(
@@ -603,7 +610,7 @@ def test_disabled_preview_never_segments(
 
     window, session, _ = configured_screen
     preview = setup(configured_screen)
-    preview.back.click()
+    collapse(preview, configured_screen)
     session.draft.capsule = CapsuleSettings()
     calls: list[bool] = []
     original = module.measure_reference
@@ -621,7 +628,7 @@ def test_disabled_preview_never_segments(
     configured_screen[0].parameters.capsule_enabled[preview.mode].setChecked(True)
     until(lambda: not preview.busy)
     assert calls == [True]
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -649,85 +656,189 @@ def test_no_repeated_text_but_errors_remain(
     preview.refresh_reference()
     until(lambda: not preview.busy)
     assert preview.message.isVisible() and "ValueError" in preview.message.text()
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
 @pytest.mark.parametrize("scale", [None, 1.0, 1.5])
-def test_twelve_annotation_placements(
+def test_per_view_selection_at_fit_and_zoom(
     configured_screen: Screen,
-    monkeypatch: pytest.MonkeyPatch,
     size: tuple[int, int],
     scale: float | None,
+) -> None:
+    window, session, runtimes = configured_screen
+    preview = setup(configured_screen, pixel_scale=3)
+    window.set_language("en")
+    window.resize(*size)
+    QApplication.processEvents()
+    before = window.bridge.application.snapshot()
+    preview.canvas.zoom(scale)
+    transform = preview.canvas.model.transform(
+        preview.canvas.width(), preview.canvas.height()
+    )
+    assert transform is not None
+    count = 0
+    for index, row in enumerate(preview.measurements):
+        assert row.measured is not None
+        for view_index, view in enumerate(row.measured.views):
+            assert view.body is not None
+            r = view.body.bounding_rect
+            x, y, w, h = transform.rectangle(r)
+            point = QPoint(round(x + w / 2), round(y + h / 2))
+            if not preview.canvas.rect().contains(point):
+                continue
+            QTest.mouseClick(preview.canvas, Qt.MouseButton.LeftButton, pos=point)
+            assert preview.canvas.selection == (index, view_index)
+            detail = preview.selection_detail.text()
+            assert f"CH{row.slot.channel_id:02d}" in detail and view.name in detail
+            assert "W 60 [20, 20]" in detail and "H 90 [30, 30]" in detail
+            assert "Size NG" in detail and "Occupancy" not in detail
+            count += 1
+    assert count > 0
+    selected = preview.canvas.selection
+    preview.set_mode("color")
+    assert (
+        preview.canvas.selection == selected
+        and "Color OK" in preview.selection_detail.text()
+    )
+    assert "Hue 30.00" in preview.selection_detail.text()
+    assert window.bridge.application.snapshot() == before and not runtimes
+    assert session.draft.capsule == SETTINGS
+
+
+def test_view_judgment_is_separate_from_other_view_and_check(
+    configured_screen: Screen,
+) -> None:
+    window, _, _ = configured_screen
+    preview = setup(configured_screen)
+    window.set_language("en")
+    image = bodies(30)
+    image[60:] = bodies(45)[60:]
+    window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(2), CameraId("CAM1"), 2),
+            2,
+            np.concatenate([image for _ in range(6)], axis=1),
+        ),
+        generation=0,
+    )
+    preview.refresh_reference()
+    until(lambda: not preview.busy)
+    assert (
+        preview.results[0]
+        and preview.results[0].assessment.judgment is ProductJudgment.NG
+    )
+    preview.select_view(0, 1)
+    assert "Size OK" in preview.selection_detail.text()
+    preview.set_mode("color")
+    assert (
+        "Color NG" in preview.selection_detail.text()
+        and "Hue 45.00" in preview.selection_detail.text()
+    )
+    assert "capsule.color.lower.tolerance" in preview.selection_detail.toolTip()
+    preview.select_view(0, 0)
+    assert (
+        "Color OK" in preview.selection_detail.text()
+        and "Hue 30.00" in preview.selection_detail.text()
+    )
+    preview.set_mode("size")
+    preview.spins["target_width"].setValue(21)
+    assert (
+        "Size NG" in preview.selection_detail.text()
+        and "W 20 [21, 21]" in preview.selection_detail.text()
+    )
+
+
+@pytest.mark.parametrize("mode", ["size", "color"])
+def test_missing_error_and_disabled_measurements_are_not_invented(
+    configured_screen: Screen,
+    mode: PreviewMode,
+) -> None:
+    window, _, _ = configured_screen
+    preview = setup(configured_screen)
+    window.set_language("en")
+    preview.set_mode(mode)
+    window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(2), CameraId("CAM1"), 2),
+            2,
+            np.zeros((120, 480, 3), np.uint8),
+        ),
+        generation=0,
+    )
+    preview.refresh_reference()
+    until(lambda: not preview.busy)
+    preview.select_view(0, 0)
+    assert f"{mode.title()} NG" in preview.selection_detail.text()
+    assert ("W —" if mode == "size" else "Hue —") in preview.selection_detail.text()
+    assert "Occupancy" not in preview.selection_detail.text()
+    assert (
+        "EMPTY" not in preview.selection_detail.text()
+    )  # Missing body is not occupancy.
+    window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(3), CameraId("CAM1"), 3), 3, np.zeros((1, 1, 3), np.uint8)
+        ),
+        generation=0,
+    )
+    preview.refresh_reference()
+    until(lambda: not preview.busy)
+    assert (
+        preview.canvas.selection is None
+        and "CH01" not in preview.selection_detail.text()
+    )
+    preview.select_view(0, 0)
+    assert (
+        "ERROR" in preview.selection_detail.text()
+        and "ValueError" in preview.selection_detail.toolTip()
+    )
+    window.parameters.capsule_enabled[mode].click()
+    until(lambda: not preview.busy)
+    assert "DISABLED" in preview.selection_detail.text()
+    assert ("W —" if mode == "size" else "Hue —") in preview.selection_detail.text()
+
+
+def test_selection_clears_on_image_camera_change_and_while_evidence_pending(
+    configured_screen: Screen,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import vimo_demo.ui.traditional_preview as module
 
     window, _, _ = configured_screen
-    preview = setup(configured_screen, pixel_scale=3)
-    window.resize(*size)
-    QApplication.processEvents()
-    records: list[tuple[QRectF, QRectF, QRectF | None]] = []
+    preview = setup(configured_screen)
+    window.set_language("en")
+    preview.select_view(0, 0)
+    entered, release = Event(), Event()
+    original = module.measure_reference
 
-    def record(body: QRectF, available: QRectF, label_size: QSizeF) -> QRectF | None:
-        result = measurement_label_rect(body, available, label_size)
-        records.append((body, available, result))
-        return result
+    def blocked(
+        frame: DisplayFrame, camera: CameraLayout, settings: CapsuleSettings
+    ) -> tuple[module.PreviewMeasurement, ...]:
+        entered.set()
+        assert release.wait(5)
+        return original(frame, camera, settings)
 
-    monkeypatch.setattr(module, "measurement_label_rect", record)
-    preview.canvas.zoom(scale)
-    preview.canvas.grab()
-    assert len(records) == 12
-    rectangles: list[QRectF] = []
-    for body, available, label in records:
-        if not body.intersects(available):
-            assert label is None
-            continue
-        assert label is not None and available.contains(label)
+    monkeypatch.setattr(module, "measure_reference", blocked)
+    preview.camera_tabs.setCurrentIndex(1)
+    until(entered.is_set)
+    try:
         assert (
-            label.height() >= 30
-        )  # Two readable logical-pixel text lines plus padding.
-        assert not any(label.intersects(previous) for previous in rectangles)
-        rectangles.append(label)
-    assert len(rectangles) == 12 if scale is None else len(rectangles) > 0
-    records.clear()
+            preview.canvas.selection is None
+            and "CAM1" not in preview.selection_detail.text()
+        )
+        preview.select_view(0, 1)
+        assert (
+            "CAM2" in preview.selection_detail.text()
+            and "Unavailable" in preview.selection_detail.text()
+        )
+        assert "W —" in preview.selection_detail.text()
+    finally:
+        release.set()
+    until(lambda: not preview.busy)
     preview.set_mode("color")
-    preview.canvas.grab()
-    assert not records  # No Size labels in Color mode.
-    preview.back.click()
-
-
-def test_narrow_real_frame_labels_and_extreme_zoom(qapp: QApplication) -> None:
-    from vimo_demo.ui.production_presentation import image_transform
-
-    font = QFont()
-    font.setPixelSize(12)
-    metrics = QFontMetricsF(font)
-    size = QSizeF(
-        max(metrics.horizontalAdvance("W 108"), metrics.horizontalAdvance("H 292")) + 8,
-        2 * metrics.lineSpacing() + 6,
-    )
-    for width, height in ((1032, 1680), (1872, 760)):
-        transform = image_transform(1056, 960, width, height)
-        labels: list[QRectF] = []
-        for channel in range(6):
-            for view in range(2):
-                body = QRectF(
-                    *transform.rectangle(
-                        BoundingRect(channel * 176 + 28, view * 480 + 80, 108, 292)
-                    )
-                )
-                available = QRectF(
-                    *transform.rectangle(
-                        BoundingRect(channel * 176, view * 480, 176, 480)
-                    )
-                ).adjusted(3, 22 if view == 0 else 3, -3, -3)
-                label = measurement_label_rect(body, available, size)
-                assert label is not None and available.contains(label)
-                assert not any(label.intersects(other) for other in labels)
-                labels.append(label)
-        assert len(labels) == 12
     assert (
-        measurement_label_rect(QRectF(0, 0, 5, 10), QRectF(0, 0, 8, 20), size) is None
+        "Hue 31.00" in preview.selection_detail.text()
+        and "lower" in preview.selection_detail.text()
     )
 
 
@@ -794,7 +905,7 @@ def test_preview_scopes_ng_event_but_preserves_errors(
     )
     window.bridge.command_finished.emit("start")
     assert window.event_frame.isVisible() and not window.event_label.text()
-    preview.back.click()
+    collapse(preview, configured_screen)
     window.navigate(0)
     assert window.event_frame.isVisible() and not window.event_label.text()
     assert app.snapshot() == before
@@ -843,7 +954,7 @@ def test_color_only_sampling_without_body_geometry(configured_screen: Screen) ->
         for r in preview.results
     )
     assert window.bridge.application.snapshot() == before and not runtimes
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 def test_preview_capability_changes_recompute_but_thresholds_rejudge(
@@ -894,7 +1005,7 @@ def test_preview_capability_changes_recompute_but_thresholds_rejudge(
     preview.show_settings()
     until(lambda: not preview.busy)
     assert calls == [(False, True), (True, False), (True, True)]
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 def test_capability_change_discards_inflight_job_and_uses_latest_snapshot(
@@ -932,7 +1043,7 @@ def test_capability_change_discards_inflight_job_and_uses_latest_snapshot(
         row.measured and not row.measured.size_measured for row in preview.measurements
     )
     assert not any(t.name == "CapsulePreview" for t in threads())
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 @pytest.mark.parametrize(
@@ -943,7 +1054,8 @@ def test_one_entry_mode_selection_and_draft_synchronization(
     configured_screen: Screen, size_enabled: bool, color_enabled: bool
 ) -> None:
     window, session, runtimes = configured_screen
-    setup(configured_screen).back.click()
+    preview = setup(configured_screen)
+    collapse(preview, configured_screen)
     page = window.parameters
     session.draft.capsule = replace(
         SETTINGS,
@@ -970,12 +1082,12 @@ def test_one_entry_mode_selection_and_draft_synchronization(
     preview.set_mode("color")
     preview.tolerance.setValue(7)
     expected = session.draft.capsule
-    preview.back.click()
+    collapse(preview, configured_screen)
     assert page.preview is None and session.draft.capsule == expected
     assert page.capsule_enabled["size"].isChecked() is expected.size.enabled
     assert page.capsule_enabled["color"].isChecked() is expected.color.enabled
-    assert "21" in page.capsule_summary["size"].text()
-    assert "7" in page.capsule_summary["color"].text()
+    assert "21" in page.expand_tuning["size"].text()
+    assert "7" in page.expand_tuning["color"].text()
     assert window.bridge.application.snapshot() == before and not runtimes
 
 
@@ -1007,7 +1119,7 @@ def test_disabled_selected_mode_keeps_other_checks_ng(
     assert configured_screen[0].parameters.capsule_enabled[preview.mode].isChecked()
     assert preview.measurements is measurements and preview.results == results
     assert window.bridge.application.snapshot() == before and not runtimes
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 def test_integrated_controls_precede_canvas_and_enablement_is_separate(
@@ -1031,7 +1143,7 @@ def test_integrated_controls_precede_canvas_and_enablement_is_separate(
         session.draft.capsule.size.enabled and not session.draft.capsule.color.enabled
     )
     assert page.expand_tuning["color"].isChecked()
-    preview.back.click()
+    collapse(preview, configured_screen)
 
 
 @pytest.mark.parametrize(
@@ -1074,7 +1186,6 @@ def test_tuning_preview_screenshots(
         assert preview.frame is not None and len(preview.results) == 6
         assert preview.canvas.height() >= 240
         for control in (
-            preview.back,
             preview.camera_tabs,
             preview.fit_button,
             preview.refresh_button,

@@ -21,6 +21,7 @@ from tests.recipe_ui_support import configured_screen as configured_screen
 
 from vimo_demo.application import (
     ApplicationState,
+    ModelPreparationState,
     PreparedConfiguration,
 )
 from vimo_demo.configuration import (
@@ -32,6 +33,94 @@ from vimo_demo.configuration import (
 )
 from vimo_demo.ui.parameters_page import DirtyDecision
 from vimo_demo.ui.production_style import Language, Style, text
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_model_cache_preparation_is_queued_identity_bound_and_draft_independent(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, language: Language
+) -> None:
+    from run_production_ui import DemoEngine
+
+    window, session, runtimes = configured_screen
+    app, page = window.bridge.application, window.parameters
+    entered, release = Event(), Event()
+
+    def factory(_request: object) -> DemoEngine:
+        entered.set()
+        assert release.wait(5)
+        return DemoEngine("normal", 0, 0)
+
+    monkeypatch.setattr(app, "_preparation_factory", factory)
+    window.set_language(language)
+    before = app.snapshot()
+    assert session.entry is not None
+    original_file = session.entry.path.read_bytes()
+    try:
+        assert page.cache_status.toolTip() == text("cache_unknown", language)
+        page.buttons["cache_prepare"].click()
+        until(entered.is_set)
+        assert app.preparation_snapshot().state is ModelPreparationState.PREPARING
+        assert page.cache_status.toolTip() == text("cache_preparing", language)
+        assert not page.buttons["cache_prepare"].isEnabled()
+        assert not window.buttons["operation"].isEnabled()
+        assert not session.dirty and not runtimes and app.snapshot() == before
+        # GUI dispatch stays live while native initialization would be blocked.
+        dispatch = Event()
+        QTimer.singleShot(0, dispatch.set)
+        until(dispatch.is_set)
+        index = page.model.currentIndex()
+        page.model.setCurrentIndex(1 - index)
+        page.model.activated.emit(1 - index)
+        assert page.cache_status.toolTip() == text("cache_unknown", language)
+        release.set()
+        until(lambda: not app.preparation_snapshot().owns_resources)
+        window.bridge.refresh()
+        assert page.cache_status.toolTip() == text("cache_unknown", language)
+        page.model.setCurrentIndex(index)
+        page.model.activated.emit(index)
+        assert page.cache_status.toolTip() == text("cache_initialized", language)
+        assert page.buttons["cache_prepare"].isEnabled()
+        assert window.buttons["operation"].isEnabled()
+        assert not session.dirty and not runtimes and app.snapshot() == before
+        assert session.entry.path.read_bytes() == original_file
+    finally:
+        release.set()
+
+
+def test_model_cache_failure_is_presented_only_for_its_requested_model(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, session, _runtimes = configured_screen
+    page, app = window.parameters, window.bridge.application
+
+    def broken(_request: object) -> None:
+        raise ValueError("test initialization failed")
+
+    monkeypatch.setattr(app, "_preparation_factory", broken)
+    page.buttons["cache_prepare"].click()
+    until(lambda: app.preparation_snapshot().state is ModelPreparationState.FAILED)
+    window.bridge.refresh()
+    assert "test initialization failed" in page.cache_status.toolTip()
+    assert not session.dirty and app.snapshot().state is ApplicationState.READY
+    assert page.buttons["cache_prepare"].isEnabled()
+    page.model.setCurrentIndex(1)
+    page.model.activated.emit(1)
+    assert page.cache_status.toolTip() == text("cache_unknown", page.language)
+    session.discard()
+
+
+def test_recipe_cache_action_respects_production_editing_lock(
+    configured_screen: Screen,
+) -> None:
+    window, _session, runtimes = configured_screen
+    started = window.bridge.application.start()
+    until(lambda: bool(runtimes))
+    window.bridge.refresh()
+    assert not window.parameters.buttons["cache_prepare"].isEnabled()
+    runtimes[0].ready.set_result(None)
+    until(started.done)
+    window.bridge.refresh()
+    assert not window.parameters.buttons["cache_prepare"].isEnabled()
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -57,6 +146,7 @@ def test_compact_recipe_layout(
         "reload",
         "recipe_discard",
         "save_apply",
+        "cache_prepare",
     }
     assert window.navigation[1].text() == text("parameters", language)
     for button in page.buttons.values():
@@ -66,14 +156,28 @@ def test_compact_recipe_layout(
         )
     assert session.entry is not None
     model = session.registry.get(session.default_model_id)
-    assert not page.model_details.isVisible()
-    assert model.model_id in page.model_status.text()
-    page.model_more.click()
     assert (
-        page.model_details.isVisible()
-        and model.expected_sha256 in page.model_details.text()
+        page.model.currentText()
+        == f"{model.display_name} · {model.expected_sha256[:8]}"
     )
-    page.model_more.click()
+    assert (
+        model.model_id in page.model.toolTip()
+        and model.expected_sha256 in page.model.toolTip()
+    )
+    assert (
+        "Configured SHA-256" in page.model.toolTip()
+        if language == "en"
+        else "配置 SHA-256" in page.model.toolTip()
+    )
+    assert not hasattr(page, "model_more") and not hasattr(page, "advanced")
+    assert not hasattr(page, "label_filter")
+    assert_inside(page.label_choices, page)
+    color = session.draft.capsule.color
+    assert (
+        page.expand_tuning["color"]
+        .text()
+        .endswith(f" · H {color.target_hue} ± {color.hue_tolerance}")
+    )
     assert page.roi_workspace is None
     window.navigate(4)
     assert (
@@ -97,9 +201,6 @@ def test_metadata_model_and_hidden_overrides_preserved(
     page.recipes.activated.emit(index)
     assert session.entry is not None
     original = session.entry.recipe
-    assert not page.notice.isVisible()
-    page.advanced.click()
-    assert page.notice.isVisible()
     edit(page.metadata["display_name"], "新产品")
     edit(page.metadata["product_code"], "SKU-中文")
     page.buttons["save_apply"].click()
@@ -126,7 +227,257 @@ def test_metadata_model_and_hidden_overrides_preserved(
         if not e.recipe.channel_overrides
     )
     page.recipes.activated.emit(index)
-    assert page.notice.isVisible() and "required" in page.notice.text()
+    assert session.draft.defaults == session.entry.recipe.defaults
+
+
+@pytest.mark.parametrize("action", ["exclude", "all", "unknown"])
+def test_default_model_labels_edit_only_defaults_and_persist(
+    configured_screen: Screen,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    window, session, runtimes = configured_screen
+    page = window.parameters
+    target = next(
+        i
+        for i, e in enumerate(session.catalog.discover().entries)
+        if e.recipe.channel_overrides
+    )
+    page.recipes.activated.emit(target)
+    assert session.entry is not None
+    catalog = ("Dent", "dent", "黑点", "压痕", "A&B")
+    calls: list[int] = []
+
+    def metadata(
+        path: Path, *, module_id: str, expected_sha256: str
+    ) -> tuple[str, ...]:
+        calls.append(get_ident())
+        assert module_id == "2" and len(expected_sha256) == 64
+        return catalog
+
+    monkeypatch.setattr("vimo_demo.ui.parameters_page.read_model_labels", metadata)
+    disabled = (
+        ("Retired",)
+        if action == "unknown"
+        else ("黑点", "Dent")
+        if action == "all"
+        else ()
+    )
+    session.draft.defaults = replace(
+        session.draft.defaults,
+        vimo=replace(
+            session.draft.defaults.vimo,
+            enabled=False,
+            required=False,
+            disabled_labels=disabled,
+        ),
+    )
+    original = session.draft.to_recipe()
+    before = window.bridge.application.snapshot()
+    saved_bytes = session.entry.path.read_bytes()
+    window.navigate(0)
+    window.navigate(1)
+    until(lambda: not page.labels_loading)
+    assert page.findChild(QDialog) is None
+    checks = page.label_checks
+    assert tuple(checks) == catalog and calls and calls[0] != get_ident()
+    assert all(
+        check.isChecked() == (label not in disabled) for label, check in checks.items()
+    )
+    if action == "all":
+        for check in checks.values():
+            check.setChecked(True)
+    else:
+        checks["Dent"].setChecked(False)
+        assert checks["dent"].isChecked()  # Exact, case-sensitive identity.
+    QApplication.processEvents()
+    expected = (
+        ()
+        if action == "all"
+        else ("Dent", "Retired")
+        if action == "unknown"
+        else ("Dent",)
+    )
+    result = session.draft.to_recipe()
+    assert result.defaults.vimo.disabled_labels == expected
+    assert (
+        result.defaults.vimo.enabled is False and result.defaults.vimo.required is False
+    )
+    assert (
+        result.camera_overrides == original.camera_overrides
+        and result.channel_overrides == original.channel_overrides
+    )
+    assert (
+        result.model_override_id == original.model_override_id
+        and result.capsule == original.capsule
+    )
+    assert (
+        session.entry.path.read_bytes() == saved_bytes
+        and window.bridge.application.snapshot() == before
+        and not runtimes
+    )
+    resolved = session.resolve()
+    assert resolved.channels[0].checks.vimo.disabled_labels == expected
+    assert resolved.channels[12].checks.vimo.required is False
+    assert resolved.channels[16].checks.vimo.required is True
+    assert resolved.channels[16].checks.vimo.disabled_labels == ("黑点",)
+    page.save_and_apply()
+    until(lambda: not page.busy)
+    saved = load_recipe(session.entry.path)
+    assert saved == result
+    session.draft.defaults = replace(
+        saved.defaults,
+        vimo=replace(saved.defaults.vimo, disabled_labels=("temporary",)),
+    )
+    page.show_draft()
+    page.request_discard()
+    confirm = page.findChild(QMessageBox)
+    assert confirm is not None
+    next(
+        b
+        for b in confirm.buttons()
+        if b.text() == text("recipe_discard", page.language)
+    ).click()
+    assert session.draft.to_recipe() == saved
+
+
+@pytest.mark.parametrize("failure", ["sdk", "empty", "stale"])
+def test_label_catalog_failure_or_stale_model_keeps_draft(
+    configured_screen: Screen,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    window, session, _ = configured_screen
+    page = window.parameters
+    session.draft.defaults = replace(
+        session.draft.defaults,
+        vimo=replace(session.draft.defaults.vimo, disabled_labels=("Saved",)),
+    )
+    before = session.draft.to_recipe()
+    calls: list[str] = []
+
+    def metadata(
+        path: Path, *, module_id: str, expected_sha256: str
+    ) -> tuple[str, ...]:
+        if failure == "sdk":
+            raise RuntimeError("SDK metadata unavailable")
+        calls.append("read")
+        return () if failure == "empty" else ("Old" if len(calls) == 1 else "Current",)
+
+    monkeypatch.setattr("vimo_demo.ui.parameters_page.read_model_labels", metadata)
+    window.navigate(0)
+    window.navigate(1)
+    if failure == "stale":
+        session.draft.model_override_id = "special"
+    until(
+        lambda: (
+            not page.labels_loading
+            and (failure != "stale" or "Current" in page.label_checks)
+        )
+    )
+    if failure == "stale":
+        assert tuple(page.label_checks) == ("Current",) and len(calls) == 2
+    else:
+        assert not page.label_checks
+        assert page.status.text() == text("recipe_labels_error", page.language)
+    assert session.draft.defaults == before.defaults
+    assert window.bridge.application.snapshot().active is None
+
+
+def test_inline_labels_wrap_and_cards_follow_content(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, session, _ = configured_screen
+    page = window.parameters
+    labels = [tuple(f"Defect label {i:02d}" for i in range(40))]
+
+    def metadata(
+        path: Path, *, module_id: str, expected_sha256: str
+    ) -> tuple[str, ...]:
+        return labels[0]
+
+    monkeypatch.setattr("vimo_demo.ui.parameters_page.read_model_labels", metadata)
+    window.navigate(0)
+    window.navigate(1)
+    until(lambda: not page.labels_loading)
+    heights: list[int] = []
+    for width in (1920, 1080):
+        window.resize(width, 1200)
+        until(lambda: page.label_choices.width() == page.model_section.width() - 22)
+        QApplication.processEvents()
+        assert len({check.y() for check in page.label_checks.values()}) > 1
+        for check in page.label_checks.values():
+            assert_inside(check, page.label_choices)
+        heights.append(page.model_section.height())
+        for card in (page.recipe_section, page.model_section, page.inspection_section):
+            assert card.minimumHeight() == 0 and card.maximumHeight() > card.height()
+        assert page.summary_scroll.horizontalScrollBar().maximum() == 0
+        assert page.summary_scroll.verticalScrollBar().maximum() == 0
+    assert heights[1] > heights[0]
+    before = session.draft.to_recipe()
+    labels[0] = tuple(f"Defect label {i:03d}" for i in range(120))
+    window.resize(1080, 800)
+    window.navigate(0)
+    window.navigate(1)
+    until(lambda: not page.labels_loading)
+    until(lambda: page.summary_scroll.verticalScrollBar().maximum() > 0)
+    assert_inside(page.buttons["save_apply"], page)
+    for language in ("zh", "en"):
+        window.set_language(language)
+        QApplication.processEvents()
+        for check in page.label_checks.values():
+            assert_inside(check, page.label_choices)
+    # Replacing expanded content with a short catalog shrinks both card and area.
+    labels[0] = ("Dent", "dent")
+    window.resize(1080, 1920)
+    window.navigate(0)
+    window.navigate(1)
+    until(lambda: not page.labels_loading)
+    until(lambda: page.summary_scroll.verticalScrollBar().maximum() == 0)
+    assert page.model_section.height() < heights[0]
+    assert session.draft.to_recipe() == before
+
+
+def test_inline_labels_recheck_runtime_lock_and_metadata_close_is_observed(
+    configured_screen: Screen,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, session, runtimes = configured_screen
+    page, app = window.parameters, window.bridge.application
+    before = session.draft.to_recipe()
+    future = app.start()
+    until(lambda: bool(runtimes))
+    runtimes[0].ready.set_result(None)
+    until(future.done)
+    # An already delivered click is rechecked, even before the next UI refresh.
+    page.label_checks["黑点"].setChecked(False)
+    assert session.draft.to_recipe() == before
+    window.bridge.refresh()
+    assert all(not check.isEnabled() for check in page.label_checks.values())
+    stopped = app.stop()
+    until(stopped.done)
+    window.bridge.refresh()
+    entered, release = Event(), Event()
+    closed: list[bool] = []
+
+    def blocked(path: Path, *, module_id: str, expected_sha256: str) -> tuple[str, ...]:
+        entered.set()
+        assert release.wait(5)
+        return ("黑点",)
+
+    monkeypatch.setattr("vimo_demo.ui.parameters_page.read_model_labels", blocked)
+    window.navigate(0)
+    window.navigate(1)
+    until(entered.is_set)
+    # Catalog IO does not claim readiness or block the unrelated setup slot.
+    assert not page.busy and page.editable()
+    try:
+        page.request_close(lambda: closed.append(True))
+        assert not closed and page.labels_loading
+    finally:
+        release.set()
+    until(lambda: bool(closed))
+    assert not page.labels_loading and session.draft.to_recipe() == before
 
 
 def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> None:
@@ -141,15 +492,16 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     assert app.snapshot().active is None
     assert "next successful Start" in text("roi_applied", "en")
     assert page.status.text() == text("roi_applied", page.language)
-    assert text("model_verified", page.language) in page.model_status.text()
+    model_identity = page.model.toolTip()
     window.bridge.start()
     until(lambda: len(runtimes) == 1)
     window.bridge.refresh()
-    assert text("model_running", page.language) not in page.model_status.text()
+    assert page.model.toolTip() == model_identity
     runtimes[0].ready.set_result(None)
     until(lambda: app.snapshot().state is ApplicationState.RUNNING)
     window.bridge.refresh()
-    assert text("model_running", page.language) in page.model_status.text()
+    assert page.model.toolTip() == model_identity
+    assert all(not check.isEnabled() for check in page.label_checks.values())
     active = app.snapshot().active
     assert active is not None and active.recipe_id == original.recipe_id
     assert not page.buttons["save_apply"].isEnabled()
@@ -160,7 +512,7 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     window.bridge.stop()
     until(lambda: app.snapshot().state is ApplicationState.READY)
     window.bridge.refresh()
-    assert text("model_running", page.language) not in page.model_status.text()
+    assert page.model.toolTip() == model_identity
 
 
 @pytest.mark.parametrize(
@@ -277,24 +629,38 @@ def test_active_recipe_stays_protected_without_candidate(
     assert session.entry.path.read_bytes() == payload
 
 
-def test_expanded_model_details_preserve_canvas_and_save_access(
+def test_rule_rows_expand_and_collapse_without_toggling_checks(
     configured_screen: Screen,
 ) -> None:
+    from dataclasses import replace
+
     window, session, _ = configured_screen
-    window.resize(1920, 1080)
     page = window.parameters
-    page.open_preview("size")
-    page.model_more.click()
-    page.advanced.click()
-    QApplication.processEvents()
-    assert window.size().height() == 1080
-    assert page.model_details.isVisible() and page.notice.isVisible()
-    assert page.preview is not None and page.preview.canvas.height() >= 240
-    assert_inside(page.buttons["save_apply"], page)
-    assert_inside(page.buttons["recipe_discard"], page)
-    assert not session.dirty
-    page.leave_preview(lambda: None)
+    session.draft.capsule = replace(
+        session.draft.capsule,
+        size=replace(session.draft.capsule.size, enabled=True),
+        color=replace(
+            session.draft.capsule.color, enabled=True, target_hue=14, hue_tolerance=1
+        ),
+    )
+    page.show_draft()
+    assert page.expand_tuning["color"].text().endswith("H 14 ± 1")
+    page.expand_tuning["size"].click()
+    preview = page.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    assert page.expand_tuning["size"].width() > page.width() // 2
+    assert not hasattr(preview, "back")
+    assert session.draft.capsule.size.enabled and session.draft.capsule.color.enabled
+    page.expand_tuning["color"].click()
+    assert page.preview is preview and preview.mode == "color"
+    assert session.draft.capsule.size.enabled and session.draft.capsule.color.enabled
+    page.expand_tuning["color"].click()
     until(lambda: page.preview is None)
+    page.capsule_enabled["size"].click()
+    assert page.preview is None and not session.draft.capsule.size.enabled
+    page.expand_tuning["size"].click()
+    assert page.preview is not None and not session.draft.capsule.size.enabled
 
 
 @pytest.mark.parametrize("duplicate", [False, True])
@@ -555,7 +921,10 @@ def test_single_model_and_unrelated_edit_preserve_model_semantics(
     page = window.parameters
     page.reload()
     assert page.model.count() == 1 and not page.model.isEnabled()
-    assert page.model.currentText() == session.registry.models[0].display_name
+    assert (
+        page.model.currentText()
+        == f"{session.registry.models[0].display_name} · {session.registry.models[0].expected_sha256[:8]}"
+    )
     edit(page.metadata["product_code"], "new-code")
     page.save_and_apply()
     until(lambda: not page.busy)

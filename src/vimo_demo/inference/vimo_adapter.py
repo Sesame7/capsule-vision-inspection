@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from contextlib import ExitStack
 from pathlib import Path
 from types import MappingProxyType, TracebackType
@@ -31,6 +32,51 @@ from .models import (
     ImageResult,
     RotatedRect,
 )
+
+
+def read_model_labels(
+    model_path: str | Path, *, module_id: str, expected_sha256: str
+) -> tuple[str, ...]:
+    """Read the segmentation module's complete catalog, never create an engine.
+
+    Own/close the SDK Solution in the calling background context. Loading an
+    exact hashed memory snapshot avoids model/cache writes and file races. No
+    create_module, pipelines, inference or GPU initialization is requested.
+    """
+    try:
+        buffer = bytearray(Path(model_path).read_bytes())
+        if hashlib.sha256(buffer).hexdigest() != expected_sha256.lower():
+            raise ValueError("Model SHA-256 differs from configured identity")
+        import smartmore.vimo.inference as vimo  # pyright: ignore[reportMissingTypeStubs]
+
+        solution = vimo.Solution()
+        with solution:
+            solution.load_from_memory(buffer)
+            modules = [
+                info
+                for info in solution.module_info_list
+                if info.id == module_id and info.type == vimo.ModuleType.SEGMENTATION
+            ]
+            if len(modules) != 1:
+                raise ValueError("Expected one configured segmentation module")
+            labels = tuple(modules[0].features)
+            if (
+                not labels
+                or any(
+                    not label or not label.strip() or any(ord(c) < 32 for c in label)
+                    for label in labels
+                )
+                or len(set(labels)) != len(labels)
+            ):
+                raise ValueError(
+                    "Module does not provide a valid complete label catalog"
+                )
+            return labels
+    except Exception as exc:
+        raise VimoInitializationError(
+            f"Cannot read model labels for module {module_id}: {exc}"
+        ) from exc
+
 
 if TYPE_CHECKING:
     # SDK 3.20 has usable inline annotations but no py.typed marker/stub package.

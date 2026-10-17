@@ -2,12 +2,21 @@
 
 from collections.abc import Callable
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Condition, Thread, current_thread
 
 from vimo_demo.inspection import CycleId, Frame
 from vimo_demo.inspection.production import ProductionInspectionResult
 
+from .model_preparation import (
+    ModelPreparation,
+    ModelPreparationFactory,
+    ModelPreparationRequest,
+    ModelPreparationResult,
+    ModelPreparationSnapshot,
+    ModelPreparationState,
+    real_preparation_engine,
+)
 from .models import (
     ApplicationCapacityError,
     ApplicationError,
@@ -48,10 +57,16 @@ class ProductionApplication:
         session_factory: Callable[[PreparedConfiguration, int], RuntimeSession],
         *,
         max_pending_cycles: int = 8,
+        preparation_factory: ModelPreparationFactory = real_preparation_engine,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
             raise ValueError("max_pending_cycles must be positive")
         self._factory = session_factory
+        self._preparation_factory = preparation_factory
+        self._preparation: ModelPreparation | None = None
+        self._prepare_requested = False
+        self._preparation_future: Future[ModelPreparationResult] | None = None
+        self._preparation_snapshot = ModelPreparationSnapshot()
         self._max_pending = max_pending_cycles
         self._condition = Condition()
         self._state = ApplicationState.UNCONFIGURED
@@ -118,6 +133,8 @@ class ProductionApplication:
     def start(self) -> Future[None]:
         with self._condition:
             self._require(ApplicationState.READY)
+            if self._preparation is not None:
+                raise ApplicationStateError("Model preparation still owns resources")
             self._generation += 1
             self._state = ApplicationState.STARTING
             self._latest = None
@@ -128,6 +145,64 @@ class ProductionApplication:
             self._stop_requested = False
             self._condition.notify_all()
             return self._startup
+
+    def preparation_snapshot(self) -> ModelPreparationSnapshot:
+        with self._condition:
+            return self._preparation_snapshot
+
+    def prepare_model_cache(
+        self, request: ModelPreparationRequest
+    ) -> Future[ModelPreparationResult]:
+        """Admit one explicit model identity, without sources/Recipe activation."""
+        with self._condition:
+            self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
+            if self._preparation is not None or self._session is not None:
+                raise ApplicationStateError("An engine owner is already admitted")
+            self._preparation = ModelPreparation(request, self._preparation_factory)
+            self._preparation_future = _promise(Future())
+            self._preparation_snapshot = ModelPreparationSnapshot(
+                ModelPreparationState.PREPARING, request, owns_resources=True
+            )
+            self._prepare_requested = True
+            self._condition.notify_all()
+            return self._preparation_future
+
+    def _prepare_model(self, operation: ModelPreparation) -> None:
+        result, error = operation.run()
+        with self._condition:
+            future = self._preparation_future
+            if result.cleanup_complete:
+                self._preparation = None
+            elif error is not None:
+                self._fault("model_preparation", error)
+            self._preparation_snapshot = ModelPreparationSnapshot(
+                ModelPreparationState.FAILED
+                if error
+                else ModelPreparationState.SUCCEEDED,
+                operation.request,
+                result,
+                ApplicationIssue(
+                    "model_preparation",
+                    "preparation_failed",
+                    type(error).__name__,
+                    str(error),
+                )
+                if error
+                else None,
+                not result.cleanup_complete,
+            )
+        assert future is not None
+        if error is not None:
+            future.set_exception(
+                lifecycle_error(
+                    "Model cache preparation failed"
+                    if result.cleanup_complete
+                    else "Model cache preparation failed; cleanup remains incomplete",
+                    error,
+                )
+            )
+        else:
+            future.set_result(result)
 
     def stop(self) -> Future[None]:
         with self._condition:
@@ -153,9 +228,12 @@ class ProductionApplication:
             if self._state is not ApplicationState.FAULT:
                 self._state = ApplicationState.STOPPING
             session = self._session
+            preparation = self._preparation
             self._condition.notify_all()
         if session is not None:
             session.request_stop()
+        if preparation is not None:
+            preparation.request_stop()
         return future
 
     def close(self) -> Future[None]:
@@ -168,10 +246,13 @@ class ProductionApplication:
             if self._state is not ApplicationState.FAULT:
                 self._state = ApplicationState.STOPPING
             session = self._session
+            preparation = self._preparation
             self._condition.notify_all()
             future = self._closed
         if session is not None:
             session.request_stop()
+        if preparation is not None:
+            preparation.request_stop()
         return future
 
     def join(self, timeout: float | None = None) -> bool:
@@ -184,7 +265,11 @@ class ProductionApplication:
     def reset_fault(self) -> None:
         with self._condition:
             self._require(ApplicationState.FAULT)
-            if self._session is not None or self._pending:
+            if (
+                self._session is not None
+                or self._pending
+                or self._preparation is not None
+            ):
                 raise ApplicationStateError(
                     "Runtime ownership must be safely released before reset"
                 )
@@ -306,7 +391,10 @@ class ProductionApplication:
             with self._condition:
                 self._condition.wait_for(
                     lambda: (
-                        self._start_requested or self._stop_requested or self._closing
+                        self._start_requested
+                        or self._stop_requested
+                        or self._closing
+                        or self._prepare_requested
                     )
                 )
                 starting = self._start_requested
@@ -314,6 +402,11 @@ class ProductionApplication:
                 prepared = self._candidate or self._active
                 generation = self._generation
                 startup = self._startup if starting else None
+                preparation = self._preparation if self._prepare_requested else None
+                self._prepare_requested = False
+            if preparation is not None:
+                self._prepare_model(preparation)
+                continue
             startup_error: BaseException | None = None
             if starting:
                 try:
@@ -352,6 +445,16 @@ class ProductionApplication:
             resource_error = False
             resources_checked = False
             try:
+                if self._preparation is not None:
+                    if not self._preparation.settle():
+                        raise ApplicationError(
+                            "Model preparation cleanup remains incomplete"
+                        )
+                    with self._condition:
+                        self._preparation = None
+                        self._preparation_snapshot = replace(
+                            self._preparation_snapshot, owns_resources=False
+                        )
                 if session is not None:
                     session.request_stop()
                     if not session.join():
@@ -370,7 +473,7 @@ class ProductionApplication:
                         self._session = None
             except BaseException as exc:
                 cleanup_error = exc
-            if self._closing and self._session is None:
+            if self._closing and self._session is None and self._preparation is None:
                 resources_checked = True
                 try:
                     self._close_resources()
@@ -401,10 +504,17 @@ class ProductionApplication:
                 # leave its request pending for the next owner iteration; never
                 # announce CLOSED without running application-resource cleanup.
                 closing = self._closing and (
-                    resources_checked or self._session is not None
+                    resources_checked
+                    or self._session is not None
+                    or self._preparation is not None
                 )
                 closed = self._closed
-                if closing and self._session is None and not resource_error:
+                if (
+                    closing
+                    and self._session is None
+                    and self._preparation is None
+                    and not resource_error
+                ):
                     self._state = ApplicationState.CLOSED
                 elif closing:
                     self._closing = False
@@ -426,7 +536,11 @@ class ProductionApplication:
                 else:
                     stopped.set_result(None)
             if closing and closed is not None:
-                if self._session is None and not resource_error:
+                if (
+                    self._session is None
+                    and self._preparation is None
+                    and not resource_error
+                ):
                     closed.set_result(None)
                     return
                 closed.set_exception(

@@ -105,20 +105,56 @@ Recipe stacks Recipe management, Model information, Inspection Rules and one
 shared Image Tuning workspace. New/Duplicate, explicit selection, metadata and
 model selection retain their drafts. Reload remains a catalog-refresh action,
 including external new/repaired files; it is distinct from Discard. Single-model
-selection is read-only. Expandable model details show configured IDs/path/hash;
-last candidate artifact verification does not claim continuous integrity or SDK
-loading. A running, warmed session is shown separately; the configured segmentation
-interface is not invented model metadata.
-Expanded model/policy details scroll within the summary area when needed, keeping
-the shared tuning canvas and Save/apply accessible.
+selection is read-only. The compact Model selector shows its display name and
+configured SHA-256 prefix; its tooltip exposes the full ID/hash, not a runtime
+verification claim. The second row shows compact default defect-label checkboxes,
+wrapping at the available width. There is no filter popup, technical-details or
+policy-summary panel. The three summary cards use their content's natural height;
+one enclosing scroll area updates on wrapping/content/language changes and scrolls
+only when needed, leaving Save/apply accessible.
+Opening Recipe reads the selected segmentation module's complete
+`ModuleInfo.features` catalog through the inference adapter, off Qt dispatch. One
+bounded metadata job and one current catalog are owned by the page; stale results
+cannot populate another model. Metadata IO does not occupy preparation or gate
+Start; Close observes actual job termination before detaching delivery. It
+hash-checks a memory snapshot before SDK metadata loading; no inference module,
+pipeline or cache is created. Missing/invalid metadata reports an error without
+offering an inferred catalog. Checked labels participate; unchecked labels update
+only draft `defaults.vimo.disabled_labels`. Checking all catalog labels leaves no
+filter when no other exclusions exist. Previously saved out-of-catalog exclusions
+remain preserved with a tooltip, not offered as catalog choices. Metadata failure
+leaves saved/draft exclusions unchanged and uses existing feedback; re-entry retries
+the read without a polling/retry loop. Labels retain exact
+case-sensitive identities. Default enabled/required and camera/channel overrides
+are unchanged; defaults -> camera -> channel resolution still applies. Save/apply,
+Discard and runtime editing locks govern this edit like other Recipe changes.
 
-Occupancy stays always on. Size/Color enablement is independent of expansion:
-both may be enabled, with only one tuning panel visible. Switching panels reuses
+The Model selector row also offers **Prepare TensorRT cache**, independent of
+Recipe Save/apply. It submits the selected immutable Model identity to the
+[application owner](architecture.md#inference); the UI requests initialization only,
+so neither connected cameras nor Folder inputs are needed. The adjacent icon shows
+unknown, preparing, succeeded or failed with localized tooltips. Preparation can
+take minutes; Close waits asynchronously for native work and cleanup, and Start
+is unavailable while preparation owns resources. Recipe selection/editing retains
+its existing stopped-state rules; changing the Model never retags an earlier result.
+
+Status is a bounded, session-only observation of the latest request, never inferred
+from cache files or restored on launch. Success requires initialization and actual
+worker cleanup; the tooltip distinguishes initialization-only from optional sample
+inference evidence supplied through the application API. It does not certify
+permanent cache validity, activate a Recipe or replace Production warm-up. The
+operation never saves/discards drafts, changes sources, produces counters/results
+or reports to PLC. SDK artifacts remain opaque; no delete/rebuild policy is added.
+
+Occupancy stays always on. The Size/Color rule rows alone open/switch/collapse
+tuning; their separate enablement checkboxes never expand it. Both checks may be
+enabled, with only one tuning panel visible and no second Collapse action.
+Switching panels reuses
 the same frozen image and cached measurement ownership. Camera selection, Fit,
 Refresh, numeric parameters and image color sampling remain draft-only, with no
 production admission, counters, source commands or activation. The former separate
-Tune page and duplicate enablement controls are removed. Advanced details expose
-existing policies/inheritance without changing hidden values or adding new policies.
+Tune page and duplicate enablement controls are removed. Size and Color summaries
+use actual draft limits, including `H <target> ± <tolerance>` for circular Hue.
 
 On first selection, Folder tuning reads the camera's first decodable image in the
 normal deterministic Folder order. Previous/Next and the image selector browse
@@ -135,6 +171,22 @@ dimensions on a blank canvas, or explicitly schematic ROI extents when neither
 is available. Schematic extents never become measured image bounds or evidence.
 Image tools reuse Vision's icons, whole-group wrapping, Fit and 1:1; Recipe
 management icons retain localized names/tooltips and the existing confirmations.
+
+Click an upper/lower view in the current image to select its camera, ChannelId
+and view. A single detail area beside the parameters shows actual body W/H with
+configured limits, or actual Hue with target/circular tolerance. View status uses
+the existing Size/Color judge's reasons for that capability and view; it is not
+the combined channel result or production acceptance. Image overlays keep compact
+channel judgments/body outlines and a selection highlight, without twelve repeated
+W/H captions. Threshold edits rejudge cached evidence; mode switches retain the
+selection. New images/camera changes clear it; stale asynchronous evidence is
+never displayed as the selected view's measurements.
+Disabled checks, unavailable/pending evidence, execution ERROR and content NG are
+distinct; missing scalars display `—`, never ROI-derived measurements. Tune does
+not collect Occupancy evidence or infer EMPTY from a missing body. Routine
+always-on/unavailable explanations are omitted from Qt presentation; actual
+production Occupancy state/evidence and technical errors remain visible. This
+does not change Size/Color judgment or the production EMPTY skip contract.
 
 Recipe Discard beside Save/apply confirms reloading the selected Recipe from its
 actual saved file. Read/identity/validation failure preserves the current draft;

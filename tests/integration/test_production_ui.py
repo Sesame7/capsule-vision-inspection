@@ -730,6 +730,10 @@ def test_ng_is_quiet_but_technical_errors_keep_fixed_status_geometry(
         )
         QApplication.processEvents()
         assert window.metrics["channel_ng"][0].text() == str(36 * cycle)
+        # This fixture has no Occupancy evidence; omit routine unavailable prose.
+        assert text("occupancy", window.language) not in (
+            window.cards[0].indicators[0].toolTip()
+        )
         if status is TechnicalStatus.SUCCESS:
             assert not window.event_label.text()
         else:

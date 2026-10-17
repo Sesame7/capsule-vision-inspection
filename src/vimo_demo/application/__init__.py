@@ -2,6 +2,12 @@
 
 from .application import ProductionApplication
 from .ingress import LocalCycleIngress
+from .model_preparation import (
+    ModelPreparationRequest,
+    ModelPreparationResult,
+    ModelPreparationSnapshot,
+    ModelPreparationState,
+)
 from .models import (
     ApplicationCapacityError,
     ApplicationError,
@@ -26,6 +32,10 @@ __all__ = [
     "ConfigurationIdentity",
     "ConfiguredProductionPipeline",
     "LocalCycleIngress",
+    "ModelPreparationRequest",
+    "ModelPreparationResult",
+    "ModelPreparationSnapshot",
+    "ModelPreparationState",
     "PreparedConfiguration",
     "ProductionApplication",
     "ProductionApplicationSnapshot",

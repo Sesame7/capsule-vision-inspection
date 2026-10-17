@@ -7,7 +7,7 @@ from .errors import (
     VimoResponseError,
 )
 from .models import BoundingRect, DefectRegion, EngineInfo, ImageResult, RotatedRect
-from .vimo_adapter import VimoSegmentationEngine
+from .vimo_adapter import VimoSegmentationEngine, read_model_labels
 
 __all__ = [
     "BoundingRect",
@@ -20,4 +20,5 @@ __all__ = [
     "VimoInitializationError",
     "VimoResponseError",
     "VimoSegmentationEngine",
+    "read_model_labels",
 ]

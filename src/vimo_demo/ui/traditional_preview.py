@@ -9,11 +9,10 @@ from time import monotonic
 from typing import Literal
 
 import numpy as np
-from PySide6.QtCore import QRectF, QSize, QSizeF, Qt, QTimer, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
-    QFont,
-    QFontMetricsF,
+    QMouseEvent,
     QPainter,
     QPaintEvent,
     QPen,
@@ -101,29 +100,9 @@ def measure_reference(
     return tuple(rows)
 
 
-def measurement_label_rect(
-    body: QRectF, available: QRectF, size: QSizeF
-) -> QRectF | None:
-    """Place a readable label above its body, or inside when space is limited.
-
-    Never bleed into another channel/view or pin labels for offscreen bodies.
-    At extreme zoom-out insufficient space requires zooming in, not tiny text.
-    """
-    if (
-        not body.intersects(available)
-        or size.width() > available.width()
-        or size.height() > available.height()
-    ):
-        return None
-    x = min(max(body.left(), available.left()), available.right() - size.width())
-    y = body.top() - size.height() - 3
-    if y < available.top():
-        y = body.top() + 3
-    y = min(max(y, available.top()), available.bottom() - size.height())
-    return QRectF(x, y, size.width(), size.height())
-
-
 class PreviewCanvas(RoiCanvas):
+    view_selected = Signal(int, int)
+
     def __init__(self) -> None:
         super().__init__(lambda: False)
         self.rows: tuple[PreviewMeasurement, ...] = ()
@@ -131,6 +110,30 @@ class PreviewCanvas(RoiCanvas):
         self.slots: tuple[ChannelROI, ...] = ()
         self.language: Language = "zh"
         self.mode: PreviewMode = "size"
+        self.selection: tuple[int, int] | None = None
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        transform = self.model.transform(self.width(), self.height())
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and transform is not None
+            and not self._image.isNull()
+        ):
+            x, y = transform.source_point(event.position().x(), event.position().y())
+            assert self.model.size is not None
+            if 0 <= x < self.model.size[0] and 0 <= y < self.model.size[1]:
+                for index, slot in enumerate(self.slots):
+                    rect = slot.rect
+                    if (
+                        rect.x <= x < rect.x + rect.width
+                        and rect.y <= y < rect.y + rect.height
+                    ):
+                        self.view_selected.emit(
+                            index, int(y >= rect.y + rect.height // 2)
+                        )
+                        event.accept()
+                        return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
@@ -139,12 +142,6 @@ class PreviewCanvas(RoiCanvas):
             return
         painter = QPainter(self)
         painter.setClipRect(
-            QRectF(transform.x, transform.y, transform.width, transform.height)
-        )
-        label_font = QFont(self.font())
-        label_font.setPixelSize(12)
-        metrics = QFontMetricsF(label_font)
-        visible = QRectF(self.rect()).intersected(
             QRectF(transform.x, transform.y, transform.width, transform.height)
         )
         for index, slot in enumerate(self.slots):
@@ -174,46 +171,27 @@ class PreviewCanvas(RoiCanvas):
                 continue
             measured = self.rows[index].measured
             assert measured is not None
-            for view_index, view in enumerate(measured.views):
+            for view in measured.views:
                 if view.body is None:
                     continue
                 box = view.body.bounding_rect
                 body = QRectF(*transform.rectangle(box))
                 painter.setPen(QPen(QColor(color), 1.5))
                 painter.drawRect(body)
-                if self.mode == "size":
-                    caption = f"W {box.width}\nH {box.height}"
-                    size = QSizeF(
-                        max(
-                            metrics.horizontalAdvance(line)
-                            for line in caption.splitlines()
-                        )
-                        + 8,
-                        2 * metrics.lineSpacing() + 6,
-                    )
-                    split = slot.rect.height // 2
-                    view_roi = BoundingRect(
-                        slot.rect.x,
-                        slot.rect.y + (split if view_index else 0),
-                        slot.rect.width,
-                        slot.rect.height - split if view_index else split,
-                    )
-                    bounds = QRectF(*transform.rectangle(view_roi)).intersected(visible)
-                    bounds = bounds.adjusted(3, 22 if view_index == 0 else 3, -3, -3)
-                    label_rect = measurement_label_rect(body, bounds, size)
-                    if label_rect is not None:
-                        painter.save()
-                        painter.setFont(label_font)
-                        painter.setPen(Qt.PenStyle.NoPen)
-                        painter.setBrush(QColor(20, 24, 30, 225))
-                        painter.drawRoundedRect(label_rect, 3, 3)
-                        painter.setPen(QColor(Style.primary))
-                        painter.drawText(
-                            label_rect.adjusted(4, 3, -4, -3),
-                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-                            caption,
-                        )
-                        painter.restore()
+        if self.selection is not None:
+            index, view = self.selection
+            slot = self.slots[index].rect
+            middle = slot.height // 2
+            rect = BoundingRect(
+                slot.x,
+                slot.y + (middle if view else 0),
+                slot.width,
+                slot.height - middle if view else middle,
+            )
+            painter.setPen(
+                QPen(QColor(theme_colors(self).accent), 2, Qt.PenStyle.DashLine)
+            )
+            painter.drawRect(QRectF(*transform.rectangle(rect)).adjusted(2, 2, -2, -2))
 
 
 class TraditionalPreview(QWidget):
@@ -264,6 +242,7 @@ class TraditionalPreview(QWidget):
         self._reference_error = ""
         self._close: Callable[[], None] | None = None
         self._loading = False
+        self._selection_frame: DisplayFrame | None = None
         root = QVBoxLayout(self)
         root.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
         root.setSpacing(Style.small)
@@ -272,7 +251,6 @@ class TraditionalPreview(QWidget):
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(Style.small)
         self.title = QLabel()
-        self.back = QPushButton()
         self.camera_tabs = QTabBar()
         self.camera_tabs.setExpanding(False)
         self.camera_tabs.setUsesScrollButtons(False)
@@ -295,7 +273,6 @@ class TraditionalPreview(QWidget):
         self.reference.setMaximumWidth(300)
         self.reference.setMinimumHeight(Style.touch)
         for button in (
-            self.back,
             self.refresh_button,
             self.fit_button,
             self.actual_button,
@@ -306,7 +283,6 @@ class TraditionalPreview(QWidget):
         ):
             button.setFixedSize(Style.touch, Style.touch)
             button.setIconSize(QSize(Style.icon, Style.icon))
-        header.addWidget(self.back)
         header.addWidget(self.camera_tabs)
         reference_controls, display_controls = QWidget(), QWidget()
         reference_row, display_row = (
@@ -385,14 +361,20 @@ class TraditionalPreview(QWidget):
         self._controls_row.setSpacing(Style.space)
         self._controls_row.addWidget(self.title)
         self._controls_row.addWidget(self.controls)
-        self._controls_row.addStretch()
+        self.selection_detail = QLabel()
+        self.selection_detail.setMinimumWidth(230)
+        self.selection_detail.setWordWrap(True)
+        self.selection_detail.setTextFormat(Qt.TextFormat.PlainText)
+        self.selection_detail.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._controls_row.addWidget(self.selection_detail, 1)
         root.addLayout(self._controls_row)
         root.addWidget(self.canvas, 1)
         self.message = QLabel()
         self.message.setWordWrap(True)
         self.message.setTextFormat(Qt.TextFormat.PlainText)
         root.addWidget(self.message)
-        self.back.clicked.connect(lambda: self.request_close(self.leave))
         self.refresh_button.clicked.connect(self.refresh_reference)
         self.fit_button.clicked.connect(lambda: self.canvas.zoom(None))
         self.actual_button.clicked.connect(lambda: self.canvas.zoom(1.0))
@@ -404,6 +386,7 @@ class TraditionalPreview(QWidget):
         self.camera_tabs.currentChanged.connect(self.select_camera)
         self.tolerance.valueChanged.connect(self.update_settings)
         self.sample.clicked.connect(self.sample_color)
+        self.canvas.view_selected.connect(self.select_view)
         self._timer = QTimer(self)
         self._timer.setInterval(15)
         self._timer.timeout.connect(self._poll)
@@ -427,7 +410,6 @@ class TraditionalPreview(QWidget):
         for index in range(self.camera_tabs.count()):
             self.camera_tabs.setTabIcon(index, camera_icon(color))
         for button, tool in (
-            (self.back, "minus"),
             (self.import_button, "folder"),
             (self.runtime_button, "runtime"),
             (self.previous_button, "previous"),
@@ -451,8 +433,6 @@ class TraditionalPreview(QWidget):
         ):
             button.setToolTip(text(key, language))
             button.setAccessibleName(button.toolTip())
-        self.back.setToolTip(self.tr_pair("收起", "Collapse"))
-        self.back.setAccessibleName(self.back.toolTip())
         self.reference.setAccessibleName(text("vision_image_select", language))
         self.camera_tabs.setAccessibleName(text("camera_setup", language))
         for index, camera in enumerate(self.session.machine.layout.cameras):
@@ -532,6 +512,94 @@ class TraditionalPreview(QWidget):
         self.runtime_button.setEnabled(viewing and self._runtime_frame() is not None)
         self.refresh_button.setEnabled(viewing)
         self._present_reference()
+        self._present_selection()
+
+    def select_view(self, slot: int, view: int) -> None:
+        if self.frame is None or not (
+            0 <= slot < len(self.camera.slots) and view in (0, 1)
+        ):
+            return
+        self._selection_frame = self.frame
+        self.canvas.selection = slot, view
+        self._present_selection()
+        self.canvas.update()
+
+    def _present_selection(self) -> None:
+        selected = self.canvas.selection
+        if (
+            selected is None
+            or self._selection_frame is not self.frame
+            or self.frame is None
+        ):
+            self.selection_detail.setText(
+                self.tr_pair("点选上／下胶囊查看测量", "Select an upper/lower capsule")
+            )
+            self.selection_detail.setToolTip("")
+            return
+        index, view_index = selected
+        slot = self.camera.slots[index]
+        name = "upper" if view_index == 0 else "lower"
+        caption = self.tr_pair("上" if view_index == 0 else "下", name)
+        row = self.measurements[index] if index < len(self.measurements) else None
+        measured = row.measured if row else None
+        view = measured.views[view_index] if measured else None
+        settings = self.session.draft.capsule
+        enabled = (
+            settings.size.enabled if self.mode == "size" else settings.color.enabled
+        )
+        available = measured is not None and (
+            measured.size_measured if self.mode == "size" else measured.color_measured
+        )
+        status, reason = self.tr_pair("不可用", "Unavailable"), ""
+        if not enabled:
+            status = "DISABLED"
+        elif row is not None and row.error:
+            status, reason = "ERROR", row.error
+        elif available and measured is not None:
+            # Reuse the accepted judgment for this capability, then select its
+            # explicit view reasons. This is advisory view status, not acceptance.
+            selected_settings = replace(
+                settings,
+                size=replace(settings.size, enabled=self.mode == "size"),
+                color=replace(settings.color, enabled=self.mode == "color"),
+            )
+            try:
+                result = judge_capsule(measured, selected_settings)
+                reasons = [r.code for r in result.reasons if f".{name}." in r.code]
+                status = "NG" if reasons else "OK"
+                reason = ", ".join(reasons)
+            except ValueError as exc:
+                status, reason = "ERROR", str(exc)
+        check_name = self.tr_pair(
+            "尺寸" if self.mode == "size" else "颜色", self.mode.title()
+        )
+        header = f"{self.camera.camera_id} · CH{slot.channel_id:02d} · {caption} · {check_name} {status}"
+        if self.mode == "size":
+            rect = (
+                view.body.bounding_rect
+                if view is not None and view.body is not None and enabled and available
+                else None
+            )
+            width, height = (str(rect.width), str(rect.height)) if rect else ("—", "—")
+            s = settings.size
+            values = f"W {width} [{s.target_width - s.width_tolerance}, {s.target_width + s.width_tolerance}] · H {height} [{s.target_height - s.height_tolerance}, {s.target_height + s.height_tolerance}] px"
+        else:
+            hue = (
+                view.color.hue
+                if view is not None and view.color is not None and enabled and available
+                else None
+            )
+            actual = f"{hue:.2f}" if hue is not None else "—"
+            values = f"Hue {actual} · {self.tr_pair('目标', 'Target')} {settings.color.target_hue} ± {settings.color.hue_tolerance}"
+        self.selection_detail.setText(f"{header}\n{values}")
+        self.selection_detail.setToolTip(
+            reason
+            + ("\n" if reason else "")
+            + self.tr_pair(
+                "数值来自当前冻结图和配方草稿。",
+                "Values use this frozen image and Recipe draft.",
+            )
+        )
 
     def update_settings(self) -> None:
         if self._loading or not self.allowed() or self._close is not None:
@@ -655,6 +723,8 @@ class TraditionalPreview(QWidget):
         self._revision += 1
         self.measurements, self.results = (), ()
         self.canvas.rows, self.canvas.results = (), ()
+        self.canvas.selection = None
+        self._selection_frame = None
         self.canvas.setToolTip("")
         self.frame = reference.frame if reference else None
         if reference is not None:
@@ -973,6 +1043,7 @@ class TraditionalPreview(QWidget):
         )
         self.canvas.rows, self.canvas.results = self.measurements, self.results
         self.canvas.update()
+        self._present_selection()
         if self._reference_error:
             self.show_message(self._reference_error)
         elif self.frame is None:
