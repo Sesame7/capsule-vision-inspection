@@ -227,6 +227,7 @@ def load_startup(
             else None,
             auto_select_first=False,
             require_saved_sources=True,
+            preferences_path=data.preferences,
         )
         assert preferences is not None
         entry = next(

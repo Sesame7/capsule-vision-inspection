@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from vimo_demo.application import PreparedConfiguration, prepare_configuration
+from vimo_demo.application.preferences import load_preferences
 from vimo_demo.configuration import (
     CameraOverride,
     ChannelOverride,
@@ -80,11 +81,13 @@ class RecipeEditorSession:
         cli_sources: bool = False,
         auto_select_first: bool = True,
         require_saved_sources: bool = False,
+        preferences_path: Path | None = None,
     ) -> None:
         self.camera_sources = camera_sources
         self.cli_sources = cli_sources
         self.auto_select_first = auto_select_first
         self.require_saved_sources = require_saved_sources
+        self.preferences_path = preferences_path
         self.machine_path = machine_path
         self.machine_editor = MachineLayoutDraft(machine, machine_path)
         self.catalog, self.registry = catalog, registry
@@ -120,10 +123,27 @@ class RecipeEditorSession:
     def discard(self) -> None:
         if self.entry is not None:
             recipe = load_recipe(self.entry.path)
+            if recipe.recipe_id != self.entry.recipe.recipe_id:
+                raise ConfigurationError(
+                    "Recipe identity changed externally; reload explicitly"
+                )
             self.entry = RecipeEntry(self.entry.path, recipe)
             self.draft = RecipeDraft.from_recipe(recipe)
         else:
             self.draft = RecipeDraft("", "")
+
+    def delete(self, *, protected_ids: frozenset[str]) -> None:
+        if self.entry is None:
+            raise ConfigurationError("Select a saved Recipe before Delete")
+        if self.preferences_path is not None:
+            # Read the actual manifest, including an earlier applied identity
+            # retained after a preference-write failure. Unknown state fails closed.
+            persisted = load_preferences(self.preferences_path).last_applied_recipe_id
+            if persisted is not None:
+                protected_ids = protected_ids | {persisted}
+        self.catalog.delete(self.entry, protected_ids=protected_ids)
+        self.entry = None
+        self.draft = RecipeDraft("", "")
 
     def resolve(
         self, recipe: RecipeDefinition | None = None

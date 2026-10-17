@@ -108,3 +108,19 @@ class RecipeCatalog:
                 raise ConfigurationError("Recipe target already exists")
         save_recipe(path, recipe)
         return RecipeEntry(path, recipe)
+
+    def delete(self, entry: RecipeEntry, *, protected_ids: frozenset[str]) -> None:
+        """Delete only the unchanged selected Recipe, never a shared asset."""
+        if entry.recipe.recipe_id in protected_ids:
+            raise ConfigurationError("Active/applied Recipe cannot be deleted")
+        snapshot = self.discover()
+        if snapshot.issues or entry not in snapshot.entries:
+            raise ConfigurationError(
+                "Recipe changed or catalog is invalid; reload before Delete"
+            )
+        if entry.path.resolve().parent != self.directory.resolve():
+            raise ConfigurationError("Recipe is outside its catalog")
+        try:
+            entry.path.unlink()
+        except OSError as exc:
+            raise ConfigurationIOError(f"Delete Recipe {entry.path}: {exc}") from exc

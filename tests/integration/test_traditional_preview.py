@@ -1,21 +1,35 @@
 """Preview shares production math but has no application/runtime side effects."""
 
+from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
 from threading import enumerate as threads
 
+import cv2
 import numpy as np
 import pytest
 from PySide6.QtCore import QPoint, QRectF, QSizeF
 from PySide6.QtGui import QFont, QFontMetricsF
-from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLabel
 from tests.capsule_support import SETTINGS, bodies
 from tests.qt_support import until
 from tests.recipe_ui_support import Screen, assert_inside, demo_recipe_window
 from tests.recipe_ui_support import configured_screen as configured_screen
 
-from vimo_demo.configuration import MachineLayoutDefinition, load_recipe
+from vimo_demo.application.basler_connection import (
+    CameraSnapshot,
+    ConnectedCamera,
+    ConnectionState,
+    SourceConnectionSnapshot,
+)
+from vimo_demo.application.folder_replay import decode_image
+from vimo_demo.configuration import (
+    CameraFolder,
+    CameraSources,
+    MachineLayoutDefinition,
+    load_recipe,
+)
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.inspection.production import (
@@ -25,14 +39,315 @@ from vimo_demo.inspection.production import (
     ProductJudgment,
 )
 from vimo_demo.inspection.production.capsule import CapsuleSettings, judge_capsule
+from vimo_demo.ui.camera_source_editor import CameraSourceDraft
 from vimo_demo.ui.display_frames import DisplayFrame
 from vimo_demo.ui.machine_editor import MachineLayoutDraft
-from vimo_demo.ui.production_style import Language, Style
+from vimo_demo.ui.production_style import Language
 from vimo_demo.ui.traditional_preview import (
     PreviewMode,
     TraditionalPreview,
     measurement_label_rect,
 )
+
+
+def source_preview(
+    screen: Screen, root: Path, *, basler: bool = False
+) -> CameraSourceDraft:
+    preview = setup(screen)
+    preview.back.click()
+    session = screen[1]
+    mappings: list[CameraFolder] = []
+    for index, camera in enumerate(session.machine.layout.camera_ids):
+        folder = root / str(camera)
+        folder.mkdir()
+        for number in (2, 10):
+            image = np.concatenate(
+                [bodies(30 + index + number) for _ in range(6)], axis=1
+            )
+            ok, encoded = cv2.imencode(".png", image)
+            assert ok
+            encoded.tofile(folder / f"image{number}.png")
+        mappings.append(
+            CameraFolder(camera, str(folder), basler_serial=str(1000 + index))
+        )
+    sources = CameraSourceDraft(
+        CameraSources(tuple(mappings), mode="basler" if basler else "folder"),
+        root / "sources.json",
+    )
+    session.camera_sources = sources
+    return sources
+
+
+def test_folder_first_valid_navigation_camera_identity_and_no_side_effects(
+    configured_screen: Screen,
+    tmp_path: Path,
+) -> None:
+    window, session, runtimes = configured_screen
+    sources = source_preview(configured_screen, tmp_path)
+    (tmp_path / "CAM1/image1.png").write_bytes(b"not an image")
+    before, recipe, machine = (
+        window.bridge.application.snapshot(),
+        session.draft.to_recipe(),
+        session.machine,
+    )
+    window.parameters.open_preview("size")
+    preview = window.parameters.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    original = preview.frame
+    assert original is not None and original.frame_id.camera_id == "CAM1"
+    assert original.frame_id.sequence == 1 and "2/3" in preview.reference.currentText()
+    assert (
+        "480×120" in preview.reference.currentText()
+        and "schematic" not in preview.reference.currentText()
+    )
+    assert not original.image.flags.writeable
+    with pytest.raises(ValueError):
+        original.image.setflags(write=True)
+    preview.next_button.click()
+    until(lambda: not preview.busy)
+    second = preview.frame
+    assert (
+        second is not None
+        and second.frame_id.sequence == 2
+        and not preview.next_button.isEnabled()
+    )
+    preview.camera_tabs.setCurrentIndex(1)
+    until(lambda: not preview.busy)
+    assert preview.frame and preview.frame.frame_id.camera_id == "CAM2"
+    preview.camera_tabs.setCurrentIndex(0)
+    until(lambda: not preview.busy)
+    assert (
+        preview.frame is second
+    )  # Per-camera frozen selection, not first-image reload.
+    preview.refresh_button.click()
+    until(lambda: not preview.busy)
+    assert (
+        preview.frame and preview.frame.frame_id.sequence == 2
+    )  # Refresh is not Next.
+    preview.actual_button.click()
+    assert preview.canvas.model.scale == 1.0
+    preview.fit_button.click()
+    assert preview.canvas.model.scale is None
+    assert session.draft.to_recipe() == recipe and session.machine == machine
+    assert sources.saved == sources.definition and not sources.dirty
+    assert window.bridge.application.snapshot() == before and not runtimes
+
+
+@pytest.mark.parametrize("basler", [False, True])
+def test_temporary_import_stays_frozen_and_failure_keeps_pixels(
+    configured_screen: Screen,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    basler: bool,
+) -> None:
+    window, session, _ = configured_screen
+    sources = source_preview(configured_screen, tmp_path, basler=basler)
+    window.parameters.open_preview("color")
+    preview = window.parameters.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    before, recipe = window.bridge.application.snapshot(), session.draft.to_recipe()
+    path = tmp_path / "CAM1/image10.png"
+
+    def choose_file(*args: object, **kwargs: object) -> tuple[str, str]:
+        return str(path), ""
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", choose_file)
+    preview.import_button.click()
+    until(lambda: not preview.busy)
+    imported = preview.frame
+    assert imported is not None and imported.source_key == str(path)
+    assert (
+        imported.frame_id.camera_id == "CAM1"
+        and "480×120" in preview.reference.currentText()
+    )
+    window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(7), CameraId("CAM1"), 7),
+            7,
+            np.zeros((120, 480, 3), np.uint8),
+        ),
+        generation=0,
+        source_key="basler:1000",
+    )
+    window.bridge.refresh()
+    preview.set_mode("size")
+    assert preview.frame is imported
+    preview.camera_tabs.setCurrentIndex(1)
+    until(lambda: not preview.busy)
+    assert preview.frame is None or preview.frame.frame_id.camera_id == "CAM2"
+    preview.camera_tabs.setCurrentIndex(0)
+    until(lambda: not preview.busy)
+    assert preview.frame is imported
+    preview.refresh_button.click()
+    until(lambda: not preview.busy)
+    refreshed = preview.frame
+    assert refreshed is not None and refreshed.source_key == str(path)
+    assert refreshed is not imported and refreshed.frame_id.camera_id == "CAM1"
+    preview.load_image(tmp_path / "missing.png")
+    until(lambda: not preview.busy)
+    assert preview.frame is refreshed and "missing.png" in preview.message.text()
+    assert session.draft.to_recipe() == recipe and not sources.dirty
+    assert window.bridge.application.snapshot() == before
+
+
+def test_basler_reference_filters_mapping_and_requires_explicit_refresh(
+    configured_screen: Screen,
+    tmp_path: Path,
+) -> None:
+    window, _, _ = configured_screen
+    source_preview(configured_screen, tmp_path, basler=True)
+    store = window.bridge.frames
+    cam1, cam2 = CameraId("CAM1"), CameraId("CAM2")
+    image = np.concatenate([bodies(42) for _ in range(6)], axis=1)
+    store.publish(
+        Frame(FrameId(CycleId(2), cam1, 2), 2, image),
+        generation=3,
+        source_key="basler:1000",
+    )
+    store.publish(
+        Frame(FrameId(CycleId(2), cam2, 2), 2, image),
+        generation=3,
+        source_key="basler:wrong",
+    )
+    window.parameters.open_preview("size")
+    preview = window.parameters.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    frozen = preview.frame
+    assert (
+        frozen is not None and frozen.generation == 3 and frozen.frame_id.sequence == 2
+    )
+    store.publish(
+        Frame(FrameId(CycleId(3), cam1, 3), 3, image),
+        generation=3,
+        source_key="basler:1000",
+    )
+    window.bridge.refresh()
+    assert preview.frame is frozen
+    preview.camera_tabs.setCurrentIndex(1)
+    until(lambda: not preview.busy)
+    assert (
+        preview.frame is None and preview.measurements == () and preview.results == ()
+    )
+    assert (
+        preview.canvas.model.size is None
+        and preview.canvas.model.schematic_size is not None
+    )
+    assert not preview.runtime_button.isEnabled() and not preview.sample.isEnabled()
+    preview.camera_tabs.setCurrentIndex(0)
+    until(lambda: not preview.busy)
+    assert preview.frame is frozen
+    preview.refresh_button.click()
+    until(lambda: not preview.busy)
+    assert preview.frame and preview.frame.frame_id.sequence == 3
+
+
+def test_blank_preview_uses_only_authoritative_connected_dimensions(
+    configured_screen: Screen,
+    tmp_path: Path,
+) -> None:
+    window, _, _ = configured_screen
+    source_preview(configured_screen, tmp_path, basler=True)
+
+    class Connection:
+        state = ConnectionState.CONNECTED
+
+        def source_snapshot(self) -> SourceConnectionSnapshot:
+            return SourceConnectionSnapshot(
+                self.state,
+                (ConnectedCamera(CameraId("CAM1"), "1000", 480, 120),),
+                False,
+                True,
+                "",
+                None,
+                0,
+                0,
+                None,
+                False,
+            )
+
+        def connect_source(self) -> None:
+            pytest.fail("Preview must not connect")
+
+        def disconnect_source(self) -> None:
+            pytest.fail("Preview must not disconnect")
+
+        def capture_image(
+            self, camera: CameraId, *, timeout: float = 10.0
+        ) -> Future[CameraSnapshot]:
+            pytest.fail("Preview must not acquire")
+
+    connection = Connection()
+    window.parameters.open_preview("color")
+    preview = window.parameters.preview
+    assert preview is not None and preview.frame is None and not preview.busy
+    preview.connection = connection
+    preview.refresh_state()
+    assert preview.canvas.model.size == (480, 120)
+    assert (
+        "480" in preview.reference.currentText()
+        and "120" in preview.reference.currentText()
+    )
+    assert (
+        not preview.measurements
+        and not preview.results
+        and not preview.sample.isEnabled()
+    )
+    connection.state = ConnectionState.DISCONNECTED
+    preview.refresh_state()
+    assert (
+        preview.canvas.model.size is None
+        and preview.canvas.model.schematic_size is not None
+    )
+    assert "480" not in preview.reference.currentText()
+
+
+@pytest.mark.parametrize("close", [False, True])
+def test_async_decode_camera_change_and_close_discard_stale_work(
+    configured_screen: Screen,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    close: bool,
+) -> None:
+    import vimo_demo.ui.traditional_preview as module
+
+    window, _, _ = configured_screen
+    source_preview(configured_screen, tmp_path)
+    entered, release = Event(), Event()
+    original = decode_image
+
+    def blocked(path: Path):
+        if path.parent.name == "CAM1":
+            entered.set()
+            assert release.wait(5)
+        return original(path)
+
+    monkeypatch.setattr(module, "decode_image", blocked)
+    window.parameters.open_preview("size")
+    preview = window.parameters.preview
+    assert preview is not None
+    until(entered.is_set)
+    try:
+        preview.camera_tabs.setCurrentIndex(1)
+        preview.camera_tabs.setCurrentIndex(2)
+        assert (
+            preview.frame is None and not preview.measurements and not preview.results
+        )
+        assert sum(t.name == "CapsulePreview" for t in threads()) == 1
+        if close:
+            preview.back.click()
+            assert window.parameters.preview is preview
+    finally:
+        release.set()
+    if close:
+        until(lambda: window.parameters.preview is None)
+        assert not any(t.name == "CapsulePreview" for t in threads())
+    else:
+        until(lambda: not preview.busy)
+        assert preview.frame and preview.frame.frame_id.camera_id == "CAM3"
+        assert len(preview.results) == 6 and "image2.png" in preview.reference.toolTip()
 
 
 def setup(screen: Screen, *, pixel_scale: int = 1) -> TraditionalPreview:
@@ -103,7 +418,7 @@ def test_cached_judgment_and_isolation_and_save(
         result and result.assessment.judgment is ProductJudgment.OK
         for result in preview.results
     )
-    preview.mode_tabs.setCurrentIndex(1)
+    preview.set_mode("color")
     session.draft.capsule = replace(
         session.draft.capsule, color=replace(session.draft.capsule.color, target_hue=50)
     )
@@ -159,6 +474,7 @@ def test_camera_refresh_and_layout(
         assert preview.camera_tabs.accessibleTabName(
             index
         ) == preview.camera_tabs.tabToolTip(index)
+        assert preview.camera_tabs.rect().contains(preview.camera_tabs.tabRect(index))
     assert preview.canvas.width() > 500 and preview.canvas.height() > 240
     for widget in (
         preview.back,
@@ -175,7 +491,7 @@ def test_camera_refresh_and_layout(
     until(lambda: not preview.busy)
     assert preview.frame is not None and preview.frame is not original
     assert preview.frame.frame_id.camera_id == "CAM3"
-    preview.mode_tabs.setCurrentIndex(1)
+    preview.set_mode("color")
     preview.sample.click()
     assert session.draft.capsule.color.target_hue == 32
     camera = CameraId("CAM3")
@@ -265,7 +581,10 @@ def test_preview_read_only_during_runtime_and_navigation_releases(
     runtimes[0].ready.set_result(None)
     until(future.done)
     window.bridge.refresh()
-    assert not preview.enabled.isEnabled() and not preview.controls.isEnabled()
+    assert (
+        not configured_screen[0].parameters.capsule_enabled[preview.mode].isEnabled()
+        and not preview.controls.isEnabled()
+    )
     preview.sample_color()
     assert session.draft.capsule == before
     window.navigate(4)
@@ -299,7 +618,7 @@ def test_disabled_preview_never_segments(
     window.parameters.open_preview("size")
     preview = window.parameters.preview
     assert preview is not None and not preview.busy and not calls
-    preview.enabled.setChecked(True)
+    configured_screen[0].parameters.capsule_enabled[preview.mode].setChecked(True)
     until(lambda: not preview.busy)
     assert calls == [True]
     preview.back.click()
@@ -313,7 +632,7 @@ def test_no_repeated_text_but_errors_remain(
     preview = setup(configured_screen)
     window.set_language(language)
     for mode in (0, 1):
-        preview.mode_tabs.setCurrentIndex(mode)
+        preview.set_mode("size" if (mode) == 0 else "color")
         assert not preview.message.isVisible() and preview.message.text() == ""
         labels = " ".join(label.text() for label in preview.findChildren(QLabel))
         assert "CH01: OK" not in labels
@@ -371,7 +690,7 @@ def test_twelve_annotation_placements(
         rectangles.append(label)
     assert len(rectangles) == 12 if scale is None else len(rectangles) > 0
     records.clear()
-    preview.mode_tabs.setCurrentIndex(1)
+    preview.set_mode("color")
     preview.canvas.grab()
     assert not records  # No Size labels in Color mode.
     preview.back.click()
@@ -484,7 +803,7 @@ def test_preview_scopes_ng_event_but_preserves_errors(
 def test_color_only_sampling_without_body_geometry(configured_screen: Screen) -> None:
     window, session, runtimes = configured_screen
     preview = setup(configured_screen)
-    preview.mode_tabs.setCurrentIndex(1)
+    preview.set_mode("color")
     session.draft.capsule = replace(
         SETTINGS,
         size=replace(SETTINGS.size, enabled=False),
@@ -542,18 +861,24 @@ def test_preview_capability_changes_recompute_but_thresholds_rejudge(
         return original(frame, camera, settings)
 
     monkeypatch.setattr(module, "measure_reference", observed)
-    preview.enabled.setChecked(False)  # Color-only
+    configured_screen[0].parameters.capsule_enabled[preview.mode].setChecked(
+        False
+    )  # Color-only
     until(lambda: not preview.busy)
     assert calls == [(False, True)]
-    preview.mode_tabs.setCurrentIndex(1)
+    preview.set_mode("color")
     preview.tolerance.setValue(12)
     preview.sample.click()
     assert calls == [(False, True)]  # Targets and tolerances only rejudge.
-    preview.enabled.setChecked(False)  # Neither: clear stale evidence, no job.
+    configured_screen[0].parameters.capsule_enabled[preview.mode].setChecked(
+        False
+    )  # Neither: clear stale evidence, no job.
     assert not preview.busy and not preview.measurements and not preview.results
     assert calls == [(False, True)]
-    preview.mode_tabs.setCurrentIndex(0)
-    preview.enabled.setChecked(True)  # Size-only
+    preview.set_mode("size")
+    configured_screen[0].parameters.capsule_enabled[preview.mode].setChecked(
+        True
+    )  # Size-only
     until(lambda: not preview.busy)
     assert calls[-1] == (True, False)
     assert all(
@@ -627,26 +952,22 @@ def test_one_entry_mode_selection_and_draft_synchronization(
     )
     page.show_draft()
     before = window.bridge.application.snapshot()
-    assert [
-        b
-        for b in page.findChildren(QPushButton)
-        if b.text() == page.tune_preview.text()
-    ] == [page.tune_preview]
     assert page.capsule_enabled["size"].isChecked() is size_enabled
     assert page.capsule_enabled["color"].isChecked() is color_enabled
-    page.tune_preview.click()
+    initial = "color" if color_enabled and not size_enabled else "size"
+    page.expand_tuning[initial].click()
     preview = page.preview
     assert preview is not None
     until(lambda: not preview.busy)
     assert preview.mode == ("color" if color_enabled and not size_enabled else "size")
-    assert preview.enabled.isChecked() is (
-        color_enabled if preview.mode == "color" else size_enabled
-    )
-    preview.enabled.setChecked(not preview.enabled.isChecked())
+    assert configured_screen[0].parameters.capsule_enabled[
+        preview.mode
+    ].isChecked() is (color_enabled if preview.mode == "color" else size_enabled)
+    page.capsule_enabled[preview.mode].click()
     until(lambda: not preview.busy)
-    preview.mode_tabs.setCurrentIndex(0)
+    preview.set_mode("size")
     preview.spins["target_width"].setValue(21)
-    preview.mode_tabs.setCurrentIndex(1)
+    preview.set_mode("color")
     preview.tolerance.setValue(7)
     expected = session.draft.capsule
     preview.back.click()
@@ -672,51 +993,44 @@ def test_disabled_selected_mode_keeps_other_checks_ng(
         size=replace(SETTINGS.size, enabled=mode != "size", target_width=25),
         color=replace(SETTINGS.color, enabled=mode != "color", target_hue=50),
     )
-    preview.mode_tabs.setCurrentIndex(0 if mode == "size" else 1)
+    preview.set_mode("size" if (0 if mode == "size" else 1) == 0 else "color")
     preview.show_settings()
     until(lambda: not preview.busy)
-    assert not preview.enabled.isChecked()
-    assert preview.enabled.text() == ("未启用" if language == "zh" else "Disabled")
+    assert not configured_screen[0].parameters.capsule_enabled[preview.mode].isChecked()
+    assert configured_screen[0].parameters.capsule_enabled[preview.mode].isVisible()
     assert all(
         r and r.assessment.judgment is ProductJudgment.NG for r in preview.results
     )
     assert preview.canvas.results == preview.results
     measurements, results = preview.measurements, preview.results
-    preview.mode_tabs.setCurrentIndex(1 if mode == "size" else 0)
-    assert preview.enabled.isChecked()
+    preview.set_mode("size" if (1 if mode == "size" else 0) == 0 else "color")
+    assert configured_screen[0].parameters.capsule_enabled[preview.mode].isChecked()
     assert preview.measurements is measurements and preview.results == results
     assert window.bridge.application.snapshot() == before and not runtimes
     preview.back.click()
 
 
-def test_preview_control_groups_wrap(configured_screen: Screen) -> None:
-    # Retain the wide-metadata precondition before opening the preview.
-    window, _, _ = configured_screen
-    page = window.parameters
-    for line in page.metadata.values():
-        line.setMinimumWidth(450)
-    window.resize(900, 1200)
-    QApplication.processEvents()
-    window.resize(1920, 1080)
-    QApplication.processEvents()
+def test_integrated_controls_precede_canvas_and_enablement_is_separate(
+    configured_screen: Screen,
+) -> None:
+    window, session, _ = configured_screen
     preview = setup(configured_screen)
-    preview.mode_tabs.setMinimumWidth(400)
-    window.resize(900, 1200)
-    QApplication.processEvents()
+    page = window.parameters
+    assert not preview.findChildren(QCheckBox)
+    assert preview.controls.y() + preview.controls.height() <= preview.canvas.y()
+    before = session.draft.capsule
+    frozen = preview.frame
+    page.expand_tuning["color"].click()
     assert (
-        preview.controls.mapTo(preview, QPoint(0, 0)).y()
-        >= preview.enabled.mapTo(preview, QPoint(0, preview.enabled.height())).y()
+        page.preview is preview and preview.frame is frozen and preview.mode == "color"
     )
-    assert_inside(preview.controls, preview)
-    for spin in preview.spins.values():
-        assert_inside(spin, preview)
-        assert spin.height() >= Style.touch
-    window.resize(1920, 1080)
-    QApplication.processEvents()
+    assert session.draft.capsule == before
+    page.capsule_enabled["color"].click()
+    until(lambda: not preview.busy)
     assert (
-        preview.controls.mapTo(preview, QPoint(0, 0)).x()
-        > preview.mode_tabs.mapTo(preview, QPoint(preview.mode_tabs.width(), 0)).x()
+        session.draft.capsule.size.enabled and not session.draft.capsule.color.enabled
     )
+    assert page.expand_tuning["color"].isChecked()
     preview.back.click()
 
 
@@ -751,22 +1065,19 @@ def test_tuning_preview_screenshots(
         )
         page.show_draft()
         before = composition.application.snapshot()
-        page.tune_preview.click()
+        page.expand_tuning["size" if workspace == "size" else "color"].click()
         preview = page.preview
         assert preview is not None
-        preview.mode_tabs.setCurrentIndex(0 if workspace == "size" else 1)
+        preview.set_mode("size" if (0 if workspace == "size" else 1) == 0 else "color")
         until(lambda: not preview.busy)
         qapp.processEvents()
         assert preview.frame is not None and len(preview.results) == 6
-        assert preview.mode_tabs.width() < preview.width() // 2
-        assert preview.canvas.height() > window.height() * 0.6
+        assert preview.canvas.height() >= 240
         for control in (
             preview.back,
             preview.camera_tabs,
             preview.fit_button,
             preview.refresh_button,
-            preview.mode_tabs,
-            preview.enabled,
             preview.controls,
         ):
             assert_inside(control, preview)

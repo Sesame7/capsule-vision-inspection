@@ -414,6 +414,7 @@ class ProductionWindow(QMainWindow):
 
     def _refresh_theme_icons(self) -> None:
         self.navbar.present(self.language, self.theme, self.pages.currentIndex())
+        self.parameters.refresh_theme()
         workspace = self.parameters.roi_workspace
         if workspace is not None:
             workspace.refresh_theme()

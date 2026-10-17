@@ -15,6 +15,43 @@ type Theme = Literal["dark", "light"]
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "delete_recipe": ("删除", "Delete"),
+    "delete_recipe_question": (
+        "删除此配方及其未保存修改？仅删除该配方文件。",
+        "Delete this Recipe and its unsaved edits? Only its Recipe file is deleted.",
+    ),
+    "recipe_delete_protected": (
+        "当前活动或已应用配方不可删除。",
+        "The active/applied Recipe cannot be deleted.",
+    ),
+    "recipe_delete_error": (
+        "删除失败；请检查配方引用、文件权限和详情。",
+        "Delete failed; check Recipe references, file access and details.",
+    ),
+    "recipe_discard": ("放弃修改", "Discard changes"),
+    "recipe_discard_question": (
+        "放弃该配方未保存修改，重新读取已保存文件？",
+        "Discard this Recipe's unsaved edits and reload the saved file?",
+    ),
+    "recipe_discard_error": (
+        "恢复失败，草稿已保留；请检查已保存文件。",
+        "Restore failed; draft kept. Check the saved file.",
+    ),
+    "model_module": ("模块", "Module"),
+    "model_configured": ("已配置 · 未运行", "Configured · Not running"),
+    "model_verified": (
+        "上次候选校验通过 · 未运行",
+        "Last candidate verified · Not running",
+    ),
+    "model_running": ("运行中 · 已预热", "Running · Warmed up"),
+    "model_interface": (
+        "接口：ViMo 分割；实际模块类型在 Start 初始化时确认。",
+        "Interface: ViMo segmentation; actual module type is checked during Start initialization.",
+    ),
+    "model_verification_tip": (
+        "校验指已有候选的文件哈希校验；不代表已加载 SDK 或文件持续未变。Start 才加载并预热运行时。",
+        "Verification refers to the existing candidate artifact hash, not SDK loading or continuous file integrity. Start loads and warms the runtime.",
+    ),
     "production_stop": ("停止", "Stop"),
     "pause_unsupported": (
         "当前采集模式不支持暂停",
@@ -781,6 +818,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLabel[role="error"] {{ color: {c.warning}; }}
     QFrame#visionSources {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
     QFrame#visionRoi {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
+    QFrame#recipeSection {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
     QFrame#visionModeSwitch QPushButton {{ background: transparent; border: none; border-radius: 20px; padding: 0; }}
     QFrame#visionModeSwitch QPushButton:checked, QFrame#visionModeSwitch QPushButton:hover, QFrame#visionModeSwitch QPushButton:disabled {{ background: transparent; border: none; }}
     QFrame#visionModeSwitch QPushButton:focus:enabled {{ border: 1px dotted {c.accent}; }}
@@ -821,7 +859,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QComboBox QAbstractItemView, QMenu {{ background: {c.surface}; color: {c.primary}; border: 1px solid {c.border}; selection-background-color: {c.selected}; }}
     QLineEdit, QSpinBox, QDoubleSpinBox {{ background: {c.surface}; color: {c.primary}; padding: 7px; border: 1px solid {c.border}; border-radius: 6px; selection-background-color: {c.selected}; }}
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
-    QScrollArea, QWidget#commBody, QWidget#sourceMappings {{ background: {c.background}; border: none; }}
+    QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
     QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
     QCheckBox {{ background: transparent; spacing: 8px; }}

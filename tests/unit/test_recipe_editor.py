@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from tests.recipe_support import editor
 
+from vimo_demo.application.preferences import ApplicationPreferences, save_preferences
 from vimo_demo.configuration import (
     CheckConfiguration,
     CheckOverrides,
@@ -42,6 +43,65 @@ def test_catalog_discovery_errors_and_read_only(tmp_path: Path) -> None:
     assert len(snapshot.issues) == 3 and len(snapshot.entries) == 1
     with pytest.raises(ConfigurationError, match="catalog"):
         catalog.save(RecipeDefinition("c", "C"), original=None)
+
+
+@pytest.mark.parametrize(
+    "blocker",
+    ["protected", "persisted", "external", "permission", "invalid_preferences"],
+)
+def test_delete_refuses_references_and_failures_without_changing_draft(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocker: str
+) -> None:
+    session = editor(tmp_path)
+    entry = session.entry
+    assert entry is not None
+    session.draft.display_name = "Unsaved"
+    draft = replace(session.draft)
+    protected: frozenset[str] = (
+        frozenset({entry.recipe.recipe_id}) if blocker == "protected" else frozenset()
+    )
+    if blocker in ("persisted", "invalid_preferences"):
+        session.preferences_path = tmp_path / "app.json"
+        save_preferences(
+            session.preferences_path,
+            ApplicationPreferences(last_applied_recipe_id=entry.recipe.recipe_id),
+        )
+        if blocker == "invalid_preferences":
+            session.preferences_path.write_text("{", encoding="utf8")
+    if blocker == "external":
+        save_recipe(entry.path, replace(entry.recipe, display_name="External"))
+    if blocker == "permission":
+        original = Path.unlink
+
+        def fail(path: Path, missing_ok: bool = False) -> None:
+            if path == entry.path:
+                raise PermissionError("Delete denied")
+            original(path, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", fail)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    with pytest.raises(ConfigurationError):
+        session.delete(protected_ids=protected)
+    assert session.entry == entry and session.draft == draft
+    assert {p: p.read_bytes() for p in before} == before
+
+
+def test_delete_only_selected_recipe_and_leave_no_implicit_selection(
+    tmp_path: Path,
+) -> None:
+    session = editor(tmp_path)
+    entry = session.entry
+    assert entry is not None
+    before = {
+        p: p.read_bytes()
+        for p in tmp_path.rglob("*")
+        if p.is_file() and p != entry.path
+    }
+    session.delete(protected_ids=frozenset())
+    assert not entry.path.exists() and session.entry is None
+    assert not session.dirty and session.draft == RecipeDraft("", "")
+    assert len(session.catalog.discover().entries) == 1
+    assert {p: p.read_bytes() for p in before} == before
 
 
 def test_load_dirty_save_as_new_discard_and_identity(tmp_path: Path) -> None:
