@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from threading import Event, Thread
 
-from PySide6.QtCore import Qt, QThread, QTimer, Slot
-from PySide6.QtGui import QHideEvent, QResizeEvent
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Slot
+from PySide6.QtGui import QColor, QHideEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -61,7 +61,7 @@ from vimo_demo.communication.reporting import (
     ReportingWriteProtectedError,
 )
 from vimo_demo.configuration import ConfigurationError
-from vimo_demo.web.runtime import WebRuntime
+from vimo_demo.web.runtime import WebRuntime, WebState
 
 from .inference_bridge import FutureDelivery
 from .production_style import (
@@ -183,6 +183,7 @@ class CommunicationPage(QWidget):
         self.service_layout = QGridLayout(self.service_cards)
         self.service_layout.setContentsMargins(0, 0, 0, 0)
         self.service_layout.setSpacing(Style.space)
+        self.service_layout.setColumnStretch(0, 1)
         if reporting is not None and reporting.reporting_editable:
             self.reporting_panel = ReportingPanel(reporting)
             self.service_layout.addWidget(
@@ -318,21 +319,16 @@ class CommunicationPage(QWidget):
         self.watch_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.watch_table.verticalHeader().hide()
         self.watch_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
+            QHeaderView.ResizeMode.Stretch
         )
         self.watch_table.horizontalHeader().setMinimumSectionSize(90)
-        self.watch_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Interactive
-        )
-        self.watch_table.setColumnWidth(0, 160)
-        for column in (1, 2, 3):
-            self.watch_table.horizontalHeader().setSectionResizeMode(
-                column, QHeaderView.ResizeMode.Stretch
-            )
         self.watch_table.setMinimumWidth(200)
         self.watch_table.setTextElideMode(Qt.TextElideMode.ElideRight)
         watch.addWidget(self.watch_table)
         self.watch_empty = self._caption("comm_watch_empty")
+        self.watch_empty.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         watch.addWidget(self.watch_empty)
         self.watch_area.currentIndexChanged.connect(self._watch_area_changed)
         self._watch_area_changed()
@@ -404,6 +400,7 @@ class CommunicationPage(QWidget):
         self.protocol.currentIndexChanged.connect(self._refresh)
         self.port.valueChanged.connect(self._refresh)
         self.set_language("zh")
+        self.service_cards.installEventFilter(self)
 
     def _panel(
         self,
@@ -470,6 +467,17 @@ class CommunicationPage(QWidget):
         super().resizeEvent(event)
         self._arrange_services()
 
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.service_cards and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.LayoutRequest,
+        ):
+            # The scroll area settles this width after the page's resize event,
+            # including the first navigation from a previously hidden page.
+            self._arrange_services()
+        return super().eventFilter(watched, event)
+
     def _arrange_services(self) -> None:
         panel = self.reporting_panel
         if panel is None:
@@ -481,11 +489,12 @@ class CommunicationPage(QWidget):
         )
         wide = self.width() > self.height() and self.service_cards.width() >= required
         position = (0, 1) if wide else (1, 0)
-        if self.service_layout.itemAtPosition(*position) is None:
-            self.service_layout.removeWidget(self.web_panel)
-            self.service_layout.addWidget(
-                self.web_panel, *position, Qt.AlignmentFlag.AlignTop
-            )
+        if self.service_layout.itemAtPosition(*position) is not None:
+            return
+        self.service_layout.removeWidget(self.web_panel)
+        self.service_layout.addWidget(
+            self.web_panel, *position, Qt.AlignmentFlag.AlignTop
+        )
         self.service_layout.setColumnStretch(0, 1)
         self.service_layout.setColumnStretch(1, 1 if wide else 0)
         self.service_cards.updateGeometry()
@@ -553,7 +562,6 @@ class CommunicationPage(QWidget):
         self._preferences_path, self._preferences = path, value
         self._settings_missing = not path.exists()
         self._show_preferences(value)
-        self.web_panel.launched = value.web
         self.web_panel.saved_available = not (self._settings_missing or error)
         self.web_panel.refresh()
         self._settings_message = "comm_settings_failed" if error else ""
@@ -564,7 +572,6 @@ class CommunicationPage(QWidget):
             field.textChanged.connect(self._settings_edited)
         for field in (self.protocol, self.web_panel.interval):
             field.currentIndexChanged.connect(self._settings_edited)
-        self.web_panel.enabled.toggled.connect(self._settings_edited)
         for field in (
             self.port,
             self.timeout,
@@ -575,15 +582,15 @@ class CommunicationPage(QWidget):
             field.valueChanged.connect(self._settings_edited)
         if self.reporting_panel is not None:
             self.reporting_panel.edited.connect(self._settings_edited)
-            self.reporting_panel.advanced_button.toggled.connect(
-                lambda: QTimer.singleShot(0, self._arrange_services)
-            )
         self._render_preferences()
 
     def _render_preferences(self) -> None:
         dirty = self.dirty
         self.web_panel.saved = self._preferences.web
-        self.web_panel.dirty = dirty
+        try:
+            self.web_panel.dirty = self.web_panel.preferences() != self._preferences.web
+        except ValueError:
+            self.web_panel.dirty = True
         self.web_panel.editable = not (self._closing or self._disposed)
         self.web_panel.refresh()
         key = self._settings_message or (
@@ -603,6 +610,7 @@ class CommunicationPage(QWidget):
         failed = self._settings_message in (
             "comm_settings_failed",
             "comm_reload_failed",
+            "web_power_failed",
         )
         self.preferences_status.setStyleSheet(
             f"color: {theme_colors(self).warning if failed else theme_colors(self).secondary};"
@@ -760,20 +768,57 @@ class CommunicationPage(QWidget):
     @Slot(str)
     def _web_action(self, action: str) -> None:
         runtime = self.web_panel.runtime
-        if runtime is None or self._closing or self._disposed:
+        if (
+            runtime is None
+            or self._closing
+            or self._disposed
+            or runtime.snapshot().busy
+            or runtime.snapshot().closing
+        ):
             return
-        if action != "stop" and (self.dirty or not self.web_panel.saved_available):
+        if action == "apply" and (
+            self.web_panel.dirty or not self.web_panel.saved_available
+        ):
             return
+        self.web_panel.operation_error = ""
         try:
-            if action == "start":
-                runtime.start(self._preferences.web)
+            if action == "power":
+                if self._preferences_path is None:
+                    raise ConfigurationError("No communication settings path")
+                target = not runtime.snapshot().owned
+                path = self._preferences_path
+                # Read the actual file; never serialize any UI draft here. A missing
+                # first-use file can be established from effective startup defaults.
+                saved = (
+                    self._preferences
+                    if self._settings_missing and not path.exists()
+                    else load_communication_preferences(path)
+                )
+                self._preferences = replace(self._preferences, web=saved.web)
+                value = replace(saved, web=replace(saved.web, enabled=target))
+                save_communication_preferences(path, value)
+                self._preferences = replace(self._preferences, web=value.web)
+                self._settings_missing = False
+                self.web_panel.saved_available = True
+                self._settings_message = self._settings_detail = ""
+                if target:
+                    runtime.apply(value.web)  # Includes safe cleanup of failed owners.
+                else:
+                    runtime.stop()
             elif action == "apply":
-                runtime.apply(self._preferences.web)
-            elif action == "stop":
-                runtime.stop()
-        except (ValueError, RuntimeError) as exc:
-            self.web_panel.actual.setToolTip(str(exc))
-        self.web_panel.refresh()
+                observed = runtime.snapshot()
+                if (
+                    observed.state is WebState.RUNNING
+                    and observed.configuration != self._preferences.web
+                ):
+                    runtime.apply(self._preferences.web)
+        except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
+            self.web_panel.operation_error = f"{type(exc).__name__}: {exc}"[:2000]
+            self._settings_message, self._settings_detail = (
+                "web_power_failed",
+                self.web_panel.operation_error,
+            )
+        self._render_preferences()
 
     @property
     def log_count(self) -> int:
@@ -840,7 +885,7 @@ class CommunicationPage(QWidget):
                     "comm_word_address",
                     "comm_dec",
                     "comm_table_hex",
-                    "comm_table_observed",
+                    "comm_last_read",
                 )
             )
         )
@@ -850,7 +895,7 @@ class CommunicationPage(QWidget):
                 "comm_word_address",
                 "comm_word",
                 "comm_hex",
-                "comm_observed",
+                "comm_last_read",
             )
         ):
             item = self.watch_table.horizontalHeaderItem(column)
@@ -858,7 +903,6 @@ class CommunicationPage(QWidget):
             item.setToolTip(text(key, language))
         self._render_watch()
         self._refresh()
-        QTimer.singleShot(0, self._arrange_services)
 
     def _snapshot(self, kind: RequestKind, count: int = 1) -> CommunicationRequest:
         values = (
@@ -976,38 +1020,58 @@ class CommunicationPage(QWidget):
                     else None
                 )
                 observed = (
-                    observation.completed_at.astimezone().strftime("%H:%M:%S")
-                    + " · "
-                    + text(
-                        "comm_current"
-                        if index in self._watch_fresh
-                        else "comm_previous",
-                        self.language,
-                    )
+                    observation.completed_at.astimezone().strftime("%H:%M:%S.%f")[:-3]
                     if observation
-                    else text("comm_not_read", self.language)
+                    else "--"
+                )
+                freshness = text(
+                    "comm_current"
+                    if index in self._watch_fresh
+                    else "comm_previous"
+                    if observation
+                    else "comm_not_read",
+                    self.language,
                 )
                 cells = (
-                    name,
+                    name + (" · ERR" if error else ""),
                     f"{group.area.prefix}{group.start + offset}",
                     str(value) if value is not None else "--",
                     f"{value:04X}" if value is not None else "--",
-                    "ERR · " + observed if error else observed,
+                    observed,
                 )
                 for column, content in enumerate(cells):
                     item = QTableWidgetItem(content)
-                    if column in (1, 2, 3):
+                    if column in (1, 2, 3, 4):
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setToolTip(
-                        f"{name} · {address}\n"
+                        f"{name} · {address}\n{freshness}\n"
                         + self._response_description(observation)
                         + " · "
                         + observed
                         if observation
-                        else f"{name} · {address}\n{observed}"
+                        else f"{name} · {address}\n{freshness}"
                     )
                     if error:
-                        item.setToolTip(f"{name} · {address}\n{error}")
+                        item.setToolTip(item.toolTip() + "\n" + error)
+                    colors = theme_colors(self)
+                    item.setForeground(
+                        QColor(
+                            colors.warning
+                            if error
+                            else colors.secondary
+                            if index not in self._watch_fresh
+                            else colors.primary
+                        )
+                    )
+                    if column == 0 and (
+                        error or (observation and index not in self._watch_fresh)
+                    ):
+                        item.setIcon(
+                            production_icon(
+                                "FAULT" if error else "clock",
+                                colors.warning if error else colors.secondary,
+                            )
+                        )
                     self.watch_table.setItem(row, column, item)
                 row += 1
         self.watch_selector.setCurrentIndex(

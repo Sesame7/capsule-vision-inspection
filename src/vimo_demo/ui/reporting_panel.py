@@ -1,8 +1,8 @@
 """Compact presentation of next-Start preferences and the existing H2B owner."""
 
-from PySide6.QtCore import QSize, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
@@ -26,7 +26,14 @@ from vimo_demo.communication.reporting import (
     ReportOutcome,
 )
 
-from .production_style import Language, Style, navigation_icon, text, theme_colors
+from .production_style import (
+    Language,
+    Style,
+    navigation_icon,
+    production_icon,
+    text,
+    theme_colors,
+)
 
 
 class ReportingPanel(QFrame):
@@ -38,11 +45,12 @@ class ReportingPanel(QFrame):
         self.language: Language = "zh"
         self.state = ApplicationState.UNCONFIGURED
         self._syncing = False
+        self._summary_text = ""
         self._draft = controller.reporting_selection()
         self.setObjectName("commPanel")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root = QVBoxLayout(self)
-        root.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
+        root.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
         root.setSpacing(Style.small)
         header = QHBoxLayout()
         icon = QLabel()
@@ -51,12 +59,19 @@ class ReportingPanel(QFrame):
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 18px; font-weight: 600;")
         header.addWidget(self.title)
-        self.enabled = QCheckBox()
-        self.enabled.setMinimumHeight(Style.touch)
-        header.addWidget(self.enabled)
-        header.addStretch()
+        self.summary = QLabel()
+        self.summary.setMinimumWidth(0)
+        self.summary.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        header.addWidget(self.summary, 1)
         self.service_status = QLabel()
         header.addWidget(self.service_status)
+        self.enabled = QPushButton()
+        self.enabled.setCheckable(True)
+        self.enabled.setObjectName("reportingPower")
+        self.enabled.setMinimumHeight(Style.touch)
+        header.addWidget(self.enabled)
         root.addLayout(header)
         settings = root
         self._captions: list[tuple[str, QLabel]] = []
@@ -113,14 +128,6 @@ class ReportingPanel(QFrame):
         settings.addWidget(self.advanced)
         self.advanced.hide()
         self.advanced_button.toggled.connect(self.refresh)
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        self.error = QLabel()
-        self.error.setWordWrap(True)
-        status_row = QHBoxLayout()
-        status_row.addWidget(self.status, 1)
-        status_row.addWidget(self.error)
-        root.addLayout(status_row)
         self._fields = (self.port, self.timeout, *self.destination, *self.source)
         for field in self._fields:
             field.valueChanged.connect(self._changed)
@@ -129,6 +136,7 @@ class ReportingPanel(QFrame):
         self.host.textChanged.connect(self._changed)
         self._load_selection()
         self.set_language("zh")
+        self.summary.installEventFilter(self)
 
     @staticmethod
     def _address_fields() -> tuple[QSpinBox, QSpinBox, QSpinBox]:
@@ -198,8 +206,11 @@ class ReportingPanel(QFrame):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.title.setText(text("plc_reporting", language))
-        self.enabled.setText(text("plc_enable", language))
-        self.enabled.setAccessibleName(self.enabled.text())
+        self.summary.setMinimumWidth(
+            self.summary.fontMetrics().horizontalAdvance(
+                f"ACK -- · {text('plc_success', language)} 0 · ERR 0"
+            )
+        )
         self.enabled.setToolTip(text("plc_next_start", language))
         self.advanced_button.setText(text("comm_advanced", language))
         self.advanced_button.setAccessibleName(self.advanced_button.text())
@@ -229,11 +240,35 @@ class ReportingPanel(QFrame):
         self.state = state
         self.refresh()
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._render_summary()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.summary and event.type() is QEvent.Type.Resize:
+            self._render_summary()
+        return super().eventFilter(watched, event)
+
+    def _render_summary(self) -> None:
+        self.summary.setText(
+            self.summary.fontMetrics().elidedText(
+                self._summary_text, Qt.TextElideMode.ElideRight, self.summary.width()
+            )
+        )
+
     @Slot()
     def refresh(self) -> None:
         editable = self.state in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
         for widget in (self.enabled, self.host, self.protocol, *self._fields):
             widget.setEnabled(editable)
+        self.enabled.setText(
+            text(
+                "plc_disable" if self.enabled.isChecked() else "plc_enable",
+                self.language,
+            )
+        )
+        self.enabled.setAccessibleName(self.enabled.text())
+        self.enabled.setIcon(production_icon("power", theme_colors(self).primary))
         selected = self.controller.reporting_selection()
         udp = self.protocol.currentIndex() == 0
         self.advanced.setEnabled(editable and udp)
@@ -245,59 +280,65 @@ class ReportingPanel(QFrame):
         )
         snapshot = self.controller.reporting_snapshot()
         key = "plc_disabled" if not selected.enabled else "plc_enabled"
+        if selected.enabled and self.state is ApplicationState.STARTING:
+            key = "plc_starting"
         if snapshot is not None and snapshot.thread_alive:
             key = (
-                "plc_starting"
+                "plc_stopping"
+                if self.state is ApplicationState.STOPPING
+                else "plc_starting"
                 if self.state is ApplicationState.STARTING
+                else "plc_stopping"
+                if not snapshot.accepting
                 else "plc_active"
             )
-            if (
-                snapshot.last_outcome
-                and snapshot.last_outcome.outcome is ReportOutcome.FAILED
-            ):
-                key = "plc_report_failed"
+        elif snapshot is not None and (
+            snapshot.failure_issue or snapshot.cleanup_issue
+        ):
+            key = "plc_report_failed"
         ack = snapshot.last_acknowledged if snapshot else None
-        if snapshot and snapshot.thread_alive and snapshot.last_outcome:
-            if snapshot.last_outcome.outcome is ReportOutcome.ACKNOWLEDGED:
-                key = "plc_acknowledged"
-            elif snapshot.last_outcome.outcome in (
-                ReportOutcome.FAILED,
-                ReportOutcome.REJECTED,
-            ):
-                key = "plc_report_failed"
         self.service_status.setText(text(key, self.language))
-        self.status.setText(
+        self._summary_text = (
             f"ACK {ack.sequence if ack else '--'} · "
             f"{text('plc_success', self.language)} {snapshot.acknowledged_count if snapshot else 0} · "
             f"ERR {snapshot.failed_count if snapshot else 0}"
         )
-        self.status.setStyleSheet(
-            f"color: {theme_colors(self).warning if key == 'plc_report_failed' else theme_colors(self).accent};"
+        warning = key == "plc_report_failed" or bool(
+            snapshot
+            and snapshot.last_outcome
+            and snapshot.last_outcome.outcome
+            in (ReportOutcome.FAILED, ReportOutcome.REJECTED)
         )
-        detail = text("plc_ack_hint", self.language)
+        self.summary.setStyleSheet(
+            f"color: {theme_colors(self).warning if warning else theme_colors(self).secondary};"
+        )
+        detail = (
+            text(key, self.language)
+            + "\n"
+            + self._summary_text
+            + "\n"
+            + text("plc_ack_hint", self.language)
+        )
         if snapshot:
-            detail += f"\ngeneration={snapshot.generation}; pending={snapshot.pending}; skipped={snapshot.skipped_count}; rejected={snapshot.rejected_count}"
+            detail += f"\ngeneration={snapshot.generation}; pending={snapshot.pending}; peak_pending={snapshot.peak_pending}; queued={snapshot.queued_count}; attempted={snapshot.attempted_count}; skipped={snapshot.skipped_count}; rejected={snapshot.rejected_count}"
             if ack:
                 detail += f"\nACK cycle={ack.identity.cycle_id}; sequence={ack.sequence}; words={ack.reject_words}"
-        self.service_status.setToolTip(detail)
-        self.service_status.setAccessibleDescription(detail)
-        self.status.setToolTip(detail)
-        self.status.setAccessibleDescription(detail)
         failure = snapshot.last_failed if snapshot else None
-        issue = failure.issue if failure else None
-        self.error.setVisible(issue is not None)
-        self.error.setStyleSheet(f"color: {theme_colors(self).warning};")
-        self.error.setText(
-            f"{text('plc_last_error', self.language)} · {failure.stage.value if failure and failure.stage else '--'}"
+        issue = (
+            failure.issue
+            if failure
+            else (snapshot.failure_issue or snapshot.cleanup_issue)
+            if snapshot
+            else None
         )
-        self.error.setToolTip(
-            f"generation={failure.identity.generation}; cycle={failure.identity.cycle_id}; sequence={failure.sequence}\n{issue.exception_type}: {issue.message}"
-            + (
-                f"\n{issue.cause_type}: {issue.cause_message}"
-                if issue.cause_type
-                else ""
-            )
-            if failure and issue
-            else ""
-        )
-        self.error.setAccessibleDescription(self.error.toolTip())
+        if issue:
+            detail += "\n" + text("plc_last_error", self.language)
+            if failure:
+                detail += f" · {failure.stage.value if failure.stage else '--'}; cycle={failure.identity.cycle_id}; sequence={failure.sequence}"
+            detail += f"\n{issue.exception_type}: {issue.message}"
+            if issue.cause_type:
+                detail += f"\n{issue.cause_type}: {issue.cause_message}"
+        for label in (self.service_status, self.summary):
+            label.setToolTip(detail)
+            label.setAccessibleDescription(detail)
+        self._render_summary()

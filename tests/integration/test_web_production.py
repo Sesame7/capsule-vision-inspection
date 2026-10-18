@@ -18,6 +18,7 @@ from vimo_demo.application.communication_preferences import (
     save_communication_preferences,
 )
 from vimo_demo.application.local_replay import ReplayState
+from vimo_demo.communication.reporting import ReportStage
 from vimo_demo.ui import bootstrap
 from vimo_demo.web import ProductionSnapshotService
 from vimo_demo.web.runtime import WebRuntime, WebState
@@ -127,16 +128,36 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         assert panel.controller.reporting_selection() is effective
         engines[0].release.set()
         until(lambda: replay_state(startup) is ReplayState.PAUSED)
+        until(
+            lambda: (
+                (report := panel.controller.reporting_snapshot()) is not None
+                and report.acknowledged_count == 1
+            )
+        )
         assert readback(peer)[0] == 1
         stop = runtime.stop()
         until(stop.done)
         assert stop.result().state is WebState.STOPPED
         assert startup.application.snapshot().state is ApplicationState.RUNNING
+        peer.hold_next(ReportStage.SEQUENCE)
         window.bridge.step_replay()
+        try:
+            until(
+                lambda: (
+                    startup.application.snapshot().counters.cycles_completed == 2
+                    and replay_state(startup) is ReplayState.PAUSED
+                    and peer.entered.is_set()
+                )
+            )
+            report = panel.controller.reporting_snapshot()
+            assert report is not None and report.acknowledged_count == 1
+        finally:
+            peer.release.set()
+        # Folder terminal accounting/PAUSED is not the asynchronous report ACK.
         until(
             lambda: (
-                startup.application.snapshot().counters.cycles_completed == 2
-                and replay_state(startup) is ReplayState.PAUSED
+                (report := panel.controller.reporting_snapshot()) is not None
+                and report.acknowledged_count == 2
             )
         )
         assert readback(peer)[0] == 2

@@ -291,7 +291,9 @@ Capture success is temporary canvas data, never inspection admission or accounti
 
 Normal startup owns a Qt-independent `WebRuntime` control thread and at most one
 Web publisher/serial HTTP pair. Production Stop/Start leaves Web independent.
-Communication can explicitly Start, Stop or Apply/Restart saved settings. Admission
+Communication's header power action persists only Web enablement, then starts or
+stops using saved network settings. Conditional Apply changes restarts differing
+saved/running settings; drafts never become runtime inputs implicitly. Admission
 allows one operation, with no restart backlog or completed-result history. The
 control owner constructs/binds off Qt; Stop interrupts HTTP I/O and joins both
 actual service threads/socket before releasing ownership or rebinding. Close

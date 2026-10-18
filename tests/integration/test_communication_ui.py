@@ -687,6 +687,12 @@ def test_unconfigured_shell_communication_has_no_production_dependency(
         delivery.detach()
 
 
+def watch_tip(page: CommunicationPage, row: int, column: int) -> str:
+    item = page.watch_table.item(row, column)
+    assert item is not None
+    return item.toolTip()
+
+
 def watch_cell(page: CommunicationPage, row: int, column: int) -> str:
     item = page.watch_table.item(row, column)
     assert item is not None
@@ -716,7 +722,7 @@ def test_compact_empty_and_bounded_populated_watch(
     qapp.processEvents()
     assert page.watch_table.height() == height
     assert page.watch_table.verticalScrollBar().maximum() > 0
-    assert page.watch_table.columnWidth(0) == 160
+    assert page.watch_table.columnWidth(0) > 0
     for column, label in ((2, "DEC"), (3, "HEX")):
         header = page.watch_table.horizontalHeaderItem(column)
         assert header is not None and header.text() == label
@@ -786,7 +792,8 @@ def test_watch_editor_validation_and_identity(page: CommunicationPage) -> None:
     )
     assert [watch_cell(page, i, 1) for i in range(4)] == ["W49", "W50", "W51", "W52"]
     assert watch_cell(page, 0, 2) == "--"
-    assert watch_cell(page, 0, 4) == text("comm_not_read", page.language)
+    assert watch_cell(page, 0, 4) == "--"
+    assert text("comm_not_read", page.language) in watch_tip(page, 0, 4)
     # Equal ranges are separate named groups, not silently merged.
     assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Other"))
     page.watch_selector.setCurrentIndex(0)
@@ -862,7 +869,7 @@ def test_watch_localhost_mixed_groups_read_once_and_thread_ownership(
     ]
     assert watch_cell(page, 4, 1) == "D100"
     assert all(
-        text("comm_current", page.language) in watch_cell(page, i, 4) for i in range(5)
+        text("comm_current", page.language) in watch_tip(page, i, 4) for i in range(5)
     )
     assert page.last_read is None
     assert page.log_count == 1 and not page.auto_refresh
@@ -961,19 +968,19 @@ def test_monitor_failure_retains_per_group_timestamp_and_requires_restart(
     assert text("comm_watch_failed", page.language) in page.watch_status.text()
     assert watch_cell(page, 0, 2) == "4" and text(
         "comm_current", page.language
-    ) in watch_cell(page, 0, 4)
+    ) in watch_tip(page, 0, 4)
     assert watch_cell(page, 1, 2) == "2"
-    assert watch_cell(page, 1, 4) == "ERR · " + retained + " · " + text(
-        "comm_previous", page.language
-    )
-    assert text("comm_previous", page.language) in watch_cell(page, 2, 4)
+    assert watch_cell(page, 1, 4) == retained
+    assert "ERR" in watch_cell(page, 1, 0)
+    assert text("comm_previous", page.language) in watch_tip(page, 1, 4)
+    assert text("comm_previous", page.language) in watch_tip(page, 2, 4)
     assert page.log_count == 2
     page.refresh_timer.timeout.emit()
     QApplication.processEvents()
     assert len(calls) == 5
     page.set_language("en")
     assert text("comm_watch_failed", "en") in page.watch_status.text()
-    assert "Previous" in watch_cell(page, 1, 4)
+    assert "Previous" in watch_tip(page, 1, 4)
     fail = False
     assert page.start_monitoring()
     until(lambda: not page.busy)
@@ -987,6 +994,57 @@ def test_monitor_failure_retains_per_group_timestamp_and_requires_restart(
     page.stop_monitoring()
     assert len(calls) == 11 and not page.auto_refresh
     assert all(request.host == "127.0.0.1" for request in calls)
+
+
+def test_watch_local_milliseconds_survive_invalid_read_and_match_auto_refresh(
+    page: WatchProbe,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = datetime(2026, 10, 14, 13, 22, 35, 123456, tzinfo=UTC)
+    malformed = False
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        return CommunicationResponse(
+            request, None if malformed else (1234,), 1, completed
+        )
+
+    monkeypatch.setattr(page, "_execute", execute)
+    assert not page.watch_table.isVisible()
+    assert page.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.DM, 100, name="Read timing")
+    )
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    expected = completed.astimezone().strftime("%H:%M:%S.%f")[:-3]
+    assert watch_cell(page, 0, 4) == expected and expected.endswith(".123")
+    assert (
+        page.watch_table.columnWidth(4)
+        >= page.watch_table.fontMetrics().horizontalAdvance(expected) + 8
+    )
+    assert page.watch_table.columnCount() == 5
+    heading = page.watch_table.horizontalHeaderItem(4)
+    assert heading is not None and heading.text() == text(
+        "comm_last_read", page.language
+    )
+    malformed = True
+    completed = completed.replace(second=36, microsecond=567890)
+    assert page.start_monitoring()
+    until(lambda: not page.busy)
+    assert watch_cell(page, 0, 4) == expected and watch_cell(page, 0, 2) == "1234"
+    assert "ERR" in watch_cell(page, 0, 0) and "Invalid watch response" in watch_tip(
+        page, 0, 4
+    )
+    assert text("comm_previous", page.language) in watch_tip(page, 0, 4)
+    malformed = False
+    assert page.start_monitoring()
+    until(lambda: not page.busy)
+    page.stop_monitoring()
+    assert watch_cell(page, 0, 4) == completed.astimezone().strftime("%H:%M:%S.%f")[:-3]
+    assert watch_cell(page, 0, 4).endswith(".567") and "ERR" not in watch_cell(
+        page, 0, 0
+    )
+    assert page.remove_watch_group(0)
+    assert not page.watch_table.isVisible() and page.watch_empty.isVisible()
 
 
 @pytest.mark.parametrize("action", ["stop", "leave", "close"])

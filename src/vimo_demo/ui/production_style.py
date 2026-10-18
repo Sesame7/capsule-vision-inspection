@@ -70,6 +70,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "plc_reporting": ("生产上报", "Production reporting"),
     "plc_enable": ("启用", "Enable"),
+    "plc_disable": ("停用", "Disable"),
     "plc_next_start": (
         "仅保存成功的设置用于下次 Start；ACK 不代表机械剔除。",
         "Only saved settings apply at next Start; ACK is not physical rejection.",
@@ -111,19 +112,29 @@ STRINGS: dict[str, tuple[str, str]] = {
     "web_running": ("运行中", "Running"),
     "web_stopping": ("正在停止", "Stopping"),
     "web_stopped": ("已停止", "Stopped"),
-    "web_action_start": ("启动", "Start"),
-    "web_action_stop": ("停止", "Stop"),
-    "web_action_apply": ("应用 / 重启", "Apply / Restart"),
+    "web_turn_on": ("开启", "Turn on"),
+    "web_turn_off": ("关闭", "Turn off"),
+    "web_apply_changes": ("应用更改", "Apply changes"),
+    "web_power_tip": (
+        "保存 Web 启用偏好并使用已保存的网络设置；其他草稿保持不变。",
+        "Saves only Web enablement and uses saved network settings; other drafts stay unchanged.",
+    ),
+    "web_power_failed": (
+        "Web 操作失败，请查看服务详情",
+        "Web operation failed; see service details",
+    ),
+    "web_saved_on": ("已保存：开启", "Saved: on"),
+    "web_saved_off": ("已保存：关闭", "Saved: off"),
+    "web_choose_address": (
+        "选择本机 IPv4（也可手动输入）",
+        "Choose local IPv4 (or enter manually)",
+    ),
     "web_open": ("打开运行地址", "Open running URL"),
     "web_addresses": ("刷新本机 IPv4", "Refresh local IPv4 addresses"),
     "web_save_first": ("请先保存或放弃未保存的设置", "Save or discard settings first"),
     "web_restored": (
         "已恢复先前运行设置；新设置未能启动",
         "Previous running settings restored; new settings failed to start",
-    ),
-    "web_restart": (
-        "设置与当前服务不同",
-        "Settings differ from the current service",
     ),
     "web_boundary": (
         "只读且无身份验证；仅绑定一个本机 IPv4，请仅用于可信网络。",
@@ -132,6 +143,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "plc_disabled": ("自动报告已关闭", "Reporting disabled"),
     "plc_enabled": ("已启用 · 待启动", "Enabled · next Start"),
     "plc_starting": ("已启用 · 启动中", "Enabled · starting"),
+    "plc_stopping": ("正在结束报告", "Stopping reporting"),
     "plc_acknowledged": ("最近 ACK", "Last ACK"),
     "plc_active": ("报告会话运行中", "Reporting session active"),
     "plc_report_failed": ("报告失败", "Reporting failed"),
@@ -609,7 +621,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "comm_table_group": ("组", "Group"),
     "comm_dec": ("DEC", "DEC"),
     "comm_table_hex": ("HEX", "HEX"),
-    "comm_table_observed": ("观察 / 状态", "Observed / status"),
     "comm_protocol": ("协议", "Protocol"),
     "comm_tcp_nodes": (
         "TCP 节点由握手分配；保留的 UDP 地址不参与 TCP。",
@@ -664,6 +675,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "comm_current": ("本批成功", "Latest pass"),
     "comm_previous": ("历史", "Previous"),
     "comm_not_read": ("尚未读取", "Not read"),
+    "comm_last_read": ("最近成功读取", "Last successful read"),
     "comm_address": ("起始地址", "Start address"),
     "comm_count": ("读取字数", "Read words"),
     "comm_read": ("读取", "Read"),
@@ -696,7 +708,6 @@ STRINGS: dict[str, tuple[str, str]] = {
         "最近响应是历史观察，不代表持续在线。",
         "A recent response is an observation, not continuously verified connectivity.",
     ),
-    "comm_last_read": ("最近读取值", "Last read values"),
     "comm_word": ("无符号值", "Unsigned value"),
     "comm_word_address": ("地址", "Address"),
     "comm_log": ("最近操作（最多 100 条）", "Recent operations (latest 100)"),
@@ -928,6 +939,10 @@ def stylesheet(theme: Theme = "dark") -> str:
     QFrame#navigation QComboBox {{ padding: 5px 8px; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
+    QComboBox#webAddress::drop-down {{ width: {Style.touch}px; }}
+    QComboBox#webAddress::down-arrow {{ image: none; }}
+    QPushButton#webPower, QPushButton#reportingPower {{ color: {c.primary}; border-color: {c.accent}; background: {c.selected}; }}
+    QPushButton#webPower:disabled, QPushButton#reportingPower:disabled {{ color: {c.secondary}; border-color: {c.border}; background: {c.raised}; }}
     QComboBox QAbstractItemView, QMenu {{ background: {c.surface}; color: {c.primary}; border: 1px solid {c.border}; selection-background-color: {c.selected}; }}
     QLineEdit, QSpinBox, QDoubleSpinBox {{ background: {c.surface}; color: {c.primary}; padding: 7px; border: 1px solid {c.border}; border-radius: 6px; selection-background-color: {c.selected}; }}
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
@@ -1070,6 +1085,9 @@ def production_icon(kind: str, foreground: str | None = None) -> QIcon:
             painter.drawLine(15, 5, 15, 17)
         elif kind in ("stop", "replay_end"):
             painter.drawRect(QRectF(5, 5, 12, 12))
+        elif kind == "power":
+            painter.drawArc(QRectF(4, 4, 15, 15), 135 * 16, 270 * 16)
+            painter.drawLine(11, 2, 11, 11)
         elif kind == "reset":
             painter.drawArc(4, 4, 14, 14, 30 * 16, 290 * 16)
             painter.drawLine(19, 3, 19, 9)

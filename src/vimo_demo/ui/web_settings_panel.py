@@ -1,9 +1,8 @@
 """Saved Web preferences and independent observations of the one runtime owner."""
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QEvent, QObject, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -13,7 +12,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyleOptionComboBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from vimo_demo.application.communication_preferences import WebPreferences
@@ -30,6 +32,26 @@ from .production_style import (
 )
 
 
+class _AddressSelector(QComboBox):
+    """Use the shell's painted chevron while retaining native combo hit testing."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        area = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxArrow,
+            self,
+        )
+        painter = QPainter(self)
+        shell_icon("chevron", theme_colors(self).secondary).paint(
+            painter, area.adjusted(10, 10, -10, -10)
+        )
+        painter.end()
+
+
 class WebSettingsPanel(QFrame):
     requested = Signal(str)
 
@@ -38,7 +60,6 @@ class WebSettingsPanel(QFrame):
         self.setObjectName("commPanel")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.language: Language = "zh"
-        self.launched: WebPreferences | None = None
         self.available, self.detail = False, ""
         self.runtime: WebRuntime | None = None
         self.saved = WebPreferences()
@@ -46,24 +67,44 @@ class WebSettingsPanel(QFrame):
         self.editable = True
         self.saved_available = False
         self._address_error = ""
+        self.operation_error = ""
+        self._url_text = ""
+        self._presentation: tuple[object, ...] | None = None
         root = QVBoxLayout(self)
         root.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
         root.setSpacing(Style.small)
         header = QHBoxLayout()
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 18px; font-weight: 600;")
-        self.enabled = QCheckBox()
-        self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.title)
-        header.addWidget(self.enabled)
-        header.addStretch()
+        self.open_browser = QPushButton()
+        self.open_browser.setMinimumHeight(Style.touch)
+        self.open_browser.setMinimumWidth(0)
+        self.open_browser.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.open_browser.clicked.connect(self._open_browser)
+        self.open_browser.installEventFilter(self)
+        url_area = QWidget()
+        url_area.setMinimumWidth(0)
+        url_area.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        url_row = QHBoxLayout(url_area)
+        url_row.setContentsMargins(0, 0, 0, 0)
+        url_row.addWidget(self.open_browser)
+        header.addWidget(url_area, 1)
         self.actual = QLabel()
         header.addWidget(self.actual)
+        self.power = QPushButton()
+        self.power.setMinimumHeight(Style.touch)
+        self.power.setObjectName("webPower")
+        self.power.clicked.connect(lambda: self.requested.emit("power"))
+        header.addWidget(self.power)
         root.addLayout(header)
         grid = QGridLayout()
-        self.addresses = QComboBox()
+        self.addresses = _AddressSelector()
         self.addresses.setEditable(True)
         self.addresses.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.addresses.setObjectName("webAddress")
         line = self.addresses.lineEdit()
         assert line is not None
         self.host: QLineEdit = line
@@ -99,32 +140,37 @@ class WebSettingsPanel(QFrame):
             widget.setMinimumHeight(Style.touch)
         root.addLayout(grid)
         actions = QHBoxLayout()
-        self.runtime_buttons: dict[str, QPushButton] = {}
-        for action in ("start", "stop", "apply"):
-            button = QPushButton()
-            button.setMinimumHeight(Style.touch)
-            button.clicked.connect(
-                lambda _checked=False, name=action: self.requested.emit(name)
-            )
-            self.runtime_buttons[action] = button
-            actions.addWidget(button)
         actions.addStretch()
+        self.apply_changes = QPushButton()
+        self.apply_changes.setMinimumHeight(Style.touch)
+        self.apply_changes.clicked.connect(lambda: self.requested.emit("apply"))
+        actions.addWidget(self.apply_changes)
         root.addLayout(actions)
-        self.open_browser = QPushButton()
-        self.open_browser.setMinimumHeight(Style.touch)
-        self.open_browser.clicked.connect(self._open_browser)
-        root.addWidget(self.open_browser, alignment=Qt.AlignmentFlag.AlignLeft)
         self.actual.setTextFormat(Qt.TextFormat.PlainText)
-        self.restart = QLabel()
-        self.restart.setProperty("role", "secondary")
-        root.addWidget(self.restart)
         self.set_preferences(WebPreferences())
-        self.enabled.toggled.connect(self.refresh)
         self.host.textChanged.connect(self.refresh)
         self.port.valueChanged.connect(self.refresh)
         self.interval.currentIndexChanged.connect(self.refresh)
         self.set_language("zh")
         self.refresh_addresses()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.open_browser and event.type() is QEvent.Type.Resize:
+            self._render_url()
+        return super().eventFilter(watched, event)
+
+    def _render_url(self) -> None:
+        width = (
+            self.open_browser.width()
+            - self.open_browser.iconSize().width()
+            - 2 * Style.space
+            - Style.small
+        )
+        self.open_browser.setText(
+            self.open_browser.fontMetrics().elidedText(
+                self._url_text, Qt.TextElideMode.ElideRight, max(0, width)
+            )
+        )
 
     def refresh_addresses(self) -> None:
         current = self.host.text()
@@ -152,14 +198,14 @@ class WebSettingsPanel(QFrame):
                 QDesktopServices.openUrl(QUrl(observed.url))
 
     def set_preferences(self, value: WebPreferences) -> None:
-        self.enabled.setChecked(value.enabled)
+        self.saved = value
         self.host.setText(value.host)
         self.port.setValue(value.port)
         self.interval.setCurrentIndex((500, 1000, 2000).index(value.interval_ms))
 
     def preferences(self) -> WebPreferences:
         return WebPreferences(
-            self.enabled.isChecked(),
+            self.saved.enabled,
             self.host.text().strip(),
             self.port.value(),
             (500, 1000, 2000)[self.interval.currentIndex()],
@@ -174,14 +220,10 @@ class WebSettingsPanel(QFrame):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.title.setText(text("web_observer", language))
-        self.enabled.setText(text("plc_enable", language))
-        self.enabled.setAccessibleName(
-            text("web_observer", language) + " · " + self.enabled.text()
-        )
         for key, label in self._captions:
             label.setText(text(key, language))
         for key, field in (
-            ("web_bind", self.host),
+            ("web_bind", self.addresses),
             ("comm_port", self.port),
             ("web_refresh", self.interval),
         ):
@@ -191,6 +233,26 @@ class WebSettingsPanel(QFrame):
 
     def refresh(self) -> None:
         observed = self.runtime.snapshot() if self.runtime else None
+        colors = theme_colors(self)
+        presentation = (
+            observed,
+            self.available if observed is None else None,
+            self.detail if observed is None else None,
+            self.saved,
+            self.dirty,
+            self.editable,
+            self.saved_available,
+            self.operation_error,
+            self._address_error,
+            self.language,
+            colors,
+            self.host.text(),
+            self.port.value(),
+            self.interval.currentIndex(),
+        )
+        if presentation == self._presentation:
+            return  # Keep an open address popup stable across unchanged bridge ticks.
+        self._presentation = presentation
         if observed is not None:
             self.available = observed.state is WebState.RUNNING
             self.detail = observed.error or observed.url
@@ -203,55 +265,49 @@ class WebSettingsPanel(QFrame):
         self.actual.setToolTip(
             text("web_boundary", self.language)
             + ("\n" + self.detail if self.detail else "")
+            + "\n"
+            + text(
+                "web_saved_on" if self.saved.enabled else "web_saved_off", self.language
+            )
+            + f" · {self.saved.host}:{self.saved.port} · {self.saved.interval_ms} ms"
+            + ("\n" + self.operation_error if self.operation_error else "")
         )
         self.actual.setAccessibleDescription(self.actual.toolTip())
-        try:
-            changed = self.preferences() != (
-                observed.configuration if observed else self.launched
-            )
-        except ValueError:
-            changed = True
-        self.restart.setText(text("web_restart", self.language))
-        self.restart.setVisible(
-            changed and (observed is None or observed.configuration is not None)
-        )
-        colors = theme_colors(self)
         self.actual.setStyleSheet(
-            f"color: {colors.warning if observed is not None and (observed.state is WebState.FAILED or observed.error) else colors.accent if self.available else colors.secondary};"
+            f"color: {colors.warning if self.operation_error or (observed is not None and (observed.state is WebState.FAILED or observed.error)) else colors.accent if self.available else colors.secondary};"
         )
         blocked = (
             not self.editable or observed is None or observed.busy or observed.closing
         )
-        for action, button in self.runtime_buttons.items():
-            button.setText(text("web_action_" + action, self.language))
-            button.setIcon(
-                production_icon(
-                    "reset" if action == "apply" else action, colors.secondary
-                )
+        self.power.setText(
+            text(
+                "web_turn_off"
+                if (observed.owned if observed is not None else self.available)
+                else "web_turn_on",
+                self.language,
             )
-            button.setAccessibleName(button.text())
-            allowed = not blocked
-            if action != "stop":
-                allowed = allowed and not self.dirty and self.saved_available
-                if action == "start":
-                    allowed = (
-                        allowed
-                        and self.saved.enabled
-                        and observed is not None
-                        and not observed.owned
-                    )
-            else:
-                allowed = allowed and observed is not None and observed.owned
-            button.setEnabled(allowed)
-            button.setToolTip(
-                text(
-                    "web_save_first"
-                    if self.dirty or not self.saved_available
-                    else "web_action_" + action,
-                    self.language,
-                )
-            )
+        )
+        self.power.setIcon(production_icon("power", colors.primary))
+        self.power.setEnabled(not blocked)
+        self.power.setAccessibleName(self.power.text())
+        self.power.setToolTip(text("web_power_tip", self.language))
+        changed = (
+            observed is not None
+            and observed.state is WebState.RUNNING
+            and observed.configuration != self.saved
+        )
+        self.apply_changes.setVisible(changed)
+        self.apply_changes.setText(text("web_apply_changes", self.language))
+        self.apply_changes.setIcon(production_icon("reset", colors.primary))
+        self.apply_changes.setEnabled(
+            not blocked and not self.dirty and self.saved_available
+        )
+        self.apply_changes.setAccessibleName(self.apply_changes.text())
+        self.apply_changes.setToolTip(
+            text("web_save_first" if self.dirty else "web_apply_changes", self.language)
+        )
         self.address_refresh.setIcon(production_icon("reset", colors.secondary))
+        self.addresses.setToolTip(text("web_choose_address", self.language))
         self.address_refresh.setToolTip(
             text("web_addresses", self.language)
             + ("\n" + self._address_error if self._address_error else "")
@@ -262,16 +318,17 @@ class WebSettingsPanel(QFrame):
             if observed is not None and observed.state is WebState.RUNNING
             else None
         )
-        self.open_browser.setText(
-            running.url if running is not None else text("web_open", self.language)
-        )
+        self._url_text = running.url if running is not None else ""
         self.open_browser.setIcon(shell_icon("globe", colors.secondary))
         self.open_browser.setToolTip(
             text("web_open", self.language)
             + ("\n" + running.url if running is not None else "")
         )
         self.open_browser.setAccessibleName(text("web_open", self.language))
+        self.open_browser.setAccessibleDescription(self._url_text)
         self.open_browser.setEnabled(running is not None)
+        self.open_browser.setVisible(running is not None)
+        self._render_url()
         if observed is not None and observed.configuration is not None:
             actual = observed.configuration
             self.actual.setToolTip(

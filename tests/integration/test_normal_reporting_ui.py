@@ -113,7 +113,10 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         assert panel.protocol.currentText() == "FINS/UDP"
         assert commands.reporting_snapshot() is None
         assert text("plc_disabled", window.language) in panel.service_status.text()
-        assert "ACK --" in panel.status.text() and not panel.error.isVisible()
+        assert (
+            "ACK --" in panel.summary.toolTip()
+            and text("plc_last_error", window.language) not in panel.summary.toolTip()
+        )
         before = {p: p.read_bytes() for p in startup.data.root.rglob("*.json")}
         startup.application.start().result(WAIT)
         assert engine.entered.wait(WAIT)
@@ -221,9 +224,9 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         )
         assert clients[0][5] != get_ident()
         assert not panel.enabled.isEnabled() and not panel.port.isEnabled()
-        assert text("plc_acknowledged", window.language) in panel.service_status.text()
-        assert "ACK 89" in panel.status.text()
-        assert "generation=1" in panel.status.toolTip()
+        assert text("plc_active", window.language) in panel.service_status.text()
+        assert "ACK 89" in panel.summary.toolTip()
+        assert "generation=1" in panel.summary.toolTip()
         packets = peer.packets[1:]  # Exclude the independent sequence seeding request.
         assert len(packets) == 3
         assert all(
@@ -300,6 +303,7 @@ def test_settings_locked_starting_stopping_then_restart_has_new_generation(
         assert first.entered.wait(WAIT)
         window.bridge.refresh()
         assert startup.application.snapshot().state is ApplicationState.STARTING
+        assert panel.service_status.text() == text("plc_starting", window.language)
         assert not panel.enabled.isEnabled()
         assert not peer.packets  # Warm-up has zero protocol/result side effects.
         with pytest.raises(ApplicationStateError):
@@ -357,12 +361,16 @@ def test_reporting_failure_feedback_does_not_fault_production(
         assert snapshot.latest_production_result is not None
         assert snapshot.counters.cycles_completed == 1
         window.navigate(2)
-        assert "ACK --" in panel.status.text() and panel.error.isVisible()
-        assert "initialization" in panel.error.text()
-        assert text("plc_report_failed", window.language) in panel.service_status.text()
         assert (
-            "generation=1" in panel.error.toolTip()
-            and "FinsPlcError" in panel.error.toolTip()
+            "ACK --" in panel.summary.toolTip()
+            and text("plc_last_error", window.language) in panel.summary.toolTip()
+        )
+        assert "initialization" in panel.summary.toolTip()
+        assert text("plc_active", window.language) in panel.service_status.text()
+        assert "ERR 1" in panel.summary.toolTip()
+        assert (
+            "generation=1" in panel.summary.toolTip()
+            and "FinsPlcError" in panel.summary.toolTip()
         )
         assert "FinsPlcError" not in window.event_label.toolTip()
 
@@ -387,6 +395,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         first.release.set()
         window.bridge.refresh()
         assert not stop.done() and not panel.port.isEnabled()
+        assert panel.service_status.text() == text("plc_stopping", window.language)
         page = window.communication
         page.port.setValue(peer.port)
         window.communication.persist_settings()
@@ -403,6 +412,8 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
             observed.acknowledged_count == 1 and observed.last_acknowledged is not None
         )
         assert observed.last_acknowledged.sequence == 51 and first.closed
+        assert panel.service_status.text() == text("plc_enabled", window.language)
+        assert "ACK 51" in panel.summary.toolTip()
         panel.timeout.setValue(0.2)
         window.communication.persist_settings()
         startup.application.start().result(WAIT)
@@ -621,6 +632,10 @@ def test_reporting_panel_localized_layout(
         window.communication.advanced_button.click()
         qapp.processEvents()
         assert panel.title.text() == text("plc_reporting", language)
+        assert panel.summary.y() == panel.service_status.y()
+        assert panel.title.geometry().right() < panel.summary.x()
+        assert panel.summary.geometry().right() < panel.service_status.x()
+        assert panel.summary.y() < panel.host.y()
         assert panel.enabled.accessibleName() == text("plc_enable", language)
         assert panel.port.accessibleName() == text("comm_port", language)
         assert panel.host.text() == "127.0.0.1" and panel.advanced.isVisible()
@@ -653,6 +668,8 @@ def test_reporting_panel_localized_layout(
             window.communication.watch_table.columnWidth(0)
             < window.communication.watch_table.width() / 4
         )
+        widths = [window.communication.watch_table.columnWidth(c) for c in range(5)]
+        assert max(widths) - min(widths) <= 1
         assert window.grab().save(
             str(tmp_path / f"communication-populated-{language}-{width}x{height}.png")
         )
@@ -827,6 +844,7 @@ def test_reporting_host_editor_preserves_invalid_draft_and_saved_endpoint(
         assert panel.controller.reporting_selection().settings.host == "127.0.0.1"
         window.communication.persist_settings()
         assert panel.controller.reporting_selection().settings.host == "192.0.2.42"
+        assert text("plc_next_start", panel.language) in panel.enabled.toolTip()
         panel.host.setText("not-an-ip")
         window.communication.persist_settings()
         assert panel.host.text() == "not-an-ip"
@@ -851,6 +869,10 @@ def test_unsaved_reporting_draft_does_not_admit_or_change_active_session(
         assert engine.entered.wait(WAIT)
         window.bridge.refresh()
         assert not panel.enabled.isEnabled() and not panel.port.isEnabled()
+        panel.enabled.click()
+        assert (
+            panel.enabled.isChecked()
+        )  # A disabled draft control cannot stop reporting.
         assert panel.controller.reporting_selection() is original
         assert panel.controller.reporting_snapshot() is None
         page.web_panel.port.setValue(8766)

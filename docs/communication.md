@@ -116,8 +116,13 @@ and hides inapplicable routing controls without deleting saved UDP values.
 Diagnostics has its own independently saved endpoint and routing, grouped DM/WR
 watches and serialized manual/auto refresh, plus explicit one-shot writes.
 Requests always snapshot the saved/effective diagnostic endpoint, identified above
-the operations; draft edits never silently redirect them. Read errors are shown
-at their groups, retaining stale values/timestamps; write ACK/error/uncertain
+the operations; draft edits never silently redirect them. The watch table has five
+evenly stretching columns: Group, Address, DEC, HEX and Last successful read.
+The last column shows local `HH:mm:ss.SSS` from the validated response's completion timestamp,
+not delayed Qt delivery. Failed/malformed reads retain the last successful values
+and timestamp, with an ERR marker on the affected group and stale/error tooltips.
+Unvisited groups remain explicitly stale. Manual and auto passes use the same
+presentation; an empty watch list has no empty table viewport. Write ACK/error/uncertain
 execution appears beside writing. Detailed errors remain in tooltips and bounded
 observations. Test Read, standalone read controls and the Operation Details panel
 are removed from the UI; underlying typed reads/tests remain supported. Register
@@ -138,15 +143,27 @@ It does not persist, restart/stop any owner or undo earlier network operations.
 The default settings can be explicitly saved before any edits. Portrait stacks
 cards; landscape places Production/Web side by side only when their actual content
 fits. Expanded routing/diagnostics grow in the outer scroll area.
-Web has explicit **Start**, **Stop** and **Apply / Restart**, independent of
-Production and reporting. Start/Apply use successfully saved settings, never draft
-text; first Save or Discard any dirty Communication edits. Stop remains available
-with dirty drafts and does not persist them. Apply with saved enablement off stops
-the service; enabled settings allow startup/restart, including unchanged settings.
-Saving alone never starts/rebinds Web or changes an active session.
+Service cards reflow when their actual container is shown/resized, including the
+first navigation after maximized startup; no manual resize is needed.
+Web has one header power action: **Turn on** or **Turn off**, alongside actual
+service state, independent of Production and reporting. Power first reads and
+validates the actual settings file, atomically changes only `web.enabled`, then
+starts/stops using saved network settings. It never saves or discards network,
+reporting or diagnostic drafts. A missing first-use file can be established from
+effective startup defaults; invalid files require explicit review/Save. Persistence
+failure leaves the runtime unchanged. Lifecycle failure retains the successfully
+saved preference and shows the actual failure; it never pretends the service ran.
 
-Actual service state is at the Web header's right edge; its tooltip retains errors,
-running interval and any failed-rebind/restoration observation. Open Browser uses
+**Apply changes** appears only when saved settings differ from the running Web
+configuration. Save or Discard Web network edits before applying them; unrelated
+drafts are not applied. Saving alone never starts/rebinds Web or changes an active
+session. Applying reuses the existing Stop/join/Start owner; there is no second
+listener. Power-off persists disabled, so the next process launch stays off.
+
+The effective running URL is a browser action in the Web title row, followed by
+actual service state and the power action. Unavailable URLs are hidden; long URLs
+retain their full value in the tooltip/accessibility description. The status
+tooltip retains errors, running interval and any failed-rebind/restoration observation. Open Browser uses
 the actual running URL, not the edited endpoint. An explicit address refresh lists
 assigned local IPv4s without network scanning; 127.0.0.1 and manual entry are always
 available. An unavailable saved IP survives Save/Discard but fails actual startup;
@@ -156,8 +173,13 @@ one safe restoration of the previous running configuration; the failed saved
 configuration remains saved for review. A failed restoration stays FAILED. Close
 waits asynchronously for actual Web and diagnostic termination; it does not
 abandon blocked work or claim socket release on timeout. Web errors never fault
-Production. Reporting retains separate header status and compact ACK/failure
-observations, without a duplicate endpoint footer.
+Production. Reporting puts its name and compact ACK/success/ERR statistics on the
+left, with actual lifecycle and a power-style Enable/Disable toggle on the right.
+This toggle edits the existing draft only: Save/Discard and next-Start semantics
+apply, and active-session editing remains locked. It never starts/stops a reporting
+worker or adopts Web's immediate runtime power semantics. Generation, queue depth
+and error details remain in tooltips. ACK never replaces the lifecycle label.
+There is no separate ACK row, endpoint summary or status footer.
 
 The default remains 127.0.0.1:8765 at 500 ms. Saved enablement is restored on the
 next application launch. The observer remains read-only and unauthenticated;

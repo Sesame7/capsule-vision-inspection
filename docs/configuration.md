@@ -35,8 +35,12 @@ can fall back visibly; required Model/Recipe identities cannot be guessed.
 `data/communication.json` is independent from `app.json`, Recipes, MachineLayout
 and CameraSources. Communication's explicit **Save settings** atomically replaces
 this file (same-directory temporary write, fsync, replace); it does not change any
-other asset or start a network owner. All fields are drafts until a successful
-Save. Unsaved reporting edits never change next-Start admission; diagnostic
+other asset or start a network owner. Network/reporting fields are drafts until a
+successful Save. The Web header's power action is the specific exception: it
+persists only `web.enabled` from the actual validated file, then requests runtime
+start/stop using saved Web network settings. It never saves unrelated drafts or
+changes effective reporting selection. An invalid file is not silently replaced;
+first-use defaults can establish a missing file. Unsaved reporting edits never change next-Start admission; diagnostic
 requests continue to use the effective saved endpoint, not draft text. Save and
 reporting publication are serialized with Start under the existing Application
 lock. An unchanged reporting selection permits saving independent Web/diagnostic
@@ -70,10 +74,11 @@ without changing the file or invalidating Production readiness.
 Restored reporting selection is frozen at the next Production Start, never a
 connection or authorization to transmit at startup/warm-up. Runtime observations,
 ACKs, watches, counters and results are not persisted. Saving does not alter the
-running Web service. Communication's explicit Start and Apply/Restart use only
-saved settings; dirty drafts must first be saved or discarded. Saved disabled
-plus Apply stops Web; enabled allows Start/Restart. Stop does not change saved
-enablement. The next process launch restores that preference. Runtime settings
+running Web service. The header power action changes saved enablement; a failed
+write prevents runtime action, while failed startup leaves saved enabled distinct
+from actual FAILED. Apply changes is available only for differing saved/running
+settings, after Web network drafts are saved/discarded. It uses the existing safe
+restart path. The next process launch restores saved enablement. Runtime settings
 and URL are presented separately from edited/saved values. Developer launchers
 retain their independent CLI settings.
 
