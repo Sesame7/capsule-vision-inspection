@@ -1,7 +1,6 @@
 """Independent serial command owner and finite controller lease.
 
-P0B-1 is deliberately loopback-only. No field endpoint can be contacted by this
-tool until a subsequent readiness review enables live operation. The controller
+Live access is explicit and fixed to the reviewed photo endpoint. The controller
 never owns a PLC socket: revocation and release cannot race another writer here.
 """
 
@@ -18,13 +17,23 @@ from threading import Event
 from time import monotonic
 from typing import Protocol
 
-from vimo_demo.communication.fins import FinsProtocolError
+from vimo_demo.communication.fins import FinsMemoryArea, FinsProtocolError
 from vimo_demo.communication.fins_tcp import FinsTcpClient
 
 from .ledger import Ledger
 from .schedule import BurstPlan, Slot
 
 PHOTO = bytes.fromhex("31 00 0a 07 00 01")  # W342 WR bit, W10.7, one bit.
+FIELD_ENDPOINT = ("192.168.251.1", 9600)
+
+
+def endpoint_gate(host: str, port: int, live: bool) -> None:
+    if not IPv4Address(host).is_loopback and (
+        not live or (host, port) != FIELD_ENDPOINT
+    ):
+        raise ValueError(
+            "Non-loopback access requires the explicit reviewed field endpoint"
+        )
 
 
 class Channel(Protocol):
@@ -35,9 +44,10 @@ class Channel(Protocol):
 
 
 class PhotoClient(FinsTcpClient):
-    def __init__(self, host: str, *, port: int, timeout: float) -> None:
-        if not IPv4Address(host).is_loopback:
-            raise ValueError("P0B-1 permits controlled loopback peers only")
+    def __init__(
+        self, host: str, *, port: int, timeout: float, live: bool = False
+    ) -> None:
+        endpoint_gate(host, port, live)
         super().__init__(host, port=port, timeout=timeout)
 
     def __enter__(self) -> PhotoClient:
@@ -54,6 +64,21 @@ class PhotoClient(FinsTcpClient):
         if type(value) is not int or value not in (0, 1):
             raise ValueError("Only one W10.7 bit value 0/1 is permitted")
         self._exchange(b"\x01\x02", PHOTO + bytes((value,)), 0)
+
+    def preflight(self) -> dict[str, int]:
+        words = {
+            f"W{n}": self.read_words(n, area=FinsMemoryArea.W)[0]
+            for n in (10, 15, 16, 18)
+        }
+        bit = self.read_photo()
+        if bit != (words["W10"] >> 7) & 1:
+            raise RuntimeError("Photo bit changed during read-only preflight")
+        return {**words, "photo": bit}
+
+
+def require_manual_idle(words: dict[str, int]) -> None:
+    if words["W15"] & 1 != 1 or words["W16"] & 6 or words["photo"] != 0:
+        raise RuntimeError(f"PLC is not manual/stopped/photo-low: {words}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,10 +129,10 @@ class SupervisorSettings:
     hold: float  # Explicit experiment input; no invented electrical pulse width.
     lease: float = 1.0
     timeout: float = 0.25
+    live: bool = False
 
     def validate(self) -> None:
-        if not IPv4Address(self.host).is_loopback:
-            raise ValueError("P0B-1 permits controlled loopback peers only")
+        endpoint_gate(self.host, self.port, self.live)
         if not self.run or not 1 <= self.port <= 65535:
             raise ValueError("Explicit run/endpoint required")
         if not all(math.isfinite(v) for v in (self.hold, self.lease, self.timeout)):
@@ -184,7 +209,7 @@ class _Supervisor:
 
     def connect(self) -> PhotoClient:
         s = self.settings
-        return PhotoClient(s.host, port=s.port, timeout=s.timeout)
+        return PhotoClient(s.host, port=s.port, timeout=s.timeout, live=s.live)
 
     def release(self, pulse: int | None, *, recovery: bool) -> bool:
         # Recovery uses a new serial connection ONLY for zero; no activation retry.
@@ -253,6 +278,10 @@ class _Supervisor:
     def serve(self) -> str:
         s = self.settings
         self.client = self.connect()
+        if s.live:
+            preflight = self.client.preflight()
+            require_manual_idle(preflight)
+            self.ledger.emit("plc_preflight", **preflight)
         if self.client.read_photo() != 0:
             raise RuntimeError("W10.7 initially high; no activation admitted")
         self.released = True
@@ -298,7 +327,7 @@ def supervise(
     settings: SupervisorSettings, connection: Channel, directory: Path, locks: Path
 ) -> None:
     """Process entry. Bounded lease watchdog is independent of controller finally."""
-    settings.validate()  # Hard loopback gate precedes sockets or file ownership.
+    settings.validate()  # Endpoint/readiness gate precedes sockets or ownership.
     lock = EndpointLock(locks, settings.host, settings.port)
     ledger = Ledger(directory / "supervisor.jsonl", settings.run, "supervisor")
     owner = _Supervisor(settings, connection, ledger)

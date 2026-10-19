@@ -48,6 +48,7 @@ class Ledger:
         self._queue: Queue[EventRow] = Queue(capacity)
         self._budget, self._index, self.peak = event_budget, 0, 0
         self.error: str | None = None
+        self.emit_seconds = self.write_seconds = 0.0
         self._thread = Thread(target=self._write, name=f"BenchmarkLedger-{producer}")
         # Exclusive creation fails synchronously, before any diagnostic admission.
         self._stream = path.open("x", encoding="utf-8")
@@ -63,6 +64,7 @@ class Ledger:
         )
 
     def emit(self, kind: str, **fields: Scalar | tuple[Scalar, ...]) -> bool:
+        started = monotonic()
         # Refuse arrays, result objects, nested dictionaries and oversized strings.
         if (
             len(kind) > 64
@@ -108,6 +110,7 @@ class Ledger:
                 return False
             self._index += 1
             self.peak = max(self.peak, self._queue.qsize())
+            self.emit_seconds += monotonic() - started
             return True
 
     def _write(self) -> None:
@@ -117,6 +120,7 @@ class Ledger:
                     row = self._queue.get(timeout=0.05)
                 except Empty:
                     continue
+                started = monotonic()
                 self._stream.write(
                     json.dumps(
                         {
@@ -132,6 +136,7 @@ class Ledger:
                     + "\n"
                 )
                 self._stream.flush()
+                self.write_seconds += monotonic() - started
         except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
             self.abort.set()
@@ -154,6 +159,8 @@ class Ledger:
                         "run": self.run,
                         "producer": self.producer,
                         "events": self._index,
+                        "emit_seconds": self.emit_seconds,
+                        "write_seconds": self.write_seconds,
                         "peak": self.peak,
                         "error": self.error,
                         "terminated": True,

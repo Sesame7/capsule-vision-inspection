@@ -9,12 +9,20 @@ from .observations import Observations
 
 
 class IsolatedTarget:
-    def __init__(self, observe: Observations, pulse_budget: int) -> None:
+    def __init__(
+        self,
+        observe: Observations,
+        pulse_budget: int,
+        *,
+        server: FinsUdpSimulator | None = None,
+    ) -> None:
         if type(pulse_budget) is not int or not 1 <= pulse_budget <= 40000:
             raise ValueError("Finite isolated target request budget required")
         self._observe = observe
         self._stop = Event()
-        self._server = FinsUdpSimulator(port=0, on_first_station_write=observe.target)
+        self._server = server or FinsUdpSimulator(
+            port=0, on_first_station_write=observe.target
+        )
         self.settings = LocalReportingSettings("127.0.0.1", self._server.port)
         self._thread = Thread(
             target=self._server.serve,

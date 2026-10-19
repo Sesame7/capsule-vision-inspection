@@ -1,11 +1,52 @@
 # Backend benchmark diagnostics
 
 The tools in [scripts/field_benchmark](../scripts/field_benchmark/) prepare and
-locally qualify a finite backend experiment. They do not add PLC triggering to
+observe a finite backend experiment. They do not add PLC triggering to
 Production or change its early inspection, deadlines, reporting or archive
-contracts. There is **no live benchmark CLI command**. Photo transport is currently
-hard-gated to loopback, including the isolated bit client. Field execution needs
-the readiness review below; these tests are not field or throughput acceptance.
+contracts. Live photo access requires an explicit diagnostic flag and is fixed
+to `192.168.251.1:9600`; other non-loopback endpoints are rejected. Field execution
+requires the readiness checks below. Local tests alone are not field acceptance.
+
+## Finite live campaign
+
+Run on the provisioned field repository on D:, with no other camera owner:
+
+```powershell
+uv run --no-sync python scripts/run_field_benchmark.py --campaign outputs/s1-p0b-2/campaign --stage single --model data/models/model.json --machine data/machine/machine.json --recipe data/recipes/local.recipe.json --sources data/sources/camera_sources.json --live-field-photo
+```
+
+After independently reviewing the completed stage, use `burst`, then `B`, `R`,
+`A`, `RA` separately. Budgets are 1, 8, 80, 80, 80, 80 (329 total). Each stage
+claims an exclusive directory; a failed/blocked stage cannot be replaced and
+later stages require its successful reconciliation. There is no automatic
+campaign escalation or retry. The runner freezes input hashes across stages.
+It never loads saved Communication preferences. R/RA allocate a maintained
+localhost UDP target; A/RA write all genuine categories under unique run roots.
+
+The runner uses existing backend composition, explicit Connect, actual camera
+dimensions/ROI validation, real engine initialization/warm-up and attached RUNNING
+admission with zero counters before enabling stimulus. Fresh W15.0/manual,
+W16.1/.2/stopped, W18 observation and W10.7/low checks precede activation. The
+finite supervisor uses the established 20 ms hold and 10 ms lateness guard.
+Unexpected pre-stimulus frames, runtime/identity/report/archive errors, telemetry
+failure, RAM below 2 GiB, disk below 5 GiB or GPU temperature at least 60°C stop
+further stimulus. These resource limits are experiment guards, not product limits.
+
+Windows hosting uses a detached process/new process group with explicit job
+breakaway and a bounded authenticated loopback channel. Hosting failure blocks
+activation; there is no silent fallback. The common endpoint lock directory is
+the campaign parent's `photo-locks/`. EOF/lease loss revokes further activation.
+Actual process exit, final supervisor low verification and a separate final
+readback are distinct observations. An external/uncooperative writer, supervisor
+death, host power loss or total PLC network loss cannot be solved by this tool.
+
+After the stimulus, the existing owners Stop/drain, Disconnect and Close. Native
+initialization/inference is allowed to finish; no native process/thread is killed.
+The sampler records approximately 1 Hz resource observations outside callbacks;
+ledger footers record enqueue and writer wall time. Live analysis additionally
+checks six cleanups, saved-definition integrity, SDK/admitted identities and
+actual accounting. Command intervals/jitter, per-camera inference, cycle latency,
+drain and encoded-byte throughput include observer overhead and are preliminary.
 
 ## Offline commands
 
@@ -73,9 +114,11 @@ retry is permitted. An unresolved release remains explicit even if sockets close
 Local tests terminate only a synthetic controller subprocess while the controlled
 peer holds its activation ACK. They verify surviving release and exclusion,
 lease expiry, ACK loss, delayed/rejected release and subsequent socket cleanup.
-This does not prove survival of Windows console/job termination, SSH host-policy
-cleanup, IPC power failure, supervisor death or total PLC communication failure.
-Independent field hosting and an operator/PLC-side fallback remain required.
+The detached-hosting test also verifies actual subprocess exit after controller
+channel loss. Run it in the actual Windows/SSH environment before live activation;
+neither test proves survival of host power loss, supervisor death or total PLC
+communication failure. An operator/PLC-side fallback remains necessary for those
+conditions.
 
 ## Production observations
 
@@ -122,8 +165,7 @@ latency subtraction, timing-based frame association or physical-product count.
 
 ## Before any field experiment
 
-1. Review/enable a separately authorized live endpoint path; the current loopback
-   gate deliberately prevents it. Reconcile deployed revision and hashes without
+1. Review the explicit diagnostic live endpoint path. Reconcile deployed revision and hashes without
    changing saved configuration, models, runtime or camera settings.
 2. Establish independent field-local supervisor hosting, common lock directory,
    no competing owner/writer, tested release fallback and finite campaign budget.

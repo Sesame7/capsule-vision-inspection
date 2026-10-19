@@ -10,6 +10,7 @@ from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import Future
 from contextlib import contextmanager
 from pathlib import Path
+from threading import Condition, Event, get_ident
 from time import monotonic
 from unittest.mock import patch
 
@@ -59,13 +60,33 @@ class Observations:
         ledger: Ledger,
         source_epoch: str,
         cameras: tuple[tuple[CameraId, str], ...] = (),
+        *,
+        strict_run: bool = False,
     ) -> None:
         if not source_epoch:
             raise ValueError("Explicit source connection epoch required")
         self.ledger, self.source_epoch = ledger, source_epoch
         self._cameras = {serial: str(camera) for camera, serial in cameras}
+        self.strict_run = strict_run
+        self.stop = Event()
+        self._terminal = Condition()
+        self.terminal_count = 0
         if cameras and (len(cameras) != 6 or len(self._cameras) != 6):
             raise ValueError("Six configured camera/serial identities required")
+
+    def fail(self, reason: str) -> None:
+        if self.strict_run:
+            self.ledger.emit("run_guard", issue=reason[:1200])
+            self.stop.set()
+            with self._terminal:
+                self._terminal.notify_all()
+
+    def wait_cycles(self, expected: int, timeout: float) -> bool:
+        with self._terminal:
+            self._terminal.wait_for(
+                lambda: self.terminal_count >= expected or self.stop.is_set(), timeout
+            )
+            return self.terminal_count == expected and not self.stop.is_set()
 
     def sdk(self, metadata: AcquisitionMetadata) -> None:
         # Explicit fields avoid SDK objects and preserve raw clock metadata.
@@ -103,6 +124,8 @@ class Observations:
                 cycle=int(cycle_id),
                 issue=str(error)[:1200] if error else None,
             )
+            if error:
+                self.fail(f"Cycle admission: {error}")
 
         def terminal(future: Future[ProductionInspectionResult]) -> None:
             try:
@@ -114,6 +137,7 @@ class Observations:
                     cycle=int(cycle_id),
                     issue=f"{type(exc).__name__}: {exc}"[:1200],
                 )
+                self.fail(f"Cycle terminal exception: {exc}")
                 return
             self.result(generation, result)
 
@@ -160,6 +184,15 @@ class Observations:
                 occupancy_ms=camera.timing.occupancy_ms,
                 mapping_ms=camera.timing.mapping_ms,
             )
+        with self._terminal:
+            self.terminal_count += 1
+            self._terminal.notify_all()
+        if result.cycle_status.name != "COMPLETE" or any(
+            row.assessment.technical_status.name == "ERROR"
+            for cam in result.cameras
+            for row in cam.channels
+        ):
+            self.fail("Incomplete/technical ERROR result; no further stimulus")
 
     def frame(self, generation: int, frame: Frame, admitted: Future[None]) -> None:
         fields = identity(generation, frame.id)
@@ -182,6 +215,8 @@ class Observations:
                 **fields,
                 issue=str(error)[:1200] if error else None,
             )
+            if error:
+                self.fail(f"Frame admission: {error}")
 
         admitted.add_done_callback(completed)  # Closure contains scalars, never Frame.
 
@@ -201,6 +236,8 @@ class Observations:
             sequence_ms=row.sequence_ms,
             completion_to_ack_ms=row.completion_to_ack_ms,
         )
+        if row.outcome.value != "acknowledged":
+            self.fail(f"Report {row.outcome.value}")
 
     def target(self, sequence: int, words: tuple[int, int, int]) -> None:
         self.ledger.emit("target_commit", sequence=sequence, words=words)
@@ -239,6 +276,7 @@ class Observations:
             write_png(root, item)
         except Exception as exc:
             self.ledger.emit("archive_failed", **fields, issue=str(exc)[:1200])
+            self.fail(f"Archive write: {exc}")
             raise
         self.ledger.emit(
             "archive_written",
@@ -275,7 +313,7 @@ class Observations:
         class MeasuredEngine:
             def __init__(self, prepared: PreparedConfiguration) -> None:
                 start = monotonic()
-                observer.ledger.emit("engine_initializing")
+                observer.ledger.emit("engine_initializing", thread=get_ident())
                 try:
                     self.engine = factory(prepared)
                 except Exception as exc:
@@ -284,7 +322,9 @@ class Observations:
                     )
                     raise
                 observer.ledger.emit(
-                    "engine_created", duration_ms=(monotonic() - start) * 1000
+                    "engine_created",
+                    duration_ms=(monotonic() - start) * 1000,
+                    thread=get_ident(),
                 )
 
             def infer(self, image_bgr: NDArray[np.generic]) -> ImageResult:
@@ -300,6 +340,7 @@ class Observations:
                 finally:
                     observer.ledger.emit(
                         "inference_finished",
+                        thread=get_ident(),
                         shape=tuple(image_bgr.shape),
                         duration_ms=(monotonic() - started) * 1000,
                         succeeded=succeeded,
@@ -308,7 +349,7 @@ class Observations:
 
             def close(self) -> None:
                 self.engine.close()
-                observer.ledger.emit("engine_closed")
+                observer.ledger.emit("engine_closed", thread=get_ident())
 
         def create(prepared: PreparedConfiguration) -> InferenceEngine:
             return MeasuredEngine(prepared)
@@ -351,6 +392,7 @@ class Observations:
                     cycle=int(cycle_id),
                     issue=str(exc)[:1200],
                 )
+                obs.fail(f"Cycle submission: {exc}")
                 raise
             obs.cycle(generation, cycle_id, cycle)
             return cycle
@@ -364,6 +406,7 @@ class Observations:
                     **identity(app.snapshot().generation, frame.id),
                     issue=str(exc)[:1200],
                 )
+                obs.fail(f"Frame submission: {exc}")
                 raise
             obs.frame(app.snapshot().generation, frame, admitted)
             return admitted
@@ -512,6 +555,7 @@ class Observations:
                         cycle=int(report.identity.cycle_id),
                         issue=str(exc)[:1200],
                     )
+                    obs.fail(f"Report submission: {exc}")
                     raise
                 future.add_done_callback(lambda f: obs.report(f.result()))
                 return future
@@ -538,6 +582,7 @@ class Observations:
                     issue=str(error)[:1200],
                 )
                 super().note_skipped(identity, error)
+                obs.fail(f"Report skipped: {error}")
 
             def join(self, timeout: float | None = None) -> bool:
                 joined = super().join(timeout)
@@ -564,6 +609,7 @@ class Observations:
                     frame_identity=None,
                 )
                 super()._drop(message)
+                obs.fail(f"Archive drop: {message}")
 
             def retain(self, frame: Frame) -> None:
                 obs.ledger.emit(

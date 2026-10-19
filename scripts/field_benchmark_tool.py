@@ -8,6 +8,7 @@ from typing import cast
 from field_benchmark.analyze import load_rows, reconcile
 from field_benchmark.archive_check import verify_archive
 from field_benchmark.configuration import Mode, prepare_run
+from field_benchmark.measurements import live_measurements
 
 
 def main() -> int:
@@ -63,6 +64,8 @@ def main() -> int:
         owners += ("reporter",)
     if mode in (Mode.A, Mode.RA):
         owners += ("archive",)
+    if manifest.get("live_field") is True:
+        owners += ("application", "resource_sampler")
     paths = sorted(directory.glob("*.jsonl"))
     rows = load_rows(paths)
     summary = reconcile(
@@ -73,6 +76,11 @@ def main() -> int:
         required_owners=owners,
     )
     issues = cast(list[str], summary["issues"])
+    if manifest.get("live_field") is True:
+        live_issues, measurements = live_measurements(rows, manifest)
+        issues.extend(live_issues)
+        summary["live_measurements"] = measurements
+    logging_cost: list[dict[str, object]] = []
     if mode in (Mode.A, Mode.RA):
         issues.extend(verify_archive(rows, directory / "archive"))
     for path in paths:
@@ -81,6 +89,7 @@ def main() -> int:
             issues.append(f"ledger termination/footer missing: {path.name}")
             continue
         footer: dict[str, object] = json.loads(footer_path.read_text(encoding="utf-8"))
+        logging_cost.append(footer)
         count = sum(row.get("producer") == footer.get("producer") for row in rows)
         if (
             footer.get("run") != manifest["run"]
@@ -103,6 +112,7 @@ def main() -> int:
     else:
         issues.append("independent supervisor final release evidence missing")
     summary["evidence_complete"] = not issues
+    summary["logging_cost"] = logging_cost
     # Exclusive analysis output preserves previous/partial evidence.
     with (directory / "reconciliation.json").open("x", encoding="utf-8") as stream:
         json.dump(summary, stream, ensure_ascii=False, indent=2)
