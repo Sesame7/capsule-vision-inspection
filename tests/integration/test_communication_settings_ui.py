@@ -22,10 +22,11 @@ from vimo_demo.application.communication_preferences import (
     load_communication_preferences,
     save_communication_preferences,
 )
-from vimo_demo.communication import FinsTransport
+from vimo_demo.communication import FinsMemoryArea, FinsTransport
 from vimo_demo.communication.operations import (
     CommunicationRequest,
     CommunicationResponse,
+    RegisterWatchGroup,
     RequestKind,
 )
 from vimo_demo.communication.reporting import LocalReportingSettings, ReportingSelection
@@ -37,7 +38,7 @@ from vimo_demo.ui.bootstrap import (
     main,
 )
 from vimo_demo.ui.inference_bridge import FutureDelivery
-from vimo_demo.ui.production_style import text
+from vimo_demo.ui.production_style import Language, Style, text
 from vimo_demo.ui.production_window import ProductionWindow
 from vimo_demo.web import ProductionSnapshotService
 from vimo_demo.web.runtime import WebRuntime, WebState
@@ -731,36 +732,6 @@ def test_discard_does_not_undo_observed_write(
     assert page.success.text() and page.status.text()
 
 
-@pytest.mark.parametrize("landscape", [False, True])
-def test_service_cards_reflow_without_clipping(
-    settings_window: tuple[Startup, ProductionWindow], landscape: bool
-) -> None:
-    _, window = settings_window
-    page = window.communication
-    window.resize(*((1920, 1017) if landscape else (1080, 1857)))
-    window.set_language("en")
-    QApplication.processEvents()
-    assert (
-        page.service_layout.itemAtPosition(*((0, 1) if landscape else (1, 0)))
-        is not None
-    )
-    panel = page.reporting_panel
-    assert panel is not None
-    panel.advanced_button.setChecked(True)
-    QApplication.processEvents()
-    assert panel.advanced.isVisible()
-    for control in (
-        panel.port,
-        panel.timeout,
-        page.web_panel.host,
-        page.web_panel.interval,
-    ):
-        parent = control.parentWidget()
-        assert parent is not None and parent.rect().contains(control.geometry())
-    assert page.body.width() <= page.scroll_area.viewport().width()
-    assert page.save_settings.isVisible() and page.discard_settings.isVisible()
-
-
 @pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
 def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
     qapp: QApplication, tmp_path: Path, size: tuple[int, int]
@@ -837,3 +808,193 @@ def test_reporting_power_edits_only_draft_until_save_or_discard(
     assert panel.controller.reporting_snapshot() is None
     assert page.web_panel.runtime is web_runtime
     assert startup.application.snapshot().counters == ProductionCounters()
+
+
+def _assert_service_cards_reflow(
+    settings_window: tuple[Startup, ProductionWindow], landscape: bool
+) -> None:
+    _, window = settings_window
+    page = window.communication
+    window.resize(*((1920, 1017) if landscape else (1080, 1857)))
+    window.set_language("en")
+    QApplication.processEvents()
+    assert (
+        page.service_layout.itemAtPosition(*((0, 1) if landscape else (1, 0)))
+        is not None
+    )
+    panel = page.reporting_panel
+    assert panel is not None
+    panel.advanced_button.setChecked(True)
+    QApplication.processEvents()
+    assert panel.advanced.isVisible()
+    for control in (
+        panel.port,
+        panel.timeout,
+        page.web_panel.host,
+        page.web_panel.interval,
+    ):
+        parent = control.parentWidget()
+        assert parent is not None and parent.rect().contains(control.geometry())
+    assert page.body.width() <= page.scroll_area.viewport().width()
+    assert page.save_settings.isVisible() and page.discard_settings.isVisible()
+
+
+@pytest.mark.parametrize(
+    "language,size",
+    [
+        ("zh", (1080, 1920)),
+        ("en", (1920, 1080)),
+        ("en", (1080, 1920)),
+        ("zh", (1920, 1080)),
+        ("zh", (880, 720)),
+        ("en", (900, 1200)),
+    ],
+)
+def test_communication_presentation_matrix(
+    settings_window: tuple[Startup, ProductionWindow],
+    qapp: QApplication,
+    tmp_path: Path,
+    language: Language,
+    size: tuple[int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    startup, window = settings_window
+    page = window.communication
+    panel = page.reporting_panel
+    assert panel is not None
+    before = startup.application.snapshot()
+    # Retain the original two work-area heights as internal resize observations.
+    if language == "en" and size in ((1080, 1920), (1920, 1080)):
+        _assert_service_cards_reflow(settings_window, size[0] > size[1])
+        panel.advanced_button.setChecked(False)
+    window.set_language(language)
+    window.resize(*size)
+    window.navigate(2)
+    qapp.processEvents()
+    width, height = size
+    assert (
+        window.communication.body.width()
+        <= window.communication.scroll_area.viewport().width()
+    )
+    assert panel.host.isVisible()
+    assert window.grab().save(
+        str(tmp_path / f"communication-empty-{language}-{width}x{height}.png")
+    )
+    panel.advanced_button.click()
+    window.communication.advanced_button.click()
+    qapp.processEvents()
+    assert panel.title.text() == text("plc_reporting", language)
+    assert panel.summary.y() == panel.service_status.y()
+    assert panel.title.geometry().right() < panel.summary.x()
+    assert panel.summary.geometry().right() < panel.service_status.x()
+    assert panel.summary.y() < panel.host.y()
+    assert panel.enabled.accessibleName() == text("plc_enable", language)
+    assert panel.port.accessibleName() == text("comm_port", language)
+    assert panel.host.text() == "127.0.0.1" and panel.advanced.isVisible()
+    # Narrow requested widths may be raised by Qt's effective minimum. Preserve
+    # the original requested-width assertion at its four original input rows.
+    assert panel.geometry().width() <= window.width()
+    if size in ((1080, 1920), (1920, 1080)):
+        assert panel.geometry().width() <= width
+    for widget in (panel.enabled, panel.port, panel.timeout, panel.advanced_button):
+        assert widget.width() >= widget.minimumSizeHint().width()
+    for widget in (
+        panel.port,
+        panel.timeout,
+        panel.advanced_button,
+        window.communication.host,
+        window.communication.port,
+        window.communication.timeout,
+        window.communication.advanced_button,
+    ):
+        parent = widget.parentWidget()
+        assert parent is not None and parent.rect().contains(widget.geometry())
+
+    page.watch_editor_button.click()
+    page.manual_button.click()
+    completed = datetime(2026, 10, 14, 13, 22, 35, 123456, tzinfo=UTC)
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        return CommunicationResponse(
+            request, tuple(range(request.count)), 1.25, completed
+        )
+
+    monkeypatch.setattr(page, "_execute", execute)
+    assert page.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "提交 / Commit")
+    )
+    assert page.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.DM, 100, 3, "测试 / Test")
+    )
+    assert page.dispatch(RequestKind.READ, count=3)
+    until(lambda: not page.busy)
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    qapp.processEvents()
+    page = window.communication
+    for control in (
+        page.host,
+        page.port,
+        page.timeout,
+        page.address,
+        page.write_button,
+        page.advanced_button,
+        page.area,
+        page.watch_area,
+        page.watch_address,
+        page.watch_count,
+        page.watch_name,
+        page.watch_selector,
+        page.watch_add,
+        page.watch_remove,
+        page.watch_once,
+        page.watch_auto,
+        *page.destination,
+        *page.source,
+    ):
+        parent = control.parentWidget()
+        assert parent is not None and parent.rect().contains(control.geometry())
+        assert control.height() >= Style.touch
+    assert page.body.width() <= page.scroll_area.viewport().width()
+    for button in (page.watch_add, page.watch_remove, page.watch_once, page.watch_auto):
+        assert (
+            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 20
+        )
+    assert window.event_frame.height() == 44
+    assert window.grab().save(
+        str(tmp_path / f"communication-{language}-{size[0]}x{size[1]}.png")
+    )
+
+    # The reporting layout's original five-row input remains a separate stage.
+    while page.watch_groups:
+        assert page.remove_watch_group(0)
+    assert window.communication.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "首工位 / First station")
+    )
+    assert window.communication.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.DM, 100, 1, "诊断 / Diagnostic")
+    )
+    assert window.communication.read_watch_once()
+    until(lambda: not window.communication.busy)
+    qapp.processEvents()
+    assert (
+        window.communication.watch_table.columnWidth(0)
+        < window.communication.watch_table.width() / 4
+    )
+    widths = [window.communication.watch_table.columnWidth(c) for c in range(5)]
+    assert max(widths) - min(widths) <= 1
+    assert window.grab().save(
+        str(tmp_path / f"communication-populated-{language}-{width}x{height}.png")
+    )
+
+    expected = completed.astimezone().strftime("%H:%M:%S.%f")[:-3]
+    assert page.watch_table.columnCount() == 5
+    assert (
+        page.watch_table.columnWidth(4)
+        >= page.watch_table.fontMetrics().horizontalAdvance(expected) + 8
+    )
+    for row in range(page.watch_table.rowCount()):
+        item = page.watch_table.item(row, 4)
+        assert item is not None and item.text() == expected
+    assert page.save_settings.isVisible() and page.discard_settings.isVisible()
+    assert startup.application.snapshot() == before

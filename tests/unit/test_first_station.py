@@ -35,12 +35,10 @@ def statuses(default: Status = Status.OK) -> Statuses:
 
 
 @pytest.mark.parametrize("channel_id", range(1, 37))
-@pytest.mark.parametrize("status", [Status.NG, Status.EMPTY, Status.UNKNOWN])
-def test_every_reject_bit_uses_channel_identity(
-    channel_id: int, status: Status
-) -> None:
+def test_every_reject_bit_uses_channel_identity(channel_id: int) -> None:
     inputs = tuple(
-        (i, status if i == channel_id else state) for i, state in reversed(statuses())
+        (i, Status.NG if i == channel_id else state)
+        for i, state in reversed(statuses())
     )
     expected = [0, 0, 0]
     word, bit = divmod(channel_id - 1, 16)

@@ -13,7 +13,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLabel
 from tests.capsule_support import SETTINGS, bodies
-from tests.qt_support import until
+from tests.qt_support import ensure_test_fonts, until
 from tests.recipe_ui_support import Screen, assert_inside, demo_recipe_window
 from tests.recipe_ui_support import configured_screen as configured_screen
 
@@ -727,53 +727,6 @@ def test_no_repeated_text_but_errors_remain(
     collapse(preview, configured_screen)
 
 
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-@pytest.mark.parametrize("scale", [None, 1.0, 1.5])
-def test_per_view_selection_at_fit_and_zoom(
-    configured_screen: Screen,
-    size: tuple[int, int],
-    scale: float | None,
-) -> None:
-    window, session, runtimes = configured_screen
-    preview = setup(configured_screen, pixel_scale=3)
-    window.set_language("en")
-    window.resize(*size)
-    QApplication.processEvents()
-    before = window.bridge.application.snapshot()
-    preview.canvas.zoom(scale)
-    transform = preview.canvas.model.transform(
-        preview.canvas.width(), preview.canvas.height()
-    )
-    assert transform is not None
-    count = 0
-    for index, row in enumerate(preview.measurements):
-        assert row.measured is not None
-        for view_index, view in enumerate(row.measured.views):
-            assert view.body is not None
-            r = view.body.bounding_rect
-            x, y, w, h = transform.rectangle(r)
-            point = QPoint(round(x + w / 2), round(y + h / 2))
-            if not preview.canvas.rect().contains(point):
-                continue
-            QTest.mouseClick(preview.canvas, Qt.MouseButton.LeftButton, pos=point)
-            assert preview.canvas.selection == (index, view_index)
-            detail = preview.selection_detail.text()
-            assert f"CH{row.slot.channel_id:02d}" in detail and view.name in detail
-            assert "W 60 [20, 20]" in detail and "H 90 [30, 30]" in detail
-            assert "Size NG" in detail and "Occupancy" not in detail
-            count += 1
-    assert count > 0
-    selected = preview.canvas.selection
-    preview.set_mode("color")
-    assert (
-        preview.canvas.selection == selected
-        and "Color OK" in preview.selection_detail.text()
-    )
-    assert "Hue 30.00" in preview.selection_detail.text()
-    assert window.bridge.application.snapshot() == before and not runtimes
-    assert session.draft.capsule == SETTINGS
-
-
 def test_view_judgment_is_separate_from_other_view_and_check(
     configured_screen: Screen,
 ) -> None:
@@ -1214,12 +1167,74 @@ def test_integrated_controls_precede_canvas_and_enablement_is_separate(
     collapse(preview, configured_screen)
 
 
+def _assert_preview_zoom_selection(
+    screen: Screen, preview: TraditionalPreview, scale: float | None
+) -> None:
+    window, session, runtimes = screen
+    before = window.bridge.application.snapshot()
+    preview.canvas.zoom(scale)
+    transform = preview.canvas.model.transform(
+        preview.canvas.width(), preview.canvas.height()
+    )
+    assert transform is not None
+    count = 0
+    for index, row in enumerate(preview.measurements):
+        assert row.measured is not None
+        for view_index, view in enumerate(row.measured.views):
+            assert view.body is not None
+            r = view.body.bounding_rect
+            x, y, w, h = transform.rectangle(r)
+            point = QPoint(round(x + w / 2), round(y + h / 2))
+            if not preview.canvas.rect().contains(point):
+                continue
+            QTest.mouseClick(preview.canvas, Qt.MouseButton.LeftButton, pos=point)
+            assert preview.canvas.selection == (index, view_index)
+            detail = preview.selection_detail.text()
+            assert f"CH{row.slot.channel_id:02d}" in detail and view.name in detail
+            assert "W 60 [20, 20]" in detail and "H 90 [30, 30]" in detail
+            assert "Size NG" in detail and "Occupancy" not in detail
+            count += 1
+    assert count > 0
+    selected = preview.canvas.selection
+    preview.set_mode("color")
+    assert (
+        preview.canvas.selection == selected
+        and "Color OK" in preview.selection_detail.text()
+    )
+    assert "Hue 30.00" in preview.selection_detail.text()
+    assert window.bridge.application.snapshot() == before and not runtimes
+    assert session.draft.capsule == SETTINGS
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
+def test_preview_zoom_selection_by_orientation(
+    configured_screen: Screen, size: tuple[int, int]
+) -> None:
+    window, _, _ = configured_screen
+    preview = setup(configured_screen, pixel_scale=3)
+    window.set_language("en")
+    window.resize(*size)
+    QApplication.processEvents()
+    frozen = preview.frame
+    for scale in (None, 1.0, 1.5):
+        try:
+            preview.set_mode("size")
+            preview.canvas.selection = None
+            preview.evaluate()
+            assert preview.canvas.selection is None
+            # The helper's zoom resets pan and computes a new transform each row.
+            _assert_preview_zoom_selection(configured_screen, preview, scale)
+            assert preview.frame is frozen
+        except Exception as exc:
+            exc.add_note(f"Tune selection: size={size}, scale={scale}")
+            raise
+
+
 @pytest.mark.parametrize(
     "language,size,workspace",
     [("en", (1920, 1080), "size"), ("zh", (1080, 1920), "color")],
 )
 def test_tuning_preview_screenshots(
-    configured_screen: Screen,
     qapp: QApplication,
     tmp_path: Path,
     language: Language,
@@ -1228,6 +1243,7 @@ def test_tuning_preview_screenshots(
 ) -> None:
     from run_production_ui import compose, demo_images
 
+    ensure_test_fonts()
     composition = compose(demo_images(), tmp_path / "demo", "normal", 0.001)
     with demo_recipe_window(composition, language=language, size=size) as window:
         window.navigate(1)

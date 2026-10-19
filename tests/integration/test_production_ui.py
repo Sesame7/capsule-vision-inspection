@@ -1,6 +1,5 @@
 """Offscreen shell tests, actual application commands and controlled session Futures."""
 
-from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, get_ident
@@ -11,15 +10,15 @@ from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QLabel, QWidget
-from tests.application_support import FakeSession, prepared, production
+from tests.application_support import FakeSession, production
 from tests.business_support import channel, mixed_result
 from tests.production_support import source_frame
-from tests.qt_support import ensure_test_fonts, until
+from tests.qt_support import screen as screen
+from tests.qt_support import until
 
 from vimo_demo.application import (
     ApplicationState,
     ConfigurationIdentity,
-    ProductionApplication,
     ProductionApplicationSnapshot,
     ProductionCounters,
 )
@@ -34,9 +33,9 @@ from vimo_demo.inspection.production import (
     TechnicalStatus,
 )
 from vimo_demo.ui.camera_card import CameraCard
-from vimo_demo.ui.display_frames import DisplayFrame, LatestDisplayFrameStore
-from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
-from vimo_demo.ui.production_presentation import Indicator
+from vimo_demo.ui.display_frames import DisplayFrame
+from vimo_demo.ui.production_bridge import QtProductionBridge
+from vimo_demo.ui.production_presentation import Indicator, grid_columns
 from vimo_demo.ui.production_style import (
     Language,
     Style,
@@ -47,104 +46,6 @@ from vimo_demo.ui.production_style import (
     text,
 )
 from vimo_demo.ui.production_window import ProductionWindow
-
-
-@pytest.fixture
-def screen(
-    qapp: QApplication, tmp_path: Path
-) -> Iterator[tuple[ProductionWindow, FakeSession]]:
-    # Windows' offscreen plugin exposes no system fonts in this environment.
-    # Read existing OS fonts for realistic metrics/Chinese glyphs; install nothing.
-    ensure_test_fonts()
-    candidate = prepared(tmp_path)
-    session = FakeSession(automatic_start=False)
-    app = ProductionApplication(lambda _p, _g: session)
-    app.configure(candidate)
-    store = LatestDisplayFrameStore(candidate.configuration.layout.camera_ids)
-    bridge = QtProductionBridge(app, store, poll_ms=10, close_timeout_ms=1000)
-    choices = (
-        RecipeChoice(candidate, "Recipe A"),
-        RecipeChoice(
-            replace(
-                candidate, configuration=replace(candidate.configuration, recipe_id="B")
-            ),
-            "Recipe B",
-        ),
-    )
-    window = ProductionWindow(bridge, choices)
-    window.resize(1080, 1920)
-    window.show()
-    yield window, session
-    if not session.ready.done():
-        session.ready.set_result(None)
-    if session.join_gate is not None:
-        session.join_gate.set()
-    session.cleanup_safe = True
-    window.close()
-    until(lambda: window.bridge.closed)
-    assert app.join(0)
-    window.deleteLater()
-
-
-@pytest.mark.parametrize(
-    "size,columns", [((1080, 1920), 2), ((1920, 1080), 3), ((900, 1200), 2)]
-)
-@pytest.mark.parametrize("language", ["zh", "en"])
-def test_bilingual_geometry_and_navigation(
-    screen: tuple[ProductionWindow, FakeSession],
-    qapp: QApplication,
-    size: tuple[int, int],
-    columns: int,
-    language: Language,
-) -> None:
-    window, _ = screen
-    identities = tuple(id(card) for card in window.cards)
-    window.set_language(language)
-    window.resize(*size)
-    qapp.processEvents()
-    assert window.columns == columns and len(window.cards) == 6
-    assert window.pages.currentIndex() == 0
-    assert window.navigation[0].text() == text("production", language)
-    for index, card in enumerate(window.cards):
-        number = str(card.camera_layout.camera_id).removeprefix("CAM")
-        assert card.identity.text() == number
-        name = f"{text('camera_number', language).format(number=number)} ({card.camera_layout.camera_id})"
-        assert card.identity.toolTip() == card.identity.accessibleName() == name
-        assert (
-            card.camera_icon.pixmap().toImage()
-            == camera_icon().pixmap(Style.icon, Style.icon).toImage()
-        )
-        assert card.camera_icon.size() == QSize(Style.icon, Style.icon)
-        assert card.identity_group.rect().contains(card.camera_icon.geometry())
-        assert card.identity_group.rect().contains(card.identity.geometry())
-        item = window.grid.itemAtPosition(index // columns, index % columns)
-        assert item is not None and item.widget() is card
-        assert (
-            card.isVisible()
-            and card.viewport.width() > 100
-            and card.viewport.height() > 100
-        )
-        parent = card.parentWidget()
-        assert parent is not None and parent.rect().contains(card.geometry())
-        for button in card.indicators:
-            assert card.rect().contains(button.geometry())
-    for button in (
-        *window.navigation,
-        *window.buttons.values(),
-    ):
-        parent = button.parentWidget()
-        assert parent is not None and parent.rect().contains(button.geometry())
-        assert (
-            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 15
-        )
-    window.navigation[2].click()
-    assert window.pages.currentIndex() == 2
-    assert window.pages.currentWidget() is window.communication
-    assert window.communication.write_button.text() == text("comm_write", language)
-    window.navigation[0].click()
-    window.resize(size[1], size[0])
-    qapp.processEvents()
-    assert tuple(id(card) for card in window.cards) == identities
 
 
 def test_snapshot_and_pixels_present_cards_once_per_refresh(
@@ -774,161 +675,6 @@ def test_long_recipe_and_batch_keep_pending_activation_visible(
     assert window.buttons["operation"].text() == text("replay_start", language)
 
 
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-@pytest.mark.parametrize("language", ["zh", "en"])
-def test_summary_groups_center_state_recipe_and_keep_batch_left_actions_right(
-    screen: tuple[ProductionWindow, FakeSession],
-    tmp_path: Path,
-    size: tuple[int, int],
-    language: Language,
-) -> None:
-    window, _ = screen
-    window.set_language(language)
-    window.resize(*size)
-    window.choices = (
-        replace(window.choices[0], label="Long Recipe 很长的配方名称 " * 15),
-    )
-    window.bridge.snapshot_changed.emit(
-        replace(window.snapshot, batch_id="batch-with-a-long-identity-" * 15)
-    )
-    QApplication.processEvents()
-    batch = window.batch_group
-    assert (
-        batch.mapTo(window.summary, QPoint()).x()
-        == window.summary.contentsRect().left()
-        + window.summary_layout.contentsMargins().left()
-    )
-    identity = window.identity_group
-    center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
-    assert abs(center - window.summary.width() / 2) <= 1
-    assert not window.pending_label.isVisible()
-    assert "Long Recipe" in window.identity_label.toolTip()
-    operation = window.buttons["operation"]
-    right = (
-        window.operation_group.mapTo(window.summary, QPoint()).x()
-        + window.operation_group.width()
-    )
-    assert window.summary.width() - right <= Style.space + 1
-    for widget in (window.identity_group, batch, operation):
-        position = widget.mapTo(window.summary, QPoint())
-        assert window.summary.rect().contains(position)
-        assert window.summary.rect().contains(
-            position + QPoint(widget.width() - 1, widget.height() - 1)
-        )
-    assert len(window.metrics) == 4 and "channel_ok" in window.metrics
-    assert window.grab().save(
-        str(tmp_path / f"header-{language}-{size[0]}x{size[1]}-long-identities.png")
-    )
-
-
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (880, 720)])
-@pytest.mark.parametrize("language", ["zh", "en"])
-def test_business_indicators_summary_and_bilingual_layout(
-    screen: tuple[ProductionWindow, FakeSession],
-    qapp: QApplication,
-    tmp_path: Path,
-    size: tuple[int, int],
-    language: Language,
-) -> None:
-    from run_production_ui import demo_images
-
-    from vimo_demo.inspection import Frame
-
-    window, session = screen
-    window.set_language(language)
-    window.resize(*size)
-    session.ready.set_result(None)
-    window.bridge.start()
-    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
-    result = mixed_result()
-    # Existing fake pixels, independent owned display copies and matching FrameIds.
-    images = demo_images()
-    for image in images:
-        # Test-specific EMPTY/EMPTY+NG pixels, before Frame ownership transfer.
-        for slot in (1, 3):
-            image[:, slot * image.shape[1] // 6 : (slot + 1) * image.shape[1] // 6] = 0
-    result = replace(
-        result,
-        cameras=tuple(
-            replace(camera, image_shape=(image.shape[0], image.shape[1], 3))
-            for camera, image in zip(result.cameras, images, strict=True)
-        ),
-    )
-    for camera, image in zip(result.cameras, images, strict=True):
-        assert camera.frame_id is not None
-        window.bridge.frames.publish(Frame(camera.frame_id, 0, image), generation=1)
-    receipt = window.bridge.application.begin_cycle(CycleId(1))
-    session.cycles[0].accepted.set_result(None)
-    session.cycles[0].result.set_result(result)
-    until(
-        lambda: (
-            receipt.result.done()
-            and all(card.result is not None for card in window.cards)
-        )
-    )
-    assert (
-        window.snapshot.counters.channel_ok == 18
-    )  # Original judgments, including EMPTY/UNKNOWN.
-    assert window.metrics["channel_ok"][0].text() == "6"  # Business OK only.
-    assert window.metrics["channel_ng"][0].text() == "12"
-    assert window.metrics["channel_ok"][1].text() == "CH OK"
-    assert window.metrics["channel_ng"][1].text() == "CH NG"
-    assert set(window.metrics) == {"cycles", "channel_ok", "channel_ng", "processing"}
-    expected = (
-        Indicator.OK,
-        Indicator.EMPTY,
-        Indicator.UNKNOWN,
-        Indicator.ERROR_NG,
-        Indicator.ERROR,
-        Indicator.NG,
-    )
-    for camera, card in zip(result.cameras, window.cards, strict=True):
-        for row, button, state in zip(
-            camera.channels, card.indicators, expected, strict=True
-        ):
-            assert (
-                f"{text('channel', language)} {row.channel_id} ·"
-                in button.accessibleName()
-            )
-            assert not button.pixmap().isNull()
-            assert text(state.value, language) in button.accessibleName()
-            assert button.toolTip() == button.accessibleName()
-            assert text("business_status", language) in button.toolTip()
-            assert text("occupancy", language) in button.toolTip()
-            assert text("product_judgment", language) in button.toolTip()
-            assert text("technical_status", language) in button.toolTip()
-            assert button.size() == QSize(Style.touch, Style.touch)
-            if size != Style.minimum:
-                assert card.indicator_group.rect().contains(button.geometry())
-        empty, conflict = card.indicators[1], card.indicators[3]
-        assert text("traditional_skip_empty", language) in empty.toolTip()
-        assert text("occupancy_empty", language) in conflict.toolTip()
-        assert text("error_ng", language) in conflict.toolTip()
-        assert "execution_error" in conflict.toolTip()
-        assert Style.warning in conflict.styleSheet()
-    neutral = indicator_icon(Indicator.EMPTY).pixmap(18, 18).toImage()
-    assert neutral != indicator_icon(Indicator.DISABLED).pixmap(18, 18).toImage()
-    assert neutral != indicator_icon(Indicator.PENDING).pixmap(18, 18).toImage()
-    qapp.processEvents()
-    for value, caption in window.metrics.values():
-        for widget in (value, caption):
-            assert widget.width() >= widget.fontMetrics().horizontalAdvance(
-                widget.text()
-            )
-            position = widget.mapTo(window.summary, QPoint())
-            assert window.summary.rect().contains(position)
-            assert window.summary.rect().contains(
-                position + QPoint(widget.width() - 1, widget.height() - 1)
-            )
-    counts = window.snapshot.counters
-    for _ in range(3):
-        window.bridge.refresh()
-    assert window.snapshot.counters == counts
-    assert window.grab().save(
-        str(tmp_path / f"e2-production-{language}-{size[0]}x{size[1]}.png")
-    )
-
-
 @pytest.mark.parametrize("failure", [False, True])
 def test_empty_technical_error_and_failed_occupancy_remain_visible(
     screen: tuple[ProductionWindow, FakeSession],
@@ -976,97 +722,6 @@ def test_empty_technical_error_and_failed_occupancy_remain_visible(
     assert (
         "private" not in button.toolTip() and "sdk.dll" not in button.accessibleName()
     )
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize(
-    "size,batch_id",
-    [
-        pytest.param((1080, 1920), None, id="portrait-none"),
-        pytest.param((1080, 1920), "121", id="portrait-short"),
-        pytest.param((1080, 1920), "12313123", id="portrait-eight-digits"),
-        pytest.param((1080, 1920), "1231312213123", id="portrait-thirteen-digits"),
-        pytest.param((1080, 1920), "LOT-20261009-001", id="portrait-lot"),
-        pytest.param((1080, 1920), "long-batch-" * 100, id="portrait-very-long"),
-        pytest.param((1920, 1080), None, id="landscape-none"),
-        pytest.param((1920, 1080), "121", id="landscape-short"),
-        pytest.param((1920, 1080), "LOT-20261009-001", id="landscape-lot"),
-        pytest.param((1920, 1080), "long-batch-" * 100, id="landscape-very-long"),
-    ],
-)
-def test_batch_identity_uses_available_width_in_ready_and_running(
-    screen: tuple[ProductionWindow, FakeSession],
-    tmp_path: Path,
-    language: Language,
-    size: tuple[int, int],
-    batch_id: str | None,
-) -> None:
-    window, session = screen
-    window.set_language(language)
-    window.resize(*size)
-    window.bridge.start_batch(batch_id)
-    full_text = f"{text('batch_id', language)} {batch_id or '—'}"
-    operation_positions: list[QPoint] = []
-    for state in (
-        ApplicationState.READY,
-        ApplicationState.RUNNING,
-        ApplicationState.READY,
-    ):
-        if state is ApplicationState.RUNNING:
-            session.ready.set_result(None)
-            window.bridge.start()
-        elif window.snapshot.state is ApplicationState.RUNNING:
-            window.bridge.stop()
-        until(lambda state=state: window.snapshot.state is state)
-        QApplication.processEvents()
-        # Qt posts another layout request when a resize changes the text width.
-        until(
-            lambda: (
-                window.buttons["batch"].x()
-                == window.batch_label.x() + window.batch_label.width() + Style.small
-            )
-        )
-        if batch_id is None or len(batch_id) < 100:
-            assert window.batch_label.text() == full_text
-        else:
-            assert window.batch_label.text() != full_text
-            assert "…" in window.batch_label.text()
-        assert window.batch_label.toolTip() == full_text
-        assert window.batch_label.accessibleName() == full_text
-        assert window.batch_label.isEnabled()
-        assert window.buttons["batch"].isEnabled() == (state is ApplicationState.READY)
-        assert (
-            window.batch_label.fontMetrics().horizontalAdvance(
-                window.batch_label.text()
-            )
-            <= window.batch_label.width()
-        )
-        edit = window.buttons["batch"]
-        assert (
-            edit.x()
-            == window.batch_label.x() + window.batch_label.width() + Style.small
-        )
-        assert edit.size() == QSize(Style.touch, Style.touch)
-        group = window.batch_group
-        assert (
-            group.mapTo(window.summary, QPoint()).x()
-            == window.summary.contentsRect().left()
-            + window.summary_layout.contentsMargins().left()
-        )
-        identity = window.identity_group
-        center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
-        assert abs(center - window.summary.width() / 2) <= 1
-        operation_positions.append(
-            window.buttons["operation"].mapTo(window.summary, QPoint())
-        )
-        if batch_id == "LOT-20261009-001":
-            assert window.grab().save(
-                str(
-                    tmp_path
-                    / f"header-{language}-{size[0]}x{size[1]}-{state.name}-{window.snapshot.generation}-batch.png"
-                )
-            )
-    assert operation_positions[0] == operation_positions[1] == operation_positions[2]
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -1200,79 +855,6 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
         assert window.grab().save(
             str(tmp_path / f"header-{language}-{index}-{size[0]}x{size[1]}-pending.png")
         )
-
-
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
-def test_camera_header_slots_do_not_move_for_mixed_results(
-    screen: tuple[ProductionWindow, FakeSession], size: tuple[int, int]
-) -> None:
-    window, _ = screen
-    window.resize(*size)
-    camera_id = CameraId("CAM6")
-    window.bridge.frames.publish(source_frame(camera_id), generation=1)
-    window.bridge.frames_changed.emit(window.bridge.frames.snapshot())
-    baseline = production()
-    window.bridge.snapshot_changed.emit(
-        replace(
-            window.snapshot,
-            state=ApplicationState.RUNNING,
-            generation=1,
-            latest_production_result=baseline,
-        )
-    )
-    QApplication.processEvents()
-    card = window.cards[-1]
-    positions = tuple(button.mapTo(card, QPoint()) for button in card.indicators)
-    group = card.indicator_group
-    center = group.mapTo(card, QPoint()).x() + group.width() / 2
-    assert abs(center - card.width() / 2) <= 1
-    states = (
-        (TechnicalStatus.SUCCESS, ProductJudgment.OK),
-        (TechnicalStatus.SUCCESS, ProductJudgment.NG),
-        (TechnicalStatus.ERROR, ProductJudgment.UNKNOWN),
-        (TechnicalStatus.ERROR, ProductJudgment.NG),
-        (TechnicalStatus.DISABLED, ProductJudgment.UNKNOWN),
-        (TechnicalStatus.SUCCESS, ProductJudgment.OK),
-    )
-    camera = baseline.cameras[-1]
-    mixed = replace(
-        camera,
-        channels=tuple(
-            replace(
-                channel,
-                checks=(
-                    channel.checks[0],
-                    replace(
-                        channel.checks[1],
-                        assessment=Assessment(status, judgment),
-                        reasons=(Reason(FindingSource.VIMO, "execution_error"),)
-                        if status is TechnicalStatus.ERROR
-                        or judgment is ProductJudgment.NG
-                        else (),
-                    ),
-                ),
-            )
-            for channel, (status, judgment) in zip(camera.channels, states, strict=True)
-        ),
-    )
-    window.bridge.snapshot_changed.emit(
-        replace(
-            window.snapshot,
-            latest_production_result=replace(
-                baseline, cameras=(*baseline.cameras[:-1], mixed)
-            ),
-        )
-    )
-    QApplication.processEvents()
-    assert (
-        tuple(button.mapTo(card, QPoint()) for button in card.indicators) == positions
-    )
-    for index, button in enumerate(card.indicators):
-        assert button.size() == QSize(Style.touch, Style.touch)
-        assert str(camera.layout.slots[index].channel_id) in button.accessibleName()
-        assert group.rect().contains(button.geometry())
-    assert not card.viewport.message
-    assert text("execution_error", window.language) in window.event_label.text()
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -1488,3 +1070,462 @@ def test_production_focus_is_visible_and_keyboard_targets_stay_usable(
     assert not operation.isEnabled() and operation.accessibleName() == operation.text()
     operation.setFocus(Qt.FocusReason.TabFocusReason)
     assert not operation.hasFocus()
+
+
+def _assert_grid_and_navigation(
+    screen: tuple[ProductionWindow, FakeSession],
+    qapp: QApplication,
+    size: tuple[int, int],
+    columns: int,
+    language: Language,
+) -> None:
+    window, _ = screen
+    identities = tuple(id(card) for card in window.cards)
+    window.set_language(language)
+    window.resize(*size)
+    qapp.processEvents()
+    assert window.columns == columns and len(window.cards) == 6
+    assert window.pages.currentIndex() == 0
+    assert window.navigation[0].text() == text("production", language)
+    for index, card in enumerate(window.cards):
+        number = str(card.camera_layout.camera_id).removeprefix("CAM")
+        assert card.identity.text() == number
+        name = f"{text('camera_number', language).format(number=number)} ({card.camera_layout.camera_id})"
+        assert card.identity.toolTip() == card.identity.accessibleName() == name
+        assert (
+            card.camera_icon.pixmap().toImage()
+            == camera_icon().pixmap(Style.icon, Style.icon).toImage()
+        )
+        assert card.camera_icon.size() == QSize(Style.icon, Style.icon)
+        assert card.identity_group.rect().contains(card.camera_icon.geometry())
+        assert card.identity_group.rect().contains(card.identity.geometry())
+        item = window.grid.itemAtPosition(index // columns, index % columns)
+        assert item is not None and item.widget() is card
+        assert (
+            card.isVisible()
+            and card.viewport.width() > 100
+            and card.viewport.height() > 100
+        )
+        parent = card.parentWidget()
+        assert parent is not None and parent.rect().contains(card.geometry())
+        for button in card.indicators:
+            assert card.rect().contains(button.geometry())
+    for button in (
+        *window.navigation,
+        *window.buttons.values(),
+    ):
+        parent = button.parentWidget()
+        assert parent is not None and parent.rect().contains(button.geometry())
+        assert (
+            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 15
+        )
+    window.navigation[2].click()
+    assert window.pages.currentIndex() == 2
+    assert window.pages.currentWidget() is window.communication
+    assert window.communication.write_button.text() == text("comm_write", language)
+    window.navigation[0].click()
+    window.resize(size[1], size[0])
+    qapp.processEvents()
+    assert tuple(id(card) for card in window.cards) == identities
+
+
+def _inspect_and_assert_business_presentation(
+    screen: tuple[ProductionWindow, FakeSession],
+    qapp: QApplication,
+    tmp_path: Path,
+    size: tuple[int, int],
+    language: Language,
+) -> None:
+    from run_production_ui import demo_images
+
+    from vimo_demo.inspection import Frame
+
+    window, session = screen
+    window.set_language(language)
+    window.resize(*size)
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    result = mixed_result()
+    # Existing fake pixels, independent owned display copies and matching FrameIds.
+    images = demo_images()
+    for image in images:
+        # Test-specific EMPTY/EMPTY+NG pixels, before Frame ownership transfer.
+        for slot in (1, 3):
+            image[:, slot * image.shape[1] // 6 : (slot + 1) * image.shape[1] // 6] = 0
+    result = replace(
+        result,
+        cameras=tuple(
+            replace(camera, image_shape=(image.shape[0], image.shape[1], 3))
+            for camera, image in zip(result.cameras, images, strict=True)
+        ),
+    )
+    for camera, image in zip(result.cameras, images, strict=True):
+        assert camera.frame_id is not None
+        window.bridge.frames.publish(Frame(camera.frame_id, 0, image), generation=1)
+    receipt = window.bridge.application.begin_cycle(CycleId(1))
+    session.cycles[0].accepted.set_result(None)
+    session.cycles[0].result.set_result(result)
+    until(
+        lambda: (
+            receipt.result.done()
+            and all(card.result is not None for card in window.cards)
+        )
+    )
+    assert (
+        window.snapshot.counters.channel_ok == 18
+    )  # Original judgments, including EMPTY/UNKNOWN.
+    assert window.metrics["channel_ok"][0].text() == "6"  # Business OK only.
+    assert window.metrics["channel_ng"][0].text() == "12"
+    assert window.metrics["channel_ok"][1].text() == "CH OK"
+    assert window.metrics["channel_ng"][1].text() == "CH NG"
+    assert set(window.metrics) == {"cycles", "channel_ok", "channel_ng", "processing"}
+    expected = (
+        Indicator.OK,
+        Indicator.EMPTY,
+        Indicator.UNKNOWN,
+        Indicator.ERROR_NG,
+        Indicator.ERROR,
+        Indicator.NG,
+    )
+    for camera, card in zip(result.cameras, window.cards, strict=True):
+        for row, button, state in zip(
+            camera.channels, card.indicators, expected, strict=True
+        ):
+            assert (
+                f"{text('channel', language)} {row.channel_id} ·"
+                in button.accessibleName()
+            )
+            assert not button.pixmap().isNull()
+            assert text(state.value, language) in button.accessibleName()
+            assert button.toolTip() == button.accessibleName()
+            assert text("business_status", language) in button.toolTip()
+            assert text("occupancy", language) in button.toolTip()
+            assert text("product_judgment", language) in button.toolTip()
+            assert text("technical_status", language) in button.toolTip()
+            assert button.size() == QSize(Style.touch, Style.touch)
+            if size != Style.minimum:
+                assert card.indicator_group.rect().contains(button.geometry())
+        empty, conflict = card.indicators[1], card.indicators[3]
+        assert text("traditional_skip_empty", language) in empty.toolTip()
+        assert text("occupancy_empty", language) in conflict.toolTip()
+        assert text("error_ng", language) in conflict.toolTip()
+        assert "execution_error" in conflict.toolTip()
+        assert Style.warning in conflict.styleSheet()
+    neutral = indicator_icon(Indicator.EMPTY).pixmap(18, 18).toImage()
+    assert neutral != indicator_icon(Indicator.DISABLED).pixmap(18, 18).toImage()
+    assert neutral != indicator_icon(Indicator.PENDING).pixmap(18, 18).toImage()
+    qapp.processEvents()
+    for value, caption in window.metrics.values():
+        for widget in (value, caption):
+            assert widget.width() >= widget.fontMetrics().horizontalAdvance(
+                widget.text()
+            )
+            position = widget.mapTo(window.summary, QPoint())
+            assert window.summary.rect().contains(position)
+            assert window.summary.rect().contains(
+                position + QPoint(widget.width() - 1, widget.height() - 1)
+            )
+    counts = window.snapshot.counters
+    for _ in range(3):
+        window.bridge.refresh()
+    assert window.snapshot.counters == counts
+    assert window.grab().save(
+        str(tmp_path / f"e2-production-{language}-{size[0]}x{size[1]}.png")
+    )
+
+
+def _assert_camera_header_stability(
+    screen: tuple[ProductionWindow, FakeSession], size: tuple[int, int]
+) -> None:
+    window, _ = screen
+    window.resize(*size)
+    camera_id = CameraId("CAM6")
+    # The preceding result stage already published this FrameId. A fresh display
+    # generation preserves monotonic latest-only publication and matching evidence.
+    generation = window.snapshot.generation + 1
+    assert window.bridge.frames.publish(source_frame(camera_id), generation=generation)
+    window.bridge.frames_changed.emit(window.bridge.frames.snapshot())
+    baseline = production()
+    window.bridge.snapshot_changed.emit(
+        replace(
+            window.snapshot,
+            state=ApplicationState.RUNNING,
+            generation=generation,
+            latest_production_result=baseline,
+        )
+    )
+    QApplication.processEvents()
+    card = window.cards[-1]
+    positions = tuple(button.mapTo(card, QPoint()) for button in card.indicators)
+    group = card.indicator_group
+    center = group.mapTo(card, QPoint()).x() + group.width() / 2
+    assert abs(center - card.width() / 2) <= 1
+    states = (
+        (TechnicalStatus.SUCCESS, ProductJudgment.OK),
+        (TechnicalStatus.SUCCESS, ProductJudgment.NG),
+        (TechnicalStatus.ERROR, ProductJudgment.UNKNOWN),
+        (TechnicalStatus.ERROR, ProductJudgment.NG),
+        (TechnicalStatus.DISABLED, ProductJudgment.UNKNOWN),
+        (TechnicalStatus.SUCCESS, ProductJudgment.OK),
+    )
+    camera = baseline.cameras[-1]
+    mixed = replace(
+        camera,
+        channels=tuple(
+            replace(
+                channel,
+                checks=(
+                    channel.checks[0],
+                    replace(
+                        channel.checks[1],
+                        assessment=Assessment(status, judgment),
+                        reasons=(Reason(FindingSource.VIMO, "execution_error"),)
+                        if status is TechnicalStatus.ERROR
+                        or judgment is ProductJudgment.NG
+                        else (),
+                    ),
+                ),
+            )
+            for channel, (status, judgment) in zip(camera.channels, states, strict=True)
+        ),
+    )
+    window.bridge.snapshot_changed.emit(
+        replace(
+            window.snapshot,
+            latest_production_result=replace(
+                baseline, cameras=(*baseline.cameras[:-1], mixed)
+            ),
+        )
+    )
+    QApplication.processEvents()
+    assert (
+        tuple(button.mapTo(card, QPoint()) for button in card.indicators) == positions
+    )
+    for index, button in enumerate(card.indicators):
+        assert button.size() == QSize(Style.touch, Style.touch)
+        assert str(camera.layout.slots[index].channel_id) in button.accessibleName()
+        assert group.rect().contains(button.geometry())
+    assert not card.viewport.message
+    assert text("execution_error", window.language) in window.event_label.text()
+
+
+def _assert_long_summary(
+    screen: tuple[ProductionWindow, FakeSession],
+    tmp_path: Path,
+    size: tuple[int, int],
+    language: Language,
+) -> None:
+    window, _ = screen
+    window.set_language(language)
+    window.resize(*size)
+    window.choices = (
+        replace(window.choices[0], label="Long Recipe 很长的配方名称 " * 15),
+    )
+    window.bridge.snapshot_changed.emit(
+        replace(window.snapshot, batch_id="batch-with-a-long-identity-" * 15)
+    )
+    QApplication.processEvents()
+    batch = window.batch_group
+    assert (
+        batch.mapTo(window.summary, QPoint()).x()
+        == window.summary.contentsRect().left()
+        + window.summary_layout.contentsMargins().left()
+    )
+    identity = window.identity_group
+    center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
+    assert abs(center - window.summary.width() / 2) <= 1
+    assert not window.pending_label.isVisible()
+    assert "Long Recipe" in window.identity_label.toolTip()
+    operation = window.buttons["operation"]
+    right = (
+        window.operation_group.mapTo(window.summary, QPoint()).x()
+        + window.operation_group.width()
+    )
+    assert window.summary.width() - right <= Style.space + 1
+    for widget in (window.identity_group, batch, operation):
+        position = widget.mapTo(window.summary, QPoint())
+        assert window.summary.rect().contains(position)
+        assert window.summary.rect().contains(
+            position + QPoint(widget.width() - 1, widget.height() - 1)
+        )
+    assert len(window.metrics) == 4 and "channel_ok" in window.metrics
+    assert window.grab().save(
+        str(tmp_path / f"header-{language}-{size[0]}x{size[1]}-long-identities.png")
+    )
+
+
+def _assert_batch_snapshots(
+    window: ProductionWindow,
+    tmp_path: Path,
+    language: Language,
+    size: tuple[int, int],
+    batch_id: str | None,
+    baseline: ProductionApplicationSnapshot,
+) -> None:
+    full_text = f"{text('batch_id', language)} {batch_id or '—'}"
+    operation_positions: list[QPoint] = []
+    for state in (
+        ApplicationState.READY,
+        ApplicationState.RUNNING,
+        ApplicationState.READY,
+    ):
+        window.bridge.snapshot_changed.emit(
+            replace(
+                baseline,
+                state=state,
+                batch_id=batch_id,
+                active=baseline.candidate
+                if state is ApplicationState.RUNNING or operation_positions
+                else baseline.active,
+                generation=1 if operation_positions else baseline.generation,
+            )
+        )
+        until(lambda state=state: window.snapshot.state is state)
+        QApplication.processEvents()
+        # Qt posts another layout request when a resize changes the text width.
+        until(
+            lambda: (
+                window.buttons["batch"].x()
+                == window.batch_label.x() + window.batch_label.width() + Style.small
+            )
+        )
+        if batch_id is None or len(batch_id) < 100:
+            assert window.batch_label.text() == full_text
+        else:
+            assert window.batch_label.text() != full_text
+            assert "…" in window.batch_label.text()
+        assert window.batch_label.toolTip() == full_text
+        assert window.batch_label.accessibleName() == full_text
+        assert window.batch_label.isEnabled()
+        assert window.buttons["batch"].isEnabled() == (state is ApplicationState.READY)
+        assert (
+            window.batch_label.fontMetrics().horizontalAdvance(
+                window.batch_label.text()
+            )
+            <= window.batch_label.width()
+        )
+        edit = window.buttons["batch"]
+        assert (
+            edit.x()
+            == window.batch_label.x() + window.batch_label.width() + Style.small
+        )
+        assert edit.size() == QSize(Style.touch, Style.touch)
+        group = window.batch_group
+        assert (
+            group.mapTo(window.summary, QPoint()).x()
+            == window.summary.contentsRect().left()
+            + window.summary_layout.contentsMargins().left()
+        )
+        identity = window.identity_group
+        center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
+        assert abs(center - window.summary.width() / 2) <= 1
+        operation_positions.append(
+            window.buttons["operation"].mapTo(window.summary, QPoint())
+        )
+        if batch_id == "LOT-20261009-001":
+            assert window.grab().save(
+                str(
+                    tmp_path
+                    / f"header-{language}-{size[0]}x{size[1]}-{state.name}-{window.snapshot.generation}-batch.png"
+                )
+            )
+    assert operation_positions[0] == operation_positions[1] == operation_positions[2]
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_batch_and_summary_presentation(
+    screen: tuple[ProductionWindow, FakeSession],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size: tuple[int, int],
+    language: Language,
+) -> None:
+    window, session = screen
+    window.set_language(language)
+    window.resize(*size)
+    authoritative = window.bridge.application.snapshot()
+    batch_ids = (
+        (
+            None,
+            "121",
+            "12313123",
+            "1231312213123",
+            "LOT-20261009-001",
+            "long-batch-" * 100,
+        )
+        if size[0] == 1080
+        else (None, "121", "LOT-20261009-001", "long-batch-" * 100)
+    )
+    # Freeze only the observation used by periodic presentation refresh. No real
+    # session is started; independent command/accounting tests retain that seam.
+    with monkeypatch.context() as patch:
+        patch.setattr(window.bridge.application, "snapshot", lambda: window.snapshot)
+        for batch_id in batch_ids:
+            try:
+                _assert_batch_snapshots(
+                    window, tmp_path, language, size, batch_id, authoritative
+                )
+            except Exception as exc:
+                exc.add_note(
+                    f"Batch presentation: size={size}, language={language}, batch={batch_id!r}"
+                )
+                raise
+        try:
+            window.bridge.snapshot_changed.emit(authoritative)
+            _assert_long_summary(screen, tmp_path, size, language)
+        except Exception as exc:
+            exc.add_note(f"Long summary: size={size}, language={language}")
+            raise
+    assert window.bridge.application.snapshot() == authoritative
+    assert not session.cycles
+    window.bridge.refresh()
+
+
+@pytest.mark.parametrize(
+    "size,columns",
+    [((1080, 1920), 2), ((1920, 1080), 3), ((900, 1200), 2), ((880, 720), 2)],
+)
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_production_layout_indicators_and_header_stability(
+    screen: tuple[ProductionWindow, FakeSession],
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    size: tuple[int, int],
+    columns: int,
+    language: Language,
+) -> None:
+    window, _ = screen
+    try:
+        # Original geometry cases precede any result/state mutations. The 880px
+        # row belongs to the original mixed-result matrix, not its >100px viewport
+        # assertion; preserve both original input sets rather than weakening it.
+        if size != (880, 720):
+            _assert_grid_and_navigation(screen, qapp, size, columns, language)
+        else:
+            window.set_language(language)
+            window.resize(*size)
+            qapp.processEvents()
+            assert window.columns == grid_columns(window.width(), window.height())
+            assert len(window.cards) == 6
+        _inspect_and_assert_business_presentation(
+            screen, qapp, tmp_path, size, language
+        )
+        actual = window.bridge.application.snapshot()
+        # This original header stage was already presentation-only. Keep the real
+        # mixed-result admission above and prevent refresh from replacing this view.
+        # Its original three sizes have enough header space for exact centering;
+        # 880x720 retains its original business-indicator/containment assertions.
+        if size != (880, 720):
+            with monkeypatch.context() as patch:
+                patch.setattr(
+                    window.bridge.application, "snapshot", lambda: window.snapshot
+                )
+                _assert_camera_header_stability(screen, size)
+        assert window.bridge.application.snapshot() == actual
+        window.bridge.refresh()
+    except Exception as exc:
+        exc.add_note(f"Production stages: size={size}, language={language}")
+        raise

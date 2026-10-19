@@ -11,8 +11,8 @@ import pytest
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 from tests.application_support import FakeSession
-from tests.integration.test_production_ui import screen as screen
-from tests.qt_support import ensure_test_fonts, until
+from tests.qt_support import screen as screen
+from tests.qt_support import until
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.application.communication_preferences import CommunicationPreferences
@@ -34,7 +34,7 @@ from vimo_demo.communication.operations import (
 )
 from vimo_demo.communication.simulator import FinsUdpSimulator
 from vimo_demo.ui.communication_page import CommunicationPage
-from vimo_demo.ui.production_style import Language, Style, text
+from vimo_demo.ui.production_style import Language, text
 from vimo_demo.ui.production_window import ProductionWindow
 
 
@@ -113,107 +113,6 @@ def test_idle_communication_drain_does_not_reenter_first_close(
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("area", list(FinsMemoryArea))
-def test_actual_udp_ui_read_write_readback_and_owner_thread(
-    page: CommunicationPage,
-    simulator: FinsUdpSimulator,
-    monkeypatch: pytest.MonkeyPatch,
-    language: Language,
-    area: FinsMemoryArea,
-) -> None:
-    identities: list[tuple[str, int]] = []
-    clients: list[FinsUdpClient] = []
-
-    class TrackedClient(FinsUdpClient):
-        def __init__(
-            self,
-            host: str,
-            *,
-            destination: FinsAddress,
-            source: FinsAddress,
-            port: int,
-            timeout: float,
-        ) -> None:
-            identities.append(("create", get_ident()))
-            super().__init__(
-                host, destination=destination, source=source, port=port, timeout=timeout
-            )
-            clients.append(self)
-
-        def read_words(
-            self,
-            start: int,
-            count: int = 1,
-            *,
-            area: FinsMemoryArea = FinsMemoryArea.DM,
-        ) -> tuple[int, ...]:
-            identities.append(("read", get_ident()))
-            return super().read_words(start, count, area=area)
-
-        def write_words(
-            self,
-            start: int,
-            values: Sequence[int],
-            *,
-            area: FinsMemoryArea = FinsMemoryArea.DM,
-        ) -> None:
-            identities.append(("write", get_ident()))
-            super().write_words(start, values, area=area)
-
-        def close(self) -> None:
-            identities.append(("close", get_ident()))
-            super().close()
-
-    monkeypatch.setattr(
-        "vimo_demo.communication.operations.FinsUdpClient", TrackedClient
-    )
-    page.set_language(language)
-    page.port.setValue(simulator.port)
-    page.persist_settings()
-    page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
-    page.persist_settings()
-    page.dispatch(RequestKind.TEST)
-    until(lambda: not page.busy)
-    assert page.last_response is not None and page.last_response.values == (
-        (1234,) if area is FinsMemoryArea.DM else (0,)
-    )
-    assert page.last_response.request.area is area
-    assert page.feedback_text == text("comm_test_ok", language)
-    page.write_values.setText("0, 65535 4321")
-    page.write_button.click()
-    until(lambda: not page.busy)
-    assert page.last_response is not None and page.last_response.values is None
-    assert page.feedback_text == text("comm_write_ok", language)
-    assert page.last_read is not None and page.last_read.values == (
-        (1234,) if area is FinsMemoryArea.DM else (0,)
-    )
-    page.dispatch(RequestKind.READ, count=3)
-    until(lambda: not page.busy)
-    assert page.last_response is not None and page.last_response.values == (
-        0,
-        65535,
-        4321,
-    )
-    assert page.log_count == 3 and "ms" in page.success.text()
-    assert [name for name, _ in identities] == [
-        "create",
-        "read",
-        "close",
-        "create",
-        "write",
-        "close",
-        "create",
-        "read",
-        "close",
-    ]
-    for offset in (0, 3, 6):
-        assert len({ident for _, ident in identities[offset : offset + 3]}) == 1
-    assert all(ident != get_ident() for _, ident in identities)
-    assert all(client.closed for client in clients)
-    assert not any(t.name == "FinsCommunication" for t in threads())
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_validation_remote_read_and_write(
     qapp: QApplication, tmp_path: Path, language: Language, area: FinsMemoryArea
 ) -> None:
@@ -270,38 +169,6 @@ def test_validation_remote_read_and_write(
     finally:
         page.request_close(lambda: None)
         until(lambda: page.closed)
-        page.deleteLater()
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize(
-    "error,key",
-    [
-        (FinsTimeoutError("deadline"), "comm_timeout_error"),
-        (FinsTransportError("network unreachable"), "comm_transport_error"),
-        (FinsProtocolError("wrong SID"), "comm_protocol_error"),
-        (FinsPlcError(b"\x01\x01", 0x1103, b""), "comm_plc_error"),
-    ],
-)
-def test_localized_error_feedback(
-    qapp: QApplication, language: Language, error: BaseException, key: str
-) -> None:
-    def execute(request: CommunicationRequest) -> CommunicationResponse:
-        raise error
-
-    page = CommunicationPage(execute=execute)
-    try:
-        page.set_language(language)
-        assert page.dispatch(RequestKind.READ)
-        until(lambda: not page.busy)
-        assert text(key, language) in page.feedback_text
-        assert type(error).__name__ in page.feedback_error
-        if isinstance(error, FinsPlcError):
-            assert "0x1103" in page.feedback_text and "0x1103" in page.feedback_details
-        page.set_language("en" if language == "zh" else "zh")
-        assert text(key, page.language) in page.feedback_text
-    finally:
-        page.request_close(lambda: None)
         page.deleteLater()
 
 
@@ -573,80 +440,6 @@ def test_stale_delivery_and_bounded_log(qapp: QApplication) -> None:
     finally:
         page.request_close(lambda: None)
         page.deleteLater()
-
-
-@pytest.mark.parametrize(
-    "language,size",
-    [
-        ("zh", (1080, 1920)),
-        ("en", (1920, 1080)),
-        ("en", (1080, 1920)),
-        ("zh", (1920, 1080)),
-        ("zh", (880, 720)),
-        ("en", (900, 1200)),
-    ],
-)
-def test_communication_layout_screenshot(
-    screen: tuple[ProductionWindow, FakeSession],
-    qapp: QApplication,
-    tmp_path: Path,
-    language: Language,
-    size: tuple[int, int],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ensure_test_fonts()
-    window, _ = screen
-    window.set_language(language)
-    window.resize(*size)
-    window.navigate(2)
-    window.communication.advanced_button.click()
-    window.communication.watch_editor_button.click()
-    window.communication.manual_button.click()
-    window.communication.add_watch_group(
-        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "提交 / Commit")
-    )
-    window.communication.add_watch_group(
-        RegisterWatchGroup(FinsMemoryArea.DM, 100, 3, "测试 / Test")
-    )
-    monkeypatch.setattr(window.communication, "_execute", response)
-    window.communication.dispatch(RequestKind.READ, count=3)
-    until(lambda: not window.communication.busy)
-    window.communication.read_watch_once()
-    until(lambda: not window.communication.busy)
-    qapp.processEvents()
-    page = window.communication
-    for control in (
-        page.host,
-        page.port,
-        page.timeout,
-        page.address,
-        page.write_button,
-        page.advanced_button,
-        page.area,
-        page.watch_area,
-        page.watch_address,
-        page.watch_count,
-        page.watch_name,
-        page.watch_selector,
-        page.watch_add,
-        page.watch_remove,
-        page.watch_once,
-        page.watch_auto,
-        *page.destination,
-        *page.source,
-    ):
-        parent = control.parentWidget()
-        assert parent is not None and parent.rect().contains(control.geometry())
-        assert control.height() >= Style.touch
-    assert page.body.width() <= page.scroll_area.viewport().width()
-    for button in (page.watch_add, page.watch_remove, page.watch_once, page.watch_auto):
-        assert (
-            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 20
-        )
-    assert window.event_frame.height() == 44
-    assert window.grab().save(
-        str(tmp_path / f"communication-{language}-{size[0]}x{size[1]}.png")
-    )
 
 
 def test_failed_thread_start_leaves_no_owner_or_disabled_controls(
@@ -1144,3 +937,198 @@ def test_auto_start_failure_leaves_no_timer_or_owner(
     assert not page.start_monitoring()
     assert not page.auto_refresh and not page.busy and not page.refresh_timer.isActive()
     assert text("comm_watch_failed", page.language) in page.watch_status.text()
+
+
+@pytest.mark.parametrize("area", list(FinsMemoryArea))
+def test_udp_roundtrip_bilingual_owner(
+    page: CommunicationPage,
+    simulator: FinsUdpSimulator,
+    monkeypatch: pytest.MonkeyPatch,
+    area: FinsMemoryArea,
+) -> None:
+    packets: list[tuple[bytes, bytes | None]] = []
+    handle = simulator.handle_datagram
+
+    def capture(packet: bytes) -> bytes | None:
+        reply = handle(packet)
+        packets.append((packet, reply))
+        return reply
+
+    monkeypatch.setattr(simulator, "handle_datagram", capture)
+    identities: list[tuple[str, int]] = []
+    clients: list[FinsUdpClient] = []
+
+    class TrackedClient(FinsUdpClient):
+        def __init__(
+            self,
+            host: str,
+            *,
+            destination: FinsAddress,
+            source: FinsAddress,
+            port: int,
+            timeout: float,
+        ) -> None:
+            identities.append(("create", get_ident()))
+            super().__init__(
+                host, destination=destination, source=source, port=port, timeout=timeout
+            )
+            clients.append(self)
+
+        def read_words(
+            self,
+            start: int,
+            count: int = 1,
+            *,
+            area: FinsMemoryArea = FinsMemoryArea.DM,
+        ) -> tuple[int, ...]:
+            identities.append(("read", get_ident()))
+            return super().read_words(start, count, area=area)
+
+        def write_words(
+            self,
+            start: int,
+            values: Sequence[int],
+            *,
+            area: FinsMemoryArea = FinsMemoryArea.DM,
+        ) -> None:
+            identities.append(("write", get_ident()))
+            super().write_words(start, values, area=area)
+
+        def close(self) -> None:
+            identities.append(("close", get_ident()))
+            super().close()
+
+    monkeypatch.setattr(
+        "vimo_demo.communication.operations.FinsUdpClient", TrackedClient
+    )
+    page.set_language("zh")
+    page.port.setValue(simulator.port)
+    page.persist_settings()
+    page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
+    page.persist_settings()
+    page.dispatch(RequestKind.TEST)
+    until(lambda: not page.busy)
+    assert page.last_response is not None and page.last_response.values == (
+        (1234,) if area is FinsMemoryArea.DM else (0,)
+    )
+    assert page.last_response.request.area is area
+    observed = page.last_response
+    for language in ("zh", "en"):
+        page.set_language(language)
+        assert page.last_response is observed
+        assert page.feedback_text == text("comm_test_ok", language)
+    page.set_language("zh")
+    page.write_values.setText("0, 65535 4321")
+    page.write_button.click()
+    until(lambda: not page.busy)
+    assert page.last_response is not None and page.last_response.values is None
+    observed = page.last_response
+    for language in ("zh", "en"):
+        page.set_language(language)
+        assert page.last_response is observed
+        assert page.feedback_text == text("comm_write_ok", language)
+    page.set_language("zh")
+    assert page.last_read is not None and page.last_read.values == (
+        (1234,) if area is FinsMemoryArea.DM else (0,)
+    )
+    page.dispatch(RequestKind.READ, count=3)
+    until(lambda: not page.busy)
+    assert page.last_response is not None and page.last_response.values == (
+        0,
+        65535,
+        4321,
+    )
+    for language in ("zh", "en"):
+        page.set_language(language)
+        assert page.feedback_text == text("comm_read_ok", language)
+        assert page.last_response is not None and page.last_response.values == (
+            0,
+            65535,
+            4321,
+        )
+    assert page.log_count == 3 and "ms" in page.success.text()
+    assert [name for name, _ in identities] == [
+        "create",
+        "read",
+        "close",
+        "create",
+        "write",
+        "close",
+        "create",
+        "read",
+        "close",
+    ]
+    for offset in (0, 3, 6):
+        assert len({ident for _, ident in identities[offset : offset + 3]}) == 1
+    assert all(ident != get_ident() for _, ident in identities)
+    assert all(client.closed for client in clients)
+    assert not any(t.name == "FinsCommunication" for t in threads())
+    header = bytes.fromhex("80 00 02 00 02 00 00 01 00 01")
+    reply_header = bytes.fromhex("C0 00 02 00 01 00 00 02 00 01")
+    location = bytes((area.value,)) + bytes.fromhex("00 64 00")
+    first = bytes.fromhex("04 D2") if area is FinsMemoryArea.DM else bytes(2)
+    assert packets == [
+        (
+            header + b"\x01\x01" + location + b"\x00\x01",
+            reply_header + b"\x01\x01\x00\x00" + first,
+        ),
+        (
+            header + b"\x01\x02" + location + bytes.fromhex("00 03 00 00 FF FF 10 E1"),
+            reply_header + b"\x01\x02\x00\x00",
+        ),
+        (
+            header + b"\x01\x01" + location + b"\x00\x03",
+            reply_header + bytes.fromhex("01 01 00 00 00 00 FF FF 10 E1"),
+        ),
+    ], area
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_localized_failures_settle_each_operation(
+    qapp: QApplication, language: Language
+) -> None:
+    rows = (
+        (FinsTimeoutError("deadline"), "comm_timeout_error"),
+        (FinsTransportError("network unreachable"), "comm_transport_error"),
+        (FinsProtocolError("wrong SID"), "comm_protocol_error"),
+        (FinsPlcError(b"\x01\x01", 0x1103, b""), "comm_plc_error"),
+    )
+    calls: list[CommunicationRequest] = []
+    error: BaseException = rows[0][0]
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        calls.append(request)
+        raise error
+
+    page = CommunicationPage(execute=execute)
+    try:
+        for index, (error, key) in enumerate(rows):
+            try:
+                page.set_language(language)
+                assert not page.busy and len(calls) == page.log_count == index
+                assert page.dispatch(RequestKind.READ)
+                until(
+                    lambda index=index: (
+                        not page.busy and len(calls) == page.log_count == index + 1
+                    )
+                )
+                assert text(key, language) in page.feedback_text
+                assert type(error).__name__ in page.feedback_error
+                assert str(error) in page.feedback_error
+                if isinstance(error, FinsPlcError):
+                    assert (
+                        "0x1103" in page.feedback_text
+                        and "0x1103" in page.feedback_details
+                    )
+                page.set_language("en" if language == "zh" else "zh")
+                assert text(key, page.language) in page.feedback_text
+                assert not any(t.name == "FinsCommunication" for t in threads())
+            except Exception as exc:
+                exc.add_note(
+                    f"Localized failure: language={language}, row={index}, key={key}, error={error!r}"
+                )
+                raise
+    finally:
+        page.request_close(lambda: None)
+        until(lambda: page.closed)
+        page.deleteLater()

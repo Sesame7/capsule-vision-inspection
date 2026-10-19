@@ -2,6 +2,8 @@
 
 import json
 import socket
+from collections.abc import Callable
+from http.client import HTTPConnection
 from pathlib import Path
 from threading import enumerate as threads
 
@@ -31,6 +33,41 @@ class StartupWindow(QWidget):
 
     def bind_web_runtime(self, runtime: WebRuntime) -> None:
         self.runtime = runtime
+
+
+def run_startup(
+    qapp: QApplication,
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    observe: Callable[[WebRuntime], None],
+) -> None:
+    original_threads = {thread.ident for thread in threads()}
+    window = StartupWindow()
+
+    def existing_qt(_args: object) -> QApplication:
+        return qapp
+
+    def existing_window(*_args: object) -> QWidget:
+        return window
+
+    def observe_before_close() -> int:
+        assert window.isMaximized()
+        runtime = window.runtime
+        assert runtime is not None
+        until(lambda: not runtime.snapshot().busy)
+        observe(runtime)
+        return 0
+
+    monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
+    monkeypatch.setattr(bootstrap, "create_window", existing_window)
+    monkeypatch.setattr(qapp, "exec", observe_before_close)
+    try:
+        assert bootstrap.main(root, []) == 0
+        assert window.runtime is not None and window.runtime.closed
+        assert not window.runtime.snapshot().owned
+    finally:
+        window.close()
+    assert not {thread.ident for thread in threads()} - original_threads
 
 
 def test_stop_restart_and_close_keep_web_independent_of_production(
@@ -170,11 +207,68 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         )
 
 
+@pytest.mark.parametrize("enabled", [True, False])
+def test_normal_startup_web_defaults_and_interval(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+) -> None:
+    services: list[ProductionSnapshotService] = []
+
+    class ObservedService(ProductionSnapshotService):
+        def start(self) -> None:
+            services.append(self)
+            super().start()
+
+    monkeypatch.setattr(bootstrap, "ProductionSnapshotService", ObservedService)
+
+    def observe(runtime: WebRuntime) -> None:
+        assert runtime.snapshot().state is (
+            WebState.RUNNING if enabled else WebState.STOPPED
+        )
+        assert len(services) == int(enabled)
+        if services:
+            service = services[0]
+            assert service.http_alive and service.publisher_alive
+            until(lambda: service.publisher.latest() is not None)
+            connection = HTTPConnection(service.host, service.port, timeout=2)
+            try:
+                connection.request("GET", "/api/snapshot")
+                response = connection.getresponse()
+                assert response.status == 200
+                metadata = json.loads(response.read())
+            finally:
+                connection.close()
+            assert metadata["refresh_interval_ms"] == 500
+            assert metadata["publisher_id"] == service.publisher.publisher_id
+
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
+    save_communication_preferences(
+        bootstrap.ApplicationData.at_entry(tmp_path).communication,
+        CommunicationPreferences(web=WebPreferences(enabled=enabled, port=port)),
+    )
+    run_startup(qapp, tmp_path, monkeypatch, observe)
+    assert len(services) == int(enabled)
+    if services:
+        service = services[0]
+        assert service.interval == 0.5
+        publication = service.publisher.latest()
+        assert publication is not None
+        assert json.loads(publication.metadata)["refresh_interval_ms"] == 500
+        assert service.stopping.is_set() and service.join(0)
+        assert not service.http_alive and not service.publisher_alive
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0
+
+
 @pytest.mark.parametrize(
     "enabled,interval_ms,expected_interval",
     [(True, 500, 0.5), (False, 500, None), (True, 2000, 2.0), (True, 1000, 1.0)],
 )
-def test_normal_startup_web_defaults_and_interval(
+def test_saved_web_interval_and_publication_metadata(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -184,57 +278,55 @@ def test_normal_startup_web_defaults_and_interval(
 ) -> None:
     services: list[ProductionSnapshotService] = []
 
-    class ObservedService(ProductionSnapshotService):
+    class InlineService(ProductionSnapshotService):
+        """Real constructor/publisher; no HTTP socket or publisher threads."""
+
+        active = False
+
         def start(self) -> None:
             services.append(self)
-            super().start()
+            self.publisher.publish()
+            self.active = True
 
-    window = StartupWindow()
-    monkeypatch.setattr(bootstrap, "ProductionSnapshotService", ObservedService)
+        @property
+        def http_alive(self) -> bool:
+            return self.active
 
-    def existing_qt(_args: object) -> QApplication:
-        return qapp
+        @property
+        def publisher_alive(self) -> bool:
+            return self.active
 
-    def existing_window(*_args: object) -> QWidget:
-        return window
+        def request_stop(self) -> None:
+            super().request_stop()
+            self.active = False
 
-    def observe_before_close() -> int:
-        assert window.isMaximized()
-        assert window.runtime is not None
-        until(lambda: not window.runtime.snapshot().busy if window.runtime else False)
-        if services:
-            until(lambda: services[0].publisher.latest() is not None)
-        assert (window.runtime.snapshot().state is WebState.RUNNING) == bool(services)
-        return 0
+    monkeypatch.setattr(bootstrap, "ProductionSnapshotService", InlineService)
+    settings = WebPreferences(enabled=enabled, interval_ms=interval_ms)
+    path = bootstrap.ApplicationData.at_entry(tmp_path).communication
+    save_communication_preferences(path, CommunicationPreferences(web=settings))
+    saved = path.read_bytes()
 
-    monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
-    monkeypatch.setattr(bootstrap, "create_window", existing_window)
-    monkeypatch.setattr(qapp, "exec", observe_before_close)
-    with socket.socket() as available:
-        available.bind(("127.0.0.1", 0))
-        port = available.getsockname()[1]
-    save_communication_preferences(
-        bootstrap.ApplicationData.at_entry(tmp_path).communication,
-        CommunicationPreferences(
-            web=WebPreferences(enabled=enabled, port=port, interval_ms=interval_ms)
-        ),
-    )
-    try:
-        assert bootstrap.main(tmp_path, []) == 0
+    def observe(runtime: WebRuntime) -> None:
+        snapshot = runtime.snapshot()
+        assert snapshot.state is (WebState.RUNNING if enabled else WebState.STOPPED)
+        assert snapshot.configuration == (settings if enabled else None)
+        assert snapshot.owned is enabled
         assert len(services) == int(expected_interval is not None)
         if services:
             service = services[0]
             assert service.interval == expected_interval
+            assert service.publisher.refresh_interval_ms == interval_ms
             publication = service.publisher.latest()
             assert publication is not None
-            assert json.loads(publication.metadata)["refresh_interval_ms"] == (
-                service.interval * 1000
+            assert (
+                json.loads(publication.metadata)["refresh_interval_ms"] == interval_ms
             )
-            assert service.stopping.is_set() and service.join(0)
-            with socket.socket() as probe:
-                assert probe.connect_ex(("127.0.0.1", port)) != 0
-    finally:
-        window.close()
+
+    run_startup(qapp, tmp_path, monkeypatch, observe)
+    assert path.read_bytes() == saved
+    for service in services:
+        assert service.stopping.is_set() and service.join(0)
+        assert not service.http_alive and not service.publisher_alive
 
 
 def test_occupied_web_port_does_not_prevent_normal_startup(

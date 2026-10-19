@@ -5,7 +5,7 @@ from PySide6.QtCore import QPoint, QRect, QTimer
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import QApplication
 from tests.application_support import FakeSession, production
-from tests.integration.test_production_ui import screen as screen
+from tests.qt_support import screen as screen
 from tests.qt_support import until
 
 from vimo_demo.application import ApplicationState
@@ -23,15 +23,13 @@ from vimo_demo.ui.production_window import ProductionWindow
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-@pytest.mark.parametrize("language", ["zh", "en"])
 def test_navigation_language_and_themes_preserve_presentation_contract(
     screen: tuple[ProductionWindow, FakeSession],
     size: tuple[int, int],
-    language: Language,
 ) -> None:
     window, _ = screen
     window.resize(*size)
-    window.set_language(language)
+    window.set_language("zh")
     QApplication.processEvents()
     baseline = window.bridge.application.snapshot()
     timers = window.findChildren(QTimer)
@@ -52,22 +50,26 @@ def test_navigation_language_and_themes_preserve_presentation_contract(
     )
     for theme in ("light", "dark"):
         window.theme_button.click()
-        assert window.theme == theme
+        assert window.theme == theme, (size, theme)
         for _ in range(2):
             current = window.language
+            case = f"size={size}, theme={theme}, language={current}"
             expected = (
                 ("生产", "配方", "通信", "历史", "视觉")
                 if current == "zh"
                 else ("Production", "Recipe", "Comms", "History", "Vision")
             )
-            assert tuple(button.text() for button in window.navigation) == expected
+            assert tuple(button.text() for button in window.navigation) == expected, (
+                case
+            )
             for page, button in enumerate(window.navigation):
+                page_case = f"{case}, page={page}"
                 button.click()
                 QApplication.processEvents()
-                assert window.pages.currentIndex() == page
+                assert window.pages.currentIndex() == page, page_case
                 assert tuple(b.isChecked() for b in window.navigation) == tuple(
                     i == page for i in range(5)
-                )
+                ), page_case
                 assert (
                     button.toolTip()
                     == button.accessibleName()
@@ -81,46 +83,52 @@ def test_navigation_language_and_themes_preserve_presentation_contract(
                         )[page],
                         current,
                     )
+                ), page_case
+                assert not button.icon().isNull(), page_case
+                assert button.height() >= Style.touch, page_case
+                assert window.navbar.rect().contains(button.geometry()), page_case
+                assert window.event_frame.isVisible(), page_case
+                assert window.event_frame.state.text() == window.state_label.text(), (
+                    page_case
                 )
-                assert not button.icon().isNull()
-                assert button.height() >= Style.touch
-                assert window.navbar.rect().contains(button.geometry())
-                assert window.event_frame.isVisible()
-                assert window.event_frame.state.text() == window.state_label.text()
-                assert "PLC" in window.event_frame.plc.text()
-                assert "Web" in window.event_frame.web.text()
-                assert not window.event_label.text()
-                assert not window.event_label.wordWrap()
-                assert window.bridge.application.snapshot() == baseline
+                assert "PLC" in window.event_frame.plc.text(), page_case
+                assert "Web" in window.event_frame.web.text(), page_case
+                assert not window.event_label.text(), page_case
+                assert not window.event_label.wordWrap(), page_case
+                assert window.bridge.application.snapshot() == baseline, page_case
                 if page == 2:
-                    assert window.pages.currentWidget() is window.communication
+                    assert window.pages.currentWidget() is window.communication, (
+                        page_case
+                    )
                     assert window.communication.write_button.text() == text(
                         "comm_write", current
-                    )
-            assert window.pages.currentWidget() is window.parameters.settings
+                    ), page_case
+            assert window.pages.currentWidget() is window.parameters.settings, case
             palette = window.parameters.metadata["display_name"].palette()
             assert palette.color(
                 QPalette.ColorGroup.Active, QPalette.ColorRole.Text
-            ) != palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.Base)
+            ) != palette.color(QPalette.ColorGroup.Active, QPalette.ColorRole.Base), (
+                case
+            )
             window.language_selector.activated.emit(
                 1 - window.language_selector.currentIndex()
             )
             QApplication.processEvents()
-            assert window.language != current
-            assert window.navigation[4].isChecked()
-            assert window.language_selector.width() == width
+            assert window.language != current, case
+            assert window.navigation[4].isChecked(), case
+            assert window.language_selector.width() == width, case
             assert (
                 tuple(button.geometry() for button in window.navigation) == navigation
-            )
+            ), case
             assert (
                 tuple(
                     QRect(widget.mapTo(window, QPoint()), widget.size())
                     for widget in anchored
                 )
                 == geometry
-            )
-            assert window.columns == (2 if size[0] < size[1] else 3)
-    assert set(window.findChildren(QTimer)) == set(timers)
+            ), case
+            assert window.columns == (2 if size[0] < size[1] else 3), case
+    assert set(window.findChildren(QTimer)) == set(timers), size
 
 
 def test_web_status_uses_owner_observation_without_a_new_timer(

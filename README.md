@@ -123,7 +123,26 @@ with VimoSegmentationEngine(model_path) as engine:
     print(result.has_defects, result.label_map, result.regions_per_label)
 ```
 
-Normal development checks are GPU independent:
+For a fast, optional regression while editing, run this CPU/fake-engine selection:
+
+```powershell
+uv run --no-sync pytest --tb=short `
+  tests/unit/test_contracts.py tests/unit/test_configuration.py `
+  tests/unit/test_inspection_cycle.py tests/unit/test_inference_worker.py `
+  tests/unit/test_runtime_coordinator.py tests/unit/test_production_application.py `
+  tests/unit/test_production_inspection.py tests/integration/test_global_shell.py `
+  tests/integration/test_parameters_ui.py::test_compact_recipe_layout `
+  tests/integration/test_production_ui.py::test_nonblocking_start_polling_commands_and_deferred_close `
+  tests/integration/test_communication_ui.py::test_settings_and_disclosure_do_not_dispatch_or_change_active_watch `
+  tests/integration/test_web_production.py::test_saved_web_interval_and_publication_metadata
+```
+
+This covers typed inputs, configuration, cycles, worker/coordinator ownership,
+judgment, application accounting and representative Qt interactions. The Web
+interval cases use a real constructor/publisher with controlled startup, without
+a listener. This selection excludes OS-process and real-server lifecycle tests
+and is **not an acceptance substitute**. The full GPU-independent quality gate
+retains those checks:
 
 ```powershell
 uv run --no-sync ruff check src tests scripts app.py

@@ -190,6 +190,22 @@ def test_invalid_language_apply_preserves_both_outcomes_and_recovery(
     window = create_window(startup, delivery)
     show(window, language)
     window.resize(1920, 1080) if language == "zh" else window.resize(1080, 1920)
+
+    def assert_preferences_feedback(current_language: Language) -> None:
+        QApplication.processEvents()
+        expected = text("preferences_error", current_language)
+        label = window.event_label
+        full = label.accessibleName()
+        visible = label.text()
+        # The single row may elide; recovery text must remain fully accessible.
+        assert full.startswith(expected)
+        assert label.toolTip().splitlines()[0] == full
+        assert visible and "\n" not in visible and not label.wordWrap()
+        assert visible == full or (
+            visible.endswith("…") and full.startswith(visible.removesuffix("…"))
+        )
+        assert label.fontMetrics().horizontalAdvance(visible) <= label.width()
+
     try:
         window.navigate(1)
         window.parameters.recipes.activated.emit(
@@ -205,7 +221,7 @@ def test_invalid_language_apply_preserves_both_outcomes_and_recovery(
         assert snapshot.counters == ProductionCounters() and not snapshot.runtime_owned
         assert text("roi_applied", language) in window.parameters.status.text()
         assert text("startup_language", language) in window.parameters.status.text()
-        assert text("preferences_error", language) in window.event_label.text()
+        assert_preferences_feedback(language)
         assert "app.json" in window.event_label.toolTip()
         assert "Repair app.json externally and restart" in window.event_label.toolTip()
         assert "invalid language" in window.event_label.toolTip()
@@ -214,11 +230,11 @@ def test_invalid_language_apply_preserves_both_outcomes_and_recovery(
         window.bridge.command_finished.connect(finished.append)
         window.bridge.stop()  # An unrelated successful command cannot repair the manifest.
         until(lambda: "stop" in finished)
-        assert text("preferences_error", language) in window.event_label.text()
+        assert_preferences_feedback(language)
         capture(window, tmp_path, "invalid_language_after_apply")
         other: Language = "en" if language == "zh" else "zh"
         window.set_language(other)
-        assert text("preferences_error", other) in window.event_label.text()
+        assert_preferences_feedback(other)
         assert data.preferences.read_bytes() == original
     finally:
         close_window(window)

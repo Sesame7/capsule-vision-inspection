@@ -118,17 +118,18 @@ def test_circular_hue_and_color_unusable() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "size,color", [(False, False), (True, False), (False, True), (True, True)]
-)
-def test_independent_enabled(size: bool, color: bool) -> None:
-    settings = CapsuleSettings(
-        replace(SETTINGS.size, enabled=size), replace(SETTINGS.color, enabled=color)
-    )
-    result = judge_capsule(measure_capsule(bodies(), ROI, SETTINGS), settings)
-    assert result.assessment.technical_status is (
-        TechnicalStatus.SUCCESS if size or color else TechnicalStatus.DISABLED
-    )
+def test_independent_enabled() -> None:
+    measured = measure_capsule(bodies(), ROI, SETTINGS)
+    before = replace(measured)
+    for size, color in ((False, False), (True, False), (False, True), (True, True)):
+        settings = CapsuleSettings(
+            replace(SETTINGS.size, enabled=size), replace(SETTINGS.color, enabled=color)
+        )
+        result = judge_capsule(measured, settings)
+        assert result.assessment.technical_status is (
+            TechnicalStatus.SUCCESS if size or color else TechnicalStatus.DISABLED
+        ), (size, color)
+        assert measured == before, (size, color)
 
 
 def test_invalid_roi_is_execution_failure() -> None:

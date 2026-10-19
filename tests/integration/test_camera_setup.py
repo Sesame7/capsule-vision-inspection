@@ -154,84 +154,6 @@ def test_vision_connection_buttons_never_show_as_top_level_windows(
         qapp.removeEventFilter(watch)
 
 
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-def test_unified_layout_camera_reference_and_frozen_refresh(
-    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
-    language: Language,
-    size: tuple[int, int],
-    tmp_path: Path,
-) -> None:
-    window, workspace, engine = camera_screen
-    window.resize(*size)
-    window.set_language(language)
-    QApplication.processEvents()
-    assert (
-        workspace.isVisible() and workspace.parentWidget() is window.parameters.settings
-    )
-    assert workspace.buttons["vision_import"].accessibleName() == text(
-        "vision_import", language
-    )
-    assert workspace.canvas.height() > workspace.source_cards.height()
-    assert window.grab().save(
-        str(tmp_path / f"settings-{language}-{size[0]}x{size[1]}.png")
-    )
-    assert workspace.canvas.width() >= 600
-    for control in (
-        workspace.folder,
-        workspace.browse,
-        workspace.loop,
-        *workspace.buttons.values(),
-    ):
-        assert workspace.rect().contains(control.mapTo(workspace, QPoint(0, 0)))
-    assert list(workspace.camera_cards) == [CameraId(f"CAM{i}") for i in range(1, 7)]
-    for index, card in enumerate(workspace.camera_cards.values()):
-        name = text("camera_number", language).format(number=index + 1)
-        assert card.title == str(index + 1) and name in card.accessibleName()
-        assert f"CAM{index + 1}" in card.toolTip()
-        assert card.width() >= Style.touch and card.height() >= Style.touch
-        assert card.isChecked() == (index == 0)
-        assert card.detail in card.toolTip()
-        if index % workspace.source_cards.columns:
-            previous = list(workspace.camera_cards.values())[index - 1]
-            assert card.y() == previous.y() and card.x() > previous.x()
-    assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 1
-    frozen = workspace.frame
-    workspace.select_roi(2)
-    workspace.canvas.zoom(2)
-    workspace.camera_cards[workspace.camera].click()
-    assert workspace.frame is frozen and workspace.selected_index == 2
-    assert workspace.canvas.model.scale == 2
-    workspace.camera_cards[CameraId("CAM3")].click()
-    until(lambda: not window.parameters.busy)
-    assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 21
-    old = workspace.frame
-    source = workspace.sources
-    assert source is not None
-    key = source.definition.camera(workspace.camera).key(source.path.parent)
-    window.bridge.frames.publish(
-        Frame(
-            FrameId(CycleId(1), workspace.camera, 1),
-            1,
-            np.full((20, 60, 3), 88, dtype=np.uint8),
-        ),
-        generation=1,
-        source_key=key,
-    )
-    window.bridge.refresh()
-    QApplication.processEvents()
-    assert workspace.frame is old
-    workspace.buttons["vision_runtime"].click()
-    assert workspace.frame is window.bridge.frames.snapshot().frames[0]
-    assert int(workspace.frame.image[0, 0, 0]) == 88
-    assert (
-        not engine.calls
-        and window.bridge.application.snapshot().counters == ProductionCounters()
-    )
-    assert not source.dirty and not workspace.draft.dirty
-    assert not workspace.frame.image.flags.writeable
-
-
 def test_source_change_invalidates_reference_no_geometry_repair(
     camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
     tmp_path: Path,
@@ -1187,115 +1109,6 @@ def test_selected_xywh_edit_and_atomic_rejection(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-@pytest.mark.parametrize("mode", ["folder", "basler"])
-@pytest.mark.parametrize("theme", ["dark", "light"])
-def test_settings_representative_screenshot(
-    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
-    language: Language,
-    size: tuple[int, int],
-    mode: str,
-    theme: Theme,
-    tmp_path: Path,
-) -> None:
-    window, workspace, engine = camera_screen
-    sources = workspace.sources
-    assert sources is not None
-    for i in range(1, 7):
-        sources.set_serial(CameraId(f"CAM{i}"), f"100{i}")
-    sources.set_mode("basler" if mode == "basler" else "folder")
-    sources.save()
-    workspace.switch_camera()
-    until(lambda: not window.parameters.busy)
-    image = demo_images()[0]
-    path = tmp_path / "canvas.png"
-    ok, encoded = cv2.imencode(".png", image)
-    assert ok
-    encoded.tofile(path)
-    workspace.load_image(path)
-    until(lambda: not window.parameters.busy)
-    height, width = image.shape[:2]
-    workspace.draft.replace_rects(
-        workspace.camera,
-        tuple(
-            BoundingRect(
-                i * width // 6, 0, (i + 1) * width // 6 - i * width // 6, height
-            )
-            for i in range(6)
-        ),
-    )
-    workspace.draft.save()
-    workspace.select_roi(0)
-    window.resize(*size)
-    window.set_language(language)
-    window.set_theme(theme)
-    QApplication.processEvents()
-    assert workspace.canvas.height() > workspace.source_cards.height()
-    assert len(workspace.canvas.rois) == 6 and workspace.frame is not None
-    assert workspace.source_modes[
-        "basler" if mode == "basler" else "folder"
-    ].isChecked()
-    for control in (
-        workspace.source_cards,
-        *workspace.source_modes.values(),
-        *workspace.coordinates.values(),
-        workspace.status,
-        *workspace.buttons.values(),
-    ):
-        assert workspace.rect().contains(control.mapTo(workspace, QPoint(0, 0)))
-        assert workspace.rect().contains(
-            control.mapTo(workspace, control.rect().bottomRight())
-        )
-    for key in ("roi_set_rect", "roi_common", "roi_distribute"):
-        button = workspace.buttons[key]
-        parent = button.parentWidget()
-        assert parent is not None and parent.rect().contains(button.geometry())
-    assert not window.event_label.text()
-    assert workspace.reference_toolbar.height() <= Style.touch + Style.small
-    assert workspace.geometry_toolbar.height() == Style.touch
-    save = workspace.buttons["roi_save_apply"]
-    for toolbar, center_control, right_control in (
-        (
-            workspace.reference_toolbar,
-            workspace.reference,
-            workspace.buttons["roi_actual"],
-        ),
-        (workspace.geometry_toolbar, workspace.buttons["roi_common"], save),
-    ):
-        assert right_control.mapTo(toolbar, right_control.rect().topRight()).x() == (
-            toolbar.width() - 1
-        )
-        if size[0] == 1920 and center_control.isVisible():
-            center = (
-                center_control
-                if center_control is workspace.reference
-                else center_control.parentWidget()
-            )
-            assert center is not None
-            assert (
-                abs(
-                    center.mapTo(toolbar, center.rect().center()).x()
-                    - toolbar.rect().center().x()
-                )
-                <= 1
-            )
-    assert (
-        workspace.camera_cards[workspace.camera]
-        .rect()
-        .contains(workspace.folder.geometry())
-    )
-    assert (
-        workspace.reference_toolbar.mapTo(workspace, QPoint()).y()
-        > workspace.source_cards.geometry().bottom()
-    )
-    assert workspace.canvas.y() > workspace.reference_toolbar.geometry().bottom()
-    assert window.grab().save(
-        str(tmp_path / f"vision-{mode}-{theme}-{language}-{size[0]}x{size[1]}.png")
-    )
-    assert not engine.calls and not workspace.draft.dirty
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
 def test_compact_icon_states_and_loop_click_preserve_configuration(
     camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
     language: Language,
@@ -2159,3 +1972,255 @@ def test_import_is_temporary_owned_bgr_and_preserves_geometry(
     workspace.reference.activated.emit(1)
     until(lambda: not window.parameters.busy)
     assert workspace.reference_mode == "folder"
+
+
+def _assert_folder_reference(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    language: Language,
+    size: tuple[int, int],
+    tmp_path: Path,
+    runtime_cycle: int,
+) -> None:
+    window, workspace, engine = camera_screen
+    window.resize(*size)
+    window.set_language(language)
+    QApplication.processEvents()
+    assert (
+        workspace.isVisible() and workspace.parentWidget() is window.parameters.settings
+    )
+    assert workspace.buttons["vision_import"].accessibleName() == text(
+        "vision_import", language
+    )
+    assert workspace.canvas.height() > workspace.source_cards.height()
+    assert window.grab().save(
+        str(tmp_path / f"settings-{language}-{size[0]}x{size[1]}.png")
+    )
+    assert workspace.canvas.width() >= 600
+    for control in (
+        workspace.folder,
+        workspace.browse,
+        workspace.loop,
+        *workspace.buttons.values(),
+    ):
+        assert workspace.rect().contains(control.mapTo(workspace, QPoint(0, 0)))
+    assert list(workspace.camera_cards) == [CameraId(f"CAM{i}") for i in range(1, 7)]
+    for index, card in enumerate(workspace.camera_cards.values()):
+        name = text("camera_number", language).format(number=index + 1)
+        assert card.title == str(index + 1) and name in card.accessibleName()
+        assert f"CAM{index + 1}" in card.toolTip()
+        assert card.width() >= Style.touch and card.height() >= Style.touch
+        assert card.isChecked() == (index == 0)
+        assert card.detail in card.toolTip()
+        if index % workspace.source_cards.columns:
+            previous = list(workspace.camera_cards.values())[index - 1]
+            assert card.y() == previous.y() and card.x() > previous.x()
+    assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 1
+    frozen = workspace.frame
+    workspace.select_roi(2)
+    workspace.canvas.zoom(2)
+    workspace.camera_cards[workspace.camera].click()
+    assert workspace.frame is frozen and workspace.selected_index == 2
+    assert workspace.canvas.model.scale == 2
+    workspace.camera_cards[CameraId("CAM3")].click()
+    until(lambda: not window.parameters.busy)
+    # The preceding language may have left an eligible Runtime frame. Restore
+    # Folder viewing explicitly so this is the same 21-valued source scenario.
+    workspace.set_reference_mode("folder")
+    until(lambda: not window.parameters.busy)
+    assert workspace.frame is not None and int(workspace.frame.image[0, 0, 0]) == 21
+    old = workspace.frame
+    source = workspace.sources
+    assert source is not None
+    key = source.definition.camera(workspace.camera).key(source.path.parent)
+    assert window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(runtime_cycle), workspace.camera, 1),
+            1,
+            np.full((20, 60, 3), 88, dtype=np.uint8),
+        ),
+        generation=1,
+        source_key=key,
+    )
+    window.bridge.refresh()
+    QApplication.processEvents()
+    assert workspace.frame is old
+    workspace.buttons["vision_runtime"].click()
+    assert workspace.frame is window.bridge.frames.snapshot().frames[0]
+    assert int(workspace.frame.image[0, 0, 0]) == 88
+    assert (
+        not engine.calls
+        and window.bridge.application.snapshot().counters == ProductionCounters()
+    )
+    assert not source.dirty and not workspace.draft.dirty
+    assert not workspace.frame.image.flags.writeable
+
+
+def _reopen_camera_workspace(window: ProductionWindow) -> MachineRoiWorkspace:
+    window.navigate(0)
+    until(lambda: window.parameters.roi_workspace is None)
+    window.navigate(4)
+    until(lambda: not window.parameters.busy)
+    workspace = window.parameters.roi_workspace
+    assert workspace is not None
+    return workspace
+
+
+def _prepare_vision_image(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    mode: str,
+    tmp_path: Path,
+) -> None:
+    window, workspace, _ = camera_screen
+    sources = workspace.sources
+    assert sources is not None
+    for i in range(1, 7):
+        sources.set_serial(CameraId(f"CAM{i}"), f"100{i}")
+    sources.set_mode("basler" if mode == "basler" else "folder")
+    sources.save()
+    workspace.switch_camera()
+    until(lambda: not window.parameters.busy)
+    image = demo_images()[0]
+    path = tmp_path / "canvas.png"
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    encoded.tofile(path)
+    workspace.load_image(path)
+    until(lambda: not window.parameters.busy)
+    height, width = image.shape[:2]
+    workspace.draft.replace_rects(
+        workspace.camera,
+        tuple(
+            BoundingRect(
+                i * width // 6, 0, (i + 1) * width // 6 - i * width // 6, height
+            )
+            for i in range(6)
+        ),
+    )
+    workspace.draft.save()
+    workspace.select_roi(0)
+
+
+def _assert_source_layout(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    language: Language,
+    size: tuple[int, int],
+    mode: str,
+    theme: Theme,
+    tmp_path: Path,
+) -> None:
+    window, workspace, engine = camera_screen
+    window.resize(*size)
+    window.set_language(language)
+    window.set_theme(theme)
+    QApplication.processEvents()
+    assert workspace.canvas.height() > workspace.source_cards.height()
+    assert len(workspace.canvas.rois) == 6 and workspace.frame is not None
+    assert workspace.source_modes[
+        "basler" if mode == "basler" else "folder"
+    ].isChecked()
+    for control in (
+        workspace.source_cards,
+        *workspace.source_modes.values(),
+        *workspace.coordinates.values(),
+        workspace.status,
+        *workspace.buttons.values(),
+    ):
+        assert workspace.rect().contains(control.mapTo(workspace, QPoint(0, 0)))
+        assert workspace.rect().contains(
+            control.mapTo(workspace, control.rect().bottomRight())
+        )
+    for key in ("roi_set_rect", "roi_common", "roi_distribute"):
+        button = workspace.buttons[key]
+        parent = button.parentWidget()
+        assert parent is not None and parent.rect().contains(button.geometry())
+    assert not window.event_label.text()
+    assert workspace.reference_toolbar.height() <= Style.touch + Style.small
+    assert workspace.geometry_toolbar.height() == Style.touch
+    save = workspace.buttons["roi_save_apply"]
+    for toolbar, center_control, right_control in (
+        (
+            workspace.reference_toolbar,
+            workspace.reference,
+            workspace.buttons["roi_actual"],
+        ),
+        (workspace.geometry_toolbar, workspace.buttons["roi_common"], save),
+    ):
+        assert right_control.mapTo(toolbar, right_control.rect().topRight()).x() == (
+            toolbar.width() - 1
+        )
+        if size[0] == 1920 and center_control.isVisible():
+            center = (
+                center_control
+                if center_control is workspace.reference
+                else center_control.parentWidget()
+            )
+            assert center is not None
+            assert (
+                abs(
+                    center.mapTo(toolbar, center.rect().center()).x()
+                    - toolbar.rect().center().x()
+                )
+                <= 1
+            )
+    assert (
+        workspace.camera_cards[workspace.camera]
+        .rect()
+        .contains(workspace.folder.geometry())
+    )
+    assert (
+        workspace.reference_toolbar.mapTo(workspace, QPoint()).y()
+        > workspace.source_cards.geometry().bottom()
+    )
+    assert workspace.canvas.y() > workspace.reference_toolbar.geometry().bottom()
+    assert window.grab().save(
+        str(tmp_path / f"vision-{mode}-{theme}-{language}-{size[0]}x{size[1]}.png")
+    )
+    assert not engine.calls and not workspace.draft.dirty
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
+@pytest.mark.parametrize("mode", ["folder", "basler"])
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_source_layout_reference_and_frozen_refresh(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    size: tuple[int, int],
+    mode: str,
+    theme: Theme,
+    tmp_path: Path,
+) -> None:
+    window, workspace, engine = camera_screen
+    languages: tuple[Language, Language] = ("zh", "en")
+    # Preserve the original four Folder-reference rows once, before the imported
+    # image/geometry stage, rather than repeating them for every theme/source.
+    if mode == "folder" and theme == "dark":
+        for runtime_cycle, language in enumerate(languages, 1):
+            try:
+                _assert_folder_reference(
+                    (window, workspace, engine), language, size, tmp_path, runtime_cycle
+                )
+                workspace = _reopen_camera_workspace(window)
+            except Exception as exc:
+                exc.add_note(f"Folder reference: size={size}, language={language}")
+                raise
+    current = (window, workspace, engine)
+    _prepare_vision_image(current, mode, tmp_path)
+    frozen = workspace.frame
+    assert frozen is not None
+    sources = workspace.sources
+    assert sources is not None and workspace.draft.path is not None
+    saved = sources.path.read_bytes(), workspace.draft.path.read_bytes()
+    before = window.bridge.application.snapshot()
+    for language in languages:
+        try:
+            workspace.select_roi(0)
+            workspace.canvas.zoom(None)
+            _assert_source_layout(current, language, size, mode, theme, tmp_path)
+            assert workspace.frame is frozen
+            assert sources.path.read_bytes() == saved[0]
+            assert workspace.draft.path.read_bytes() == saved[1]
+            assert window.bridge.application.snapshot() == before
+        except Exception as exc:
+            exc.add_note(
+                f"Vision layout: size={size}, mode={mode}, theme={theme}, language={language}"
+            )
+            raise

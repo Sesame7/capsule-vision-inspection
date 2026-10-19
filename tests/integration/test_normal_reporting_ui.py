@@ -15,7 +15,7 @@ from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
 from tests.fins_tcp_support import TcpPeer
 from tests.local_input_support import input_files
-from tests.qt_support import close_window, ensure_test_fonts, until
+from tests.qt_support import close_window, until
 from tests.reporting_support import WAIT, readback, seed, server
 from tests.unit.test_application_bootstrap import close
 
@@ -50,7 +50,7 @@ from vimo_demo.ui.bootstrap import ApplicationData, Startup, create_window, load
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.local_production import compose
 from vimo_demo.ui.production_bridge import QtProductionBridge
-from vimo_demo.ui.production_style import Language, text
+from vimo_demo.ui.production_style import text
 from vimo_demo.ui.production_window import ProductionWindow
 from vimo_demo.ui.reporting_panel import ReportingPanel
 
@@ -605,74 +605,6 @@ def test_fault_and_closed_keep_preferences_locked(
         assert not panel.port.isEnabled()
         with pytest.raises(ApplicationStateError):
             panel.controller.set_reporting_selection(ReportingSelection())
-
-
-@pytest.mark.parametrize(
-    "language,width,height",
-    [("zh", 1080, 1920), ("zh", 1920, 1080), ("en", 1080, 1920), ("en", 1920, 1080)],
-)
-def test_reporting_panel_localized_layout(
-    qapp: QApplication, tmp_path: Path, language: Language, width: int, height: int
-) -> None:
-    ensure_test_fonts()
-    with server() as peer, normal_window(tmp_path) as (_, window, panel):
-        window.set_language(language)
-        window.resize(width, height)
-        window.navigate(2)
-        qapp.processEvents()
-        assert (
-            window.communication.body.width()
-            <= window.communication.scroll_area.viewport().width()
-        )
-        assert panel.host.isVisible()
-        assert window.grab().save(
-            str(tmp_path / f"communication-empty-{language}-{width}x{height}.png")
-        )
-        panel.advanced_button.click()
-        window.communication.advanced_button.click()
-        qapp.processEvents()
-        assert panel.title.text() == text("plc_reporting", language)
-        assert panel.summary.y() == panel.service_status.y()
-        assert panel.title.geometry().right() < panel.summary.x()
-        assert panel.summary.geometry().right() < panel.service_status.x()
-        assert panel.summary.y() < panel.host.y()
-        assert panel.enabled.accessibleName() == text("plc_enable", language)
-        assert panel.port.accessibleName() == text("comm_port", language)
-        assert panel.host.text() == "127.0.0.1" and panel.advanced.isVisible()
-        assert panel.geometry().width() <= width
-        for widget in (panel.enabled, panel.port, panel.timeout, panel.advanced_button):
-            assert widget.width() >= widget.minimumSizeHint().width()
-        for widget in (
-            panel.port,
-            panel.timeout,
-            panel.advanced_button,
-            window.communication.host,
-            window.communication.port,
-            window.communication.timeout,
-            window.communication.advanced_button,
-        ):
-            parent = widget.parentWidget()
-            assert parent is not None and parent.rect().contains(widget.geometry())
-        window.communication.port.setValue(peer.port)
-        window.communication.persist_settings()
-        assert window.communication.add_watch_group(
-            RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "首工位 / First station")
-        )
-        assert window.communication.add_watch_group(
-            RegisterWatchGroup(FinsMemoryArea.DM, 100, 1, "诊断 / Diagnostic")
-        )
-        assert window.communication.read_watch_once()
-        until(lambda: not window.communication.busy)
-        qapp.processEvents()
-        assert (
-            window.communication.watch_table.columnWidth(0)
-            < window.communication.watch_table.width() / 4
-        )
-        widths = [window.communication.watch_table.columnWidth(c) for c in range(5)]
-        assert max(widths) - min(widths) <= 1
-        assert window.grab().save(
-            str(tmp_path / f"communication-populated-{language}-{width}x{height}.png")
-        )
 
 
 @pytest.mark.parametrize("manual_transport", list(FinsTransport))

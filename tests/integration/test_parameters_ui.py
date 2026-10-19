@@ -308,6 +308,9 @@ def test_compact_recipe_layout(
     window.set_language(language)
     window.resize(*size)
     QApplication.processEvents()
+    # Qt honors the shell's effective minimum even if resize requests less.
+    effective_width = window.width()
+    assert effective_width == max(size[0], window.minimumWidth())
     page = window.parameters
     assert page.recipes.count() == 2 and not session.dirty and not runtimes
     assert set(page.metadata) == {"display_name", "product_code"}
@@ -357,6 +360,46 @@ def test_compact_recipe_layout(
         .endswith(f" · H {color.target_hue} ± {color.hue_tolerance}")
     )
     assert page.roi_workspace is None
+
+    sections = (page.recipe_section, page.model_section, page.inspection_section)
+    for above, below in zip(sections, sections[1:], strict=False):
+        assert above.geometry().bottom() < below.y()
+    for control in (
+        *sections,
+        page.recipes,
+        page.model,
+        *page.metadata.values(),
+        *page.buttons.values(),
+    ):
+        assert_inside(control, page)
+    name, product = page.metadata.values()
+    assert abs(name.width() - product.width()) <= 1
+    assert page.model.width() > page.width() // 2
+    assert (
+        page.buttons["save_apply"].geometry().right() >= page.width() - 2 * Style.space
+    )
+    before = window.bridge.application.snapshot()
+    page.expand_tuning["size"].click()
+    preview = page.preview
+    assert preview is not None and page.tuning_section.isVisible()
+    assert (
+        page.expand_tuning["size"].isChecked()
+        and not page.expand_tuning["color"].isChecked()
+    )
+    assert_inside(preview, page)
+    assert preview.canvas.height() >= 240
+    assert window.width() == effective_width
+    page.expand_tuning["color"].click()
+    assert page.preview is preview and preview.mode == "color"
+    assert (
+        not session.dirty
+        and not runtimes
+        and window.bridge.application.snapshot() == before
+    )
+    page.expand_tuning["color"].click()
+    until(lambda: page.preview is None)
+
+    # Vision creates its editor lazily; keep navigation after structural/tuning checks.
     window.navigate(4)
     assert (
         page.roi_workspace is not None
@@ -364,6 +407,11 @@ def test_compact_recipe_layout(
         and window.pages.currentWidget() is page.settings
     )
     window.navigate(1)
+    assert (
+        not session.dirty
+        and not runtimes
+        and window.bridge.application.snapshot() == before
+    )
 
 
 def test_metadata_model_and_hidden_overrides_preserved(
@@ -1160,52 +1208,3 @@ def test_failed_preparation_blocks_dirty_switch(
     assert page.status.text() == text("recipe_prepare_error", page.language)
     assert "unavailable" in page.status.toolTip()
     assert window.bridge.application.snapshot() == before
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
-def test_vertical_sections_and_responsive_fields(
-    configured_screen: Screen, language: Language, size: tuple[int, int]
-) -> None:
-    window, session, runtimes = configured_screen
-    window.set_language(language)
-    window.resize(*size)
-    QApplication.processEvents()
-    page = window.parameters
-    sections = (page.recipe_section, page.model_section, page.inspection_section)
-    for above, below in zip(sections, sections[1:], strict=False):
-        assert above.geometry().bottom() < below.y()
-    for control in (
-        *sections,
-        page.recipes,
-        page.model,
-        *page.metadata.values(),
-        *page.buttons.values(),
-    ):
-        assert_inside(control, page)
-    name, product = page.metadata.values()
-    assert abs(name.width() - product.width()) <= 1
-    assert page.model.width() > page.width() // 2
-    assert (
-        page.buttons["save_apply"].geometry().right() >= page.width() - 2 * Style.space
-    )
-    before = window.bridge.application.snapshot()
-    page.expand_tuning["size"].click()
-    preview = page.preview
-    assert preview is not None and page.tuning_section.isVisible()
-    assert (
-        page.expand_tuning["size"].isChecked()
-        and not page.expand_tuning["color"].isChecked()
-    )
-    assert_inside(preview, page)
-    assert preview.canvas.height() >= 240
-    assert window.size().width() == size[0]
-    page.expand_tuning["color"].click()
-    assert page.preview is preview and preview.mode == "color"
-    assert (
-        not session.dirty
-        and not runtimes
-        and window.bridge.application.snapshot() == before
-    )
-    page.expand_tuning["color"].click()
-    until(lambda: page.preview is None)

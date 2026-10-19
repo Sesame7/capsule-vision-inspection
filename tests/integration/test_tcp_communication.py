@@ -20,7 +20,7 @@ from vimo_demo.communication.operations import (
     execute_request,
 )
 from vimo_demo.ui.communication_page import CommunicationPage
-from vimo_demo.ui.production_style import Language, text
+from vimo_demo.ui.production_style import text
 
 
 def close(page: CommunicationPage) -> None:
@@ -28,109 +28,6 @@ def close(page: CommunicationPage) -> None:
     until(lambda: page.closed)
     page.deleteLater()
     assert not any(t.name == "FinsCommunication" for t in threads())
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("area", list(FinsMemoryArea))
-def test_tcp_manual_operations_owner_and_udp_address_retention(
-    qapp: QApplication,
-    tmp_path: Path,
-    language: Language,
-    area: FinsMemoryArea,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ownership: list[tuple[str, int]] = []
-    clients: list[FinsTcpClient] = []
-
-    class ObservedClient(FinsTcpClient):
-        def __init__(self, host: str, *, port: int, timeout: float) -> None:
-            ownership.append(("create", get_ident()))
-            super().__init__(host, port=port, timeout=timeout)
-            assert self.source.node == 101 and self.destination.node == 20
-            clients.append(self)
-
-        def read_words(
-            self,
-            start: int,
-            count: int = 1,
-            *,
-            area: FinsMemoryArea = FinsMemoryArea.DM,
-        ) -> tuple[int, ...]:
-            ownership.append(("read", get_ident()))
-            return super().read_words(start, count, area=area)
-
-        def write_words(
-            self,
-            start: int,
-            values: Sequence[int],
-            *,
-            area: FinsMemoryArea = FinsMemoryArea.DM,
-        ) -> None:
-            ownership.append(("write", get_ident()))
-            super().write_words(start, values, area=area)
-
-        def close(self) -> None:
-            ownership.append(("close", get_ident()))
-            super().close()
-
-    monkeypatch.setattr(
-        "vimo_demo.communication.operations.FinsTcpClient", ObservedClient
-    )
-    with TcpPeer() as peer:
-        page = CommunicationPage()
-        page.configure_preferences(
-            tmp_path / "communication.json", CommunicationPreferences()
-        )
-        page.set_language(language)
-        page.show()
-        try:
-            assert page.protocol.currentText() == "FINS/UDP"
-            page.destination[1].setValue(33)
-            page.source[1].setValue(44)
-            page.advanced_button.click()
-            page.protocol.setCurrentIndex(1)
-            assert page.advanced.isHidden() and page.advanced_button.isHidden()
-            page.port.setValue(peer.port)
-            page.persist_settings()
-            page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
-            page.address.setValue(100)
-            page.persist_settings()
-            assert page.dispatch(RequestKind.TEST)
-            until(lambda: not page.busy)
-            assert page.feedback_text == text("comm_test_ok", language)
-            assert page.last_response is not None
-            assert page.last_response.request.transport is FinsTransport.TCP
-            page.write_values.setText("7 65535")
-            assert page.dispatch(RequestKind.WRITE)
-            until(lambda: not page.busy)
-            assert peer.words(100, 2, area.value) == (7, 65535)
-            assert page.dispatch(RequestKind.READ, count=2)
-            until(lambda: not page.busy)
-            assert page.last_read is not None and page.last_read.values == (7, 65535)
-            assert "FINS/TCP" in page.success.text()
-            assert all(
-                p[3:9] == bytes.fromhex("00 14 00 00 65 00") for p in peer.packets
-            )
-            page.protocol.setCurrentIndex(0)
-            assert page.advanced.isEnabled() and page.advanced.isVisible()
-            assert page.destination[1].value() == 33 and page.source[1].value() == 44
-        finally:
-            close(page)
-    assert all(c.closed for c in clients) and len(clients) == 3
-    assert [action for action, _ in ownership] == [
-        "create",
-        "read",
-        "close",
-        "create",
-        "write",
-        "close",
-        "create",
-        "read",
-        "close",
-    ]
-    for offset in (0, 3, 6):
-        assert len({ident for _, ident in ownership[offset : offset + 3]}) == 1
-    assert all(ident != get_ident() for _, ident in ownership)
 
 
 def test_tcp_read_capture_does_not_follow_programmatic_protocol_change(
@@ -243,3 +140,131 @@ def test_tcp_watch_errors_use_existing_feedback_and_stop_refresh(
             assert text("comm_watch_failed", "zh") in page.watch_status.text()
         finally:
             close(page)
+
+
+@pytest.mark.parametrize("area", list(FinsMemoryArea))
+def test_tcp_roundtrip_bilingual_owner_and_routes(
+    qapp: QApplication,
+    tmp_path: Path,
+    area: FinsMemoryArea,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ownership: list[tuple[str, int]] = []
+    clients: list[FinsTcpClient] = []
+
+    class ObservedClient(FinsTcpClient):
+        def __init__(self, host: str, *, port: int, timeout: float) -> None:
+            ownership.append(("create", get_ident()))
+            super().__init__(host, port=port, timeout=timeout)
+            assert self.source.node == 101 and self.destination.node == 20
+            clients.append(self)
+
+        def read_words(
+            self,
+            start: int,
+            count: int = 1,
+            *,
+            area: FinsMemoryArea = FinsMemoryArea.DM,
+        ) -> tuple[int, ...]:
+            ownership.append(("read", get_ident()))
+            return super().read_words(start, count, area=area)
+
+        def write_words(
+            self,
+            start: int,
+            values: Sequence[int],
+            *,
+            area: FinsMemoryArea = FinsMemoryArea.DM,
+        ) -> None:
+            ownership.append(("write", get_ident()))
+            super().write_words(start, values, area=area)
+
+        def close(self) -> None:
+            ownership.append(("close", get_ident()))
+            super().close()
+
+    monkeypatch.setattr(
+        "vimo_demo.communication.operations.FinsTcpClient", ObservedClient
+    )
+    with TcpPeer() as peer:
+        page = CommunicationPage()
+        page.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
+        page.set_language("zh")
+        page.show()
+        try:
+            assert page.protocol.currentText() == "FINS/UDP"
+            page.destination[1].setValue(33)
+            page.source[1].setValue(44)
+            page.advanced_button.click()
+            page.protocol.setCurrentIndex(1)
+            assert page.advanced.isHidden() and page.advanced_button.isHidden()
+            page.port.setValue(peer.port)
+            page.persist_settings()
+            page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
+            page.address.setValue(100)
+            page.persist_settings()
+            assert page.dispatch(RequestKind.TEST)
+            until(lambda: not page.busy)
+            observed = page.last_response
+            for language in ("zh", "en"):
+                page.set_language(language)
+                assert page.last_response is observed
+                assert page.feedback_text == text("comm_test_ok", language)
+            page.set_language("zh")
+            assert page.last_response is not None
+            assert page.last_response.request.transport is FinsTransport.TCP
+            page.write_values.setText("7 65535")
+            assert page.dispatch(RequestKind.WRITE)
+            until(lambda: not page.busy)
+            for language in ("zh", "en"):
+                page.set_language(language)
+                assert page.feedback_text == text("comm_write_ok", language)
+                assert peer.words(100, 2, area.value) == (7, 65535)
+            page.set_language("zh")
+            assert page.dispatch(RequestKind.READ, count=2)
+            until(lambda: not page.busy)
+            assert page.last_read is not None and page.last_read.values == (7, 65535)
+            for language in ("zh", "en"):
+                page.set_language(language)
+                assert page.feedback_text == text("comm_read_ok", language)
+                assert page.last_read is not None and page.last_read.values == (
+                    7,
+                    65535,
+                )
+                assert "FINS/TCP" in page.success.text()
+            header = bytes.fromhex("80 00 02 00 14 00 00 65 00 01")
+            location = bytes((area.value,)) + bytes.fromhex("00 64 00")
+            assert peer.packets == (
+                header + b"\x01\x01" + location + b"\x00\x01",
+                header + b"\x01\x02" + location + bytes.fromhex("00 02 00 07 FF FF"),
+                header + b"\x01\x01" + location + b"\x00\x02",
+            ), area
+            assert all(
+                p[3:9] == bytes.fromhex("00 14 00 00 65 00") for p in peer.packets
+            )
+            page.protocol.setCurrentIndex(0)
+            assert page.advanced.isEnabled() and page.advanced.isVisible()
+            for language in ("zh", "en"):
+                page.set_language(language)
+                assert (
+                    page.destination[1].value() == 33 and page.source[1].value() == 44
+                )
+        finally:
+            close(page)
+    assert all(c.closed for c in clients) and len(clients) == 3
+    assert [action for action, _ in ownership] == [
+        "create",
+        "read",
+        "close",
+        "create",
+        "write",
+        "close",
+        "create",
+        "read",
+        "close",
+    ]
+    for offset in (0, 3, 6):
+        assert len({ident for _, ident in ownership[offset : offset + 3]}) == 1
+    assert all(ident != get_ident() for _, ident in ownership)

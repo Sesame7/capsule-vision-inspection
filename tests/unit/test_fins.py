@@ -28,6 +28,7 @@ from vimo_demo.communication import (
     FinsTransportError,
     FinsUdpClient,
 )
+from vimo_demo.communication.fins import decode_response
 from vimo_demo.communication.simulator import FinsUdpSimulator
 
 SOURCE = FinsAddress(0, 1, 0)
@@ -179,19 +180,6 @@ def test_explicit_routes_are_independent_of_ip() -> None:
         assert requests == [request]
 
 
-@pytest.mark.parametrize(
-    ("offset", "value"),
-    [(0, 0x80), (3, 1), (4, 3), (5, 1), (6, 1), (7, 3), (8, 1), (9, 2), (11, 2)],
-)
-def test_response_identity_mismatch_closes_client(offset: int, value: int) -> None:
-    response = bytearray(READ_1234)
-    response[offset] = value
-    with peer(bytes(response)) as (port, _), client(port) as connection:
-        with pytest.raises(FinsProtocolError):
-            connection.read_words(100)
-        assert connection.closed
-
-
 def test_response_system_fields_are_not_identity_fields() -> None:
     # W342: do not validate response GCT, RSV, or reserved ICF bits.
     response = bytearray(READ_1234)
@@ -222,18 +210,6 @@ def test_wrong_udp_sender_is_rejected() -> None:
         with pytest.raises(FinsProtocolError, match="sender"):
             connection.read_words(100)
         assert connection.closed
-
-
-@pytest.mark.parametrize("end_code", [0x1103, 0x2101, 0x0040, 0x0080, 0x8000])
-def test_plc_end_code_is_preserved(end_code: int) -> None:
-    reply = READ_1234[:12] + end_code.to_bytes(2, "big") + b"\x01\x02"
-    with peer(reply) as (port, _), client(port) as connection:
-        with pytest.raises(FinsPlcError) as caught:
-            connection.read_words(100)
-        assert caught.value.command == b"\x01\x01"
-        assert caught.value.end_code == end_code
-        assert caught.value.response_data == b"\x01\x02"
-        assert not connection.closed
 
 
 INVALID_OPERATIONS: list[Callable[[FinsUdpClient], object]] = [
@@ -409,34 +385,39 @@ def test_w_invalid_writes_are_atomic(packet: bytes, end_code: int) -> None:
         assert server.handle_datagram(WRITE_W50[:16] + b"\x00\x00") == WRITE_ACK
 
 
-@pytest.mark.parametrize(
-    ("packet", "end_code"),
-    [
-        (READ_D100[:10] + b"\x06\x01", 0x0401),
-        (READ_D100[:15], 0x1002),
-        (READ_D100 + b"\x00", 0x1001),
-        (READ_D100[:12] + b"\xb0" + READ_D100[13:], 0x1101),
-        (READ_D100[:15] + b"\x01" + READ_D100[16:], 0x1103),
-        (READ_D100[:13] + bytes.fromhex("80 00 00 00 01"), 0x1103),
-        (READ_D100[:13] + bytes.fromhex("7F FF 00 00 02"), 0x1104),
-        (READ_D100[:16] + bytes.fromhex("03 E8"), 0x110B),
-        (WRITE_D100[:-1], 0x1003),
-        (WRITE_D100 + bytes(2012), 0x1001),
-    ],
-)
-def test_simulator_documented_errors_over_udp(
-    simulator: FinsUdpSimulator, packet: bytes, end_code: int
-) -> None:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as raw:
-        raw.settimeout(0.5)
-        raw.sendto(packet, ("127.0.0.1", simulator.port))
-        response, sender = raw.recvfrom(65535)
-        assert sender == ("127.0.0.1", simulator.port)
-        # Independently specified response header; command echoes even on errors.
-        expected = bytes.fromhex("C0 00 02 00 01 00 00 02 00 01")
-        assert response == expected + packet[10:12] + end_code.to_bytes(2, "big")
-    with client(simulator.port) as connection:
-        assert connection.read_words(100) == (1234,)  # Invalid writes were atomic.
+def test_simulator_documented_errors_over_udp(simulator: FinsUdpSimulator) -> None:
+    cases = (
+        ("unsupported_command", READ_D100[:10] + b"\x06\x01", 0x0401),
+        ("short_address", READ_D100[:15], 0x1002),
+        ("extra_read_data", READ_D100 + b"\x00", 0x1001),
+        ("unsupported_area", READ_D100[:12] + b"\xb0" + READ_D100[13:], 0x1101),
+        ("bit_address", READ_D100[:15] + b"\x01" + READ_D100[16:], 0x1103),
+        ("invalid_start", READ_D100[:13] + bytes.fromhex("80 00 00 00 01"), 0x1103),
+        ("range_overflow", READ_D100[:13] + bytes.fromhex("7F FF 00 00 02"), 0x1104),
+        ("word_limit", READ_D100[:16] + bytes.fromhex("03 E8"), 0x110B),
+        ("short_write_data", WRITE_D100[:-1], 0x1003),
+        ("oversized_write", WRITE_D100 + bytes(2012), 0x1001),
+    )
+    for name, packet, end_code in cases:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as raw:
+                raw.settimeout(0.5)
+                raw.sendto(packet, ("127.0.0.1", simulator.port))
+                response, sender = raw.recvfrom(65535)
+                assert sender == ("127.0.0.1", simulator.port)
+                # Independent header; even an error echoes this request's command.
+                expected = bytes.fromhex("C0 00 02 00 01 00 00 02 00 01")
+                assert response == expected + packet[10:12] + end_code.to_bytes(
+                    2, "big"
+                )
+            with client(simulator.port) as connection:
+                # Verify atomic rejection after every row, not just the final one.
+                assert connection.read_words(100) == (1234,)
+        except Exception as exc:
+            exc.add_note(
+                f"Negative request {name}: {packet.hex()}, expected end code {end_code:04X}"
+            )
+            raise
 
 
 def test_simulator_vectors_and_safe_malformed_packets() -> None:
@@ -716,3 +697,107 @@ def test_context_closes_on_caller_exception_without_an_online_handshake() -> Non
     connection.close()
     with pytest.raises(FinsTransportError, match="closed"):
         connection.__enter__()
+
+
+def test_udp_identity_rejection_retires_real_client() -> None:
+    offset, value = (9, 2)
+    response = bytearray(READ_1234)
+    response[offset] = value
+    with peer(bytes(response)) as (port, _), client(port) as connection:
+        with pytest.raises(FinsProtocolError):
+            connection.read_words(100)
+        assert connection.closed
+
+
+@pytest.mark.parametrize("end_code", [4355])
+def test_udp_plc_rejection_preserves_live_client(end_code: int) -> None:
+    reply = READ_1234[:12] + end_code.to_bytes(2, "big") + b"\x01\x02"
+    with peer(reply) as (port, _), client(port) as connection:
+        with pytest.raises(FinsPlcError) as caught:
+            connection.read_words(100)
+        assert caught.value.command == b"\x01\x01"
+        assert caught.value.end_code == end_code
+        assert caught.value.response_data == b"\x01\x02"
+        assert not connection.closed
+
+
+# Keep both literal wire identities: UDP nodes 1/2 and negotiated TCP nodes 101/20.
+_TCP_EMBEDDED_READ = bytes.fromhex("C0 00 02 00 65 00 00 14 00 01 01 01 00 00 04 D2")
+_UDP_MUTATIONS = (
+    (0, 0x80),
+    (3, 1),
+    (4, 3),
+    (5, 1),
+    (6, 1),
+    (7, 3),
+    (8, 1),
+    (9, 2),
+    (11, 2),
+)
+_TCP_OFFSETS = (0, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+
+
+@pytest.mark.parametrize(
+    "variant,offset,value",
+    [
+        *(
+            pytest.param("udp", offset, value, id=f"udp-byte{offset}-{value:02x}")
+            for offset, value in _UDP_MUTATIONS
+        ),
+        *(
+            pytest.param(
+                "tcp",
+                offset,
+                _TCP_EMBEDDED_READ[offset] ^ 0x80,
+                id=f"tcp-byte{offset}-{_TCP_EMBEDDED_READ[offset] ^ 0x80:02x}",
+            )
+            for offset in _TCP_OFFSETS
+        ),
+    ],
+)
+def test_decoder_rejects_all_original_identity_mutations(
+    variant: str, offset: int, value: int
+) -> None:
+    raw = READ_1234 if variant == "udp" else _TCP_EMBEDDED_READ
+    source = SOURCE if variant == "udp" else FinsAddress(0, 101, 0)
+    destination = DESTINATION if variant == "udp" else FinsAddress(0, 20, 0)
+    assert (
+        decode_response(
+            raw, b"\x01\x01", 2, source=source, destination=destination, sid=1
+        )
+        == b"\x04\xd2"
+    )
+    response = bytearray(raw)
+    response[offset] = value
+    assert bytes(response) != raw
+    with pytest.raises(FinsProtocolError):
+        decode_response(
+            bytes(response),
+            b"\x01\x01",
+            2,
+            source=source,
+            destination=destination,
+            sid=1,
+        )
+
+
+@pytest.mark.parametrize("end_code", [0x1103, 0x2101, 0x0040, 0x0080, 0x8000])
+def test_decoder_preserves_all_plc_error_evidence(end_code: int) -> None:
+    for variant, raw, source, destination in (
+        ("udp", READ_1234, SOURCE, DESTINATION),
+        ("tcp", _TCP_EMBEDDED_READ, FinsAddress(0, 101, 0), FinsAddress(0, 20, 0)),
+    ):
+        try:
+            reply = raw[:12] + end_code.to_bytes(2, "big") + b"\x01\x02"
+            with pytest.raises(FinsPlcError) as caught:
+                decode_response(
+                    reply, b"\x01\x01", 2, source=source, destination=destination, sid=1
+                )
+            assert caught.value.command == b"\x01\x01"
+            assert caught.value.end_code == end_code
+            assert caught.value.response_data == b"\x01\x02"
+        except Exception as exc:
+            exc.add_note(
+                f"PLC decoder evidence: variant={variant}, end_code=0x{end_code:04x}"
+            )
+            raise

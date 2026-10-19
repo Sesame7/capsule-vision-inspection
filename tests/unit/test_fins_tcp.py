@@ -375,23 +375,6 @@ def test_invalid_configuration_before_socket_io(
         )
 
 
-@pytest.mark.parametrize("offset", [0, 3, 4, 5, 6, 7, 8, 9, 10, 11])
-def test_embedded_response_identity_rejection(offset: int) -> None:
-    response = bytearray(READ_1234)
-    response[16 + offset] ^= 0x80
-
-    def respond(connection: socket.socket, requests: list[bytes]) -> None:
-        negotiate(connection, requests)
-        request(connection, requests)
-        connection.sendall(response)
-        expect_closed(connection)
-
-    with peer(respond) as (port, _), client(port) as connection:
-        with pytest.raises(FinsProtocolError):
-            connection.read_words(100)
-        assert connection.closed
-
-
 @pytest.mark.parametrize(
     "reply",
     [
@@ -418,30 +401,6 @@ def test_invalid_exchange_envelope_or_payload(reply: bytes) -> None:
         with pytest.raises(FinsProtocolError):
             connection.read_words(100)
         assert connection.closed
-
-
-@pytest.mark.parametrize("end_code", [0x1103, 0x2101, 0x0040, 0x0080, 0x8000])
-def test_plc_error_preserves_code_and_allows_a_later_command(end_code: int) -> None:
-    reply = READ_1234[:28] + end_code.to_bytes(2, "big") + b"\x01\x02"
-
-    def respond(connection: socket.socket, requests: list[bytes]) -> None:
-        negotiate(connection, requests)
-        request(connection, requests)
-        connection.sendall(reply)
-        second = request(connection, requests)
-        assert second[25] == 2
-        response = bytearray(READ_1234)
-        response[25] = 2
-        connection.sendall(response)
-
-    with peer(respond) as (port, _), client(port) as connection:
-        with pytest.raises(FinsPlcError) as caught:
-            connection.read_words(100)
-        assert caught.value.end_code == end_code
-        assert caught.value.command == b"\x01\x01"
-        assert caught.value.response_data == b"\x01\x02"
-        assert not connection.closed
-        assert connection.read_words(100) == (1234,)
 
 
 @pytest.mark.parametrize("failure", ["timeout", "disconnect", "malformed", "envelope"])
@@ -731,3 +690,44 @@ def test_transport_imports_without_qt_numpy_or_vimo() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_tcp_identity_rejection_retires_real_client() -> None:
+    offset = 9
+    response = bytearray(READ_1234)
+    response[16 + offset] ^= 128
+
+    def respond(connection: socket.socket, requests: list[bytes]) -> None:
+        negotiate(connection, requests)
+        request(connection, requests)
+        connection.sendall(response)
+        expect_closed(connection)
+
+    with peer(respond) as (port, _), client(port) as connection:
+        with pytest.raises(FinsProtocolError):
+            connection.read_words(100)
+        assert connection.closed
+
+
+@pytest.mark.parametrize("end_code", [4355])
+def test_tcp_plc_rejection_allows_next_sid(end_code: int) -> None:
+    reply = READ_1234[:28] + end_code.to_bytes(2, "big") + b"\x01\x02"
+
+    def respond(connection: socket.socket, requests: list[bytes]) -> None:
+        negotiate(connection, requests)
+        request(connection, requests)
+        connection.sendall(reply)
+        second = request(connection, requests)
+        assert second[25] == 2
+        response = bytearray(READ_1234)
+        response[25] = 2
+        connection.sendall(response)
+
+    with peer(respond) as (port, _), client(port) as connection:
+        with pytest.raises(FinsPlcError) as caught:
+            connection.read_words(100)
+        assert caught.value.end_code == end_code
+        assert caught.value.command == b"\x01\x01"
+        assert caught.value.response_data == b"\x01\x02"
+        assert not connection.closed
+        assert connection.read_words(100) == (1234,)

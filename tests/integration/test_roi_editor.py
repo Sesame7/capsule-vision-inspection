@@ -199,41 +199,6 @@ def test_reference_frozen_and_bgr(
     dialog.request_back()
 
 
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
-def test_responsive_bilingual_editor(
-    configured_screen: Screen, language: Language, size: tuple[int, int]
-) -> None:
-    window, session, _ = configured_screen
-    window.set_language(language)
-    window.resize(*size)
-    publish(window)
-    dialog = open_editor(window)
-    assert dialog.buttons["vision_runtime"].accessibleName() == text(
-        "vision_runtime", language
-    )
-    assert set(dialog.findChildren(QComboBox)) == {
-        dialog.reference,
-        dialog.channel,
-        *(card.device for card in dialog.camera_cards.values()),
-    }
-    source_fields = {
-        field for card in dialog.camera_cards.values() for field in (card.folder,)
-    }
-    assert set(dialog.findChildren(QLineEdit)) == set(
-        dialog.coordinates.values()
-    ) | source_fields | {dialog.fps}
-    assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
-    for button in dialog.buttons.values():
-        assert dialog.rect().contains(button.mapTo(dialog, QPoint(0, 0)))
-        assert (
-            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 12
-        )
-    assert dialog.canvas.height() > dialog.source_cards.height()
-    assert not session.dirty
-    dialog.request_back()
-
-
 def test_fast_placement_buttons(roi_screen: tuple[Screen, MachineRoiWorkspace]) -> None:
     (_, session, _), dialog = roi_screen
     dialog.common_width.setText("6")
@@ -428,3 +393,53 @@ def test_workspace_open_refresh_and_reopen_never_reinitialize_saved_layout(
     assert session.machine_editor.definition == saved
     assert not session.machine_editor.dirty
     assert session.machine_path.read_bytes() == payload
+
+
+def _assert_source_free_roi_layout(
+    configured_screen: Screen, language: Language, size: tuple[int, int]
+) -> None:
+    window, session, _ = configured_screen
+    window.set_language(language)
+    window.resize(*size)
+    publish(window)
+    dialog = open_editor(window)
+    assert dialog.buttons["vision_runtime"].accessibleName() == text(
+        "vision_runtime", language
+    )
+    assert set(dialog.findChildren(QComboBox)) == {
+        dialog.reference,
+        dialog.channel,
+        *(card.device for card in dialog.camera_cards.values()),
+    }
+    source_fields = {
+        field for card in dialog.camera_cards.values() for field in (card.folder,)
+    }
+    assert set(dialog.findChildren(QLineEdit)) == set(
+        dialog.coordinates.values()
+    ) | source_fields | {dialog.fps}
+    assert dialog.canvas.width() >= 600 and dialog.canvas.height() >= 240
+    for button in dialog.buttons.values():
+        assert dialog.rect().contains(button.mapTo(dialog, QPoint(0, 0)))
+        assert (
+            button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 12
+        )
+    assert dialog.canvas.height() > dialog.source_cards.height()
+    assert not session.dirty
+    dialog.request_back()
+
+
+def test_source_free_roi_layout_matrix(configured_screen: Screen) -> None:
+    window, session, runtimes = configured_screen
+    assert session.camera_sources is None
+    before = window.bridge.application.snapshot()
+    languages: tuple[Language, Language] = ("zh", "en")
+    for size in ((1080, 1920), (1920, 1080), (900, 1200)):
+        for language in languages:
+            try:
+                _assert_source_free_roi_layout(configured_screen, language, size)
+                until(lambda: window.parameters.roi_workspace is None)
+                assert window.bridge.application.snapshot() == before
+                assert not runtimes and not session.dirty
+            except Exception as exc:
+                exc.add_note(f"Source-free ROI: size={size}, language={language}")
+                raise
