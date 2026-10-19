@@ -110,6 +110,7 @@ superseded URLs return 410. `/health` describes publication, not machine readine
 | [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit configuration paths for real developer diagnosis; Folder/fixed inputs or saved Basler mappings with explicit Vision connection |
 | [visualize_inference.py](scripts/visualize_inference.py) | Typed inference masks/contours/boxes for a selected local model and images |
 | [run_fins_simulator.py](scripts/run_fins_simulator.py) | Localhost UDP simulator, optionally tracing accepted W49 writes |
+| [field_benchmark_tool.py](scripts/field_benchmark_tool.py) | Offline isolated run files and bounded evidence analysis; [diagnostic ownership and field gates](docs/field-benchmark.md) |
 
 Use each tool's `--help`. The fake launcher remains fake even with local images.
 Developer configuration generation never repairs normal saved MachineLayout.
