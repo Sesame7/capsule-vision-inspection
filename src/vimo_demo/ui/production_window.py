@@ -242,22 +242,23 @@ class ProductionWindow(QMainWindow):
                 operations.addWidget(button)
         header.addWidget(self.operation_group, 0, 2, Qt.AlignmentFlag.AlignRight)
         summary_layout.addLayout(header)
-        metrics = QFrame()
+        metrics = self.metrics_frame = QFrame()
         metrics.setObjectName("productionMetrics")
-        metric_row = self.metric_row = QHBoxLayout(metrics)
+        # Width follows the page; the current grid must not force a wider window
+        # before it can wrap in response to fonts, translation or resize.
+        metrics.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        metric_row = self.metric_row = QGridLayout(metrics)
         metric_row.setContentsMargins(12, 8, 12, 8)
         metric_row.setSpacing(12)
+        self._metric_columns = 0
+        self._metric_groups: list[QWidget] = []
         self.metrics: dict[str, tuple[QLabel, QLabel]] = {}
         self.metric_icons: dict[str, QLabel] = {}
         for column, key in enumerate(
-            ("cycles", "channel_ok", "channel_ng", "processing")
+            ("cycles", "channel_ok", "channel_ng", "channel_empty", "processing")
         ):
-            if column:
-                separator = QFrame()
-                separator.setFrameShape(QFrame.Shape.VLine)
-                separator.setFixedHeight(36)
-                metric_row.addWidget(separator)
             group = QWidget()
+            self._metric_groups.append(group)
             row = QHBoxLayout(group)
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(12)
@@ -274,7 +275,7 @@ class ProductionWindow(QMainWindow):
             labels.addWidget(caption)
             labels.addWidget(value)
             row.addLayout(labels, 1)
-            metric_row.addWidget(group, 1)
+            metric_row.addWidget(group, 0, column)
             self.metrics[key] = (value, caption)
         summary_layout.addWidget(metrics)
         page.addWidget(summary)
@@ -371,7 +372,31 @@ class ProductionWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         self._arrange()
+        self._arrange_metrics()
         super().resizeEvent(event)
+
+    def _arrange_metrics(self) -> None:
+        if not hasattr(self, "_metric_groups"):
+            return
+        margins = self.metric_row.contentsMargins()
+        available = self.metrics_frame.width() - margins.left() - margins.right()
+        widths = [group.minimumSizeHint().width() for group in self._metric_groups]
+        columns = 1
+        for candidate in (5, 3, 2):
+            required = sum(max(widths[i::candidate]) for i in range(candidate))
+            required += (candidate - 1) * self.metric_row.horizontalSpacing()
+            if required <= available:
+                columns = candidate
+                break
+        if columns == self._metric_columns:
+            return
+        self._metric_columns = columns
+        for group in self._metric_groups:
+            self.metric_row.removeWidget(group)
+        for index in range(5):
+            self.metric_row.setColumnStretch(index, int(index < columns))
+        for index, group in enumerate(self._metric_groups):
+            self.metric_row.addWidget(group, index // columns, index % columns)
 
     def navigate(self, index: int) -> None:
         # Keep the actual destination selected while a dirty-draft decision is pending.
@@ -426,23 +451,25 @@ class ProductionWindow(QMainWindow):
             preview.refresh_theme()
         colors = theme_colors(self)
         for key, icon in self.metric_icons.items():
-            symbol = (
-                "OK"
-                if key == "channel_ok"
-                else "NG"
-                if key == "channel_ng"
-                else "clock"
-                if key == "processing"
-                else "cycles"
-            )
+            state = {
+                "channel_ok": Indicator.OK,
+                "channel_ng": Indicator.NG,
+                "channel_empty": Indicator.EMPTY,
+            }.get(key)
             icon.setPixmap(
                 (
                     indicator_icon(
-                        Indicator.OK if key == "channel_ok" else Indicator.NG,
-                        colors.ok if key == "channel_ok" else colors.ng,
+                        state,
+                        colors.ok
+                        if state is Indicator.OK
+                        else colors.ng
+                        if state is Indicator.NG
+                        else colors.secondary,
                     )
-                    if key in ("channel_ok", "channel_ng")
-                    else production_icon(symbol, colors.secondary)
+                    if state is not None
+                    else production_icon(
+                        "clock" if key == "processing" else "cycles", colors.secondary
+                    )
                 ).pixmap(28, 28)
             )
 
@@ -458,13 +485,15 @@ class ProductionWindow(QMainWindow):
         for key, (_, caption) in self.metrics.items():
             caption.setText(
                 text(
-                    {"channel_ok": "production_ok", "channel_ng": "production_ng"}.get(
-                        key, key
-                    ),
+                    {
+                        "channel_ok": "production_ok",
+                        "channel_ng": "production_ng",
+                        "channel_empty": "production_empty",
+                    }.get(key, key),
                     language,
                 )
             )
-        for key in ("channel_ok", "channel_ng"):
+        for key in ("channel_ok", "channel_ng", "channel_empty"):
             for label in self.metrics[key]:
                 label.setToolTip(text("channel_count_help", language))
         for key, label in self.placeholders.items():
@@ -883,6 +912,7 @@ class ProductionWindow(QMainWindow):
             ("cycles", counts.cycles_completed),
             ("channel_ok", counts.business_ok),
             ("channel_ng", counts.business_ng),
+            ("channel_empty", counts.business_empty),
         ):
             self.metrics[key][0].setText(f"{count:,}")
             self.metrics[key][0].setAccessibleName(
@@ -895,6 +925,10 @@ class ProductionWindow(QMainWindow):
             else f"{(result.result_ready_at - result.inspection_started_at) * 1000:.0f} ms"
         )
         self.metrics["processing"][0].setText(duration)
+        self.metrics["processing"][0].setAccessibleName(
+            f"{self.metrics['processing'][1].text()}: {duration}"
+        )
+        self._arrange_metrics()
         self._render_status()
         self._render_cards()
 
@@ -1474,6 +1508,12 @@ class ProductionWindow(QMainWindow):
         self.batch_label.setAccessibleName(batch)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.metrics_frame and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.LayoutRequest,
+        ):
+            self._arrange_metrics()
         if event.type() is QEvent.Type.Resize and watched in (
             self.summary,
             self.identity_label,

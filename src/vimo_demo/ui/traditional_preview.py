@@ -48,6 +48,7 @@ from vimo_demo.inspection.production import (
     ChannelROI,
     CheckResult,
     ProductJudgment,
+    TechnicalStatus,
 )
 from vimo_demo.inspection.production.capsule import (
     CapsuleMeasurement,
@@ -65,6 +66,21 @@ from .roi_canvas import RoiCanvas
 
 type PreviewMode = Literal["size", "color"]
 type ReferenceKind = Literal["folder", "runtime", "import"]
+
+_REASON_LABELS = {
+    leaf: f"preview_{leaf}"
+    for leaf in (
+        "missing_body",
+        "competing_bodies",
+        "truncated_body",
+        "invalid_geometry",
+        "insufficient_foreground",
+        "unusable",
+        "width",
+        "height",
+        "tolerance",
+    )
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +125,7 @@ class PreviewCanvas(RoiCanvas):
         self.results: tuple[CheckResult | None, ...] = ()
         self.slots: tuple[ChannelROI, ...] = ()
         self.language: Language = "zh"
-        self.mode: PreviewMode = "size"
+        self.check_enabled = False
         self.selection: tuple[int, int] | None = None
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -146,14 +162,26 @@ class PreviewCanvas(RoiCanvas):
         )
         for index, slot in enumerate(self.slots):
             result = self.results[index] if index < len(self.results) else None
+            error = index < len(self.rows) and bool(self.rows[index].error)
+            technical = result.assessment.technical_status if result else None
             judgment = result.assessment.judgment if result else None
             label = (
-                judgment.name
+                text("preview_disabled_short", self.language)
+                if not self.check_enabled or technical is TechnicalStatus.DISABLED
+                else text("preview_error_short", self.language)
+                if error or technical is TechnicalStatus.ERROR
+                else judgment.name
                 if judgment
-                else ("预览不可用" if self.language == "zh" else "Unavailable")
+                else "—"
             )
             color = (
-                "#41c896"
+                theme_colors(self).secondary
+                if not self.check_enabled
+                or technical is TechnicalStatus.DISABLED
+                or (result is None and not error)
+                else "#e2b45d"
+                if error or technical is TechnicalStatus.ERROR
+                else "#41c896"
                 if judgment is ProductJudgment.OK
                 else "#fa6478"
                 if judgment is ProductJudgment.NG
@@ -162,10 +190,13 @@ class PreviewCanvas(RoiCanvas):
             painter.setPen(QPen(QColor(color), 2))
             outline = QRectF(*transform.rectangle(slot.rect))
             painter.drawRect(outline)
+            caption = f"CH{slot.channel_id:02d} · {label}"
+            if painter.fontMetrics().horizontalAdvance(caption) > outline.width() - 4:
+                caption = f"CH{slot.channel_id:02d}\n{label}"
             painter.drawText(
-                outline.adjusted(5, 5, -2, -2),
-                Qt.AlignmentFlag.AlignTop,
-                f"CH{slot.channel_id:02d} · {label}",
+                outline.adjusted(2, 2, -2, -2),
+                Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter,
+                caption,
             )
             if index >= len(self.rows) or self.rows[index].measured is None:
                 continue
@@ -359,7 +390,9 @@ class TraditionalPreview(QWidget):
         )
         self._controls_row = QHBoxLayout()
         self._controls_row.setSpacing(Style.space)
-        self._controls_row.addWidget(self.title)
+        self.title.setProperty("role", "secondary")
+        self.title.setWordWrap(True)
+        root.addWidget(self.title)
         self._controls_row.addWidget(self.controls)
         self.selection_detail = QLabel()
         self.selection_detail.setMinimumWidth(230)
@@ -462,14 +495,10 @@ class TraditionalPreview(QWidget):
 
     def show_settings(self) -> None:
         self._loading = True
-        self.title.setText(
-            self.tr_pair("尺寸调参", "Size tuning")
-            if self.mode == "size"
-            else self.tr_pair("颜色调参", "Color tuning")
-        )
+        self.title.setText(text(f"preview_{self.mode}_scope", self.language))
+        self.title.setToolTip(text("preview_scope_tip", self.language))
         settings = self.session.draft.capsule
         self.controls.setCurrentIndex(0 if self.mode == "size" else 1)
-        self.canvas.mode = self.mode
         for key, spin in self.spins.items():
             value = {
                 "target_width": settings.size.target_width,
@@ -532,7 +561,15 @@ class TraditionalPreview(QWidget):
             or self.frame is None
         ):
             self.selection_detail.setText(
-                self.tr_pair("点选上／下胶囊查看测量", "Select an upper/lower capsule")
+                text("preview_pending", self.language)
+                if self.busy
+                else text("preview_no_reference", self.language)
+                if self.frame is None
+                else text("preview_unavailable", self.language)
+                if not self.measurements
+                else self.tr_pair(
+                    "点选上／下胶囊查看测量", "Select an upper/lower capsule"
+                )
             )
             self.selection_detail.setToolTip("")
             return
@@ -550,26 +587,28 @@ class TraditionalPreview(QWidget):
         available = measured is not None and (
             measured.size_measured if self.mode == "size" else measured.color_measured
         )
-        status, reason = self.tr_pair("不可用", "Unavailable"), ""
+        status, reason, explanation = self.tr_pair("不可用", "Unavailable"), "", ""
         if not enabled:
             status = "DISABLED"
         elif row is not None and row.error:
             status, reason = "ERROR", row.error
         elif available and measured is not None:
-            # Reuse the accepted judgment for this capability, then select its
-            # explicit view reasons. This is advisory view status, not acceptance.
-            selected_settings = replace(
-                settings,
-                size=replace(settings.size, enabled=self.mode == "size"),
-                color=replace(settings.color, enabled=self.mode == "color"),
-            )
-            try:
-                result = judge_capsule(measured, selected_settings)
+            result = self.results[index] if index < len(self.results) else None
+            if result is not None:
                 reasons = [r.code for r in result.reasons if f".{name}." in r.code]
                 status = "NG" if reasons else "OK"
                 reason = ", ".join(reasons)
-            except ValueError as exc:
-                status, reason = "ERROR", str(exc)
+                explanation = " · ".join(
+                    dict.fromkeys(
+                        text(
+                            _REASON_LABELS.get(
+                                code.rsplit(".", 1)[-1], "preview_unavailable"
+                            ),
+                            self.language,
+                        )
+                        for code in reasons
+                    )
+                )
         check_name = self.tr_pair(
             "尺寸" if self.mode == "size" else "颜色", self.mode.title()
         )
@@ -591,7 +630,9 @@ class TraditionalPreview(QWidget):
             )
             actual = f"{hue:.2f}" if hue is not None else "—"
             values = f"Hue {actual} · {self.tr_pair('目标', 'Target')} {settings.color.target_hue} ± {settings.color.hue_tolerance}"
-        self.selection_detail.setText(f"{header}\n{values}")
+        self.selection_detail.setText(
+            f"{header}\n{values}" + (f"\n{explanation}" if explanation else "")
+        )
         self.selection_detail.setToolTip(
             reason
             + ("\n" if reason else "")
@@ -1035,10 +1076,19 @@ class TraditionalPreview(QWidget):
         self.refresh_state()
 
     def evaluate(self) -> None:
+        settings = self.session.draft.capsule
+        selected_settings = replace(
+            settings,
+            size=replace(
+                settings.size, enabled=self.mode == "size" and settings.size.enabled
+            ),
+            color=replace(
+                settings.color, enabled=self.mode == "color" and settings.color.enabled
+            ),
+        )
+        self.canvas.check_enabled = selected_settings.enabled
         self.results = tuple(
-            judge_capsule(row.measured, self.session.draft.capsule)
-            if row.measured
-            else None
+            judge_capsule(row.measured, selected_settings) if row.measured else None
             for row in self.measurements
         )
         self.canvas.rows, self.canvas.results = self.measurements, self.results
@@ -1048,10 +1098,6 @@ class TraditionalPreview(QWidget):
             self.show_message(self._reference_error)
         elif self.frame is None:
             self.show_message("")  # The toolbar owns blank/schematic image status.
-        elif not self.session.draft.capsule.enabled:
-            self.show_message(
-                self.tr_pair("两项检测均未启用", "Both inspections are disabled")
-            )
         elif self.busy:
             self.show_message(
                 self.tr_pair("正在测量冻结参考图…", "Measuring frozen reference…")
@@ -1060,25 +1106,30 @@ class TraditionalPreview(QWidget):
             errors = [
                 f"CH{row.slot.channel_id:02d}: {row.error}"
                 for row in self.measurements
-                if row.error
+                if row.error and selected_settings.enabled
             ]
-            self.show_message("\n".join(errors))
-            self.canvas.setToolTip(
-                "\n".join(
-                    f"CH{row.slot.channel_id:02d}: "
-                    + (
-                        ", ".join(r.code for r in result.reasons)
-                        if result
-                        else row.error
-                    )
-                    for row, result in zip(self.measurements, self.results, strict=True)
-                    if row.error or (result is not None and result.reasons)
+            self.show_message(
+                text("preview_measurement_error", self.language).format(
+                    count=len(errors)
                 )
+                if errors
+                else ""
             )
+            self.message.setToolTip("\n".join(errors))
+        self.canvas.setToolTip(
+            "\n".join(
+                f"CH{row.slot.channel_id:02d}: "
+                + (", ".join(r.code for r in result.reasons) if result else row.error)
+                for row, result in zip(self.measurements, self.results, strict=True)
+                if (row.error and selected_settings.enabled)
+                or (result is not None and result.reasons)
+            )
+        )
 
     def show_message(self, message: str) -> None:
         """Only transient work/unavailable/error feedback reserves a row."""
         self.message.setText(message)
+        self.message.setToolTip(message)
         self.message.setVisible(bool(message))
 
     def request_close(self, after: Callable[[], None]) -> None:

@@ -246,7 +246,7 @@ and view. A single detail area beside the parameters shows actual body W/H with
 configured limits, or actual Hue with target/circular tolerance. View status uses
 the existing Size/Color judge's reasons for that capability and view; it is not
 the combined channel result or production acceptance. Image overlays keep compact
-channel judgments/body outlines and a selection highlight, without twelve repeated
+selected Size or Color check judgments/body outlines and a selection highlight, without twelve repeated
 W/H captions. Threshold edits rejudge cached evidence; mode switches retain the
 selection. New images/camera changes clear it; stale asynchronous evidence is
 never displayed as the selected view's measurements.
@@ -256,6 +256,11 @@ not collect Occupancy evidence or infer EMPTY from a missing body. Routine
 always-on/unavailable explanations are omitted from Qt presentation; actual
 production Occupancy state/evidence and technical errors remain visible. This
 does not change Size/Color judgment or the production EMPTY skip contract.
+One localized scope label identifies the standalone check, not Production business
+status. Selected-view feedback translates existing missing-body, unusable-color
+and tolerance reasons, retaining exact diagnostics in tooltips. Missing reference,
+pending measurement, technical ERROR and disabled checks remain distinct; a valid
+image without usable measurement evidence keeps its existing NG and `—` values.
 
 Recipe Discard beside Save/apply confirms reloading the selected Recipe from its
 actual saved file. Read/identity/validation failure preserves the current draft;

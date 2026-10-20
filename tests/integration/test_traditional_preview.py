@@ -13,10 +13,12 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLabel
 from tests.capsule_support import SETTINGS, bodies
+from tests.cycle_support import image_result
 from tests.qt_support import ensure_test_fonts, until
 from tests.recipe_ui_support import Screen, assert_inside, demo_recipe_window
 from tests.recipe_ui_support import configured_screen as configured_screen
 
+from vimo_demo.application import ConfiguredProductionPipeline
 from vimo_demo.application.basler_connection import (
     CameraSnapshot,
     ConnectedCamera,
@@ -34,15 +36,17 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.inspection.production import (
     CameraLayout,
+    ChannelBusinessStatus,
     ChannelROI,
     InspectionLayout,
     ProductJudgment,
+    TechnicalStatus,
 )
 from vimo_demo.inspection.production.capsule import CapsuleSettings, judge_capsule
 from vimo_demo.ui.camera_source_editor import CameraSourceDraft
 from vimo_demo.ui.display_frames import DisplayFrame
 from vimo_demo.ui.machine_editor import MachineLayoutDraft
-from vimo_demo.ui.production_style import Language
+from vimo_demo.ui.production_style import Language, text
 from vimo_demo.ui.traditional_preview import (
     PreviewMode,
     TraditionalPreview,
@@ -301,6 +305,31 @@ def test_runtime_preview_never_invents_pixels_or_results_but_preserves_real_pixe
                 row.measured and all(view.body is None for view in row.measured.views)
                 for row in preview.measurements
             )
+            for mode in ("size", "color"):
+                preview.set_mode(mode)
+                preview.select_view(0, 0)
+                assert preview.title.text() == text(
+                    f"preview_{mode}_scope", window.language
+                )
+                assert "NG" in preview.selection_detail.text()
+                assert "—" in preview.selection_detail.text()
+                assert all(
+                    r and r.assessment.judgment is ProductJudgment.NG
+                    for r in preview.results
+                )
+            # Explicitly compare with the real synchronous Production fusion;
+            # this test call is separate from the preview, which never runs Occupancy.
+            production = ConfiguredProductionPipeline(
+                session.resolve(session.draft.to_recipe())
+            ).inspect_frame(
+                Frame(preview.frame.frame_id, 1, preview.frame.image.copy()),
+                image_result,
+            )
+            assert all(
+                c.business_status is ChannelBusinessStatus.EMPTY
+                for c in production.channels
+            )
+            assert window.bridge.application.snapshot() == before and not runtimes
         else:
             assert all(
                 row.measured
@@ -474,7 +503,13 @@ def test_cached_judgment_and_isolation_and_save(
     )
     for row, result in zip(preview.measurements, preview.results, strict=True):
         assert row.measured is not None
-        assert result == judge_capsule(row.measured, session.draft.capsule)
+        assert result == judge_capsule(
+            row.measured,
+            replace(
+                session.draft.capsule,
+                color=replace(session.draft.capsule.color, enabled=False),
+            ),
+        )
 
     def forbidden(*args: object) -> None:
         pytest.fail("Threshold edit must not segment again")
@@ -723,7 +758,10 @@ def test_no_repeated_text_but_errors_remain(
     )
     preview.refresh_reference()
     until(lambda: not preview.busy)
-    assert preview.message.isVisible() and "ValueError" in preview.message.text()
+    assert preview.message.isVisible() and "ValueError" in preview.message.toolTip()
+    assert preview.message.text() == text("preview_measurement_error", language).format(
+        count=6
+    )
     collapse(preview, configured_screen)
 
 
@@ -747,7 +785,7 @@ def test_view_judgment_is_separate_from_other_view_and_check(
     until(lambda: not preview.busy)
     assert (
         preview.results[0]
-        and preview.results[0].assessment.judgment is ProductJudgment.NG
+        and preview.results[0].assessment.judgment is ProductJudgment.OK
     )
     preview.select_view(0, 1)
     assert "Size OK" in preview.selection_detail.text()
@@ -792,6 +830,9 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     preview.select_view(0, 0)
     assert f"{mode.title()} NG" in preview.selection_detail.text()
     assert ("W —" if mode == "size" else "Hue —") in preview.selection_detail.text()
+    assert (
+        "No measurable body" if mode == "size" else "Insufficient usable color pixels"
+    ) in preview.selection_detail.text()
     assert "Occupancy" not in preview.selection_detail.text()
     assert (
         "EMPTY" not in preview.selection_detail.text()
@@ -817,6 +858,7 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     until(lambda: not preview.busy)
     assert "DISABLED" in preview.selection_detail.text()
     assert ("W —" if mode == "size" else "Hue —") in preview.selection_detail.text()
+    assert not preview.canvas.check_enabled and not preview.message.isVisible()
 
 
 def test_selection_clears_on_image_camera_change_and_while_evidence_pending(
@@ -1132,13 +1174,23 @@ def test_disabled_selected_mode_keeps_other_checks_ng(
     assert not configured_screen[0].parameters.capsule_enabled[preview.mode].isChecked()
     assert configured_screen[0].parameters.capsule_enabled[preview.mode].isVisible()
     assert all(
-        r and r.assessment.judgment is ProductJudgment.NG for r in preview.results
+        r and r.assessment.technical_status is TechnicalStatus.DISABLED
+        for r in preview.results
+    )
+    assert all(
+        row.measured
+        and judge_capsule(row.measured, session.draft.capsule).assessment.judgment
+        is ProductJudgment.NG
+        for row in preview.measurements
     )
     assert preview.canvas.results == preview.results
     measurements, results = preview.measurements, preview.results
     preview.set_mode("size" if (1 if mode == "size" else 0) == 0 else "color")
     assert configured_screen[0].parameters.capsule_enabled[preview.mode].isChecked()
-    assert preview.measurements is measurements and preview.results == results
+    assert preview.measurements is measurements and preview.results != results
+    assert all(
+        r and r.assessment.judgment is ProductJudgment.NG for r in preview.results
+    )
     assert window.bridge.application.snapshot() == before and not runtimes
     collapse(preview, configured_screen)
 

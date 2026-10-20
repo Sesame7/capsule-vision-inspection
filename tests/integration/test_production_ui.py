@@ -423,7 +423,13 @@ def test_fixed_player_controls_follow_application_state(
         window.buttons[key].isVisible() for key in ("operation", "pause", "stop")
     )
     assert window.buttons["batch"].isEnabled() == (state is ApplicationState.READY)
-    assert set(window.metrics) == {"cycles", "channel_ok", "channel_ng", "processing"}
+    assert set(window.metrics) == {
+        "cycles",
+        "channel_ok",
+        "channel_ng",
+        "channel_empty",
+        "processing",
+    }
     if state is ApplicationState.FAULT:
         window.bridge.snapshot_changed.emit(
             replace(window.snapshot, runtime_owned=True)
@@ -601,9 +607,78 @@ def test_batch_edit_confirmation_resets_only_when_accepted(
         assert window.snapshot.counters == ProductionCounters()
         assert window.snapshot.latest_production_result is None
         assert window.snapshot.batch_id == (value or None)
+        assert all(
+            window.metrics[key][0].text() == "0"
+            for key in ("cycles", "channel_ok", "channel_ng", "channel_empty")
+        )
+        assert window.metrics["processing"][0].text() == "--"
     else:
         assert window.snapshot.counters == counts
         assert window.snapshot.latest_production_result is not None
+
+
+def test_five_metrics_follow_cumulative_business_counts_and_batch(
+    screen: tuple[ProductionWindow, FakeSession],
+) -> None:
+    window, session = screen
+    window.set_language("en")
+    assert window.metrics["processing"][0].text() == "--"
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    for cycle in (1, 2):
+        receipt = window.bridge.application.begin_cycle(CycleId(cycle))
+        result = mixed_result(cycle)
+        if cycle == 2:
+            result = replace(result, inspection_started_at=None)
+        session.cycles[-1].accepted.set_result(None)
+        session.cycles[-1].result.set_result(result)
+        until(
+            lambda receipt=receipt, cycle=cycle: (
+                receipt.result.done()
+                and window.snapshot.counters.cycles_completed == cycle
+            )
+        )
+        assert window.metrics["cycles"][0].text() == str(cycle)
+        assert window.metrics["channel_ok"][0].text() == str(6 * cycle)
+        assert window.metrics["channel_ng"][0].text() == str(12 * cycle)
+        assert window.metrics["channel_empty"][0].text() == str(6 * cycle)
+        assert window.metrics["processing"][0].text() == (
+            "25 ms" if cycle == 1 else "--"
+        )
+    window.bridge.stop()
+    until(lambda: window.snapshot.state is ApplicationState.READY)
+    counts = window.snapshot.counters
+    window.bridge.select_recipe(window.choices[1])
+    window.bridge.refresh()
+    assert window.snapshot.counters == counts
+    assert window.metrics["channel_empty"][0].text() == "12"
+    window.bridge.start_batch("new-batch")
+    window.bridge.refresh()
+    assert window.snapshot.counters == ProductionCounters()
+    assert all(
+        window.metrics[key][0].text() == "0"
+        for key in ("cycles", "channel_ok", "channel_ng", "channel_empty")
+    )
+    assert window.metrics["processing"][0].text() == "--"
+
+
+def test_metrics_wrap_without_shrinking_labels(
+    screen: tuple[ProductionWindow, FakeSession],
+    qapp: QApplication,
+) -> None:
+    window, _ = screen
+    window.resize(880, 1400)
+    window.set_language("en")
+    for value, caption in window.metrics.values():
+        caption.setStyleSheet("font-size: 36px;")
+        value.setStyleSheet("font-size: 36px;")
+    qapp.processEvents()
+    until(lambda: window.metric_row.itemAtPosition(1, 0) is not None)
+    for value, caption in window.metrics.values():
+        for label in (value, caption):
+            assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())
+            assert window.summary.rect().contains(label.mapTo(window.summary, QPoint()))
 
 
 def test_ng_is_quiet_but_technical_errors_keep_fixed_status_geometry(
@@ -1177,9 +1252,17 @@ def _inspect_and_assert_business_presentation(
     )  # Original judgments, including EMPTY/UNKNOWN.
     assert window.metrics["channel_ok"][0].text() == "6"  # Business OK only.
     assert window.metrics["channel_ng"][0].text() == "12"
+    assert window.metrics["channel_empty"][0].text() == "6"
     assert window.metrics["channel_ok"][1].text() == "CH OK"
     assert window.metrics["channel_ng"][1].text() == "CH NG"
-    assert set(window.metrics) == {"cycles", "channel_ok", "channel_ng", "processing"}
+    assert window.metrics["channel_empty"][1].text() == "CH EMPTY"
+    assert set(window.metrics) == {
+        "cycles",
+        "channel_ok",
+        "channel_ng",
+        "channel_empty",
+        "processing",
+    }
     expected = (
         Indicator.OK,
         Indicator.EMPTY,
@@ -1349,7 +1432,7 @@ def _assert_long_summary(
         assert window.summary.rect().contains(
             position + QPoint(widget.width() - 1, widget.height() - 1)
         )
-    assert len(window.metrics) == 4 and "channel_ok" in window.metrics
+    assert len(window.metrics) == 5 and "channel_empty" in window.metrics
     assert window.grab().save(
         str(tmp_path / f"header-{language}-{size[0]}x{size[1]}-long-identities.png")
     )

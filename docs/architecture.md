@@ -276,6 +276,12 @@ acquisition progress available in the state tooltip. Read-only channel symbols
 retain full ChannelIds and technical evidence in tooltips; only identity-matched
 results draw defect boxes.
 
+Production shows completed cycles, CH OK, CH NG, CH EMPTY and last inspection
+duration. Counts come directly from the application business counters; unavailable
+timing displays `--`. Whole metric groups wrap when their text cannot fit one row.
+These are cumulative occurrences, retained by Stop/Start and Recipe changes and
+reset only by explicit Batch, not physical capsule counts.
+
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,
 dimensions and source key. Only matching evidence may overlay those pixels.
