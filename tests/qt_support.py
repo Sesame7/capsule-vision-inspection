@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING
 
 import pytest
@@ -48,10 +49,14 @@ def until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
 
 
 def close_window(window: ProductionWindow) -> None:
+    """Settle owners and await Qt deletion before the next test's native work."""
+    destroyed = Event()
+    window.destroyed.connect(destroyed.set)
     window.close()
     until(lambda: window.bridge.closed and window.communication.closed)
     assert window.bridge.application.join(1)
     window.deleteLater()
+    until(destroyed.is_set)
 
 
 @pytest.fixture

@@ -308,9 +308,8 @@ def test_runtime_preview_never_invents_pixels_or_results_but_preserves_real_pixe
             for mode in ("size", "color"):
                 preview.set_mode(mode)
                 preview.select_view(0, 0)
-                assert preview.title.text() == text(
-                    f"preview_{mode}_scope", window.language
-                )
+                assert not hasattr(preview, "title")
+                assert not preview.message.text() and preview.message.isHidden()
                 assert "NG" in preview.selection_detail.text()
                 assert "—" in preview.selection_detail.text()
                 assert all(

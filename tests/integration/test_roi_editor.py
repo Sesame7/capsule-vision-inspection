@@ -433,7 +433,7 @@ def test_source_free_roi_layout_matrix(configured_screen: Screen) -> None:
     assert session.camera_sources is None
     before = window.bridge.application.snapshot()
     languages: tuple[Language, Language] = ("zh", "en")
-    for size in ((1080, 1920), (1920, 1080), (900, 1200)):
+    for size in ((1080, 1920), (1920, 1080)):
         for language in languages:
             try:
                 _assert_source_free_roi_layout(configured_screen, language, size)

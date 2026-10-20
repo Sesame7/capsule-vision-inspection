@@ -11,7 +11,16 @@ import pytest
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QWidget,
+)
 from tests.bootstrap_support import saved_data
 from tests.qt_support import close_window, ensure_test_fonts, until
 
@@ -769,7 +778,7 @@ def test_discard_does_not_undo_observed_write(
     assert page.success.text() and page.status.text()
 
 
-@pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
+@pytest.mark.parametrize("size", [(1080, 1857), (1300, 1017), (1920, 1017)])
 def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
     qapp: QApplication, tmp_path: Path, size: tuple[int, int]
 ) -> None:
@@ -785,12 +794,21 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         window.navigate(2)
         qapp.processEvents()
         page = window.communication
-        initial_position = (0, 1) if size[0] > size[1] else (1, 0)
+        panel = page.reporting_panel
+        assert panel is not None
+        required = (
+            panel.minimumSizeHint().width()
+            + page.web_panel.minimumSizeHint().width()
+            + Style.space
+        )
+        initial_position = (
+            (0, 1) if page.scroll_area.viewport().width() >= required else (1, 0)
+        )
         assert page.service_layout.itemAtPosition(*initial_position) is not None
         assert page.body.width() <= page.scroll_area.viewport().width()
 
         window.resize(size[1], size[0])
-        opposite_position = (1, 0) if size[0] > size[1] else (0, 1)
+        opposite_position = (1, 0) if initial_position == (0, 1) else (0, 1)
         until(
             lambda: page.service_layout.itemAtPosition(*opposite_position) is not None
         )
@@ -805,11 +823,68 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
             + page.web_panel.minimumSizeHint().width()
             + page.service_layout.horizontalSpacing()
         )
-        wide = page.width() > page.height() and page.service_cards.width() >= required
+        wide = page.scroll_area.viewport().width() >= required
         assert (
             page.service_layout.itemAtPosition(*(0, 1) if wide else (1, 0)) is not None
         )
         assert panel.summary.text() == "ACK -- · Successful 0 · ERR 0"
+        if size[0] == 1300:
+            # Expanded controls must fit the viewport after first navigation,
+            # language changes and shrinking from a previously wide grid.
+            panel.advanced_button.click()
+            page.advanced_button.click()
+            page.watch_editor_button.click()
+            page.manual_button.click()
+            before = startup.application.snapshot()
+            for width in (1300, 1920, 1080, 1300):
+                window.showNormal()
+                window.resize(width, 1017)
+                for language in ("zh", "en"):
+                    window.set_language(language)
+                    qapp.processEvents()
+                    available = page.scroll_area.viewport().width()
+                    assert page.body.width() <= available
+                    required = (
+                        panel.minimumSizeHint().width()
+                        + page.web_panel.minimumSizeHint().width()
+                        + Style.space
+                    )
+                    position = (0, 1) if available >= required else (1, 0)
+                    until(
+                        lambda pos=position: (
+                            page.service_layout.itemAtPosition(*pos) is not None
+                        )
+                    )
+                    assert page.body.width() <= available, (
+                        width,
+                        language,
+                        available,
+                        required,
+                        page.service_cards.width(),
+                        panel.minimumSizeHint(),
+                        page.web_panel.minimumSizeHint(),
+                    )
+                    for control in page.body.findChildren(QWidget):
+                        if control.isVisible() and isinstance(
+                            control,
+                            (
+                                QAbstractButton,
+                                QAbstractSpinBox,
+                                QComboBox,
+                                QLineEdit,
+                                QLabel,
+                            ),
+                        ):
+                            point = control.mapTo(page.body, QPoint())
+                            assert (
+                                0 <= point.x()
+                                and point.x() + control.width() <= available
+                            ), (control.accessibleName(), control.geometry(), available)
+                    if width in (1300, 1920) and language == "en":
+                        assert page.grab().save(
+                            str(tmp_path / f"communication-{width}.png")
+                        )
+            assert startup.application.snapshot() == before
     finally:
         close_window(window)
         delivery.detach()
@@ -883,8 +958,6 @@ def _assert_service_cards_reflow(
         ("en", (1920, 1080)),
         ("en", (1080, 1920)),
         ("zh", (1920, 1080)),
-        ("zh", (880, 720)),
-        ("en", (900, 1200)),
     ],
 )
 def test_communication_presentation_matrix(
@@ -928,11 +1001,8 @@ def test_communication_presentation_matrix(
     assert panel.enabled.accessibleName() == text("plc_enable", language)
     assert panel.port.accessibleName() == text("comm_port", language)
     assert panel.host.text() == "127.0.0.1" and panel.advanced.isVisible()
-    # Narrow requested widths may be raised by Qt's effective minimum. Preserve
-    # the original requested-width assertion at its four original input rows.
     assert panel.geometry().width() <= window.width()
-    if size in ((1080, 1920), (1920, 1080)):
-        assert panel.geometry().width() <= width
+    assert panel.geometry().width() <= width
     for widget in (panel.enabled, panel.port, panel.timeout, panel.advanced_button):
         assert widget.width() >= widget.minimumSizeHint().width()
     for widget in (

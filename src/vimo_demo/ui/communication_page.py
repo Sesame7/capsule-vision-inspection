@@ -401,6 +401,7 @@ class CommunicationPage(QWidget):
         self.port.valueChanged.connect(self._refresh)
         self.set_language("zh")
         self.service_cards.installEventFilter(self)
+        self.scroll_area.viewport().installEventFilter(self)
 
     def _panel(
         self,
@@ -468,13 +469,16 @@ class CommunicationPage(QWidget):
         self._arrange_services()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self.service_cards and event.type() in (
+        if watched in (
+            self.service_cards,
+            self.scroll_area.viewport(),
+        ) and event.type() in (
             QEvent.Type.Resize,
             QEvent.Type.Show,
             QEvent.Type.LayoutRequest,
         ):
-            # The scroll area settles this width after the page's resize event,
-            # including the first navigation from a previously hidden page.
+            # Observe available space, including after the vertical scrollbar
+            # appears. Content minimums can temporarily exceed this viewport.
             self._arrange_services()
         return super().eventFilter(watched, event)
 
@@ -487,7 +491,7 @@ class CommunicationPage(QWidget):
             + self.web_panel.minimumSizeHint().width()
             + Style.space
         )
-        wide = self.width() > self.height() and self.service_cards.width() >= required
+        wide = self.scroll_area.viewport().width() >= required
         position = (0, 1) if wide else (1, 0)
         if self.service_layout.itemAtPosition(*position) is not None:
             return
@@ -903,6 +907,7 @@ class CommunicationPage(QWidget):
             item.setToolTip(text(key, language))
         self._render_watch()
         self._refresh()
+        self._arrange_services()
 
     def _snapshot(self, kind: RequestKind, count: int = 1) -> CommunicationRequest:
         values = (

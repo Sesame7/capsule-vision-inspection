@@ -328,6 +328,12 @@ recent PLC reporting observation (ACK is not connectivity/consumption), Web owne
 availability and current feedback. It reuses bridge refresh/notifications without
 another timer or network request.
 
+The minimum supported window width is 1080 Qt logical pixels. UI validation uses
+1080-wide portrait at 100% Windows scaling and 1920-wide landscape; wider cases
+are retained where they exercise responsive allocation. Sub-1080 windows are not
+acceptance targets. This support boundary does not change Qt's existing minimum
+size constraints or the image canvas coordinate system.
+
 Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
 The middle control becomes Step while paused; Folder and Basler retain distinct
 source-boundary semantics. Reset is a separate fault-recovery action. Basler control

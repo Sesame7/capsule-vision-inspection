@@ -51,7 +51,7 @@ from vimo_demo.application.history import (
 
 from .image_tools import image_icon
 from .inference_bridge import FutureDelivery
-from .production_style import Language, Style, production_icon, text, theme_colors
+from .production_style import Language, Style, text, theme_colors
 
 
 class _ResultDelegate(QStyledItemDelegate):
@@ -465,41 +465,37 @@ class HistoryPage(QWidget):
             )
             + 30
         )
-        self.batch.setFixedWidth(
+        filter_width = (
             max(
-                metrics.horizontalAdvance("12-31 23:59:59 · abcdef"),
+                metrics.horizontalAdvance("12-31 23:59:59"),
                 *(
-                    metrics.horizontalAdvance(text("history_all_batches", lang))
+                    metrics.horizontalAdvance(text(key, lang))
+                    for key in (
+                        "history_all_batches",
+                        "history_all",
+                        "history_ok",
+                        "history_ng",
+                        "history_error",
+                        "history_empty",
+                        "history_unknown",
+                    )
                     for lang in ("zh", "en")
                 ),
             )
             + 40
         )
-        self.result.setFixedWidth(
+        self.batch.setFixedWidth(filter_width)
+        self.result.setFixedWidth(filter_width)
+        button_width = (
             max(
                 metrics.horizontalAdvance(text(key, lang))
-                for key in (
-                    "history_all",
-                    "history_ok",
-                    "history_ng",
-                    "history_error",
-                    "history_empty",
-                    "history_unknown",
-                )
+                for key in ("history_newer", "history_older", "history_refresh")
                 for lang in ("zh", "en")
             )
-            + 40
+            + 24
         )
-        for button, key in (
-            (self.newer, "history_newer"),
-            (self.older, "history_older"),
-            (self.refresh_button, "history_refresh"),
-        ):
-            button.setFixedWidth(
-                max(metrics.horizontalAdvance(text(key, lang)) for lang in ("zh", "en"))
-                + 24
-                + (Style.icon + Style.small if button is self.refresh_button else 0)
-            )
+        for button in (self.newer, self.older, self.refresh_button):
+            button.setFixedSize(button_width, Style.touch)
         wrapped = (
             self.workspace.width()
             < self.filters.minimumSizeHint().width()
@@ -557,14 +553,17 @@ class HistoryPage(QWidget):
             )
             + 2 * Style.small
         )
-        cell_width = max(
-            cell_minimum, (self.channels.viewport().width() - camera_width) // 6
-        )
+        available = self.channels.viewport().width() - camera_width
+        total_width = camera_width
         for column in range(1, 7):
+            cell_width = max(
+                cell_minimum, available * column // 6 - available * (column - 1) // 6
+            )
             self.channels.setColumnWidth(column, cell_width)
+            total_width += cell_width
         scroll_height = (
             self.channels.horizontalScrollBar().sizeHint().height()
-            if camera_width + 6 * cell_width > self.channels.viewport().width()
+            if total_width > self.channels.viewport().width()
             else 0
         )
         self.channels.setFixedHeight(
@@ -618,9 +617,6 @@ class HistoryPage(QWidget):
                 button.setIconSize(QSize(Style.icon, Style.icon))
         self.all_dates.setText(text("history_all_dates", language))
         self.refresh_button.setText(text("history_refresh", language))
-        self.refresh_button.setIcon(
-            production_icon("reset", theme_colors(self).primary)
-        )
         self.date.setAccessibleName(text("history_date", language))
         self.date.setToolTip(text("history_clock", language))
         self.batch.setAccessibleName(text("history_batch", language))

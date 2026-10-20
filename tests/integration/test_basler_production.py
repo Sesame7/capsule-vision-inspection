@@ -19,7 +19,7 @@ from tests.application_support import WAIT
 from tests.bootstrap_support import saved_data
 from tests.cycle_support import image_result
 from tests.production_support import inferred
-from tests.qt_support import until
+from tests.qt_support import close_window, until
 from tests.reporting_support import seed, server
 
 from vimo_demo.application import (
@@ -428,8 +428,7 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         window.navigate(0)
         assert window.buttons["secondary"].isHidden()
     finally:
-        window.close()
-        until(lambda: window.bridge.closed)
+        close_window(window)
         assert startup.application.join(0)
         delivery.detach()
 
@@ -510,8 +509,7 @@ def test_fixed_input_composition_overrides_saved_basler_without_false_status(
     finally:
         engine.release_warm.set()
         engine.release_active.set()
-        window.close()
-        until(lambda: bridge.closed)
+        close_window(window)
         assert composition.application.join(0)
 
 
@@ -888,8 +886,7 @@ def test_vision_capture_cancellation_and_stale_delivery(
         assert app.history is not None
         assert app.history.snapshot().accepted == app.history.snapshot().persisted == 0
     finally:
-        window.close()
-        until(lambda: window.bridge.closed)
+        close_window(window)
         assert app.join(WAIT)
         delivery.detach()
 
@@ -1407,9 +1404,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         )
         assert workspace.source_modes["folder"].isEnabled()
     finally:
-        window.close()
-        until(lambda: window.bridge.closed)
-        assert startup.application.join(WAIT)
+        close_window(window)
         delivery.detach()
 
 
@@ -1657,8 +1652,7 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
             peer.release.set()
             for engine in engines:
                 engine.release_active.set()
-            window.close()
-            until(lambda: window.bridge.closed)
+            close_window(window)
             assert app.join(WAIT)
             delivery.detach()
     assert not any(
@@ -1748,8 +1742,7 @@ def test_basler_partial_step_waits_for_late_native_return_before_paused(
         )
     finally:
         engine.release_active.set()
-        window.close()
-        until(lambda: window.bridge.closed)
+        close_window(window)
         assert app.join(WAIT)
         delivery.detach()
 
@@ -1874,8 +1867,7 @@ def test_vision_reentry_bilingual_metadata_without_discovery(
         exc.add_note(f"Vision metadata: ending={ending}, language={window.language}")
         raise
     finally:
-        window.close()
-        until(lambda: window.bridge.closed)
+        close_window(window)
         assert app.join(WAIT)
         delivery.detach()
     assert passive.closed and not app.source_snapshot().thread_alive

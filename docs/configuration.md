@@ -284,8 +284,8 @@ not collect Occupancy evidence or infer EMPTY from a missing body. Routine
 always-on/unavailable explanations are omitted from Qt presentation; actual
 production Occupancy state/evidence and technical errors remain visible. This
 does not change Size/Color judgment or the production EMPTY skip contract.
-One localized scope label identifies the standalone check, not Production business
-status. Selected-view feedback translates existing missing-body, unusable-color
+Routine tuning scope/success prose is omitted; the scope remains available in the
+parameter tooltip. Selected-view feedback translates existing missing-body, unusable-color
 and tolerance reasons, retaining exact diagnostics in tooltips. Missing reference,
 pending measurement, technical ERROR and disabled checks remain distinct; a valid
 image without usable measurement evidence keeps its existing NG and `—` values.

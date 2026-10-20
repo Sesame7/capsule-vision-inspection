@@ -141,11 +141,13 @@ The fixed bottom bar offers Save, confirmed Discard and concise dirty/error stat
 Discard strictly reloads/validates the actual file, not an earlier page snapshot;
 missing/invalid/unusable settings leave the draft intact with an error tooltip.
 It does not persist, restart/stop any owner or undo earlier network operations.
-The default settings can be explicitly saved before any edits. Portrait stacks
-cards; landscape places Production/Web side by side only when their actual content
-fits. Expanded routing/diagnostics grow in the outer scroll area.
+The default settings can be explicitly saved before any edits. Production/Web
+share a row when their actual content fits the available width, and otherwise
+stack. Expanded routing/diagnostics grow in the outer scroll area.
 Service cards reflow when their actual container is shown/resized, including the
-first navigation after maximized startup; no manual resize is needed.
+first navigation after maximized startup; no manual resize is needed. Available
+scroll-viewport width, not content stretched by a previous two-column layout,
+determines whether both cards fit. Vertical overflow remains scrollable.
 Web has one header power action: **Turn on** or **Turn off**, alongside actual
 service state, independent of Production and reporting. Power first reads and
 validates the actual settings file, atomically changes only `web.enabled`, then

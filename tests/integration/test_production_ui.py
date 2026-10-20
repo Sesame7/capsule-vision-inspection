@@ -35,7 +35,7 @@ from vimo_demo.inspection.production import (
 from vimo_demo.ui.camera_card import CameraCard
 from vimo_demo.ui.display_frames import DisplayFrame
 from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
-from vimo_demo.ui.production_presentation import Indicator, grid_columns
+from vimo_demo.ui.production_presentation import Indicator
 from vimo_demo.ui.production_style import (
     Language,
     Style,
@@ -751,7 +751,7 @@ def test_metrics_wrap_without_shrinking_labels(
     qapp: QApplication,
 ) -> None:
     window, _ = screen
-    window.resize(880, 1400)
+    window.resize(1080, 1400)
     window.set_language("en")
     for value, caption in window.metrics.values():
         caption.setStyleSheet("font-size: 36px;")
@@ -971,7 +971,7 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
         )
     )
     for index, size in enumerate(
-        ((1920, 1080), (880, 720), (1080, 1920), (1920, 1080))
+        ((1920, 1080), (1080, 720), (1080, 1920), (1920, 1080))
     ):
         window.resize(*size)
         QApplication.processEvents()
@@ -1670,7 +1670,7 @@ def test_batch_and_summary_presentation(
 
 @pytest.mark.parametrize(
     "size,columns",
-    [((1080, 1920), 2), ((1920, 1080), 3), ((900, 1200), 2), ((880, 720), 2)],
+    [((1080, 1920), 2), ((1920, 1080), 3)],
 )
 @pytest.mark.parametrize("language", ["zh", "en"])
 def test_production_layout_indicators_and_header_stability(
@@ -1684,31 +1684,18 @@ def test_production_layout_indicators_and_header_stability(
 ) -> None:
     window, _ = screen
     try:
-        # Original geometry cases precede any result/state mutations. The 880px
-        # row belongs to the original mixed-result matrix, not its >100px viewport
-        # assertion; preserve both original input sets rather than weakening it.
-        if size != (880, 720):
-            _assert_grid_and_navigation(screen, qapp, size, columns, language)
-        else:
-            window.set_language(language)
-            window.resize(*size)
-            qapp.processEvents()
-            assert window.columns == grid_columns(window.width(), window.height())
-            assert len(window.cards) == 6
+        _assert_grid_and_navigation(screen, qapp, size, columns, language)
         _inspect_and_assert_business_presentation(
             screen, qapp, tmp_path, size, language
         )
         actual = window.bridge.application.snapshot()
         # This original header stage was already presentation-only. Keep the real
         # mixed-result admission above and prevent refresh from replacing this view.
-        # Its original three sizes have enough header space for exact centering;
-        # 880x720 retains its original business-indicator/containment assertions.
-        if size != (880, 720):
-            with monkeypatch.context() as patch:
-                patch.setattr(
-                    window.bridge.application, "snapshot", lambda: window.snapshot
-                )
-                _assert_camera_header_stability(screen, size)
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                window.bridge.application, "snapshot", lambda: window.snapshot
+            )
+            _assert_camera_header_stability(screen, size)
         assert window.bridge.application.snapshot() == actual
         window.bridge.refresh()
     except Exception as exc:

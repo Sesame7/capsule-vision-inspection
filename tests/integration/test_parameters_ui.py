@@ -300,7 +300,7 @@ def test_recipe_cache_action_respects_production_editing_lock(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080), (900, 1200)])
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
 def test_compact_recipe_layout(
     configured_screen: Screen, language: Language, size: tuple[int, int]
 ) -> None:

@@ -587,14 +587,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "production_ng": ("CH NG", "CH NG"),
     "production_ok": ("CH OK", "CH OK"),
     "production_empty": ("CH EMPTY", "CH EMPTY"),
-    "preview_size_scope": (
-        "独立尺寸检查 · 非生产通道状态",
-        "Size check only · not Production status",
-    ),
-    "preview_color_scope": (
-        "独立颜色检查 · 非生产通道状态",
-        "Color check only · not Production status",
-    ),
     "preview_scope_tip": (
         "仅检查当前冻结图和配方草稿的尺寸或颜色；不执行占位检测。同一图像在生产中可由占位检测判为空位。",
         "Checks this frozen image with the Recipe draft, without Occupancy. Production may independently classify the same image as EMPTY.",
@@ -1041,6 +1033,11 @@ def stylesheet(theme: Theme = "dark") -> str:
     QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
     QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
+    QTableWidget#historyChannels QHeaderView {{ background: {c.raised}; }}
+    QTableWidget#historyChannels QScrollBar:horizontal {{ background: {c.background}; height: 14px; }}
+    QTableWidget#historyChannels QScrollBar::handle:horizontal {{ background: {c.border}; min-width: 40px; border-radius: 6px; }}
+    QTableWidget#historyChannels QScrollBar::add-line:horizontal, QTableWidget#historyChannels QScrollBar::sub-line:horizontal {{ width: 0; }}
+    QTableWidget#historyChannels QScrollBar::add-page:horizontal, QTableWidget#historyChannels QScrollBar::sub-page:horizontal {{ background: none; }}
     QCheckBox {{ background: transparent; spacing: 8px; }}
     QCheckBox::indicator {{ width: 20px; height: 20px; }}
     QCheckBox#archiveCondition {{ color: {c.primary}; background: {c.surface}; border: 1px solid {c.border}; border-radius: 6px; padding: 4px 8px; spacing: 6px; }}

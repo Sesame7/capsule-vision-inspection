@@ -50,7 +50,14 @@ from vimo_demo.inspection.production import (
 from vimo_demo.ui.bootstrap import create_window, load_startup
 from vimo_demo.ui.history_page import HistoryPage
 from vimo_demo.ui.inference_bridge import FutureDelivery
-from vimo_demo.ui.production_style import Language, Style, Theme, apply_theme, text
+from vimo_demo.ui.production_style import (
+    Language,
+    Style,
+    Theme,
+    apply_theme,
+    text,
+    theme_colors,
+)
 
 
 def content(table: QTableWidget, row: int, column: int) -> str:
@@ -76,7 +83,7 @@ def cycle_tip(page: HistoryPage, row: int = 0) -> str:
 @pytest.mark.parametrize(
     "language,theme,size",
     [
-        ("zh", "dark", (900, 1600)),
+        ("zh", "dark", (1080, 1600)),
         ("zh", "dark", (1920, 1017)),
         ("zh", "dark", (3440, 1200)),
         ("en", "light", (1920, 1017)),
@@ -248,7 +255,7 @@ def test_history_filters_pagination_selection_and_presentation(
 @pytest.mark.parametrize(
     "language,theme,size",
     [
-        ("zh", "dark", (900, 1500)),
+        ("zh", "dark", (1080, 1500)),
         ("zh", "dark", (1920, 1017)),
         ("zh", "dark", (3440, 1200)),
         ("en", "light", (1920, 1017)),
@@ -346,13 +353,24 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         assert max(widths[2:4]) < 1.25 * min(widths[2:4])
         assert widths[4] >= max(widths[2:4])
         camera_width = page.channels.columnWidth(0)
-        if size[0] == 900:
+        if size[0] == 1080:
             assert 80 <= camera_width <= 100
         elif size[0] == 1920:
             assert 130 <= camera_width <= 160
         else:
             assert 160 < camera_width <= 260
-        assert len({page.channels.columnWidth(i) for i in range(1, 7)}) == 1
+        cells = [page.channels.columnWidth(i) for i in range(1, 7)]
+        assert max(cells) - min(cells) <= 1
+        assert camera_width + sum(cells) == page.channels.viewport().width()
+        assert not page.channels.verticalScrollBar().isVisible()
+        assert page.channels.verticalScrollBar().maximum() == 0
+        assert not page.channels.horizontalScrollBar().isVisible()
+        header = page.channels.horizontalHeader()
+        pixels = header.grab().toImage()
+        dpr = pixels.devicePixelRatio()
+        assert pixels.pixelColor(
+            int((header.width() - 3) * dpr), int(header.height() // 2 * dpr)
+        ) == QColor(theme_colors(page).raised)
         if viewport >= 1800:
             assert widths[0] > 0.12 * viewport and widths[1] > 0.05 * viewport
             assert widths[4] >= 0.25 * viewport
@@ -404,7 +422,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             str(tmp_path / f"history-{language}-{theme}-{size[0]}-balanced.png")
         )
 
-        page.resize(1920 if size[0] == 900 else 900, size[1])
+        page.resize(1920 if size[0] == 1080 else 1080, size[1])
         page.set_language("en" if language == "zh" else "zh")
         qapp.processEvents()
         resized = [page.cycles.columnWidth(i) for i in range(5)]
@@ -437,6 +455,21 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             == page.cycles.viewport().width()
         )
         assert history.snapshot().accepted == history.snapshot().persisted == 4
+        if size[0] == 1080:
+            # A deliberately constrained matrix still scrolls real overflow;
+            # removing the trailing header artifact must not hide columns.
+            page.channels.setMaximumWidth(5 * Style.touch)
+            until(page.channels.horizontalScrollBar().isVisible)
+            assert page.channels.horizontalScrollBar().maximum() > 0
+            assert page.channels.verticalScrollBar().maximum() == 0
+            last = page.channels.item(0, 6)
+            assert last is not None
+            page.channels.scrollToItem(last)
+            assert (
+                page.channels.viewport()
+                .rect()
+                .contains(page.channels.visualItemRect(last))
+            )
     finally:
         page.dispose()
         page.close()
@@ -448,7 +481,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
 @pytest.mark.parametrize(
     "language,theme,size",
     [
-        ("zh", "dark", (900, 1500)),
+        ("zh", "dark", (1080, 1500)),
         ("en", "light", (1920, 1017)),
     ],
 )
@@ -615,7 +648,7 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
     history = ProductionHistory(tmp_path / "history.sqlite3")
     page = HistoryPage(history)
     apply_theme(page, "dark")
-    page.resize(900, 1500)
+    page.resize(1080, 1500)
     page.show()
     try:
         assert history.offer(
@@ -711,7 +744,7 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
         page.deleteLater()
 
 
-def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_900_pixels(
+def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
     qapp: QApplication,
     tmp_path: Path,
 ) -> None:
@@ -742,7 +775,7 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_900_pixels(
     history = ProductionHistory(tmp_path / "history.sqlite3")
     page = HistoryPage(history)
     apply_theme(page, "dark")
-    page.resize(900, 1500)
+    page.resize(1080, 1500)
     page.show()
     try:
         assert history.offer(
@@ -758,7 +791,7 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_900_pixels(
         page.activate()
         until(lambda: not page.busy)
         qapp.processEvents()
-        assert page.width() == 900
+        assert page.width() == 1080
         assert page.channels.rowCount() == 6 and page.channels.columnCount() == 7
         assert not page.channels.horizontalScrollBar().isVisible()
         for row, camera in enumerate(cameras):
@@ -794,7 +827,7 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_900_pixels(
             and "ERROR" in page.channel_detail.toPlainText()
         )
         assert "execution_error" in page.channel_detail.toPlainText()
-        assert page.grab().save(str(tmp_path / "history-zh-dark-900-page.png"))
+        assert page.grab().save(str(tmp_path / "history-zh-dark-1080-page.png"))
         page.cycles.clearSelection()
         page.cycles.setCurrentCell(-1, -1)
         page.cycles.clearSelection()
@@ -810,7 +843,7 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_900_pixels(
         page.deleteLater()
 
 
-@pytest.mark.parametrize("size", [(900, 1500), (1920, 1017)])
+@pytest.mark.parametrize("size", [(1080, 1500), (1920, 1017)])
 def test_bilingual_geometry_segments_top_pagination_and_calendar(
     qapp: QApplication,
     tmp_path: Path,
@@ -887,6 +920,17 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         )
         columns = tuple(page.cycles.columnWidth(i) for i in range(5))
         matrix_columns = tuple(page.channels.columnWidth(i) for i in range(7))
+        assert page.batch.width() == page.result.width()
+        assert (
+            len(
+                {
+                    button.size().toTuple()
+                    for button in (page.newer, page.older, page.refresh_button)
+                }
+            )
+            == 1
+        )
+        assert page.refresh_button.icon().isNull()
         filters = (
             page.date.date(),
             page.batch.currentData(),

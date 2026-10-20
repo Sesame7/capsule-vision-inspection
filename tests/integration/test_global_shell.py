@@ -145,7 +145,7 @@ def test_web_status_uses_owner_observation_without_a_new_timer(
     assert window.event_frame.web.toolTip() == (
         f"{window.event_frame.web.accessibleName()}\nhttp://127.0.0.1:8765/"
     )
-    window.resize(880, 720)
+    window.resize(1080, 720)
     QApplication.processEvents()
     assert (
         window.event_frame.web.fontMetrics().horizontalAdvance(

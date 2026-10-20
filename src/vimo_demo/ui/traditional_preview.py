@@ -281,7 +281,6 @@ class TraditionalPreview(QWidget):
         header = QHBoxLayout(camera_controls)
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(Style.small)
-        self.title = QLabel()
         self.camera_tabs = QTabBar()
         self.camera_tabs.setExpanding(False)
         self.camera_tabs.setUsesScrollButtons(False)
@@ -390,9 +389,6 @@ class TraditionalPreview(QWidget):
         )
         self._controls_row = QHBoxLayout()
         self._controls_row.setSpacing(Style.space)
-        self.title.setProperty("role", "secondary")
-        self.title.setWordWrap(True)
-        root.addWidget(self.title)
         self._controls_row.addWidget(self.controls)
         self.selection_detail = QLabel()
         self.selection_detail.setMinimumWidth(230)
@@ -495,8 +491,7 @@ class TraditionalPreview(QWidget):
 
     def show_settings(self) -> None:
         self._loading = True
-        self.title.setText(text(f"preview_{self.mode}_scope", self.language))
-        self.title.setToolTip(text("preview_scope_tip", self.language))
+        self.controls.setToolTip(text("preview_scope_tip", self.language))
         settings = self.session.draft.capsule
         self.controls.setCurrentIndex(0 if self.mode == "size" else 1)
         for key, spin in self.spins.items():
