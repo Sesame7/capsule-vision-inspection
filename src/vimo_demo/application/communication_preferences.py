@@ -46,7 +46,7 @@ class WebPreferences:
 class CommunicationPreferences:
     reporting: ReportingSelection = ReportingSelection()
     diagnostic: LocalReportingSettings = LocalReportingSettings()
-    web: WebPreferences = WebPreferences()
+    web: WebPreferences = WebPreferences(enabled=False)
 
     def __post_init__(self) -> None:
         for endpoint in (self.reporting.settings, self.diagnostic):

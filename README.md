@@ -5,7 +5,7 @@ It combines passive Basler hardware-trigger acquisition or Folder Replay, one
 serial ViMo engine, Occupancy/Size/Color checks, FINS UDP/TCP communication and
 PLC result reporting. The Chinese/English Qt UI has Production, Recipe,
 Communication and Vision workspaces; History is a placeholder. A read-only Web
-observer starts by default.
+observer is optional and starts automatically only when saved enabled.
 
 ## Setup
 
@@ -75,7 +75,9 @@ the first available model/Recipe, invents ROIs or substitutes fake inference.
   Vision Disconnect or normal application Close releases cameras; verify actual exit.
 - **Communication:** manual D/W reads/writes and register watches use independently
   selected UDP/TCP. Automatic W49–W52 reporting is opt-in, restored from saved
-  preferences and captured at Start only after successful Save. Unsaved edits stay drafts. Folder defaults to localhost/UDP; Basler defaults to field TCP.
+  preferences and captured at Start only after successful Save. Unsaved edits stay
+  drafts. Missing communication settings leave reporting and Web disabled; no PLC
+  endpoint is inferred from Folder or Basler mode.
 
 Counters describe admitted cycles and channel judgment occurrences, not physical
 capsules. Stop/Start or a Recipe change does not reset them; explicit Batch does.
@@ -83,7 +85,8 @@ Technical ERROR, product NG and application FAULT are distinct.
 
 ## Web observer
 
-Open `http://127.0.0.1:8765/`. Default refresh is **500 ms**, coordinated between
+After explicitly enabling Web, open its actual URL (initial editing address:
+`http://127.0.0.1:8765/`). Default refresh is **500 ms**, coordinated between
 publisher and browser. The service serves bounded latest snapshots/JPEGs and has
 no controls, history, authentication or HTTPS. Optional startup failure is reported
 without blocking Production.

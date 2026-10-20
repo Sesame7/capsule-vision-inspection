@@ -1,11 +1,9 @@
 """Real ViMo composition: independent sources and disposable inspection sessions."""
 
-import json
-import sys
 import traceback
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
@@ -36,7 +34,6 @@ from vimo_demo.application.continuous_basler import (
     ContinuousArmedAcquisition,
 )
 from vimo_demo.application.folder_cache import (
-    CacheState,
     FolderCacheStatus,
     FolderReplayCache,
 )
@@ -48,7 +45,7 @@ from vimo_demo.application.folder_replay import (
 from vimo_demo.application.image_archive import ArchiveSnapshot, ImageArchive
 from vimo_demo.application.local_replay import LocalReplayControl, ReplaySnapshot
 from vimo_demo.application.session import EngineFactory, ProductionCycle
-from vimo_demo.communication import FinsMemoryArea, FinsTransport
+from vimo_demo.communication import FinsMemoryArea
 from vimo_demo.communication.operations import CommunicationRequest, RequestKind
 from vimo_demo.communication.reporting import (
     FirstStationReport,
@@ -115,15 +112,6 @@ def _wait_for_source_interval(stop: Event, started: float, fps: float) -> bool:
         # Stop is observed between slices; scheduling can exceed this request.
         sleep(min(0.0005, remaining))
     return True
-
-
-def basler_notice(observation: ContinuousArmedAcquisition) -> None:
-    """Source-thread connection evidence; no widgets or PLC operations."""
-    print(json.dumps({"event": "ARMED", **asdict(observation)}), flush=True)
-    print(
-        "Camera acquisition is ARMED; waiting for external hardware triggers.",
-        flush=True,
-    )
 
 
 class LocalRuntimeSession(ProductionRuntimeSession):
@@ -537,9 +525,9 @@ class _LocalApplication(ProductionApplication):
         reporting_editable: bool = False,
         source_draft: CameraSourceDraft | None = None,
         source_cameras: tuple[CameraId, ...] = (),
-        observe_acquisition: Callable[
-            [ContinuousArmedAcquisition], None
-        ] = basler_notice,
+        observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: (
+            None
+        ),
     ) -> None:
         self.replay_cache = cache
         self._reporting_lock = Lock()
@@ -547,14 +535,7 @@ class _LocalApplication(ProductionApplication):
         self._archive_owner: ImageArchive | None = None
         self._reporting_selection = ReportingSelection(
             reporting is not None,
-            reporting
-            or (
-                LocalReportingSettings(
-                    host="192.168.251.1", transport=FinsTransport.TCP
-                )
-                if source_draft is not None and source_draft.saved.mode == "basler"
-                else LocalReportingSettings()
-            ),
+            reporting or LocalReportingSettings(),
         )
         self._reporting_editable = reporting_editable
         self._reporting_generation = 0
@@ -871,21 +852,6 @@ class _LocalApplication(ProductionApplication):
         self.replay_cache.clear()
 
 
-def _cache_notice(status: FolderCacheStatus) -> None:
-    if status.state in (
-        CacheState.LOADING,
-        CacheState.READY,
-        CacheState.HIT,
-        CacheState.FALLBACK,
-    ):
-        print(
-            f"FolderReplay cache {status.state.name}: {status.loaded_images}/{status.image_count} images, "
-            f"{status.decoded_bytes} bytes, load={status.load_seconds:.3f}s"
-            + (f"; on-demand fallback: {status.reason}" if status.reason else ""),
-            file=sys.stderr,
-        )
-
-
 @dataclass
 class LocalComposition:
     application: _LocalApplication
@@ -903,11 +869,11 @@ def compose(
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
     sources_file: Path | None = None,
-    observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
+    observe_cache: Callable[[FolderCacheStatus], None] = lambda _: None,
     reporting: LocalReportingSettings | None = None,
     replay_controls: bool = False,
     reporting_editable: bool = False,
-    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = basler_notice,
+    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: None,
 ) -> LocalComposition:
     """Parse/hash/decode before entering Qt; no fallback images or invented ROIs.
 
@@ -975,11 +941,11 @@ def local_application(
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
-    observe_cache: Callable[[FolderCacheStatus], None] = _cache_notice,
+    observe_cache: Callable[[FolderCacheStatus], None] = lambda _: None,
     reporting: LocalReportingSettings | None = None,
     replay_controls: bool = False,
     reporting_editable: bool = False,
-    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = basler_notice,
+    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: None,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != 6:
@@ -1159,7 +1125,6 @@ class SourceNotifications(QObject):
         observation: ContinuousArmedAcquisition,
     ) -> None:
         """Source-thread notification through the existing queued delivery gate."""
-        basler_notice(observation)
         notice: Future[str] = Future()
         notice.set_result("basler_armed")
         delivery.watch(f"basler_source:{generation}", notice)

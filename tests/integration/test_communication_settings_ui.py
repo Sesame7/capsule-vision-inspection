@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.bootstrap_support import saved_data
 from tests.qt_support import close_window, ensure_test_fonts, until
 
-from vimo_demo.application import ProductionCounters
+from vimo_demo.application import ApplicationState, ProductionCounters
 from vimo_demo.application.communication_preferences import (
     CommunicationPreferences,
     WebPreferences,
@@ -83,6 +83,7 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     assert page.dirty and panel.power.isEnabled() and panel.apply_changes.isHidden()
     panel.power.click()
     until(lambda: panel.available)
+    saved = replace(saved, web=replace(saved.web, enabled=True))
     QApplication.processEvents()
     assert panel.open_browser.isVisible()
     assert panel.open_browser.accessibleDescription() == f"http://127.0.0.1:{port}/"
@@ -421,7 +422,7 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     assert saved.reporting.settings.transport is FinsTransport.TCP
     assert saved.reporting.settings.source.node == 5
     assert saved.diagnostic.port == 19602 and saved.diagnostic.destination.node == 7
-    assert saved.web == WebPreferences(True, "127.0.0.1", 8766, 2000)
+    assert saved.web == WebPreferences(False, "127.0.0.1", 8766, 2000)
     assert {p: p.read_bytes() for p in files} == files
     assert startup.application.snapshot() == baseline
 
@@ -535,8 +536,9 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
         delivery.detach()
 
 
-def test_missing_preferences_keep_source_specific_previous_defaults(
-    tmp_path: Path,
+@pytest.mark.parametrize("mode", ["folder", "basler"])
+def test_missing_preferences_are_unsaved_disabled_and_source_independent(
+    qapp: QApplication, tmp_path: Path, mode: str
 ) -> None:
     data = saved_data(tmp_path)
     sources = load_camera_sources(data.sources)
@@ -544,7 +546,7 @@ def test_missing_preferences_keep_source_specific_previous_defaults(
         data.sources,
         replace(
             sources,
-            mode="basler",
+            mode=mode,
             cameras=tuple(
                 replace(camera, basler_serial=str(12340000 + index))
                 for index, camera in enumerate(sources.cameras)
@@ -552,17 +554,50 @@ def test_missing_preferences_keep_source_specific_previous_defaults(
         ),
     )
     startup = load_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
     try:
         assert not startup.communication_error and not data.communication.exists()
-        assert startup.communication.reporting == ReportingSelection(
-            False,
-            LocalReportingSettings(host="192.168.251.1", transport=FinsTransport.TCP),
-        )
+        assert startup.communication == CommunicationPreferences()
+        assert not startup.communication.reporting.enabled
+        assert not startup.communication.web.enabled
+        assert startup.application.snapshot().state is ApplicationState.READY
         assert startup.communication.diagnostic == LocalReportingSettings()
-        assert startup.communication.web == WebPreferences()
+        page = window.communication
+        panel = page.reporting_panel
+        assert panel is not None
+        assert panel.controller.reporting_selection() == ReportingSelection()
+        assert panel.controller.reporting_snapshot() is None
+        assert not page.web_panel.saved_available and not page.dirty
+        assert page.preferences_status.text() == text(
+            "comm_settings_defaults", window.language
+        )
+        assert page.save_settings.isEnabled() and not page.discard_settings.isEnabled()
+        panel.enabled.setChecked(True)
+        assert page.dirty and not panel.controller.reporting_selection().enabled
+        page.reload_settings()  # No saved file exists to discard to.
+        assert page.dirty and panel.enabled.isChecked()
+        assert page.preferences_status.text() == text(
+            "comm_reload_failed", window.language
+        )
+        panel.enabled.setChecked(False)
+        page.persist_settings()  # Explicitly establish neutral disabled settings.
+        payload = data.communication.read_bytes()
+        assert not page.dirty and page.web_panel.saved_available
+        assert page.preferences_status.text() == text(
+            "comm_settings_saved", window.language
+        )
+        restored = load_startup(data)
+        try:
+            assert restored.communication == CommunicationPreferences()
+            assert not restored.communication_error
+            assert data.communication.read_bytes() == payload
+        finally:
+            restored.application.close().result(5)
+            assert restored.application.join(5)
     finally:
-        startup.application.close().result(5)
-        assert startup.application.join(5)
+        close_window(window)
+        delivery.detach()
 
 
 def test_normal_cli_help_and_retired_operator_flags(

@@ -9,6 +9,7 @@ from threading import enumerate as threads
 
 import pytest
 from PySide6.QtWidgets import QApplication, QWidget
+from tests.bootstrap_support import saved_data
 from tests.integration.test_normal_replay_ui import normal_replay, replay_state
 from tests.qt_support import until
 from tests.reporting_support import readback, seed, server
@@ -140,7 +141,6 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         page.web_panel.port.setValue(port)
         page.persist_settings()
         effective = panel.controller.reporting_selection()
-        settings = page.web_panel.preferences()
         runtime = WebRuntime(
             lambda value: ProductionSnapshotService(
                 startup.application,
@@ -151,9 +151,10 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
             )
         )
         window.bind_web_runtime(runtime)
-        start = runtime.start(settings)
-        until(start.done)
-        assert start.result().state is WebState.RUNNING
+        page.web_panel.power.click()  # Explicitly save enablement; first use is off.
+        until(lambda: runtime.snapshot().state is WebState.RUNNING)
+        settings = page.web_panel.saved
+        assert settings.enabled and runtime.snapshot().configuration == settings
         window.bridge.step_source()
         until(lambda: bool(engines) and engines[0].entered.is_set())
         assert startup.application.snapshot().state is ApplicationState.RUNNING
@@ -208,11 +209,12 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-def test_normal_startup_web_defaults_and_interval(
+def test_normal_startup_restores_saved_web_enablement_and_interval(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     enabled: bool,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     services: list[ProductionSnapshotService] = []
 
@@ -262,6 +264,32 @@ def test_normal_startup_web_defaults_and_interval(
         assert not service.http_alive and not service.publisher_alive
         with socket.socket() as probe:
             assert probe.connect_ex(("127.0.0.1", port)) != 0
+    assert "Read-only Production snapshots:" not in capsys.readouterr().err
+
+
+def test_missing_communication_starts_quietly_without_web_or_file_creation(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data = saved_data(tmp_path)
+    files = {path: path.read_bytes() for path in data.root.rglob("*.json")}
+
+    def forbidden(*_args: object, **_kwargs: object) -> ProductionSnapshotService:
+        pytest.fail("Missing settings must not create a Web service")
+
+    monkeypatch.setattr(bootstrap, "ProductionSnapshotService", forbidden)
+
+    def observe(runtime: WebRuntime) -> None:
+        assert runtime.snapshot().state is WebState.STOPPED
+        assert not runtime.snapshot().owned and runtime.snapshot().configuration is None
+
+    run_startup(qapp, tmp_path, monkeypatch, observe)
+    assert not data.communication.exists()
+    assert {path: path.read_bytes() for path in files} == files
+    captured = capsys.readouterr()
+    assert not captured.out and not captured.err
 
 
 @pytest.mark.parametrize(

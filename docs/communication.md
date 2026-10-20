@@ -21,9 +21,9 @@ implicit UDP fallback occurs. UDP uses explicit FINS routing. Clients do not
 change PLC mode, implement safety interlocks or infer photo/reject semantics.
 
 Manual Communication and automatic reporting independently select UDP/TCP and a
-numeric target. UDP remains the generic default. Normal Folder reporting defaults
-to `127.0.0.1:9600`/UDP; saved Basler defaults to `192.168.251.1:9600`/TCP. There is
-no localhost-only write authorization gate. Operators are responsible for choosing
+numeric target. UDP/localhost are neutral editing defaults; normal Production
+reporting uses an explicitly saved selection, never a camera-source-derived PLC
+endpoint. There is no localhost-only write authorization gate. Operators are responsible for choosing
 the intended commissioned endpoint and operation.
 
 ## First-station registers
@@ -67,8 +67,9 @@ still require equipment commissioning.
 Communication's Production enable/endpoint/routing fields are drafts. Only a
 successful **Save settings** publishes preferences to the next Start and persists
 them in `data/communication.json`. Persistence and publication share the existing
-Application admission lock, so a competing Start cannot freeze a half-saved selection. Missing settings keep the previous defaults (disabled;
-Folder localhost/UDP, Basler field endpoint/TCP). Restoring enabled never creates
+Application admission lock, so a competing Start cannot freeze a half-saved
+selection. Missing settings leave reporting and Web disabled and are visibly
+unsaved; startup never creates the file. Restoring enabled never creates
 a reporting client or sends before Start; warm-up still sends nothing. Production
 settings remain locked during STARTING/RUNNING/STOPPING and FAULT. Old ACKs,
 counts and connectivity are never restored as live observations.
@@ -181,8 +182,9 @@ worker or adopts Web's immediate runtime power semantics. Generation, queue dept
 and error details remain in tooltips. ACK never replaces the lifecycle label.
 There is no separate ACK row, endpoint summary or status footer.
 
-The default remains 127.0.0.1:8765 at 500 ms. Saved enablement is restored on the
-next application launch. The observer remains read-only and unauthenticated;
+The initial editing endpoint is 127.0.0.1:8765 at 500 ms, disabled without a saved
+configuration. Saved enablement is restored on the next application launch.
+The observer remains read-only and unauthenticated;
 use only trusted networks. See
 [configuration](configuration.md#communication-preferences) for validation/recovery.
 

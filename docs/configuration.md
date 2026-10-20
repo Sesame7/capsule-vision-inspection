@@ -63,9 +63,14 @@ values but negotiates its nodes. Queue limits and W49–W52 mapping are not sett
 unavailable adapter addresses; actual service startup checks local assignment and
 subnet validity. There is no DNS, wildcard fallback or automatic IP substitution.
 
-A missing file retains earlier defaults: reporting disabled, source-specific
-Production endpoint, independent localhost/UDP diagnostics, and Web enabled on
-127.0.0.1:8765 at 500 ms. Invalid files remain unchanged, with visible recovery
+A missing file leaves reporting and Web disabled, without blocking valid
+Production startup or creating a file. Communication shows **Defaults · not saved**;
+localhost/UDP and Web 127.0.0.1:8765 at 500 ms are neutral editing defaults, not a
+saved Production destination. Camera source mode never selects a PLC endpoint.
+Explicit Save establishes the file; Discard cannot reload a nonexistent file and
+preserves the draft with feedback. Valid v1 files restore their exact saved
+settings, including Web auto-start when enabled, without rewriting them.
+Invalid files remain unchanged, with visible recovery
 feedback; reporting and Web stay disabled in memory until reviewed. An explicit
 Save replaces the invalid file with validated settings. If a saved Web address is
 no longer assigned or its port cannot bind, optional service startup fails visibly

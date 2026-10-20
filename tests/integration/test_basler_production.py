@@ -889,7 +889,10 @@ def test_vision_capture_cancellation_and_stale_delivery(
 
 
 def test_synthetic_warmup_uses_actual_distinct_shapes_on_single_engine_owner(
-    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     data = saved_data(tmp_path)
     save_basler(data.sources)
@@ -926,6 +929,8 @@ def test_synthetic_warmup_uses_actual_distinct_shapes_on_single_engine_owner(
     finally:
         app.close().result(WAIT)
         assert app.join(WAIT)
+    captured = capsys.readouterr()
+    assert not captured.out and not captured.err
 
 
 def test_source_lifetime_idle_discard_restart_recipe_and_batch(

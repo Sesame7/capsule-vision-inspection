@@ -297,6 +297,8 @@ Capture success is temporary canvas data, never inspection admission or accounti
 
 Normal startup owns a Qt-independent `WebRuntime` control thread and at most one
 Web publisher/serial HTTP pair. Production Stop/Start leaves Web independent.
+Missing communication preferences leave Web and PLC reporting disabled; valid
+saved settings restore independently of camera source mode.
 Communication's header power action persists only Web enablement, then starts or
 stops using saved network settings. Conditional Apply changes restarts differing
 saved/running settings; drafts never become runtime inputs implicitly. Admission

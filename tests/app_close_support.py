@@ -25,7 +25,7 @@ from vimo_demo.communication.simulator import FinsUdpSimulator
 from vimo_demo.ui import bootstrap
 from vimo_demo.ui.bootstrap import ApplicationData, Startup
 from vimo_demo.ui.inference_bridge import FutureDelivery
-from vimo_demo.ui.local_production import basler_notice, real_engine
+from vimo_demo.ui.local_production import real_engine
 from vimo_demo.ui.production_window import ProductionWindow
 
 
@@ -65,9 +65,9 @@ def install() -> None:
         *,
         engine_factory: EngineFactory = real_engine,
         observe_source: Callable[[Future[None]], None] = lambda _: None,
-        observe_acquisition: Callable[
-            [ContinuousArmedAcquisition], None
-        ] = basler_notice,
+        observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: (
+            None
+        ),
     ) -> Startup:
         # Missing test data gives the real stopped UNCONFIGURED shell, no GPU.
         return original_load(

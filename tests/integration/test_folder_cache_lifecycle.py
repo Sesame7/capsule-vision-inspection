@@ -68,6 +68,7 @@ def test_restart_reuses_pixels_but_not_engine_results_frames_or_sessions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     cached: bool,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     before = {t.ident for t in threads()}
     model, machine, recipe, _ = input_files(tmp_path)
@@ -157,6 +158,8 @@ def test_restart_reuses_pixels_but_not_engine_results_frames_or_sessions(
         assert app.join(WAIT)
     assert app.replay_cache.snapshot().state is CacheState.RELEASED
     assert app.replay_cache.snapshot().decoded_bytes == 0
+    captured = capsys.readouterr()
+    assert not captured.out and not captured.err
     assert not {t.ident for t in threads()} - before
 
 

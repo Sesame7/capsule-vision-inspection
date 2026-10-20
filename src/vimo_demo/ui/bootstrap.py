@@ -50,7 +50,6 @@ from .display_frames import LatestDisplayFrameStore
 from .inference_bridge import FutureDelivery
 from .local_production import (
     SourceNotifications,
-    basler_notice,
     local_application,
     real_engine,
     unconfigured_application,
@@ -143,7 +142,7 @@ def load_startup(
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
-    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = basler_notice,
+    observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: None,
 ) -> Startup:
     """Blocking startup IO only, called before QApplication is constructed.
 
@@ -309,11 +308,7 @@ def load_startup(
             reporting_editable=True,
             replay_controls=True,
         )
-    communication = CommunicationPreferences(
-        reporting=application.reporting_selection()
-        if isinstance(application, ProductionReportingCommands)
-        else CommunicationPreferences().reporting,
-    )
+    communication = CommunicationPreferences()
     communication_error = ""
     try:
         communication = load_communication_preferences(data.communication)
@@ -322,7 +317,6 @@ def load_startup(
             # Preserve the bad file; safe in-memory recovery is visible and only
             # an explicit settings Save can replace it. Never open a wider bind.
             communication_error = str(exc)
-            communication = replace(communication, web=WebPreferences(enabled=False))
             issues.append(
                 StartupIssue(
                     "startup_communication", communication_error, blocking=False
@@ -469,15 +463,12 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
         window.bind_web_runtime(runtime)
         if web.enabled:
 
-            def started(future: Future[WebRuntimeSnapshot]) -> None:
+            def started(_future: Future[WebRuntimeSnapshot]) -> None:
                 # This callback runs on the control thread, never mutates widgets.
                 assert runtime is not None
                 observation = runtime.snapshot()
-                print(
-                    observation.error
-                    or f"Read-only Production snapshots: {observation.url}",
-                    file=sys.stderr,
-                )
+                if observation.error:
+                    print(observation.error, file=sys.stderr)
 
             runtime.start(web).add_done_callback(started)
         window.showMaximized()

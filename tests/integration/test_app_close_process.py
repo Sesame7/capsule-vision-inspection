@@ -128,7 +128,7 @@ def test_normal_app_native_close_exits_process_tree(
     assert stages[-1] == "atexit"
     assert stages.index("last_window_closed") < stages.index("exec_return")
     assert "application_joined" in stages
-    assert (b"Read-only Production snapshots" in stderr) == web_started
+    assert b"Read-only Production snapshots" not in stderr
     if web_host not in (None, "off") and not web_started:
         assert b"Invalid communication settings" in stderr or b"ValueError" in stderr
     for record in records:

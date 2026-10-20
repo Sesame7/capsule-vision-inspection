@@ -18,11 +18,14 @@ from vimo_demo.communication.reporting import LocalReportingSettings, ReportingS
 from vimo_demo.configuration import ConfigurationError, ConfigurationIOError
 
 
-def test_independent_endpoint_round_trip_and_definitions_only(tmp_path: Path) -> None:
+@pytest.mark.parametrize("transport", [FinsTransport.UDP, FinsTransport.TCP])
+def test_independent_endpoint_round_trip_and_definitions_only(
+    tmp_path: Path, transport: FinsTransport
+) -> None:
     path = tmp_path / "data" / "communication.json"
     value = CommunicationPreferences(
         ReportingSelection(
-            True, LocalReportingSettings(host="192.0.2.10", transport=FinsTransport.TCP)
+            True, LocalReportingSettings(host="192.0.2.10", transport=transport)
         ),
         LocalReportingSettings(port=19600, destination=FinsAddress(2, 23, 5)),
         WebPreferences(False, "127.0.0.1", 8766, 2000),
