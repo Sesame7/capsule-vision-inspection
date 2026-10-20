@@ -83,7 +83,7 @@ def test_stop_restart_and_close_keep_web_independent_of_production(
             for generation in (1, 2):
                 window.bridge.refresh()
                 assert window.buttons["operation"].isEnabled()
-                window.bridge.step_replay()  # Deterministic one-cycle source setup.
+                window.bridge.step_source()  # Deterministic one-cycle source setup.
                 until(lambda: replay_state(startup) is ReplayState.PAUSED)
                 window.bridge.refresh()
                 assert startup.application.snapshot().state is ApplicationState.RUNNING
@@ -154,7 +154,7 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         start = runtime.start(settings)
         until(start.done)
         assert start.result().state is WebState.RUNNING
-        window.bridge.step_replay()
+        window.bridge.step_source()
         until(lambda: bool(engines) and engines[0].entered.is_set())
         assert startup.application.snapshot().state is ApplicationState.RUNNING
         restart = runtime.apply(settings)
@@ -177,7 +177,7 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         assert stop.result().state is WebState.STOPPED
         assert startup.application.snapshot().state is ApplicationState.RUNNING
         peer.hold_next(ReportStage.SEQUENCE)
-        window.bridge.step_replay()
+        window.bridge.step_source()
         try:
             until(
                 lambda: (

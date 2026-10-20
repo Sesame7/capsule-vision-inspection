@@ -393,7 +393,7 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
     window = create_window(startup, delivery)
     window.show()
     try:
-        assert window.bridge.replay_enabled and window.buttons["secondary"].isHidden()
+        assert window.bridge.controls_enabled and window.buttons["secondary"].isHidden()
         window.navigate(4)
         workspace = window.parameters.roi_workspace
         assert workspace is not None and workspace.sources is not None
@@ -401,14 +401,14 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         for i in range(1, 7):
             workspace.sources.set_serial(CameraId(f"CAM{i}"), SERIALS[i - 1])
         workspace.source_modes["basler"].click()
-        assert window.bridge.replay_enabled  # Draft is not the saved source selection.
+        assert workspace.sources.saved.mode == "folder"  # Draft is not active.
+        assert window.bridge.controls_enabled
         assert not window.buttons["operation"].isEnabled()
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
         window.bridge.refresh()
-        assert (
-            not window.bridge.replay_enabled and window.buttons["secondary"].isHidden()
-        )
+        assert workspace.sources.saved.mode == "basler"
+        assert window.bridge.controls_enabled and window.buttons["secondary"].isHidden()
         assert (
             not engine.calls and not startup.application.source_snapshot().thread_alive
         )
@@ -417,7 +417,8 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         workspace.save_and_apply()
         until(lambda: not window.parameters.busy)
         window.bridge.refresh()
-        assert window.bridge.replay_enabled and window.buttons["secondary"].isHidden()
+        assert workspace.sources.saved.mode == "folder"
+        assert window.bridge.controls_enabled and window.buttons["secondary"].isHidden()
         assert (
             workspace.sources.saved.camera(CameraId("CAM5")).basler_serial == SERIALS[4]
         )
@@ -461,7 +462,7 @@ def test_normal_folder_runtime_needs_no_pypylon(
         assert startup.application.join(WAIT)
 
 
-def test_developer_fixed_images_override_saved_basler_without_false_status(
+def test_fixed_input_composition_overrides_saved_basler_without_false_status(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     from vimo_demo.application.folder_replay import folder_images
@@ -484,7 +485,6 @@ def test_developer_fixed_images_override_saved_basler_without_false_status(
     bridge = QtProductionBridge(
         composition.application,
         composition.store,
-        local_replay=composition.application,
         poll_ms=5,
     )
     window = ProductionWindow(
@@ -498,7 +498,7 @@ def test_developer_fixed_images_override_saved_basler_without_false_status(
         engine.release_warm.set()
         until(engine.active.is_set)
         assert (
-            bridge.replay_enabled
+            bridge.controls_enabled
             and not composition.application.source_snapshot().thread_alive
         )
         assert "Basler" not in window.event_label.accessibleName()
@@ -1492,7 +1492,7 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
     window.show()
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
-    assert startup.local_replay is not None
+    assert window.bridge.source_control is startup.application
 
     def control() -> BaslerControlSnapshot:
         value = window.bridge.control_snapshot()

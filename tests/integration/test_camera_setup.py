@@ -13,7 +13,6 @@ import pytest
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
-from run_local_production_ui import SourceNotifications, compose
 from run_production_ui import demo_images
 from tests.application_support import WAIT
 from tests.integration.test_local_production_ui import ControlledEngine
@@ -36,6 +35,7 @@ from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
 from vimo_demo.ui import roi_editor
 from vimo_demo.ui.inference_bridge import FutureDelivery
+from vimo_demo.ui.local_production import SourceNotifications, compose
 from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_style import Language, Style, Theme, text
 from vimo_demo.ui.production_window import ProductionWindow

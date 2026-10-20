@@ -481,7 +481,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
 
 
 @pytest.mark.parametrize("transport", list(FinsTransport))
-def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
+def test_internal_composition_keeps_fixed_settings_and_paused_lock(
     qapp: QApplication,
     tmp_path: Path,
     transport: FinsTransport,
@@ -505,9 +505,7 @@ def test_developer_launcher_keeps_fixed_settings_and_paused_lock(
             ),
             replay_controls=True,
         )
-        bridge = QtProductionBridge(
-            local.application, local.store, local_replay=local.application
-        )
+        bridge = QtProductionBridge(local.application, local.store)
         window = ProductionWindow(bridge, (local.choice,))
         window.communication.configure_preferences(
             tmp_path / "communication.json", CommunicationPreferences()
@@ -551,7 +549,7 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
             panel.enabled.setChecked(True)
             window.communication.persist_settings()
             try:
-                window.bridge.step_replay()
+                window.bridge.step_source()
                 assert peer.entered.wait(WAIT)
                 window.bridge.stop()
                 until(
@@ -648,7 +646,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         window.communication.persist_settings()
         selected = panel.controller.reporting_selection()
         assert selected.settings.transport is automatic_transport
-        window.bridge.step_replay()
+        window.bridge.step_source()
         assert first.entered.wait(WAIT)
         window.bridge.refresh()
         assert startup.application.snapshot().state is ApplicationState.STARTING
@@ -670,8 +668,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         )
         until(
             lambda: (
-                window.bridge.local_replay is not None
-                and (r := window.bridge.local_replay.replay_snapshot()) is not None
+                (r := window.bridge.control_snapshot()) is not None
                 and r.state is ReplayState.PAUSED
             )
         )
@@ -737,7 +734,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
             and stopped.cleanup_issue is None
         )
         assert panel.controller.reporting_selection() is selected
-        window.bridge.step_replay()
+        window.bridge.step_source()
         until(
             lambda: (
                 (s := panel.controller.reporting_snapshot()) is not None

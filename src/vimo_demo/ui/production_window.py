@@ -525,11 +525,11 @@ class ProductionWindow(QMainWindow):
         elif action == "reset":
             self.bridge.reset()
         elif action == "replay_pause":
-            self.bridge.pause_replay()
+            self.bridge.pause_source()
         elif action == "replay_continue":
-            self.bridge.continue_replay()
+            self.bridge.resume_source()
         elif action == "replay_step":
-            self.bridge.step_replay()
+            self.bridge.step_source()
 
     def _actions(self) -> dict[str, str | None]:
         replay = self.bridge.replay_snapshot
@@ -759,7 +759,7 @@ class ProductionWindow(QMainWindow):
     @Slot(str, object)
     def _command_failed(self, command: str, error: object) -> None:
         source_error = error if command == "folder_source" else None
-        if command in ("start", "replay_step") and isinstance(error, BaseException):
+        if command in ("start", "source_step") and isinstance(error, BaseException):
             cause: BaseException | None = error
             for _ in range(8):  # Existing lifecycle wrapping preserves source causes.
                 if isinstance(cause, FolderSourceError):
@@ -844,6 +844,13 @@ class ProductionWindow(QMainWindow):
         colors = theme_colors(self)
         self.navbar.present(self.language, self.theme, self.pages.currentIndex())
         snapshot, language = self.snapshot, self.language
+        session = self.parameters.session
+        sources = session.camera_sources if session else None
+        folder_controls = self.bridge.controls_enabled and (
+            sources is None
+            or (session is not None and session.cli_sources)
+            or sources.saved.mode == "folder"
+        )
         self.configuration_placeholder.setText(text("configure_first", language))
         availability = controls(snapshot)
         self._render_operations()
@@ -856,7 +863,7 @@ class ProductionWindow(QMainWindow):
         ):
             state = {
                 ReplayState.PAUSED: "replay_paused"
-                if self.bridge.replay_enabled
+                if folder_controls
                 else "source_paused",
                 ReplayState.PAUSING: "source_pausing",
                 ReplayState.STEPPING: "source_stepping",
@@ -885,7 +892,7 @@ class ProductionWindow(QMainWindow):
         )
         self.state_label.setToolTip(
             text(state, language) + "\n" + text("replay_help", language)
-            if self.bridge.replay_enabled
+            if folder_controls
             else text(state, language) + "\n" + text("basler_control_help", language)
             if self.bridge.controls_enabled
             else text(state, language) + "\n" + text("simulation", language)

@@ -15,7 +15,6 @@ from vimo_demo.application import (
 from vimo_demo.application.basler_connection import SourceConnectionCommands
 from vimo_demo.application.image_archive import ArchiveSnapshot, ImageArchiveCommands
 from vimo_demo.application.local_replay import (
-    LocalReplayCommands,
     ReplaySnapshot,
     SourceControlCommands,
 )
@@ -56,7 +55,6 @@ class QtProductionBridge(QObject):
         *,
         poll_ms: int = 100,
         close_timeout_ms: int = 30_000,
-        local_replay: LocalReplayCommands | None = None,
     ) -> None:
         super().__init__(parent)
         if min(poll_ms, close_timeout_ms) <= 0:
@@ -77,7 +75,6 @@ class QtProductionBridge(QObject):
             application if isinstance(application, SourceConnectionCommands) else None
         )
         self._connection_snapshot = None
-        self.local_replay = local_replay
         self.source_control = (
             application if isinstance(application, SourceControlCommands) else None
         )
@@ -108,25 +105,11 @@ class QtProductionBridge(QObject):
         self.timer.start()
 
     @property
-    def replay_enabled(self) -> bool:
-        return self.local_replay is not None and self.local_replay.replay_available
-
-    @property
     def controls_enabled(self) -> bool:
-        return (
-            self.source_control.control_available
-            if self.source_control
-            else self.replay_enabled
-        )
+        return self.source_control is not None and self.source_control.control_available
 
     def control_snapshot(self) -> ReplaySnapshot | None:
-        return (
-            self.source_control.control_snapshot()
-            if self.source_control
-            else self.local_replay.replay_snapshot()
-            if self.local_replay
-            else None
-        )
+        return self.source_control.control_snapshot() if self.source_control else None
 
     @property
     def closed(self) -> bool:
@@ -175,25 +158,19 @@ class QtProductionBridge(QObject):
         self._command("stop", self.application.stop)
 
     @Slot()
-    def pause_replay(self) -> None:
+    def pause_source(self) -> None:
         if self.source_control is not None:
             self._command("source_pause", self.source_control.pause_source)
-        elif self.local_replay is not None:
-            self._command("replay_pause", self.local_replay.pause_replay)
 
     @Slot()
-    def continue_replay(self) -> None:
+    def resume_source(self) -> None:
         if self.source_control is not None:
             self._command("source_resume", self.source_control.resume_source)
-        elif self.local_replay is not None:
-            self._command("replay_continue", self.local_replay.continue_replay)
 
     @Slot()
-    def step_replay(self) -> None:
+    def step_source(self) -> None:
         if self.source_control is not None:
             self._command("source_step", self.source_control.step_source)
-        elif self.local_replay is not None:
-            self._command("replay_step", self.local_replay.step_replay)
 
     @Slot()
     def reset(self) -> None:

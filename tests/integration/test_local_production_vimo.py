@@ -8,7 +8,6 @@ from threading import enumerate as threads
 import pytest
 from _tool_helpers import decode
 from PySide6.QtWidgets import QApplication
-from run_local_production_ui import compose
 from tests.local_input_support import input_files
 from tests.qt_support import ensure_test_fonts, until
 from tests.vimo_support import (
@@ -32,6 +31,7 @@ from vimo_demo.configuration import (
 from vimo_demo.inference import BoundingRect, VimoInitializationError
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
+from vimo_demo.ui.local_production import compose
 from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_presentation import matching_camera
 from vimo_demo.ui.production_window import ProductionWindow

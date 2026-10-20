@@ -79,8 +79,7 @@ write prevents runtime action, while failed startup leaves saved enabled distinc
 from actual FAILED. Apply changes is available only for differing saved/running
 settings, after Web network drafts are saved/discarded. It uses the existing safe
 restart path. The next process launch restores saved enablement. Runtime settings
-and URL are presented separately from edited/saved values. Developer launchers
-retain their independent CLI settings.
+and URL are presented separately from edited/saved values.
 
 ## MachineLayout
 

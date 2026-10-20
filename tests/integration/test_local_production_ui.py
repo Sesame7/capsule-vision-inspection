@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication
-from run_local_production_ui import SourceNotifications, compose
 from tests.application_support import WAIT
 from tests.cycle_support import image_result
 from tests.local_input_support import input_files
@@ -42,6 +41,7 @@ from vimo_demo.inspection.production import TechnicalStatus
 from vimo_demo.runtime import CoordinatorCapacityError
 from vimo_demo.ui import local_production as local_module
 from vimo_demo.ui.inference_bridge import FutureDelivery
+from vimo_demo.ui.local_production import SourceNotifications, compose
 from vimo_demo.ui.production_bridge import QtProductionBridge
 from vimo_demo.ui.production_presentation import matching_camera
 from vimo_demo.ui.production_style import Language, Style, text
@@ -416,11 +416,11 @@ def test_replay_nonblocking_close_at_each_phase(
         *input_files(tmp_path), engine_factory=lambda _: engine, replay_controls=True
     )
     app = composition.application
-    bridge = QtProductionBridge(app, composition.store, poll_ms=5, local_replay=app)
+    bridge = QtProductionBridge(app, composition.store, poll_ms=5)
     window = ProductionWindow(bridge, (composition.choice,))
     window.show()
     try:
-        window.bridge.step_replay()  # Existing single-step session setup.
+        window.bridge.step_source()  # Existing single-step session setup.
         if phase == "paused":
             until(lambda: replay_state(composition) is ReplayState.PAUSED)
         else:
@@ -540,7 +540,7 @@ def test_local_buttons_pause_at_boundary_continue_and_end_without_restart(
         *input_files(tmp_path), engine_factory=lambda _: engine, replay_controls=True
     )
     app = composition.application
-    bridge = QtProductionBridge(app, composition.store, poll_ms=5, local_replay=app)
+    bridge = QtProductionBridge(app, composition.store, poll_ms=5)
     window = ProductionWindow(bridge, (composition.choice,), language=language)
     window.resize(*size)
     window.show()
@@ -669,8 +669,9 @@ def test_nonloop_exhaustion_after_step_performs_genuine_stop(
         finish_local(composition)
 
 
+@pytest.mark.parametrize("single_step", [False, True])
 def test_start_preserves_camera_source_startup_feedback(
-    qapp: QApplication, tmp_path: Path
+    qapp: QApplication, tmp_path: Path, single_step: bool
 ) -> None:
     engine = ReplayEngine()
     composition = compose(
@@ -678,12 +679,22 @@ def test_start_preserves_camera_source_startup_feedback(
     )
     (tmp_path / "CAM1" / "0.png").write_bytes(b"corrupt test-only image")
     app = composition.application
-    bridge = QtProductionBridge(app, composition.store, poll_ms=5, local_replay=app)
+    bridge = QtProductionBridge(app, composition.store, poll_ms=5)
     window = ProductionWindow(bridge, (composition.choice,))
     window.show()
+    failures: list[str] = []
+
+    def failed(command: str, _error: object) -> None:
+        failures.append(command)
+
+    bridge.command_failed.connect(failed)
     try:
-        window.buttons["operation"].click()
+        if single_step:
+            bridge.step_source()
+        else:
+            window.buttons["operation"].click()
         until(lambda: "CAM1" in window.event_label.toolTip())
+        assert ("source_step" if single_step else "start") in failures
         assert text("source_error", "zh") in window.event_label.toolTip()
         assert app.snapshot().state is ApplicationState.READY
         assert app.snapshot().active is None and not engine.calls

@@ -436,6 +436,7 @@ def test_source_restore_keeps_file_bytes_and_does_not_load_optional_sdk(
 ) -> None:
     import sys
 
+    from vimo_demo.application.local_replay import SourceControlCommands
     from vimo_demo.configuration import load_camera_sources
 
     data = saved_data(tmp_path)
@@ -470,10 +471,9 @@ def test_source_restore_keeps_file_bytes_and_does_not_load_optional_sdk(
         assert startup.editor.camera_sources.saved.mode == (
             "folder" if legacy else "basler"
         )
-        assert (
-            startup.local_replay is not None
-            and startup.local_replay.replay_available == legacy
-        )
+        assert isinstance(startup.application, SourceControlCommands)
+        assert startup.application.control_available
+        assert startup.application.control_snapshot() is None
         assert data.sources.read_bytes() == original
         assert "pypylon.pylon" not in sys.modules
         assert startup.application.snapshot().counters == ProductionCounters()

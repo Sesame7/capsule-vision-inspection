@@ -147,17 +147,6 @@ class LocalReplayControl:
             )
 
 
-class LocalReplayCommands(Protocol):
-    """The local composition command boundary consumed by the optional Qt view."""
-
-    @property
-    def replay_available(self) -> bool: ...
-    def replay_snapshot(self) -> ReplaySnapshot | None: ...
-    def pause_replay(self) -> Future[None]: ...
-    def continue_replay(self) -> Future[None]: ...
-    def step_replay(self) -> Future[None]: ...
-
-
 @runtime_checkable
 class SourceControlCommands(Protocol):
     """Source admission commands; Folder pacing and Basler draining stay distinct."""

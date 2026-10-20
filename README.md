@@ -97,17 +97,16 @@ network edits first. Save alone does not restart Web. Saved enablement is restor
 The page lists local IPv4s and shows the actual running URL with Open Browser.
 A trusted-LAN bind must be
 one assigned local IPv4; wildcard/DNS/broadcast bindings remain unsupported.
-Normal `app.py` accepts only `--help`, with no operator Web flags. Developer
-launchers retain their own explicit options. Access/firewall configuration remains
-external. JPEG URLs from `/api/snapshot` include publisher/revision identities;
-superseded URLs return 410. `/health` describes publication, not machine readiness.
+Normal `app.py` accepts only `--help`, with no operator Web flags. Access/firewall
+configuration remains external. JPEG URLs from `/api/snapshot` include
+publisher/revision identities; superseded URLs return 410. `/health` describes
+publication, not machine readiness.
 
 ## Developer tools and checks
 
 | Tool | Purpose |
 | --- | --- |
 | [run_production_ui.py](scripts/run_production_ui.py) | Fake-engine UI review; no hardware/model required |
-| [run_local_production_ui.py](scripts/run_local_production_ui.py) | Explicit configuration paths for real developer diagnosis; Folder/fixed inputs or saved Basler mappings with explicit Vision connection |
 | [visualize_inference.py](scripts/visualize_inference.py) | Typed inference masks/contours/boxes for a selected local model and images |
 | [run_fins_simulator.py](scripts/run_fins_simulator.py) | Localhost UDP simulator, optionally tracing accepted W49 writes |
 | [field_benchmark_tool.py](scripts/field_benchmark_tool.py) | Offline isolated run files and bounded evidence analysis; [diagnostic ownership and field gates](docs/field-benchmark.md) |

@@ -20,7 +20,7 @@ from vimo_demo.application import (
     ApplicationState,
     PreparedConfiguration,
 )
-from vimo_demo.application.local_replay import ReplayState
+from vimo_demo.application.local_replay import ReplayState, SourceControlCommands
 from vimo_demo.communication.reporting import ReportStage
 from vimo_demo.configuration import (
     CameraFolder,
@@ -86,8 +86,8 @@ def normal_replay(
 
 
 def replay_state(startup: Startup) -> ReplayState | None:
-    assert startup.local_replay is not None
-    snapshot = startup.local_replay.replay_snapshot()
+    assert isinstance(startup.application, SourceControlCommands)
+    snapshot = startup.application.control_snapshot()
     return snapshot.state if snapshot else None
 
 
@@ -106,7 +106,7 @@ def test_normal_start_pause_then_steps_in_same_generation(
         window.resize(*size)
         window.bridge.refresh()
         primary, secondary = window.buttons["operation"], window.buttons["pause"]
-        assert window.bridge.local_replay is startup.local_replay
+        assert window.bridge.source_control is app
         assert primary.text() == text("replay_start", language)
         assert secondary.accessibleName() == text("replay_pause", language)
         assert primary.isEnabled() and not secondary.isEnabled() and not engines
@@ -327,7 +327,7 @@ def test_normal_pause_continue_end_and_restart_preserve_existing_cursor_rules(
         window.bridge.refresh()
         assert engines[0].closed and app.snapshot().counters.cycles_completed == 2
         assert engines[0].calls[8:] == [11, 21, 31, 41, 51, 61]
-        window.bridge.step_replay()  # Exercise existing restart/cursor contract.
+        window.bridge.step_source()  # Exercise existing restart/cursor contract.
         until(lambda: replay_state(startup) is ReplayState.PAUSED)
         assert len(engines) == 2 and app.snapshot().generation == 2
         assert engines[1].calls == [10, 10, 10, 20, 30, 40, 50, 60]
@@ -336,7 +336,7 @@ def test_normal_pause_continue_end_and_restart_preserve_existing_cursor_rules(
         assert app.snapshot().counters.cycles_completed == 3
 
 
-def test_normal_and_developer_entry_use_same_saved_folder_step_semantics(
+def test_normal_and_internal_composition_use_same_saved_folder_step_semantics(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     with normal_replay(tmp_path) as (startup, window, engines):
@@ -350,9 +350,9 @@ def test_normal_and_developer_entry_use_same_saved_folder_step_semantics(
             replay_controls=True,
         )
         try:
-            assert startup.local_replay is not None
+            assert isinstance(startup.application, SourceControlCommands)
             for cycle in range(1, 4):
-                startup.local_replay.step_replay().result(WAIT)
+                startup.application.step_source().result(WAIT)
                 developer.application.step_replay().result(WAIT)
                 assert engines[0].calls == developer_engine.calls
                 assert (
@@ -385,7 +385,7 @@ def test_normal_nonloop_exhaustion_does_not_wait_in_paused_state(
         window,
         engines,
     ):
-        window.bridge.step_replay()
+        window.bridge.step_source()
         until(
             lambda: (
                 startup.application.snapshot().state is ApplicationState.READY
@@ -401,7 +401,7 @@ def test_normal_source_failure_from_paused_step_stops_and_reports_camera(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     with normal_replay(tmp_path, loop=False) as (startup, window, engines):
-        window.bridge.step_replay()
+        window.bridge.step_source()
         until(lambda: replay_state(startup) is ReplayState.PAUSED)
         (tmp_path / "frames" / "CAM2" / "1.png").write_bytes(
             b"corrupt isolated test image"
@@ -423,7 +423,7 @@ def test_normal_step_failure_retains_authoritative_lifecycle(
     qapp: QApplication, tmp_path: Path, failure: str, state: ApplicationState
 ) -> None:
     with normal_replay(tmp_path, fail=failure) as (startup, window, engines):
-        window.bridge.step_replay()
+        window.bridge.step_source()
         until(
             lambda: (
                 bool(engines)
@@ -463,7 +463,7 @@ def test_normal_paused_reporting_ack_and_overload_use_genuine_stop(
         panel.controller.set_reporting_selection(
             replace(selected, settings=replace(selected.settings, max_pending=1))
         )
-        window.bridge.step_replay()
+        window.bridge.step_source()
         until(lambda: replay_state(startup) is ReplayState.PAUSED)
         assert peer.entered.wait(WAIT)
         observed = panel.controller.reporting_snapshot()
@@ -484,11 +484,11 @@ def test_normal_paused_reporting_ack_and_overload_use_genuine_stop(
         peer.release.clear()
         peer.entered.clear()
         peer.hold_next(ReportStage.BITMAP)
-        assert startup.local_replay is not None
-        startup.local_replay.step_replay().result(WAIT)
+        assert isinstance(startup.application, SourceControlCommands)
+        startup.application.step_source().result(WAIT)
         assert peer.entered.wait(WAIT)
-        startup.local_replay.step_replay().result(WAIT)  # One queued report.
-        overloaded = startup.local_replay.step_replay()
+        startup.application.step_source().result(WAIT)  # One queued report.
+        overloaded = startup.application.step_source()
         until(lambda: startup.application.snapshot().state is ApplicationState.STOPPING)
         assert overloaded.done()
         assert (
@@ -526,7 +526,8 @@ def test_normal_without_folder_capability_keeps_generic_controls(
     window = create_window(startup, delivery)
     window.show()
     try:
-        assert startup.local_replay is None and window.bridge.local_replay is None
+        assert not window.bridge.controls_enabled
+        assert window.bridge.control_snapshot() is None
         assert not window.buttons["secondary"].isVisible()
         assert not window.buttons["pause"].isEnabled()
         assert window.snapshot.state is ApplicationState.UNCONFIGURED

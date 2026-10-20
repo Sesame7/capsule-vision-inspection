@@ -23,7 +23,6 @@ from vimo_demo.application.communication_preferences import (
 )
 from vimo_demo.application.continuous_basler import ContinuousArmedAcquisition
 from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
-from vimo_demo.application.local_replay import LocalReplayCommands
 from vimo_demo.application.preferences import (
     ApplicationPreferences,
     read_preferences,
@@ -135,7 +134,6 @@ class Startup:
     choice: RecipeChoice | None
     issues: tuple[StartupIssue, ...]
     preferences_writable: bool
-    local_replay: LocalReplayCommands | None = None
     communication: CommunicationPreferences = CommunicationPreferences()
     communication_error: str = ""
 
@@ -293,7 +291,6 @@ def load_startup(
                 StartupIssue("startup_source_unavailable", str(exc), blocking=False)
             )
 
-    local_replay: LocalReplayCommands | None = None
     if editor is None or editor.camera_sources is None:
         application = unconfigured_application()
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
@@ -312,8 +309,6 @@ def load_startup(
             reporting_editable=True,
             replay_controls=True,
         )
-        # Availability selects Folder-only controls across saved mode changes.
-        local_replay = application
     communication = CommunicationPreferences(
         reporting=application.reporting_selection()
         if isinstance(application, ProductionReportingCommands)
@@ -349,7 +344,6 @@ def load_startup(
         choice,
         tuple(issues),
         preferences_writable,
-        local_replay,
         communication,
         communication_error,
     )
@@ -415,9 +409,7 @@ class PreferenceNotifications(QObject):
 
 
 def create_window(startup: Startup, delivery: FutureDelivery) -> ProductionWindow:
-    bridge = QtProductionBridge(
-        startup.application, startup.frames, local_replay=startup.local_replay
-    )
+    bridge = QtProductionBridge(startup.application, startup.frames)
     SourceNotifications(bridge, delivery)
     window = ProductionWindow(
         bridge,
@@ -446,7 +438,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
         description="Persistent ViMo Production application"
     )
     parser.parse_args(argv)
-    # Preparation before Qt creation, as in the explicit-path developer launcher.
+    # Complete startup artifact IO before Qt creation.
     startup = load_startup(
         ApplicationData.at_entry(entry_directory),
         observe_source=lambda future: delivery.watch("folder_source", future),
