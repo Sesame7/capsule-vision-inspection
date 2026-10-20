@@ -12,12 +12,20 @@ from PySide6.QtCore import (
     QObject,
     QPersistentModelIndex,
     QRect,
+    QRectF,
     QSize,
     Qt,
     QTimer,
     Slot,
 )
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QTextCharFormat
+from PySide6.QtGui import (
+    QColor,
+    QFontMetrics,
+    QPainter,
+    QPainterPath,
+    QRegion,
+    QTextCharFormat,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -281,7 +289,6 @@ class HistoryPage(QWidget):
             QHeaderView.ResizeMode.Fixed
         )
         self.cycles.setItemDelegateForColumn(4, _ResultDelegate(self.cycles))
-        self.cycles.viewport().installEventFilter(self)
         root.addWidget(self.cycles, 1)
         self.channels = self._table(7, "historyChannels")
         self.channels.setSelectionBehavior(
@@ -291,11 +298,15 @@ class HistoryPage(QWidget):
         self.channels.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Fixed
         )
-        self.channels.viewport().installEventFilter(self)
         root.addWidget(self.channels)
         self.channel_detail = QPlainTextEdit()
         self.channel_detail.setReadOnly(True)
         root.addWidget(self.channel_detail)
+        for table in (self.cycles, self.channels):
+            for child in table.findChildren(
+                QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly
+            ):
+                child.installEventFilter(self)
         self.date.dateChanged.connect(self.refresh)
         self.all_dates.toggled.connect(self.refresh)
         self.batch.currentIndexChanged.connect(self.refresh)
@@ -330,9 +341,38 @@ class HistoryPage(QWidget):
         return table
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() is QEvent.Type.Resize and hasattr(self, "channel_detail"):
-            self._size_content()
+        if hasattr(self, "channel_detail"):
+            if event.type() is QEvent.Type.Resize and watched in (
+                self.cycles.viewport(),
+                self.channels.viewport(),
+            ):
+                self._size_content()
+            if event.type() in (QEvent.Type.Resize, QEvent.Type.Move):
+                for table in (self.cycles, self.channels):
+                    if watched.parent() is table:
+                        self._clip_table_contents(table)
         return super().eventFilter(watched, event)
+
+    @staticmethod
+    def _clip_table_contents(table: QTableWidget) -> None:
+        # QSS rounds the frame background, but does not clip child headers,
+        # viewports or scrollbar containers. Keep them inside the same border
+        # without adding padding or changing the accepted table geometry.
+        inset = table.frameWidth()
+        path = QPainterPath()
+        radius = max(0, Style.radius - inset)
+        path.addRoundedRect(
+            QRectF(table.rect().adjusted(inset, inset, -inset, -inset)),
+            radius,
+            radius,
+        )
+        interior = QRegion(path.toFillPolygon().toPolygon())
+        for child in table.findChildren(
+            QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly
+        ):
+            child.setMask(
+                interior.translated(-child.x(), -child.y()).intersected(child.rect())
+            )
 
     def _size_cycles(self) -> None:
         metrics = self.cycles.fontMetrics()

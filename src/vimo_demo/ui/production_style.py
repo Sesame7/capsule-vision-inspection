@@ -1031,13 +1031,15 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
     QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
     QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
+    QTableWidget#historyCycles, QTableWidget#historyChannels {{ border-radius: {Style.radius}px; }}
     QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
-    QTableWidget#historyChannels QHeaderView {{ background: {c.raised}; }}
-    QTableWidget#historyChannels QScrollBar:horizontal {{ background: {c.background}; height: 14px; }}
-    QTableWidget#historyChannels QScrollBar::handle:horizontal {{ background: {c.border}; min-width: 40px; border-radius: 6px; }}
-    QTableWidget#historyChannels QScrollBar::add-line:horizontal, QTableWidget#historyChannels QScrollBar::sub-line:horizontal {{ width: 0; }}
-    QTableWidget#historyChannels QScrollBar::add-page:horizontal, QTableWidget#historyChannels QScrollBar::sub-page:horizontal {{ background: none; }}
+    QTableWidget#historyCycles QHeaderView, QTableWidget#historyChannels QHeaderView {{ background: {c.raised}; }}
+    QTableWidget#historyCycles QScrollBar:horizontal, QTableWidget#historyChannels QScrollBar:horizontal {{ background: {c.background}; height: 14px; }}
+    QTableWidget#historyCycles QScrollBar::handle:horizontal, QTableWidget#historyChannels QScrollBar::handle:horizontal {{ background: {c.border}; min-width: 40px; border-radius: 6px; }}
+    QTableWidget#historyCycles QScrollBar::add-line:horizontal, QTableWidget#historyCycles QScrollBar::sub-line:horizontal, QTableWidget#historyChannels QScrollBar::add-line:horizontal, QTableWidget#historyChannels QScrollBar::sub-line:horizontal {{ width: 0; }}
+    QTableWidget#historyCycles QScrollBar::add-page:horizontal, QTableWidget#historyCycles QScrollBar::sub-page:horizontal, QTableWidget#historyChannels QScrollBar::add-page:horizontal, QTableWidget#historyChannels QScrollBar::sub-page:horizontal {{ background: none; }}
+    QTableWidget#historyCycles::corner, QTableWidget#historyChannels::corner {{ background: {c.surface}; border: none; }}
     QCheckBox {{ background: transparent; spacing: 8px; }}
     QCheckBox::indicator {{ width: 20px; height: 20px; }}
     QCheckBox#archiveCondition {{ color: {c.primary}; background: {c.surface}; border: 1px solid {c.border}; border-radius: 6px; padding: 4px 8px; spacing: 6px; }}

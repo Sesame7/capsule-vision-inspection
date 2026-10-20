@@ -371,6 +371,22 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         assert pixels.pixelColor(
             int((header.width() - 3) * dpr), int(header.height() // 2 * dpr)
         ) == QColor(theme_colors(page).raised)
+        for table in (page.cycles, page.channels):
+            # The existing table frame is the card: children must not paint
+            # square corners over it, or require an extra frame/padding.
+            assert table.frameWidth() == 1
+            header_mask = table.horizontalHeader().mask()
+            viewport_mask = table.viewport().mask()
+            assert not header_mask.contains(QPoint(0, 0))
+            assert header_mask.contains(table.horizontalHeader().rect().center())
+            assert not viewport_mask.contains(table.viewport().rect().bottomLeft())
+            assert not viewport_mask.contains(table.viewport().rect().bottomRight())
+            assert viewport_mask.contains(table.viewport().rect().center())
+            frame = table.grab().toImage()
+            scale = frame.devicePixelRatio()
+            assert frame.pixelColor(int(table.width() // 2 * scale), 0) == QColor(
+                theme_colors(page).border
+            )
         if viewport >= 1800:
             assert widths[0] > 0.12 * viewport and widths[1] > 0.05 * viewport
             assert widths[4] >= 0.25 * viewport
@@ -428,6 +444,16 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         resized = [page.cycles.columnWidth(i) for i in range(5)]
         assert sum(resized) == page.cycles.viewport().width() and resized != widths
         assert not page.cycles.horizontalScrollBar().isVisible()
+        assert (
+            page.channels.viewport()
+            .mask()
+            .contains(page.channels.viewport().rect().center())
+        )
+        assert (
+            not page.channels.viewport()
+            .mask()
+            .contains(page.channels.viewport().rect().bottomRight())
+        )
         # Secondary edge case: long identifiers elide without consuming all
         # surplus or losing their full tooltip. New data triggers allocation.
         long_context = replace(
@@ -462,6 +488,11 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             until(page.channels.horizontalScrollBar().isVisible)
             assert page.channels.horizontalScrollBar().maximum() > 0
             assert page.channels.verticalScrollBar().maximum() == 0
+            scrollbar = page.channels.horizontalScrollBar()
+            container = scrollbar.parentWidget()
+            assert container is not None
+            assert container.mask().contains(container.rect().center())
+            assert not container.mask().contains(container.rect().bottomRight())
             last = page.channels.item(0, 6)
             assert last is not None
             page.channels.scrollToItem(last)
