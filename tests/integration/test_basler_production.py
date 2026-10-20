@@ -456,6 +456,10 @@ def test_normal_folder_runtime_needs_no_pypylon(
         until(lambda: startup.application.snapshot().state is ApplicationState.READY)
         assert startup.application.snapshot().counters.cycles_completed > 0
         assert engine.closed and data.sources.read_bytes() == original
+        assert startup.application.history is not None
+        records = startup.application.history.query().result(WAIT).records
+        assert len(records) == startup.application.snapshot().counters.cycles_completed
+        assert all(len(record.channels) == 36 for record in records)
         assert "pypylon.pylon" not in sys.modules
     finally:
         startup.application.close().result(WAIT)
@@ -881,6 +885,8 @@ def test_vision_capture_cancellation_and_stale_delivery(
             assert not workspace.capture.isVisible()
             assert workspace.sources is not None
             workspace.sources.discard()
+        assert app.history is not None
+        assert app.history.snapshot().accepted == app.history.snapshot().persisted == 0
     finally:
         window.close()
         until(lambda: window.bridge.closed)
@@ -915,6 +921,7 @@ def test_synthetic_warmup_uses_actual_distinct_shapes_on_single_engine_owner(
         engine = engines[0]
         assert engine.shapes == [(20, 60, 3)] * 2 + [(24, 64, 3)] * 2
         assert all(engine.zeros)
+        assert app.history is not None and not app.history.query().result(WAIT).records
         assert (
             app.snapshot().counters == ProductionCounters()
             and not startup.frames.snapshot().frames
@@ -1016,6 +1023,16 @@ def test_source_lifetime_idle_discard_restart_recipe_and_batch(
                 )
                 assert app.source_snapshot().state is ConnectionState.CONNECTED
         app.start_batch("new-batch")
+        assert app.history is not None
+        records = app.history.query().result(WAIT).records
+        assert [r.cycle_id for r in records] == [
+            4,
+            2,
+        ]  # Idle captures never become records.
+        assert all(len(r.channels) == 36 for r in records)
+        assert len({r.context.run_id for r in records}) == 2
+        assert len({r.context.batch_segment for r in records}) == 1
+        assert records[0].context.active.recipe_id == "next"
         assert app.snapshot().counters == ProductionCounters() and not passive.closed
         assert len(passive.prepared) == 6
         assert all(len({owner for _, owner in engine.calls}) == 1 for engine in engines)
@@ -1248,6 +1265,9 @@ def test_close_during_connect_cancels_before_arm_and_joins_actual_owner(
             app.start()
         closed = app.close()
         assert not closed.done() and not app.join(0)
+        # Close is asynchronous: let its owner register disconnect before the
+        # blocked native prepare returns, rather than racing the two threads.
+        until(lambda: app.source_snapshot().state is ConnectionState.DISCONNECTING)
         passive.release_prepare.set()
         closed.result(WAIT)
         assert app.join(WAIT)

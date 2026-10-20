@@ -42,6 +42,7 @@ from vimo_demo.application.folder_replay import (
     FolderSourceError,
     start_interval_wait,
 )
+from vimo_demo.application.history import ProductionHistory
 from vimo_demo.application.image_archive import ArchiveSnapshot, ImageArchive
 from vimo_demo.application.local_replay import LocalReplayControl, ReplaySnapshot
 from vimo_demo.application.session import EngineFactory, ProductionCycle
@@ -525,6 +526,7 @@ class _LocalApplication(ProductionApplication):
         reporting_editable: bool = False,
         source_draft: CameraSourceDraft | None = None,
         source_cameras: tuple[CameraId, ...] = (),
+        history: ProductionHistory | None = None,
         observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: (
             None
         ),
@@ -548,7 +550,7 @@ class _LocalApplication(ProductionApplication):
         self.connection = BaslerConnection()
         self._source_cameras = source_cameras
         self._observe_acquisition = observe_acquisition
-        super().__init__(factory)
+        super().__init__(factory, history=history)
 
     def source_snapshot(self) -> SourceConnectionSnapshot:
         return self.connection.snapshot()
@@ -850,6 +852,7 @@ class _LocalApplication(ProductionApplication):
     def _close_resources(self) -> None:
         self.connection.disconnect()
         self.replay_cache.clear()
+        super()._close_resources()
 
 
 @dataclass
@@ -945,6 +948,7 @@ def local_application(
     reporting: LocalReportingSettings | None = None,
     replay_controls: bool = False,
     reporting_editable: bool = False,
+    history: ProductionHistory | None = None,
     observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: None,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
@@ -1089,6 +1093,7 @@ def local_application(
         replay_controls=replay_controls,
         reporting=reporting,
         reporting_editable=reporting_editable,
+        history=history,
         source_draft=source_draft if not paths else None,
         source_cameras=editor.machine.layout.camera_ids,
         observe_acquisition=observe_acquisition,
@@ -1096,7 +1101,9 @@ def local_application(
     return app, store
 
 
-def unconfigured_application() -> ProductionApplication:
+def unconfigured_application(
+    history: ProductionHistory | None = None,
+) -> ProductionApplication:
     """Normal stopped shell can edit session preferences without inventing inputs."""
 
     def unavailable(
@@ -1104,7 +1111,9 @@ def unconfigured_application() -> ProductionApplication:
     ) -> LocalRuntimeSession:
         raise ConfigurationError("Persistent configuration is unavailable")
 
-    return _LocalApplication(unavailable, FolderReplayCache(), reporting_editable=True)
+    return _LocalApplication(
+        unavailable, FolderReplayCache(), reporting_editable=True, history=history
+    )
 
 
 class SourceNotifications(QObject):

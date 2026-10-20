@@ -1,7 +1,8 @@
 # Local configuration
 
 Normal [app.py](../app.py) uses `data/` beside the entry file. It restores a stopped
-candidate, never an active session, Batch, counters or old results. No first-file
+candidate, never an active session, Batch, counters or current result. Historical
+records remain separately browsable without restoring application state. No first-file
 fallback, automatic geometry creation or fake inference is used for recovery.
 
 ## Files and paths
@@ -10,6 +11,7 @@ fallback, automatic geometry creation or fake inference is used for recovery.
 | --- | --- |
 | `data/app.json` | v1: `default_model_id`, `last_applied_recipe_id`, `language` (`zh`/`en`) |
 | `data/communication.json` | optional v1 global Production reporting, diagnostic endpoint and Web preferences |
+| `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
 | `data/models/*.json` | v1 Model definition: `model_id`, `display_name`, `model_path`, `expected_sha256`, `module_id` |
 | `data/recipes/*.recipe.json` | v1 Recipe, selected by explicit ID |
 | `data/machine/machine.json` | v1 configured camera order, slots, ChannelIds and ROIs |
@@ -29,6 +31,27 @@ keeps the shell UNCONFIGURED; a structurally valid candidate with unavailable
 Folder inputs can remain READY with a warning but fails Start preflight.
 Unreliable saved preferences are not silently overwritten. Invalid optional language
 can fall back visibly; required Model/Recipe identities cannot be guessed.
+
+## History storage
+
+Normal startup creates the history owner independently of configuration readiness.
+Both Folder and Basler terminal Production results are eligible. The database
+uses internal schema version 1 and may have SQLite `-wal`/`-shm` sidecars. Preserve
+these files with other local assets; do not copy an active database without its
+SQLite consistency requirements. An unsupported schema, corrupt database or
+unwritable path is reported as unavailable, never silently reset or replaced.
+
+New records capture the active resolved Recipe's display name alongside its stable
+ID in the compact detail payload. Renaming a Recipe does not relabel past cycles.
+Earlier H1 payloads without a name remain readable and display an explicitly marked
+Recipe ID; History never looks up a current file to invent a historical name.
+
+Records expire incrementally after 30 days by their host completion observation,
+not camera exposure time. This does not remove archived images, link filenames or
+restore Batch labels/counters on launch. History has no retention settings or JSON
+preferences. In-memory diagnostic/fake compositions may omit persistence. See
+[ownership and bounds](architecture.md#production-history) for shutdown, loss
+observations and query limits.
 
 ## Communication preferences
 
@@ -78,7 +101,8 @@ without changing the file or invalidating Production readiness.
 
 Restored reporting selection is frozen at the next Production Start, never a
 connection or authorization to transmit at startup/warm-up. Runtime observations,
-ACKs, watches, counters and results are not persisted. Saving does not alter the
+ACKs, watches and current counters are not persisted as Communication settings.
+Terminal Production results have separate History storage. Saving does not alter the
 running Web service. The header power action changes saved enablement; a failed
 write prevents runtime action, while failed startup leaves saved enabled distinct
 from actual FAILED. Apply changes is available only for differing saved/running

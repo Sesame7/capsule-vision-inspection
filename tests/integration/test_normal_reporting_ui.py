@@ -160,7 +160,14 @@ def test_unconfigured_reporting_preferences_do_not_invent_assets(
         assert panel.selection().enabled
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
         assert panel.controller.reporting_snapshot() is None
-        assert not list(tmp_path.rglob("*"))
+        assert startup.application.history is not None
+        assert not startup.application.history.query().result(WAIT).records
+        assert set(tmp_path.rglob("*")) <= {
+            startup.data.root,
+            startup.data.history,
+            Path(f"{startup.data.history}-wal"),
+            Path(f"{startup.data.history}-shm"),
+        }
     finally:
         close_window(window)
         delivery.detach()

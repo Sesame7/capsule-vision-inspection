@@ -141,3 +141,5 @@ class ProductionApplicationSnapshot:
     latest_production_result: ProductionInspectionResult | None
     runtime_owned: bool
     last_issue: ApplicationIssue | None
+    active_recipe_name: str | None = None
+    candidate_recipe_name: str | None = None

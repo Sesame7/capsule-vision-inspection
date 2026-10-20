@@ -15,6 +15,57 @@ type Theme = Literal["dark", "light"]
 type Language = Literal["zh", "en"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "history_all_dates": ("所有日期", "All dates"),
+    "history_date": ("完成日期", "Completion date"),
+    "history_batch": ("批次分段", "Batch segment"),
+    "history_result": ("检测结果", "Result"),
+    "history_all_batches": ("所有分段", "All segments"),
+    "history_all": ("所有结果", "All results"),
+    "history_ok": ("周期 OK", "Cycle OK"),
+    "history_ng": ("周期 NG", "Cycle NG"),
+    "history_error": ("技术 ERROR", "Technical ERROR"),
+    "history_empty": ("含 EMPTY 通道", "Contains EMPTY"),
+    "history_unknown": ("含 UNKNOWN 通道", "Contains UNKNOWN"),
+    "history_refresh": ("刷新", "Refresh"),
+    "history_newer": ("较新", "Newer"),
+    "history_older": ("较早", "Older"),
+    "history_loading": ("正在读取历史…", "Loading history…"),
+    "history_none": ("没有符合条件的记录", "No matching records"),
+    "history_unavailable": (
+        "历史记录不可用 · 查看提示",
+        "History unavailable · see tooltip",
+    ),
+    "history_segment_observed": (
+        "最早留存周期完成时间；并非批次建立时间。",
+        "Earliest retained cycle completion; not Batch creation time.",
+    ),
+    "history_warning": (
+        "历史持久化警告 · 未确认保存 {lost} 条 · 已提交 {saved} 条",
+        "History warning · {lost} not confirmed · {saved} committed",
+    ),
+    "history_clock": (
+        "本机墙钟完成观察时间；不是相机曝光时间。历史为有界、尽力保存。",
+        "Host wall-clock completion observation, not exposure time. History is bounded and best-effort.",
+    ),
+    "history_time": ("完成时间", "Completed"),
+    "history_cycle": ("周期 ID", "Cycle ID"),
+    "history_camera": ("相机", "Camera"),
+    "history_channel": ("通道", "Channel"),
+    "history_judgment": ("检查判断", "Judgment"),
+    "history_run": ("运行", "Run"),
+    "history_unassigned": ("未分配缺陷标签", "Unassigned defect labels"),
+    "history_matrix_key": (
+        "实际通道 ID 与业务状态；ERR 为独立技术错误。点击查看原因。",
+        "Actual ChannelId and business status; ERR is an independent technical error. Select for reasons.",
+    ),
+    "history_cycle_error": ("周期 ERR", "Cycle ERR"),
+    "history_cycle_disabled": ("周期 DISABLED", "Cycle DISABLED"),
+    "history_cycle_unknown": ("周期 UNKNOWN", "Cycle UNKNOWN"),
+    "history_select_channel": ("选择通道查看详情", "Select a channel for details"),
+    "history_recipe_legacy": (
+        "未记录配方名称；显示配方 ID",
+        "Recipe name not recorded; showing Recipe ID",
+    ),
     "image_archive": ("图像归档", "Image archive"),
     "archive_directory": ("归档目录", "Archive directory"),
     "archive_browse": ("选择归档目录", "Choose archive directory"),
@@ -762,10 +813,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "comm_protocol_error": ("FINS 响应协议错误", "FINS response protocol error"),
     "comm_plc_error": ("PLC 结束码错误", "PLC end-code error"),
     "comm_unexpected_error": ("通信操作未完成", "Communication operation incomplete"),
-    "history_note": (
-        "尚无归档或历史数据功能。",
-        "Archive and history are not available yet.",
-    ),
     "settings_note": (
         "使用顶部按钮切换中文 / English。",
         "Use the top control to switch 中文 / English.",
@@ -947,6 +994,16 @@ def stylesheet(theme: Theme = "dark") -> str:
     QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}
     QWidget#production QPushButton#start:focus:enabled {{ border-color: {c.primary}; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
+    QDateEdit#historyDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
+    QDateEdit#historyDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
+    QCalendarWidget#historyCalendar {{ background: {c.surface}; color: {c.primary}; }}
+    QCalendarWidget#historyCalendar QWidget#qt_calendar_navigationbar {{ background: {c.raised}; }}
+    QCalendarWidget#historyCalendar QToolButton {{ background: {c.raised}; color: {c.primary}; padding: 4px 6px; min-height: 24px; }}
+    QCalendarWidget#historyCalendar QMenu {{ background: {c.surface}; color: {c.primary}; }}
+    QCalendarWidget#historyCalendar QSpinBox {{ background: {c.surface}; color: {c.primary}; padding: 2px; }}
+    QCalendarWidget#historyCalendar QAbstractItemView {{ background: {c.surface}; color: {c.primary}; alternate-background-color: {c.raised}; selection-background-color: {c.selected}; selection-color: {c.primary}; outline: 0; }}
+    QCalendarWidget#historyCalendar QAbstractItemView::item:selected {{ border: 1px solid {c.accent}; }}
+    QCalendarWidget#historyCalendar QAbstractItemView:disabled {{ color: {c.secondary}; }}
     QPushButton#visionSourceCard {{ background: {c.background}; border-radius: {Style.radius}px; }}
     QPushButton#visionSourceCard:hover {{ background: {c.raised}; border-color: {c.secondary}; }}
     QPushButton#visionSourceCard:checked {{ background: {c.selected}; border-color: {c.accent}; }}
@@ -982,7 +1039,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
     QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
     QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
-    QTableWidget#commWatchTable::item:selected {{ background: {c.selected}; color: {c.primary}; }}
+    QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
     QCheckBox {{ background: transparent; spacing: 8px; }}
     QCheckBox::indicator {{ width: 20px; height: 20px; }}

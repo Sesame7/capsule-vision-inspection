@@ -34,7 +34,7 @@ from vimo_demo.inspection.production import (
 )
 from vimo_demo.ui.camera_card import CameraCard
 from vimo_demo.ui.display_frames import DisplayFrame
-from vimo_demo.ui.production_bridge import QtProductionBridge
+from vimo_demo.ui.production_bridge import QtProductionBridge, RecipeChoice
 from vimo_demo.ui.production_presentation import Indicator, grid_columns
 from vimo_demo.ui.production_style import (
     Language,
@@ -553,7 +553,18 @@ def test_active_recipe_name_and_unactivated_replacement(
     window.bridge.stop()
     until(lambda: window.snapshot.state is ApplicationState.READY)
     # Name edits retain recipe ID; don't promote the new display name before Start.
-    replacement = replace(window.choices[0], label="Updated A")
+    original = window.choices[0]
+    replacement = replace(
+        original,
+        label="Updated A",
+        prepared=replace(
+            original.prepared,
+            configuration=replace(
+                original.prepared.configuration, display_name="Updated A"
+            ),
+        ),
+    )
+    window.bridge.select_recipe(replacement)
     window.parameters.applied.emit(replacement)
     assert "Recipe A" in window.identity_label.toolTip()
     assert (
@@ -565,6 +576,78 @@ def test_active_recipe_name_and_unactivated_replacement(
     )  # Other saved Recipe B is now candidate.
     until(lambda: "Recipe B" in window.identity_label.toolTip())
     assert "Recipe A" in window.identity_label.toolTip()
+
+
+@pytest.mark.parametrize(
+    "language,theme,size",
+    [
+        ("zh", "dark", (1080, 1700)),
+        ("en", "light", (1920, 1017)),
+    ],
+)
+def test_activated_display_name_uses_application_and_available_header_width(
+    screen: tuple[ProductionWindow, FakeSession],
+    tmp_path: Path,
+    language: Language,
+    theme: str,
+    size: tuple[int, int],
+) -> None:
+    window, session = screen
+    name = "阿莫西林胶囊-规格B-灯检方案"
+    prepared = window.choices[0].prepared
+    configured = replace(
+        prepared, configuration=replace(prepared.configuration, display_name=name)
+    )
+    choice = RecipeChoice(configured, "Stale menu label")
+    window.bridge.select_recipe(choice)
+    window.parameters.applied.emit(choice)
+    window.set_language(language)
+    window.set_theme("light" if theme == "light" else "dark")
+    window.resize(*size)
+    window.bridge.start_batch("LOT-20261020-003")
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    QApplication.processEvents()
+    assert window.snapshot.active_recipe_name == name
+    assert window.grab().save(
+        str(tmp_path / f"production-{language}-{theme}-{size[0]}-active-name.png")
+    )
+    assert window.identity_label.text() == name, (
+        window.width(),
+        window.identity_group.width(),
+        window.recipe_identity.width(),
+        window.recipe_identity.sizeHint().width(),
+        window.identity_label.width(),
+        window.identity_label.fontMetrics().horizontalAdvance(name),
+        window.operation_group.width(),
+    )
+    assert name in window.identity_label.toolTip()
+    assert "Stale menu label" not in window.identity_label.toolTip()
+    assert (
+        window.identity_label.fontMetrics().horizontalAdvance(name)
+        <= window.identity_label.width()
+    )
+    assert "LOT-20261020-003" in window.batch_label.text()
+    assert window.snapshot.counters == ProductionCounters()
+    assert window.snapshot.latest_production_result is None
+    window.bridge.stop()
+    until(lambda: window.snapshot.state is ApplicationState.READY)
+    next_config = replace(
+        configured,
+        configuration=replace(
+            configured.configuration, display_name="下次启动的新名称"
+        ),
+    )
+    next_choice = RecipeChoice(next_config, next_config.configuration.display_name)
+    window.bridge.select_recipe(next_choice)
+    window.parameters.applied.emit(next_choice)
+    QApplication.processEvents()
+    assert window.identity_label.text() == name
+    assert "下次启动的新名称" in window.pending_label.toolTip()
+    assert window.snapshot.active_recipe_name == name
+    assert window.snapshot.candidate_recipe_name == "下次启动的新名称"
+    assert window.snapshot.counters == ProductionCounters()
 
 
 @pytest.mark.parametrize(
@@ -738,7 +821,11 @@ def test_long_recipe_and_batch_keep_pending_activation_visible(
         replace(window.choices[0], label="很长的配方名称 Long Recipe " * 12),
     )
     window.bridge.snapshot_changed.emit(
-        replace(window.snapshot, batch_id="long-batch-id-" * 12)
+        replace(
+            window.snapshot,
+            batch_id="long-batch-id-" * 12,
+            candidate_recipe_name=window.choices[0].label,
+        )
     )
     QApplication.processEvents()
     assert window.pending_label.isVisible()
@@ -818,7 +905,17 @@ def test_recipe_summary_candidate_active_and_unconfigured(
         (None, None, "--", False),
     ):
         window.bridge.snapshot_changed.emit(
-            replace(baseline, active=active, candidate=candidate)
+            replace(
+                baseline,
+                active=active,
+                candidate=candidate,
+                active_recipe_name="Recipe A" if active else None,
+                candidate_recipe_name="Recipe A"
+                if candidate == a
+                else "Recipe B"
+                if candidate == b
+                else None,
+            )
         )
         QApplication.processEvents()
         assert window.identity_label.text() == name
@@ -869,6 +966,7 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
             window.snapshot,
             active=ConfigurationIdentity.from_prepared(a.prepared),
             candidate=ConfigurationIdentity.from_prepared(b.prepared),
+            candidate_recipe_name=window.choices[1].label,
             batch_id="long-batch-identity-" * 20,
         )
     )
@@ -1406,7 +1504,11 @@ def _assert_long_summary(
         replace(window.choices[0], label="Long Recipe 很长的配方名称 " * 15),
     )
     window.bridge.snapshot_changed.emit(
-        replace(window.snapshot, batch_id="batch-with-a-long-identity-" * 15)
+        replace(
+            window.snapshot,
+            batch_id="batch-with-a-long-identity-" * 15,
+            candidate_recipe_name=window.choices[0].label,
+        )
     )
     QApplication.processEvents()
     batch = window.batch_group

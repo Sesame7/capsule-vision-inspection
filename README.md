@@ -4,7 +4,7 @@ Windows desktop application for six-camera, 36-channel capsule inspection.
 It combines passive Basler hardware-trigger acquisition or Folder Replay, one
 serial ViMo engine, Occupancy/Size/Color checks, FINS UDP/TCP communication and
 PLC result reporting. The Chinese/English Qt UI has Production, Recipe,
-Communication and Vision workspaces; History is a placeholder. A read-only Web
+Communication, History and Vision workspaces. A read-only Web
 observer is optional and starts automatically only when saved enabled.
 
 ## Setup
@@ -32,6 +32,7 @@ Normal startup requires authorized local configuration and assets beside `app.py
 data/
   app.json                    # Explicit default Model / last-applied Recipe IDs
   communication.json          # Optional global reporting/diagnostic/Web preferences
+  history.sqlite3              # Generated compact Production history (SQLite)
   machine/machine.json        # Saved camera/channel order and ROI geometry
   models/*.json               # Model definitions and their referenced artifacts
   recipes/*.recipe.json
@@ -78,6 +79,13 @@ the first available model/Recipe, invents ROIs or substitutes fake inference.
   preferences and captured at Start only after successful Save. Unsaved edits stay
   drafts. Missing communication settings leave reporting and Web disabled; no PLC
   endpoint is inferred from Folder or Basler mode.
+- **History:** browse terminal Folder/Basler Production results by local date,
+  Batch segment and result, newest first in pages of up to 50 cycles. Select a
+  cycle for its camera/channel states and abnormal reason codes. NG, technical
+  ERROR and channel EMPTY remain independent observations. Refresh reloads the
+  list; browsing never changes current counters. Records use host completion
+  observations and are retained for 30 days. Persistence is bounded and best-effort;
+  visible warnings identify unconfirmed records or storage failures.
 
 Counters describe admitted cycles and channel judgment occurrences, not physical
 capsules. Stop/Start or a Recipe change does not reset them; explicit Batch does.

@@ -23,6 +23,7 @@ from vimo_demo.application.communication_preferences import (
 )
 from vimo_demo.application.continuous_basler import ContinuousArmedAcquisition
 from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
+from vimo_demo.application.history import ProductionHistory
 from vimo_demo.application.preferences import (
     ApplicationPreferences,
     read_preferences,
@@ -77,6 +78,10 @@ class ApplicationData:
     @property
     def communication(self) -> Path:
         return self.root / "communication.json"
+
+    @property
+    def history(self) -> Path:
+        return self.root / "history.sqlite3"
 
     @property
     def machine(self) -> Path:
@@ -291,7 +296,7 @@ def load_startup(
             )
 
     if editor is None or editor.camera_sources is None:
-        application = unconfigured_application()
+        application = unconfigured_application(ProductionHistory(data.history))
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
         cameras = (
             machine.layout.camera_ids
@@ -306,6 +311,7 @@ def load_startup(
             observe_source=observe_source,
             observe_acquisition=observe_acquisition,
             reporting_editable=True,
+            history=ProductionHistory(data.history),
             replay_controls=True,
         )
     communication = CommunicationPreferences()

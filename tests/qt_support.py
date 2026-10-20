@@ -71,6 +71,10 @@ def screen(
     # Read existing OS fonts for realistic metrics/Chinese glyphs; install nothing.
     ensure_test_fonts()
     candidate = prepared(tmp_path)
+    candidate = replace(
+        candidate,
+        configuration=replace(candidate.configuration, display_name="Recipe A"),
+    )
     session = FakeSession(automatic_start=False)
     app = ProductionApplication(lambda _p, _g: session)
     app.configure(candidate)
@@ -80,7 +84,10 @@ def screen(
         RecipeChoice(candidate, "Recipe A"),
         RecipeChoice(
             replace(
-                candidate, configuration=replace(candidate.configuration, recipe_id="B")
+                candidate,
+                configuration=replace(
+                    candidate.configuration, recipe_id="B", display_name="Recipe B"
+                ),
             ),
             "Recipe B",
         ),

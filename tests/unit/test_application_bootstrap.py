@@ -189,7 +189,14 @@ def test_missing_data_does_not_generate_configurations(tmp_path: Path) -> None:
     try:
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
         assert startup.machine is startup.editor is startup.choice is None
-        assert not data.root.exists()
+        assert startup.application.history is not None
+        assert not startup.application.history.query().result(WAIT).records
+        assert set(tmp_path.rglob("*")) <= {
+            data.root,
+            data.history,
+            Path(f"{data.history}-wal"),
+            Path(f"{data.history}-shm"),
+        }
     finally:
         close(startup)
 

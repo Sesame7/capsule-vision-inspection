@@ -4,10 +4,12 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from threading import Condition, Thread, current_thread
+from uuid import uuid4
 
 from vimo_demo.inspection import CycleId, Frame
 from vimo_demo.inspection.production import ProductionInspectionResult
 
+from .history import HistoryContext, ProductionHistory
 from .model_preparation import (
     ModelPreparation,
     ModelPreparationFactory,
@@ -58,10 +60,14 @@ class ProductionApplication:
         *,
         max_pending_cycles: int = 8,
         preparation_factory: ModelPreparationFactory = real_preparation_engine,
+        history: ProductionHistory | None = None,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
             raise ValueError("max_pending_cycles must be positive")
         self._factory = session_factory
+        self.history = history
+        self._batch_segment = uuid4().hex
+        self._run_id: str | None = None
         self._preparation_factory = preparation_factory
         self._preparation: ModelPreparation | None = None
         self._prepare_requested = False
@@ -108,6 +114,8 @@ class ProductionApplication:
                 self._latest,
                 self._session is not None,
                 self._issue,
+                self._active.configuration.display_name if self._active else None,
+                self._candidate.configuration.display_name if self._candidate else None,
             )
 
     def configure(self, candidate: PreparedConfiguration) -> None:
@@ -123,6 +131,7 @@ class ProductionApplication:
             if batch_id is not None and not batch_id.strip():
                 raise ApplicationError("batch_id must be nonempty or None")
             self._batch = batch_id
+            self._batch_segment = uuid4().hex
             self._counters = ProductionCounters()
             self._latest = None
 
@@ -351,6 +360,19 @@ class ProductionApplication:
                     )
                 self._counters = self._counters.completed(result)
                 self._latest = result
+                if self.history is not None:
+                    assert self._active is not None and self._run_id is not None
+                    self.history.offer(
+                        HistoryContext(
+                            self.history.clock(),
+                            self._batch_segment,
+                            self._batch,
+                            self._run_id,
+                            ConfigurationIdentity.from_prepared(self._active),
+                            self._active.configuration.display_name,
+                        ),
+                        result,
+                    )
             except BaseException as exc:
                 error = exc
                 if isinstance(exc, ApplicationError) or (
@@ -385,6 +407,10 @@ class ProductionApplication:
 
     def _close_resources(self) -> None:
         """Application-lifetime resources; called only by the lifecycle owner."""
+        if self.history is not None:
+            self.history.request_stop()
+            if not self.history.join():
+                raise ApplicationError("History persistence owner remains alive")
 
     def _run(self) -> None:
         while True:
@@ -428,6 +454,7 @@ class ProductionApplication:
                                 "Startup stopped before activation"
                             )
                         self._active = prepared
+                        self._run_id = uuid4().hex
                         self._state = ApplicationState.RUNNING
                     assert startup is not None
                     startup.set_result(None)

@@ -41,6 +41,7 @@ from vimo_demo.web.runtime import WebRuntime, WebState
 from .camera_card import CameraCard
 from .communication_page import CommunicationPage
 from .display_frames import DisplayFrame, DisplaySnapshot
+from .history_page import HistoryPage
 from .parameters_page import ParametersPage
 from .production_bridge import QtProductionBridge, RecipeChoice
 from .production_presentation import (
@@ -179,7 +180,7 @@ class ProductionWindow(QMainWindow):
         recipe_row.addWidget(self.recipe_icon)
         self.identity_label = QLabel()
         self.identity_label.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
         )
         self.identity_label.setMinimumWidth(2 * Style.touch)
         self.identity_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -295,7 +296,6 @@ class ProductionWindow(QMainWindow):
         else:
             self.configuration_placeholder.hide()
         page.addWidget(workspace, 1)
-        self.placeholders: dict[str, QLabel] = {}
         self.parameters = ParametersPage(
             bridge,
             recipe_editor,
@@ -307,6 +307,7 @@ class ProductionWindow(QMainWindow):
         self.parameters.sources_verified.connect(self._sources_verified)
         self.parameters.setup_changed.connect(self._render)
         self.communication = CommunicationPage(reporting=bridge.reporting)
+        self.history = HistoryPage(bridge.application.history)
         if self.communication.reporting_panel is not None:
             self.communication.reporting_panel.update_state(self.snapshot.state)
             bridge.reporting_changed.connect(self.communication.reporting_panel.refresh)
@@ -320,14 +321,8 @@ class ProductionWindow(QMainWindow):
             if name == "diagnostics":
                 self.pages.addWidget(self.communication)
                 continue
-            placeholder = QWidget()
-            container = QVBoxLayout(placeholder)
-            label = QLabel()
-            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setWordWrap(True)
-            container.addWidget(label)
-            self.placeholders[name] = label
-            self.pages.addWidget(placeholder)
+            if name == "history":
+                self.pages.addWidget(self.history)
         self.event_frame = StatusBar()
         self.event_icon = self.event_frame.event_icon
         self.event_label = self.event_frame.event_label
@@ -417,6 +412,8 @@ class ProductionWindow(QMainWindow):
             return
         if index == 4:
             self.parameters.open_roi_editor()
+        if index == 3:
+            self.history.activate()
         self.pages.setCurrentIndex(index)
         self.navigation[index].setFocus(Qt.FocusReason.OtherFocusReason)
         self._refresh_theme_icons()
@@ -438,6 +435,7 @@ class ProductionWindow(QMainWindow):
         apply_theme(self, theme)
         self._refresh_theme_icons()
         self.communication.set_language(self.language)
+        self.history.set_language(self.language)
         self._render()
 
     def _refresh_theme_icons(self) -> None:
@@ -479,6 +477,7 @@ class ProductionWindow(QMainWindow):
         self.language = language
         self.parameters.set_language(language)
         self.communication.set_language(language)
+        self.history.set_language(language)
         self._refresh_theme_icons()
         self.buttons["batch"].setToolTip(text("batch", language))
         self.buttons["batch"].setAccessibleName(text("batch", language))
@@ -496,10 +495,6 @@ class ProductionWindow(QMainWindow):
         for key in ("channel_ok", "channel_ng", "channel_empty"):
             for label in self.metrics[key]:
                 label.setToolTip(text("channel_count_help", language))
-        for key, label in self.placeholders.items():
-            label.setText(
-                f"{text(key, language)}\n\n{text('placeholder', language)}\n{text(key + '_note', language)}"
-            )
         self._render()
         self.language_changed.emit(language)
 
@@ -1349,7 +1344,9 @@ class ProductionWindow(QMainWindow):
             if choice is not None:
                 self._active_choice = choice
         active_name = (
-            self._active_choice.label
+            snapshot.active_recipe_name
+            if active and snapshot.active_recipe_name is not None
+            else self._active_choice.label
             if active
             and self._active_choice
             and ConfigurationIdentity.from_prepared(self._active_choice.prepared)
@@ -1367,7 +1364,9 @@ class ProductionWindow(QMainWindow):
             None,
         )
         candidate_name = (
-            candidate_choice.label
+            snapshot.candidate_recipe_name
+            if candidate and snapshot.candidate_recipe_name is not None
+            else candidate_choice.label
             if candidate_choice
             else candidate.recipe_id
             if candidate
@@ -1381,6 +1380,7 @@ class ProductionWindow(QMainWindow):
             and candidate is not None
             and (
                 candidate != active
+                or active_name != candidate_name
                 or (
                     candidate_choice is not None
                     and self._active_choice is not None
@@ -1404,8 +1404,8 @@ class ProductionWindow(QMainWindow):
         batch = f"{text('batch_id', language)} {snapshot.batch_id or '—'}"
         self.batch_label.ensurePolished()
         batch_padding = 16 + 2 * self.batch_group.frameWidth()
-        # Equal outer columns anchor Batch/players; the central identities use
-        # separate compact lines, so prepared Recipes do not steal action space.
+        # Balance the outer columns when possible. On narrow windows the empty
+        # space after Batch can serve the active name without moving controls.
         self.state_label.ensurePolished()
         state_width = max(
             self.state_label.fontMetrics().horizontalAdvance(text(key, lang))
@@ -1428,7 +1428,6 @@ class ProductionWindow(QMainWindow):
         )
         self.state_label.setMinimumWidth(state_width)
         side_width = self.operation_group.width()
-        self.summary_header.setColumnMinimumWidth(0, side_width)
         self.summary_header.setColumnMinimumWidth(2, side_width)
         batch_fixed = (
             self.buttons["batch"].width()
@@ -1454,11 +1453,33 @@ class ProductionWindow(QMainWindow):
         self.batch_group.setFixedWidth(self.batch_label.width() + batch_fixed)
         main_width = max(
             self.identity_label.minimumWidth(),
-            self.identity_label.fontMetrics().horizontalAdvance(display_name),
+            ceil(
+                QFontMetricsF(self.identity_label.font()).horizontalAdvance(
+                    display_name
+                )
+            )
+            + 2,
         )
         self.identity_label.setMaximumWidth(main_width)
         self.recipe_identity.setMaximumWidth(
             self.recipe_icon.width() + Style.small + main_width
+        )
+        identity_width = max(state_width, self.recipe_identity.maximumWidth())
+        margins = self.summary_layout.contentsMargins()
+        header_width = (
+            self.summary.contentsRect().width()
+            - margins.left()
+            - margins.right()
+            - 2 * self.summary_header.horizontalSpacing()
+        )
+        self.summary_header.setColumnMinimumWidth(
+            0,
+            max(
+                self.batch_group.width(),
+                min(side_width, header_width - side_width - identity_width),
+            )
+            if main_width > state_width
+            else side_width,
         )
         self.pending_label.setMaximumWidth(
             max(
@@ -1551,6 +1572,7 @@ class ProductionWindow(QMainWindow):
                 application.removeEventFilter(self)
             self.bridge.detach()
             self.communication.dispose()
+            self.history.dispose()
             event.accept()
         else:
             event.ignore()

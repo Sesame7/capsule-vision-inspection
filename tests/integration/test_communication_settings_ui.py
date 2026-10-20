@@ -747,7 +747,7 @@ def test_reload_failure_preserves_entire_draft(
 def test_discard_does_not_undo_observed_write(
     settings_window: tuple[Startup, ProductionWindow], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _, window = settings_window
+    startup, window = settings_window
     page = window.communication
     page.persist_settings()
     calls: list[CommunicationRequest] = []
@@ -764,6 +764,8 @@ def test_discard_does_not_undo_observed_write(
     page.reload_settings()
     assert page.port.value() == 9600 and not page.dirty
     assert len(calls) == 1 and page.last_response is observed
+    assert startup.application.history is not None
+    assert not startup.application.history.query().result(5).records
     assert page.success.text() and page.status.text()
 
 

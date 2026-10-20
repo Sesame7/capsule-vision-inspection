@@ -13,6 +13,7 @@ saved Model / Recipe / MachineLayout / CameraSources
   -> bounded runtime -> one InferenceWorker / ViMo engine
   -> configured channel inspection -> compact terminal result / accounting
        -> bounded serial first-station PLC reporting
+       -> bounded SQLite Production history
        -> bounded original-frame PNG archive (opt-in Basler Recipe)
        -> independent latest display copies -> Qt and read-only Web
 ```
@@ -23,7 +24,7 @@ saved Model / Recipe / MachineLayout / CameraSources
 | `inspection/` | Frame/cycle identity, synchronous collection and channel evidence/judgment |
 | `inference/` | Typed synchronous API, SDK boundary, staging and owned outputs |
 | `runtime/` | Engine worker, serialized collector, bounded dispatch and terminal delivery |
-| `application/` | Candidate activation, sessions, sources and counters |
+| `application/` | Candidate activation, sessions, sources, counters and history persistence |
 | `ui/` | Normal composition, presentation, editing and queued notifications |
 | `web/` | Latest-only publisher and serial cached HTTP delivery |
 | `communication/` | FINS clients, result projection/report owner and UDP simulator |
@@ -213,6 +214,65 @@ original owner for an explicit Disconnect/Close retry. There is no automatic
 reconnection. Source loss stops the bound session and remains visible in Vision;
 it does not fabricate results. Notification or timeout is not termination, and
 native calls are never forcibly cancelled. Qt Close stays asynchronous.
+
+## Production history
+
+Normal startup owns one `application.history.ProductionHistory` for
+`data/history.sqlite3`, including when the shell is UNCONFIGURED. Application
+accounting hands off each authoritative terminal Production result with its host
+wall-clock completion observation, active Recipe/Model identity, Run and Batch
+segment. A successful Start creates a fresh Run UUID; Stop/Start retains the
+segment. Every successful explicit Batch creates a new segment UUID, even for
+the same label. A new application starts fresh identities and counters; browsing
+old records never restores current state. Warm-up, previews, idle captures and
+manual communication requests create no records.
+
+One background owner performs all SQLite access, projection, compression and
+retention. Its non-waiting inbox holds at most 128 pending writes/queries, plus
+one active operation. Stored rows have independent persistent IDs and unique
+`(run_id, cycle_id)` identities. Compact details retain configured camera/slot/
+channel identities, business/technical/judgment states and existing abnormal
+reason codes. Images, masks, raw outputs, measurements and full snapshots are
+excluded. Neither judgments nor PLC delivery depend on storage success.
+
+Recipe display names come from the application's immutable resolved configuration:
+Production presents the active name separately from the prepared candidate, and
+each History submission freezes that active name without changing its Recipe ID.
+The optional name extends the existing detail payload; older records retain an
+unknown historical name and show their ID, without consulting current Recipe files.
+
+Only committed inserts increment the owner's persisted count. Overflow rejects
+the record explicitly; storage failures and dropped/failed counts remain visible
+in History without faulting Production. This is best-effort evidence, not a
+completeness guarantee. Normal Close settles inspection first, then drains
+accepted history requests and joins the actual persistence thread off Qt. A
+blocked write keeps Close pending; no timeout abandons the owner or force-cancels
+I/O. Failed database initialization remains unavailable until a new owner is
+created; it does not replace the database or retry automatically.
+
+Retention removes at most 256 rows strictly older than 30 days before each
+operation and on interruptible 60-second idle observations. Backlogs expire
+incrementally. This uses recorded host wall-clock times, so clock adjustments
+affect ordering and retention. SQLite can reuse deleted space; there is no
+automatic VACUUM or image deletion.
+
+History queries run on that same owner. The Qt page retains at most 50 cycles
+with keyset Newer/Older navigation and at most 100 recent Batch-segment choices
+within the date scope. Segment labels show the earliest retained cycle completion
+for that segment, not its Batch creation time; retention can advance this observation.
+Identical timestamps gain a short segment ID, while filtering always uses the full ID.
+Filters and upper-right pagination share bilingual sizing and wrap on narrow pages.
+Full Cycle/Run/Batch/Recipe identities remain in the Cycle tooltip rather than a
+repeated detail row. OK/NG filter the stored product judgment, ERROR the technical
+assessment, and EMPTY/UNKNOWN channel business states; a cycle can match several
+filters. Page entry, filters and Refresh request data; the scalar warning refresh
+does not poll the database. The read-only detail matrix uses stored camera order
+and slot/ChannelId mappings, with one row per camera. Channel selection exposes
+the independent business/technical/judgment states and reason codes; NG and ERROR
+can coexist. List summaries count channel OK/NG/EMPTY, adding UNKNOWN and independent
+technical ERR counts when present. Cycle-level anomalies absent from those counts
+remain explicit; routine COMPLETE/SUCCESS is implicit in the presentation only.
+Query failures remain explicit. There is no image association, export or Web history API.
 
 ## Image archiving
 
