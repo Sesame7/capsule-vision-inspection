@@ -30,6 +30,14 @@ EUROPEAN_LANGUAGES: dict[Language, str] = {
     "hu": "Magyar",
     "sv": "Svenska",
     "da": "Dansk",
+    "fi": "Suomi",
+    "nb": "Norsk bokmål",
+    "sk": "Slovenčina",
+    "bg": "Български",
+    "hr": "Hrvatski",
+    "sr-Latn": "Srpski (latinica)",
+    "el": "Ελληνικά",
+    "pt-PT": "Português (Portugal)",
 }
 
 
@@ -39,6 +47,19 @@ def test_european_language_identities_and_complete_catalogs() -> None:
         assert is_language(language)
         assert LANGUAGE_NAMES[language] == native_name
         assert EXTRA_STRINGS[language].keys() == STRINGS.keys(), language
+
+
+def test_explicit_variants_have_independent_translations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert text("save", "nb") == "Lagre"
+    assert text("save", "sr-Latn") == "Sačuvaj"
+    assert text("save", "pt-PT") == "Guardar"
+    assert text("save", "pt-BR") == "Salvar"
+    brazilian = EXTRA_STRINGS["pt-BR"].copy()
+    monkeypatch.delitem(EXTRA_STRINGS["pt-PT"], "save")
+    assert text("save", "pt-PT") == STRINGS["save"][1]
+    assert EXTRA_STRINGS["pt-BR"] == brazilian
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -147,7 +168,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     }
     assert tuple(LANGUAGE_NAMES) == LANGUAGES
     assert set(EXTRA_STRINGS) == set(LANGUAGES) - {"zh", "en"}
-    assert len(set(LANGUAGES)) == len(LANGUAGES) == 21
+    assert len(set(LANGUAGES)) == len(LANGUAGES) == 29
     assert LANGUAGE_NAMES["zh-TW"] == "繁體中文"
     assert len(set(LANGUAGE_NAMES.values())) == len(LANGUAGES)
     formatter = Formatter()
@@ -227,7 +248,7 @@ def test_catalog_literals_have_no_duplicate_language_or_text_keys() -> None:
 
 
 def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
-    # Pre-L2-0 resolved text and explicit keys, including English-equivalent values.
+    # Pre-L2-0 (13) and pre-L2-A2 (8) resolved text and explicit keys.
     # Review these migration snapshots explicitly when catalog content changes.
     expected: dict[Language, str] = {
         "zh": "172cc2b271d593db07941b65f57444e39d8840a2bbbe0df7c57f3e87ac0de1d1",
@@ -243,8 +264,16 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
         "ru": "4dd119af259579e6d0a65b25b7337625531e421c390b9a2c9d331bbd2619a8b1",
         "tr": "108426368dbb70b4119277fc4266d0a14a17c3a2fbcfc0165056caf04304ec29",
         "zh-TW": "d8911e1cb916af4bbf2340e724e335bdbe8909aaaf970d2327cdb5361939eafe",
+        "nl": "711c89eabb81fed589a2be1ed0e5024ca899430b7b99f49b626719c622eebe22",
+        "pl": "b8ebcdb459b839f178823c19ecdbc73396e428fb200198456f1744f8238b6d32",
+        "uk": "b1773797b879dc61ac3e8a6a93f5474456ccc3331a9c56c69ea403f003140f36",
+        "ro": "53e172401df9c76907cb3e0b3e88d84be54fe0e399f5c46762be175d299671ac",
+        "cs": "345a5b4e332d4f5c6a4511f382bf5886f5540e7a6b6395894cfc0c4dfd713814",
+        "hu": "5ba97d3227739ef47c439d8ff1d812857c0526d710acc9bb69eddba182cc9b51",
+        "sv": "a14d337c547e29d59ce1021cf2b55acb8c2efd9534dbe01d3009635a49f6ae6d",
+        "da": "b238673e678a97d7f134edaf7d2f242d9212fbc45a9bc58a05437ef6a321c90b",
     }
-    assert tuple(expected) == LANGUAGES[:13]
+    assert tuple(expected) == LANGUAGES[:21]
     for language, digest in expected.items():
         catalog = {
             "resolved": {key: text(key, language) for key in STRINGS},
@@ -258,7 +287,22 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
 
 def test_language_codes_are_exact_and_invalid_types_remain_rejected() -> None:
     invalid_mapping: dict[str, object] = {}
-    for value in ("pt_BR", "EN", "zh-CN", "vi", "th", None, 1, ["en"], invalid_mapping):
+    for value in (
+        "pt_BR",
+        "pt_PT",
+        "pt",
+        "no",
+        "sr",
+        "sr-Cyrl",
+        "EN",
+        "zh-CN",
+        "vi",
+        "th",
+        None,
+        1,
+        ["en"],
+        invalid_mapping,
+    ):
         assert not is_language(value)
 
 

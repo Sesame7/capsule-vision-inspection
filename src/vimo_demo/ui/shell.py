@@ -1,6 +1,6 @@
 """Shared navigation and compact status presentation, without runtime ownership."""
 
-from PySide6.QtCore import QSize, Qt, Signal, Slot
+from PySide6.QtCore import QPoint, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QPaintEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -51,6 +51,14 @@ LANGUAGE_LABELS = {
     "hu": "HU",
     "sv": "SV",
     "da": "DA",
+    "fi": "FI",
+    "nb": "NB",
+    "sk": "SK",
+    "bg": "BG",
+    "hr": "HR",
+    "sr-Latn": "SR",
+    "el": "EL",
+    "pt-PT": "PT-PT",
 }
 
 
@@ -81,19 +89,50 @@ class _StatusLabel(QLabel):
 class _LanguageSelector(QComboBox):
     def showPopup(self) -> None:
         # The closed control is deliberately narrower than the native names.
-        # Size the popup itself, rather than forcing a child view wider than
-        # its container. Qt retains placement/height clipping to the screen.
-        self.view().window().setMinimumWidth(
+        # Keep the native view/model and its keyboard/scroll behavior.
+        view = self.view()
+        popup = view.window()
+        available = self.screen().availableGeometry()
+        popup.setMinimumWidth(
             min(
                 max(
                     self.fontMetrics().horizontalAdvance(self.itemText(index))
                     for index in range(self.count())
                 )
                 + 60,
-                self.screen().availableGeometry().width(),
+                available.width(),
             )
         )
         super().showPopup()
+        # Windows may place the list against full screen geometry, including
+        # the taskbar. Use the actual work area and all available row space.
+        handle = popup.windowHandle()
+        rows_height = sum(view.sizeHintForRow(i) for i in range(self.count()))
+        overhead = popup.height() - view.viewport().height()
+        margins = handle.frameMargins()
+        popup.resize(
+            min(popup.width(), available.width() - margins.left() - margins.right()),
+            min(
+                rows_height + overhead,
+                available.height() - margins.top() - margins.bottom(),
+            ),
+        )
+        frame = handle.frameGeometry()
+        # Native resize events may still be queued; use the requested widget
+        # size rather than the handle's previous dimensions for placement.
+        frame.setSize(
+            QSize(
+                popup.width() + margins.left() + margins.right(),
+                popup.height() + margins.top() + margins.bottom(),
+            )
+        )
+        left = max(
+            available.left(), min(frame.left(), available.right() - frame.width() + 1)
+        )
+        top = max(
+            available.top(), min(frame.top(), available.bottom() - frame.height() + 1)
+        )
+        popup.move(QPoint(left, top))
 
     def paintEvent(self, event: QPaintEvent) -> None:
         option = QStyleOptionComboBox()
@@ -152,7 +191,8 @@ class NavigationBar(QFrame):
         self.language.setIconSize(QSize(20, 20))
         for language in LANGUAGES:
             self.language.addItem(LANGUAGE_NAMES[language], language)
-        self.language.setMaxVisibleItems(13)
+        # Use the screen's available height before Qt falls back to scrolling.
+        self.language.setMaxVisibleItems(len(LANGUAGES))
         self.language.activated.connect(self._select_language)
         row.addWidget(self.language)
 

@@ -37,9 +37,14 @@ UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chi
 `ko` (Korean), `es` (Spanish), `pt-BR` (Brazilian Portuguese), `it` (Italian),
 `id` (Indonesian), `fr` (French), `de` (German), `ru` (Russian), `tr` (Turkish),
 `nl` (Dutch), `pl` (Polish), `uk` (Ukrainian), `ro` (Romanian), `cs` (Czech),
-`hu` (Hungarian), `sv` (Swedish) and `da` (Danish).
+`hu` (Hungarian), `sv` (Swedish), `da` (Danish), `fi` (Finnish),
+`nb` (Norwegian Bokmål), `sk` (Slovak), `bg` (Bulgarian), `hr` (Croatian),
+`sr-Latn` (Serbian Latin), `el` (Greek) and `pt-PT` (European Portuguese).
 The collapsed selector uses compact language labels; its popup shows full native
-names in a screen-bounded, scrollable list. All 21 languages are selectable.
+names in a single column that expands to fit all 29 languages when screen height
+permits. On shorter screens the popup stays within the available work area and
+provides scrolling; mouse and keyboard selection retain the same ordering.
+`pt-PT` and `pt-BR` are distinct.
 It saves only the existing language preference;
 switching does not save configuration drafts or change an active inspection.
 Existing `zh`/`en` and omitted-language files remain compatible. Unknown codes

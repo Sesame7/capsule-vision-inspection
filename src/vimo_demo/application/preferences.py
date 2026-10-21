@@ -32,6 +32,14 @@ type Language = Literal[
     "hu",
     "sv",
     "da",
+    "fi",
+    "nb",
+    "sk",
+    "bg",
+    "hr",
+    "sr-Latn",
+    "el",
+    "pt-PT",
 ]
 
 LANGUAGES: tuple[Language, ...] = (
@@ -56,6 +64,14 @@ LANGUAGES: tuple[Language, ...] = (
     "hu",
     "sv",
     "da",
+    "fi",
+    "nb",
+    "sk",
+    "bg",
+    "hr",
+    "sr-Latn",
+    "el",
+    "pt-PT",
 )
 
 

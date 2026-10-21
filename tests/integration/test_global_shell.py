@@ -2,7 +2,7 @@
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QPalette
+from PySide6.QtGui import QPalette, QScreen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -325,8 +325,8 @@ def test_language_popup_retains_all_native_names_within_available_screen(
     selector = window.language_selector
     selected = selector.currentData()
     application = window.bridge.application.snapshot()
-    assert selector.count() == 21 and selector.maxVisibleItems() == 13
-    assert [(selector.itemText(i), selector.itemData(i)) for i in range(21)] == [
+    assert selector.count() == selector.maxVisibleItems() == 29
+    assert [(selector.itemText(i), selector.itemData(i)) for i in range(29)] == [
         (LANGUAGE_NAMES[language], language) for language in LANGUAGES
     ]
     selector.showPopup()
@@ -336,7 +336,7 @@ def test_language_popup_retains_all_native_names_within_available_screen(
         popup = view.window()
         assert popup.isVisible()
         assert popup.screen().availableGeometry().contains(popup.frameGeometry())
-        for row in range(21):
+        for row in range(29):
             index = selector.model().index(row, 0)
             view.scrollTo(index)
             QApplication.processEvents()
@@ -350,7 +350,10 @@ def test_language_popup_retains_all_native_names_within_available_screen(
                 + 2 * Style.space
                 <= view.viewport().width()
             )
-        assert view.verticalScrollBar().maximum() > 0
+        rows_height = sum(view.sizeHintForRow(i) for i in range(selector.count()))
+        assert (view.verticalScrollBar().maximum() == 0) == (
+            rows_height <= view.viewport().height()
+        )
         assert selector.currentData() == selected
     finally:
         selector.hidePopup()
@@ -358,8 +361,43 @@ def test_language_popup_retains_all_native_names_within_available_screen(
     QTest.keyClick(selector.view(), Qt.Key.Key_End)
     QTest.keyClick(selector.view(), Qt.Key.Key_Return)
     QApplication.processEvents()
-    assert selector.currentData() == "da" and window.language == "da"
+    assert selector.currentData() == "pt-PT" and window.language == "pt-PT"
     assert window.bridge.application.snapshot() == application
+
+
+@pytest.mark.parametrize("height", [500, 1040])
+def test_language_popup_uses_available_work_area_before_scrolling(
+    screen: tuple[ProductionWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+    height: int,
+) -> None:
+    window, _ = screen
+    selector = window.language_selector
+    bounds = QRect(0, 0, selector.screen().availableGeometry().width(), height)
+
+    def work_area(_screen: QScreen) -> QRect:
+        return bounds
+
+    with monkeypatch.context() as patch:
+        patch.setattr(QScreen, "availableGeometry", work_area)
+        selector.showPopup()
+        QApplication.processEvents()
+        try:
+            view = selector.view()
+            assert bounds.contains(view.window().frameGeometry())
+            rows_height = sum(view.sizeHintForRow(i) for i in range(selector.count()))
+            if height == 1040:
+                assert view.viewport().height() >= rows_height
+                assert view.verticalScrollBar().maximum() == 0
+            else:
+                assert view.verticalScrollBar().maximum() > 0
+            for row in range(selector.count()):
+                index = selector.model().index(row, 0)
+                view.scrollTo(index)
+                QApplication.processEvents()
+                assert view.viewport().rect().contains(view.visualRect(index)), row
+        finally:
+            selector.hidePopup()
 
 
 @pytest.mark.parametrize("outcome", [ReportOutcome.ACKNOWLEDGED, ReportOutcome.FAILED])
