@@ -894,8 +894,7 @@ def text(key: str, language: Language) -> str:
     base = STRINGS[key]
     if language in ("zh", "en"):
         return base[0 if language == "zh" else 1]
-    translated = EXTRA_STRINGS.get(key)
-    return translated[LANGUAGES.index(language) - 2] if translated else base[1]
+    return EXTRA_STRINGS[language].get(key, base[1])
 
 
 @dataclass(frozen=True, slots=True)
