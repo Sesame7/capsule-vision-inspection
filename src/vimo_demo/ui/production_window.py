@@ -1,4 +1,4 @@
-"""Layout-managed bilingual production shell; application snapshots are authoritative."""
+"""Localized production shell; application snapshots are authoritative."""
 
 from collections.abc import Callable
 from math import ceil
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSizePolicy,
+    QSpacerItem,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -29,6 +30,7 @@ from vimo_demo.application import (
 from vimo_demo.application.basler_connection import ConnectionState
 from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.application.local_replay import ReplayState
+from vimo_demo.application.preferences import is_language
 from vimo_demo.communication.reporting import ReportOutcome
 from vimo_demo.inspection import CameraId
 from vimo_demo.inspection.production import (
@@ -158,6 +160,10 @@ class ProductionWindow(QMainWindow):
         header.setContentsMargins(0, 0, 0, 0)
         header.setHorizontalSpacing(Style.space)
         header.setColumnStretch(1, 1)
+        self._batch_balance = QSpacerItem(
+            0, 0, QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
+        header.addItem(self._batch_balance, 0, 0)
         self.identity_group = QWidget()
         identity_row = QVBoxLayout(self.identity_group)
         identity_row.setContentsMargins(0, 0, 0, 0)
@@ -423,8 +429,8 @@ class ProductionWindow(QMainWindow):
 
     @Slot(str)
     def _select_language(self, language: str) -> None:
-        if language in ("zh", "en"):
-            self.set_language("zh" if language == "zh" else "en")
+        if is_language(language):
+            self.set_language(language)
 
     @Slot()
     def _switch_theme(self) -> None:
@@ -629,7 +635,7 @@ class ProductionWindow(QMainWindow):
                     "replay_step",
                     "production_stop",
                 )
-                for language in ("zh", "en")
+                for language in ("zh", "en", self.language)
             )
             + Style.icon
             + 28,
@@ -1108,20 +1114,20 @@ class ProductionWindow(QMainWindow):
             else None
         )
         report = self.bridge.reporting_snapshot
-        plc = "未启用" if self.language == "zh" else "Disabled"
+        plc = text("service_disabled", self.language)
         if selection and selection.enabled:
-            plc = "待启动" if self.language == "zh" else "Next Start"
+            plc = text("service_next_start", self.language)
         if report:
             outcome = report.last_outcome
             if outcome and outcome.outcome is ReportOutcome.ACKNOWLEDGED:
-                plc = f"{'上次 ACK' if self.language == 'zh' else 'Last ACK'} {outcome.sequence}"
+                plc = f"{text('service_ack', self.language)} {outcome.sequence}"
             elif outcome and outcome.outcome in (
                 ReportOutcome.FAILED,
                 ReportOutcome.REJECTED,
             ):
-                plc = "报告失败" if self.language == "zh" else "Report failed"
+                plc = text("service_failed", self.language)
             elif report.thread_alive:
-                plc = "报告中" if self.language == "zh" else "Reporting"
+                plc = text("service_reporting", self.language)
         available, detail = (
             self._web_observation() if self._web_observation else (False, "")
         )
@@ -1137,9 +1143,9 @@ class ProductionWindow(QMainWindow):
         web = (
             f"{self._web_interval_ms} ms"
             if available
-            else ("不可用" if self.language == "zh" else "Unavailable")
+            else text("unavailable", self.language)
             if detail
-            else ("未启用" if self.language == "zh" else "Off")
+            else text("service_off", self.language)
         )
         if observed is not None and observed.state in (
             WebState.STARTING,
@@ -1424,7 +1430,7 @@ class ProductionWindow(QMainWindow):
                 "state_FAULT",
                 "state_closing",
             )
-            for lang in ("zh", "en")
+            for lang in ("zh", "en", self.language)
         )
         self.state_label.setMinimumWidth(state_width)
         side_width = self.operation_group.width()
@@ -1446,7 +1452,7 @@ class ProductionWindow(QMainWindow):
                             f"{text('batch_id', lang)} {snapshot.batch_id or '—'}"
                         )
                     )
-                    for lang in ("zh", "en")
+                    for lang in ("zh", "en", self.language)
                 ),
             )
         )
@@ -1464,7 +1470,8 @@ class ProductionWindow(QMainWindow):
         self.recipe_identity.setMaximumWidth(
             self.recipe_icon.width() + Style.small + main_width
         )
-        identity_width = max(state_width, self.recipe_identity.maximumWidth())
+        # Balance the outer columns when space permits, with a preferred spacer
+        # that can shrink instead of retaining a wide window's minimum width.
         margins = self.summary_layout.contentsMargins()
         header_width = (
             self.summary.contentsRect().width()
@@ -1472,15 +1479,14 @@ class ProductionWindow(QMainWindow):
             - margins.right()
             - 2 * self.summary_header.horizontalSpacing()
         )
-        self.summary_header.setColumnMinimumWidth(
+        identity_width = max(state_width, self.recipe_identity.maximumWidth())
+        self._batch_balance.changeSize(
+            min(side_width, max(0, header_width - side_width - identity_width)),
             0,
-            max(
-                self.batch_group.width(),
-                min(side_width, header_width - side_width - identity_width),
-            )
-            if main_width > state_width
-            else side_width,
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Minimum,
         )
+        self.summary_header.invalidate()
         self.pending_label.setMaximumWidth(
             max(
                 self.pending_label.minimumWidth(),
@@ -1497,6 +1503,12 @@ class ProductionWindow(QMainWindow):
                 layout.activate()
         # Respect the actual player/identity minimum instead of clipping controls
         # when a restored window or larger font requests too little width.
+        # Refresh the stacked widget's cached layout-item hint after translated
+        # child sizes change, before promoting that hint to a window constraint.
+        self.pages.updateGeometry()
+        shell = self.centralWidget()
+        if shell is not None:
+            shell.updateGeometry()
         self.setMinimumWidth(max(Style.minimum[0], self.minimumSizeHint().width()))
         self.identity_label.setText(
             self.identity_label.fontMetrics().elidedText(

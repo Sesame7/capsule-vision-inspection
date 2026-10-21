@@ -516,7 +516,7 @@ class ParametersPage(QWidget):
         if self.roi_workspace is not None:
             self.roi_workspace.set_language(language)
         self.title.setText(text("parameters", language))
-        self.inspection_title.setText("检测" if language == "zh" else "Inspection")
+        self.inspection_title.setText(text("inspection", language))
         self.archive_directory.setPlaceholderText(text("archive_directory", language))
         self.archive_directory.setAccessibleName(text("archive_directory", language))
         for key, check in self.archive_checks.items():
@@ -524,11 +524,7 @@ class ParametersPage(QWidget):
             check.setAccessibleName(check.toolTip())
         self.label_choices.setAccessibleName(text("recipe_labels", language))
         for mode, button in self.expand_tuning.items():
-            button.setToolTip(
-                ("调整尺寸" if mode == "size" else "调整颜色")
-                if language == "zh"
-                else ("Tune Size" if mode == "size" else "Tune Color")
-            )
+            button.setToolTip(text("tune_" + mode, language))
             button.setAccessibleName(button.toolTip())
         self.recipes.setAccessibleName(text("recipe", language))
         self.model.setAccessibleName(text("inspection_model", language))
@@ -756,11 +752,7 @@ class ParametersPage(QWidget):
             self.preview.refresh_state()
         for mode in ("size", "color"):
             check = self.capsule_enabled[mode]
-            caption = (
-                ("尺寸检测" if mode == "size" else "颜色检测")
-                if language == "zh"
-                else ("Size inspection" if mode == "size" else "Color inspection")
-            )
+            caption = text(mode + "_check", language)
             check.setText("")
             check.setAccessibleName(caption)
             check.setToolTip(caption)

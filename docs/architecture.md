@@ -261,7 +261,7 @@ with keyset Newer/Older navigation and at most 100 recent Batch-segment choices
 within the date scope. Segment labels show the earliest retained cycle completion
 for that segment, not its Batch creation time; retention can advance this observation.
 Identical timestamps gain a short segment ID, while filtering always uses the full ID.
-Filters and upper-right pagination share bilingual sizing and wrap on narrow pages.
+Filters and upper-right pagination size for translated content and wrap on narrow pages.
 Full Cycle/Run/Batch/Recipe identities remain in the Cycle tooltip rather than a
 repeated detail row. OK/NG filter the stored product judgment, ERROR the technical
 assessment, and EMPTY/UNKNOWN channel business states; a cycle can match several

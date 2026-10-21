@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from .production_style import (
+    LANGUAGES,
     Language,
     Style,
     Theme,
@@ -22,6 +23,7 @@ from .production_style import (
     text,
     theme_colors,
 )
+from .translations import LANGUAGE_NAMES
 
 PAGES = ("production", "parameters", "diagnostics", "history", "settings")
 
@@ -71,13 +73,16 @@ class NavigationBar(QFrame):
         super().__init__()
         self._presentation: tuple[Language, Theme, int] | None = None
         self.setObjectName("navigation")
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         row = QHBoxLayout(self)
+        self._row = row
         row.setContentsMargins(12, 8, 12, 8)
         row.setSpacing(6)
         self.brand_icon = QLabel()
         self.brand_icon.setFixedSize(30, 30)
         row.addWidget(self.brand_icon)
         brand = QLabel("ViMo")
+        self._brand = brand
         brand.setStyleSheet("font-size: 21px; font-weight: 700;")
         row.addWidget(brand)
         row.addSpacing(10)
@@ -86,7 +91,6 @@ class NavigationBar(QFrame):
         self.buttons: list[QPushButton] = []
         for index, _ in enumerate(PAGES):
             button = QPushButton()
-            button.setProperty("iconAlignment", "leading")
             button.setCheckable(True)
             button.setMinimumHeight(Style.touch)
             button.setIconSize(QSize(20, 20))
@@ -101,10 +105,11 @@ class NavigationBar(QFrame):
         row.addWidget(self.theme)
         self.language = _LanguageSelector()
         self.language.setObjectName("language")
-        self.language.setFixedSize(108, Style.touch)
+        self.language.setFixedHeight(Style.touch)
         self.language.setIconSize(QSize(20, 20))
-        self.language.addItem("中文", "zh")
-        self.language.addItem("EN", "en")
+        for language in LANGUAGES:
+            self.language.addItem(LANGUAGE_NAMES[language], language)
+        self.language.view().setMinimumWidth(200)
         self.language.activated.connect(self._select_language)
         row.addWidget(self.language)
 
@@ -128,27 +133,15 @@ class NavigationBar(QFrame):
         colors = theme_colors(self)
         # Resolve the inherited stylesheet font before the first width calculation.
         self.ensurePolished()
-        # Reserve the longest supported caption, so language changes do not move tabs.
-        width = (
+        self.language.setFixedWidth(
             max(
-                self.fontMetrics().horizontalAdvance(
-                    text(key, lang) if key != "diagnostics" or lang == "zh" else "Comms"
-                )
-                for key in PAGES
-                for lang in ("zh", "en")
+                self.fontMetrics().horizontalAdvance(name)
+                for name in LANGUAGE_NAMES.values()
             )
-            + 48
+            + 70
         )
-        for button in self.buttons:
-            button.setFixedWidth(width)
         self.brand_icon.setPixmap(shell_icon("brand", colors.accent).pixmap(30, 30))
         for index, (key, button) in enumerate(zip(PAGES, self.buttons, strict=True)):
-            label = (
-                "Comms"
-                if key == "diagnostics" and language == "en"
-                else text(key, language)
-            )
-            button.setText(label)
             button.setToolTip(text(key, language))
             button.setAccessibleName(text(key, language))
             button.setChecked(index == page)
@@ -160,22 +153,60 @@ class NavigationBar(QFrame):
         self.theme.setIcon(
             shell_icon("sun" if theme == "dark" else "moon", colors.primary)
         )
-        target = (
-            ("切换浅色主题" if theme == "dark" else "切换深色主题")
-            if language == "zh"
-            else (
-                "Switch to light theme" if theme == "dark" else "Switch to dark theme"
-            )
-        )
+        target = text("theme_light" if theme == "dark" else "theme_dark", language)
         self.theme.setToolTip(target)
         self.theme.setAccessibleName(target)
-        self.language.setCurrentIndex(0 if language == "zh" else 1)
-        for index in range(2):
+        self.language.setCurrentIndex(self.language.findData(language))
+        for index in range(self.language.count()):
             self.language.setItemIcon(index, shell_icon("globe", colors.primary))
-        self.language.setToolTip(
-            "界面语言" if language == "zh" else "Interface language"
-        )
+        self.language.setToolTip(text("interface_language", language))
         self.language.setAccessibleName(self.language.toolTip())
+        self._arrange_buttons()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._presentation is not None:
+            self._arrange_buttons()
+
+    def _arrange_buttons(self) -> None:
+        if self._presentation is None:
+            return
+        language = self._presentation[0]
+        margins = self._row.contentsMargins()
+        reserved = (
+            self.brand_icon.width()
+            + self._brand.sizeHint().width()
+            + 10  # Existing gap after the logo.
+            + self.theme.width()
+            + self.language.width()
+            + (self._row.count() - 1) * self._row.spacing()
+            + margins.left()
+            + margins.right()
+        )
+        preferred = (
+            max(
+                self.fontMetrics().horizontalAdvance(
+                    text("nav_diagnostics" if key == "diagnostics" else key, lang)
+                )
+                for key in PAGES
+                for lang in LANGUAGES
+            )
+            + 48
+        )
+        width = max(
+            Style.touch,
+            min(
+                preferred, (self.contentsRect().width() - reserved) // len(self.buttons)
+            ),
+        )
+        for key, button in zip(PAGES, self.buttons, strict=True):
+            button.setFixedWidth(width)
+            caption = text("nav_diagnostics" if key == "diagnostics" else key, language)
+            button.setText(
+                button.fontMetrics().elidedText(
+                    caption, Qt.TextElideMode.ElideRight, max(0, width - 48)
+                )
+            )
 
 
 class StatusBar(QFrame):

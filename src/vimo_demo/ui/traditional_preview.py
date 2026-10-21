@@ -431,9 +431,6 @@ class TraditionalPreview(QWidget):
     def busy(self) -> bool:
         return self._thread is not None
 
-    def tr_pair(self, zh: str, en: str) -> str:
-        return zh if self.language == "zh" else en
-
     def refresh_theme(self) -> None:
         color = theme_colors(self).primary
         for index in range(self.camera_tabs.count()):
@@ -470,22 +467,20 @@ class TraditionalPreview(QWidget):
             )
             self.camera_tabs.setTabToolTip(index, f"{name} ({camera.camera_id})")
             self.camera_tabs.setAccessibleTabName(index, f"{name} ({camera.camera_id})")
-        for key, zh, en in (
-            ("target_width", "目标宽度 (px)", "Target W (px)"),
-            ("width_tolerance", "宽度容差", "W tolerance"),
-            ("target_height", "目标高度 (px)", "Target H (px)"),
-            ("height_tolerance", "高度容差", "H tolerance"),
+        for key in (
+            "target_width",
+            "width_tolerance",
+            "target_height",
+            "height_tolerance",
         ):
-            self.labels[key].setText(self.tr_pair(zh, en))
+            self.labels[key].setText(text(key, language))
             caption = self.labels[key].text()
             if key.endswith("tolerance"):
                 caption += " (px)"
             self.spins[key].setAccessibleName(caption)
             self.spins[key].setToolTip(caption)
-        self.sample.setText(self.tr_pair("取色", "Sample"))
-        self.sample.setToolTip(
-            self.tr_pair("从当前画面取色", "Use current image color")
-        )
+        self.sample.setText(text("color_sample", self.language))
+        self.sample.setToolTip(text("color_sample_tip", self.language))
         self.sample.setAccessibleName(self.sample.toolTip())
         self.show_settings()
 
@@ -507,12 +502,10 @@ class TraditionalPreview(QWidget):
             f"background: {QColor.fromHsv(settings.color.target_hue * 2, 220, 220).name()}; border: 1px solid #8090a0;"
         )
         self.swatch.setToolTip(
-            self.tr_pair("目标颜色", "Target color")
-            + f" · H {settings.color.target_hue}"
+            text("target_color", self.language) + f" · H {settings.color.target_hue}"
         )
         self.tolerance_label.setText(
-            self.tr_pair("颜色容差", "Color tolerance")
-            + f" {settings.color.hue_tolerance}"
+            text("color_tolerance", self.language) + f" {settings.color.hue_tolerance}"
         )
         self._loading = False
         self.ensure_measurement()
@@ -562,16 +555,16 @@ class TraditionalPreview(QWidget):
                 if self.frame is None
                 else text("preview_unavailable", self.language)
                 if not self.measurements
-                else self.tr_pair(
-                    "点选上／下胶囊查看测量", "Select an upper/lower capsule"
-                )
+                else text("preview_select", self.language)
             )
             self.selection_detail.setToolTip("")
             return
         index, view_index = selected
         slot = self.camera.slots[index]
         name = "upper" if view_index == 0 else "lower"
-        caption = self.tr_pair("上" if view_index == 0 else "下", name)
+        caption = text(
+            "preview_upper" if view_index == 0 else "preview_lower", self.language
+        )
         row = self.measurements[index] if index < len(self.measurements) else None
         measured = row.measured if row else None
         view = measured.views[view_index] if measured else None
@@ -582,7 +575,7 @@ class TraditionalPreview(QWidget):
         available = measured is not None and (
             measured.size_measured if self.mode == "size" else measured.color_measured
         )
-        status, reason, explanation = self.tr_pair("不可用", "Unavailable"), "", ""
+        status, reason, explanation = text("unavailable", self.language), "", ""
         if not enabled:
             status = "DISABLED"
         elif row is not None and row.error:
@@ -604,9 +597,7 @@ class TraditionalPreview(QWidget):
                         for code in reasons
                     )
                 )
-        check_name = self.tr_pair(
-            "尺寸" if self.mode == "size" else "颜色", self.mode.title()
-        )
+        check_name = text(self.mode, self.language)
         header = f"{self.camera.camera_id} · CH{slot.channel_id:02d} · {caption} · {check_name} {status}"
         if self.mode == "size":
             rect = (
@@ -624,17 +615,12 @@ class TraditionalPreview(QWidget):
                 else None
             )
             actual = f"{hue:.2f}" if hue is not None else "—"
-            values = f"Hue {actual} · {self.tr_pair('目标', 'Target')} {settings.color.target_hue} ± {settings.color.hue_tolerance}"
+            values = f"Hue {actual} · {text('target', self.language)} {settings.color.target_hue} ± {settings.color.hue_tolerance}"
         self.selection_detail.setText(
             f"{header}\n{values}" + (f"\n{explanation}" if explanation else "")
         )
         self.selection_detail.setToolTip(
-            reason
-            + ("\n" if reason else "")
-            + self.tr_pair(
-                "数值来自当前冻结图和配方草稿。",
-                "Values use this frozen image and Recipe draft.",
-            )
+            reason + ("\n" if reason else "") + text("preview_values", self.language)
         )
 
     def update_settings(self) -> None:
@@ -683,12 +669,7 @@ class TraditionalPreview(QWidget):
         ]
         target = median_hue(np.array(hues, dtype=np.float64))
         if target is None:
-            self.show_message(
-                self.tr_pair(
-                    "没有可用的双视图颜色，未更改目标颜色。",
-                    "No usable two-view color evidence; target unchanged.",
-                )
-            )
+            self.show_message(text("preview_sample_missing", self.language))
             return
         settings = self.session.draft.capsule
         self.session.draft.capsule = replace(
@@ -1094,9 +1075,7 @@ class TraditionalPreview(QWidget):
         elif self.frame is None:
             self.show_message("")  # The toolbar owns blank/schematic image status.
         elif self.busy:
-            self.show_message(
-                self.tr_pair("正在测量冻结参考图…", "Measuring frozen reference…")
-            )
+            self.show_message(text("preview_measuring", self.language))
         else:
             errors = [
                 f"CH{row.slot.channel_id:02d}: {row.error}"

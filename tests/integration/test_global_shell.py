@@ -10,6 +10,7 @@ from tests.qt_support import until
 
 from vimo_demo.application import ApplicationState
 from vimo_demo.application.folder_replay import FolderSourceError
+from vimo_demo.application.preferences import LANGUAGES
 from vimo_demo.communication.reporting import (
     ReportIdentity,
     ReportingSnapshot,
@@ -54,14 +55,17 @@ def test_navigation_language_and_themes_preserve_presentation_contract(
         for _ in range(2):
             current = window.language
             case = f"size={size}, theme={theme}, language={current}"
-            expected = (
-                ("生产", "配方", "通信", "历史", "视觉")
-                if current == "zh"
-                else ("Production", "Recipe", "Comms", "History", "Vision")
-            )
-            assert tuple(button.text() for button in window.navigation) == expected, (
-                case
-            )
+            assert len({button.width() for button in window.navigation}) == 1, case
+            for key, button in zip(
+                ("production", "parameters", "nav_diagnostics", "history", "settings"),
+                window.navigation,
+                strict=True,
+            ):
+                full = text(key, current)
+                visible = button.text()
+                assert visible == full or (
+                    visible.endswith("…") and full.startswith(visible.removesuffix("…"))
+                ), case
             for page, button in enumerate(window.navigation):
                 page_case = f"{case}, page={page}"
                 button.click()
@@ -154,6 +158,91 @@ def test_web_status_uses_owner_observation_without_a_new_timer(
         <= window.event_frame.web.width()
     )
     assert window.bridge.application.snapshot() == before
+
+
+@pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
+def test_all_languages_fit_shell_and_preserve_active_inspection(
+    screen: tuple[ProductionWindow, FakeSession], size: tuple[int, int]
+) -> None:
+    window, session = screen
+    window.resize(*size)
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    complete_cycle(window, session, 1, TechnicalStatus.SUCCESS, ProductJudgment.NG)
+    before = window.bridge.application.snapshot()
+    geometry = tuple(button.geometry() for button in window.navigation)
+    for language in LANGUAGES:
+        window.language_selector.activated.emit(
+            window.language_selector.findData(language)
+        )
+        QApplication.processEvents()
+        assert window.width() == size[0], (language, window.minimumSizeHint())
+        assert len({button.width() for button in window.navigation}) == 1, language
+        assert tuple(button.geometry() for button in window.navigation) == geometry, (
+            language
+        )
+        for key, button in zip(
+            ("production", "parameters", "diagnostics", "history", "settings"),
+            window.navigation,
+            strict=True,
+        ):
+            assert window.navbar.rect().contains(button.geometry()), language
+            assert (
+                button.fontMetrics().horizontalAdvance(button.text()) + 40
+                <= button.width()
+            ), language
+            assert button.accessibleName() == button.toolTip() == text(key, language)
+            assert button.property("iconAlignment") != "leading"
+        assert window.navbar.rect().contains(window.language_selector.geometry()), (
+            language
+        )
+        assert all(
+            a.geometry().right() < b.geometry().left()
+            for a, b in zip(window.navigation[:-1], window.navigation[1:], strict=True)
+        )
+        assert window.navigation[-1].geometry().right() < window.theme_button.x()
+        assert window.theme_button.geometry().right() < window.language_selector.x()
+        assert (
+            window.language_selector.fontMetrics().horizontalAdvance(
+                window.language_selector.currentText()
+            )
+            <= window.language_selector.width() - 60
+        ), language
+        for key in ("operation", "pause", "stop"):
+            button = window.buttons[key]
+            assert window.rect().contains(
+                button.mapTo(window, button.rect().bottomRight())
+            ), language
+        window.navigate(2)
+        page = window.communication
+        QApplication.processEvents()
+        assert page.body.width() <= page.scroll_area.viewport().width(), language
+        assert page.write_button.text() == text("comm_write", language)
+        window.navigate(3)
+        QApplication.processEvents()
+        assert window.history.workspace.width() <= window.history.width(), language
+        for control in (
+            window.history.batch,
+            window.history.result,
+            window.history.refresh_button,
+        ):
+            assert window.history.rect().contains(
+                control.mapTo(window.history, control.rect().bottomRight())
+            ), language
+        window.navigate(0)
+        assert window.bridge.application.snapshot() == before, language
+
+    # A previous wide layout must not raise the window's minimum width and
+    # prevent the same navigation from returning to the supported portrait size.
+    for width, height in ((1920, 1017), (1080, 1857), (1920, 1017)):
+        window.resize(width, height)
+        QApplication.processEvents()
+        assert window.width() == width
+        assert len({button.width() for button in window.navigation}) == 1
+        assert window.navigation[-1].geometry().right() < window.theme_button.x()
+        assert window.navbar.rect().contains(window.language_selector.geometry())
+        assert window.bridge.application.snapshot() == before
 
 
 @pytest.mark.parametrize("outcome", [ReportOutcome.ACKNOWLEDGED, ReportOutcome.FAILED])

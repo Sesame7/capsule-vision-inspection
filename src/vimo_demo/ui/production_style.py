@@ -1,4 +1,4 @@
-"""Small bilingual catalog and logical-pixel visual tokens for the workstation."""
+"""UI catalog and logical-pixel visual tokens for the workstation."""
 
 from dataclasses import dataclass
 from functools import cache
@@ -8,13 +8,54 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
+from vimo_demo.application.preferences import LANGUAGES as LANGUAGES
+from vimo_demo.application.preferences import Language as Language
+
 from .production_presentation import Indicator
+from .translations import EXTRA_STRINGS
 
 type Theme = Literal["dark", "light"]
 
-type Language = Literal["zh", "en"]
-
 STRINGS: dict[str, tuple[str, str]] = {
+    "interface_language": ("界面语言", "Interface language"),
+    "theme_light": ("切换浅色主题", "Switch to light theme"),
+    "theme_dark": ("切换深色主题", "Switch to dark theme"),
+    "nav_diagnostics": ("通信", "Comms"),
+    "inspection": ("检测", "Inspection"),
+    "tune_size": ("调整尺寸", "Tune Size"),
+    "tune_color": ("调整颜色", "Tune Color"),
+    "size_check": ("尺寸检测", "Size inspection"),
+    "color_check": ("颜色检测", "Color inspection"),
+    "size": ("尺寸", "Size"),
+    "color": ("颜色", "Color"),
+    "target_width": ("目标宽度 (px)", "Target W (px)"),
+    "target_height": ("目标高度 (px)", "Target H (px)"),
+    "width_tolerance": ("宽度容差", "W tolerance"),
+    "height_tolerance": ("高度容差", "H tolerance"),
+    "color_sample": ("取色", "Sample"),
+    "color_sample_tip": ("从当前画面取色", "Use current image color"),
+    "target_color": ("目标颜色", "Target color"),
+    "color_tolerance": ("颜色容差", "Color tolerance"),
+    "target": ("目标", "Target"),
+    "unavailable": ("不可用", "Unavailable"),
+    "preview_select": ("点选上／下胶囊查看测量", "Select an upper/lower capsule"),
+    "preview_upper": ("上", "upper"),
+    "preview_lower": ("下", "lower"),
+    "preview_values": (
+        "数值来自当前冻结图和配方草稿。",
+        "Values use this frozen image and Recipe draft.",
+    ),
+    "preview_sample_missing": (
+        "没有可用的双视图颜色，未更改目标颜色。",
+        "No usable two-view color evidence; target unchanged.",
+    ),
+    "preview_measuring": ("正在测量冻结参考图…", "Measuring frozen reference…"),
+    "service_disabled": ("未启用", "Disabled"),
+    "service_next_start": ("待启动", "Next Start"),
+    "service_ack": ("上次 ACK", "Last ACK"),
+    "service_failed": ("报告失败", "Report failed"),
+    "service_reporting": ("报告中", "Reporting"),
+    "service_off": ("未启用", "Off"),
     "history_all_dates": ("所有日期", "All dates"),
     "history_date": ("完成日期", "Completion date"),
     "history_batch": ("批次分段", "Batch segment"),
@@ -806,8 +847,8 @@ STRINGS: dict[str, tuple[str, str]] = {
     "comm_plc_error": ("PLC 结束码错误", "PLC end-code error"),
     "comm_unexpected_error": ("通信操作未完成", "Communication operation incomplete"),
     "settings_note": (
-        "使用顶部按钮切换中文 / English。",
-        "Use the top control to switch 中文 / English.",
+        "使用顶部控件切换界面语言。",
+        "Use the top control to change interface language.",
     ),
     "ready_note": ("就绪 · 点击开始检测", "Ready · select Start inspection"),
     "running_note": (
@@ -841,7 +882,11 @@ STRINGS: dict[str, tuple[str, str]] = {
 
 
 def text(key: str, language: Language) -> str:
-    return STRINGS[key][0 if language == "zh" else 1]
+    base = STRINGS[key]
+    if language in ("zh", "en"):
+        return base[0 if language == "zh" else 1]
+    translated = EXTRA_STRINGS.get(key)
+    return translated[LANGUAGES.index(language) - 2] if translated else base[1]
 
 
 @dataclass(frozen=True, slots=True)

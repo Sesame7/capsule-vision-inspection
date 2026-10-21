@@ -3,7 +3,7 @@
 Windows desktop application for six-camera, 36-channel capsule inspection.
 It combines passive Basler hardware-trigger acquisition or Folder Replay, one
 serial ViMo engine, Occupancy/Size/Color checks, FINS UDP/TCP communication and
-PLC result reporting. The Chinese/English Qt UI has Production, Recipe,
+PLC result reporting. The multilingual Qt UI has Production, Recipe,
 Communication, History and Vision workspaces. A read-only Web
 observer is optional and starts automatically only when saved enabled.
 
@@ -53,8 +53,8 @@ uv run --no-sync python app.py
 ```
 
 The native Windows window opens maximized within the available work area, stopped.
-The shared navigation offers dark/light themes (dark on launch) and a fixed-width
-中文/EN selector. Theme selection is session-only. Valid configuration produces READY; invalid
+The shared navigation offers dark/light themes (dark on launch) and a native-name
+language selector. Theme selection is session-only. Valid configuration produces READY; invalid
 required data produces UNCONFIGURED with actionable feedback. It never chooses
 the first available model/Recipe, invents ROIs or substitutes fake inference.
 

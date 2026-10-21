@@ -395,7 +395,7 @@ class HistoryPage(QWidget):
             max(
                 max(
                     metrics.horizontalAdvance(text("history_cycle", lang))
-                    for lang in ("zh", "en")
+                    for lang in ("zh", "en", self.language)
                 ),
                 min(
                     max(
@@ -418,7 +418,7 @@ class HistoryPage(QWidget):
                 counts_width,
                 sum(width for _, width, _ in _ResultDelegate.spans(metrics, counts)),
             )
-            for lang in ("zh", "en"):
+            for lang in ("zh", "en", self.language):
                 result_width = max(
                     result_width,
                     sum(
@@ -433,7 +433,8 @@ class HistoryPage(QWidget):
         names = [
             max(
                 max(
-                    metrics.horizontalAdvance(text(key, lang)) for lang in ("zh", "en")
+                    metrics.horizontalAdvance(text(key, lang))
+                    for lang in ("zh", "en", self.language)
                 ),
                 min(
                     max(
@@ -456,7 +457,7 @@ class HistoryPage(QWidget):
             max(
                 max(
                     metrics.horizontalAdvance(text("history_batch", lang))
-                    for lang in ("zh", "en")
+                    for lang in ("zh", "en", self.language)
                 ),
                 metrics.horizontalAdvance("000000"),
             )
@@ -464,7 +465,7 @@ class HistoryPage(QWidget):
             max(
                 max(
                     metrics.horizontalAdvance(text("parameters", lang))
-                    for lang in ("zh", "en")
+                    for lang in ("zh", "en", self.language)
                 ),
                 metrics.horizontalAdvance("胶囊A"),
             )
@@ -501,7 +502,7 @@ class HistoryPage(QWidget):
         self.all_dates.setFixedWidth(
             max(
                 metrics.horizontalAdvance(text("history_all_dates", lang))
-                for lang in ("zh", "en")
+                for lang in ("zh", "en", self.language)
             )
             + 30
         )
@@ -519,7 +520,7 @@ class HistoryPage(QWidget):
                         "history_empty",
                         "history_unknown",
                     )
-                    for lang in ("zh", "en")
+                    for lang in ("zh", "en", self.language)
                 ),
             )
             + 40
@@ -530,7 +531,7 @@ class HistoryPage(QWidget):
             max(
                 metrics.horizontalAdvance(text(key, lang))
                 for key in ("history_newer", "history_older", "history_refresh")
-                for lang in ("zh", "en")
+                for lang in ("zh", "en", self.language)
             )
             + 24
         )
@@ -572,7 +573,7 @@ class HistoryPage(QWidget):
                 ),
                 default=max(
                     matrix_metrics.horizontalAdvance(text("history_camera", lang))
-                    for lang in ("zh", "en")
+                    for lang in ("zh", "en", self.language)
                 ),
             )
             + padding,
@@ -635,7 +636,11 @@ class HistoryPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        locale = QLocale("zh_CN" if language == "zh" else "en_US")
+        locale = QLocale(
+            {"zh": "zh_CN", "zh-TW": "zh_TW", "en": "en_US", "pt-BR": "pt_BR"}.get(
+                language, language
+            )
+        )
         self.date.setLocale(locale)
         calendar = self.date.calendarWidget()
         calendar.setLocale(locale)

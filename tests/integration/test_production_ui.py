@@ -1259,7 +1259,13 @@ def _assert_grid_and_navigation(
     qapp.processEvents()
     assert window.columns == columns and len(window.cards) == 6
     assert window.pages.currentIndex() == 0
-    assert window.navigation[0].text() == text("production", language)
+    full_caption = text("production", language)
+    navigation = window.navigation[0]
+    assert navigation.accessibleName() == navigation.toolTip() == full_caption
+    assert navigation.text() == full_caption or (
+        navigation.text().endswith("…")
+        and full_caption.startswith(navigation.text()[:-1])
+    )
     for index, card in enumerate(window.cards):
         number = str(card.camera_layout.camera_id).removeprefix("CAM")
         assert card.identity.text() == number

@@ -2,17 +2,19 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 from tests.application_support import WAIT
 from tests.bootstrap_support import saved_data
-from tests.qt_support import close_window, until
+from tests.qt_support import close_window, ensure_test_fonts, until
 from tests.unit.test_application_bootstrap import close
 
 from vimo_demo.application import ApplicationError, ApplicationState, ProductionCounters
 from vimo_demo.application.folder_replay import FolderSourceError
 from vimo_demo.application.preferences import (
+    LANGUAGES,
     ApplicationPreferences,
     load_preferences,
     save_preferences,
@@ -27,6 +29,7 @@ from vimo_demo.configuration import (
 from vimo_demo.inspection import CameraId
 from vimo_demo.ui.bootstrap import ApplicationData, create_window, load_startup
 from vimo_demo.ui.inference_bridge import FutureDelivery
+from vimo_demo.ui.production_style import text
 
 
 def test_absent_data_opens_five_page_unconfigured_shell(
@@ -385,6 +388,74 @@ def test_v1_sources_browsing_and_recipe_apply_do_not_migrate(
         assert data.sources.read_bytes() == original
         assert startup.application.snapshot().counters == ProductionCounters()
         assert startup.application.snapshot().active is None
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+@pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
+def test_language_switches_persist_without_saving_other_drafts(
+    qapp: QApplication, tmp_path: Path, size: tuple[int, int]
+) -> None:
+    ensure_test_fonts()
+    data = saved_data(tmp_path)
+    startup = load_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.resize(*size)
+    window.show()
+    window.navigate(1)
+    session = startup.editor
+    assert session is not None
+    original = session.draft.display_name
+    diagnostic_host = window.communication.host.text()
+    session.draft.display_name = "Unsaved recipe name"
+    window.parameters.show_draft()
+    window.communication.host.setText("127.0.0.2")
+    before = startup.application.snapshot()
+    recipe_bytes = {p: p.read_bytes() for p in data.recipes.glob("*.json")}
+    try:
+        for language in LANGUAGES:
+            index = window.language_selector.findData(language)
+            assert index >= 0
+            window.language_selector.activated.emit(index)
+            qapp.processEvents()
+            until(
+                lambda: (
+                    cast(QWidget, window.parameters.summary_scroll.widget()).width()
+                    <= window.parameters.summary_scroll.viewport().width()
+                )
+            )
+            assert window.language == language
+            saved = load_preferences(data.preferences)
+            assert saved == ApplicationPreferences("general", "local", language)
+            assert session.dirty and session.draft.display_name == "Unsaved recipe name"
+            assert window.communication.dirty
+            assert window.communication.host.text() == "127.0.0.2"
+            assert startup.application.snapshot() == before
+            assert {p: p.read_bytes() for p in recipe_bytes} == recipe_bytes
+            assert window.navigation[0].accessibleName() == text("production", language)
+            if language == "zh-TW":
+                assert window.history.date.locale().name() == "zh_TW"
+            assert window.width() == size[0]
+            page = window.parameters
+            for button in page.buttons.values():
+                if button.isVisible():
+                    assert page.rect().contains(
+                        button.mapTo(page, button.rect().bottomRight())
+                    ), language
+    finally:
+        session.draft.display_name = original
+        window.parameters.show_draft()
+        window.communication.host.setText(diagnostic_host)
+        close_window(window)
+        delivery.detach()
+    restored = load_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(restored, delivery)
+    try:
+        assert window.language == LANGUAGES[-1]
+        assert window.language_selector.currentData() == LANGUAGES[-1]
     finally:
         close_window(window)
         delivery.detach()

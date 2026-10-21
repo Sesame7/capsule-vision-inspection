@@ -260,7 +260,9 @@ def test_normal_start_pause_then_steps_in_same_generation(
 def test_normal_pause_continue_end_and_restart_preserve_existing_cursor_rules(
     qapp: QApplication, tmp_path: Path
 ) -> None:
+    ensure_test_fonts()
     with normal_replay(tmp_path, hold_call=3) as (startup, window, engines):
+        window.resize(1080, 1920)  # Supported minimum with real font metrics.
         app = startup.application
         primary, secondary = window.buttons["operation"], window.buttons["pause"]
         qapp.processEvents()

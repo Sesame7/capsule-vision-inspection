@@ -9,7 +9,7 @@ fallback, automatic geometry creation or fake inference is used for recovery.
 
 | File | Content |
 | --- | --- |
-| `data/app.json` | v1: `default_model_id`, `last_applied_recipe_id`, `language` (`zh`/`en`) |
+| `data/app.json` | v1: `default_model_id`, `last_applied_recipe_id`, `language` (codes below) |
 | `data/communication.json` | optional v1 global Production reporting, diagnostic endpoint and Web preferences |
 | `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
 | `data/models/*.json` | v1 Model definition: `model_id`, `display_name`, `model_path`, `expected_sha256`, `module_id` |
@@ -31,6 +31,18 @@ keeps the shell UNCONFIGURED; a structurally valid candidate with unavailable
 Folder inputs can remain READY with a warning but fails Start preflight.
 Unreliable saved preferences are not silently overwritten. Invalid optional language
 can fall back visibly; required Model/Recipe identities cannot be guessed.
+
+UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chinese),
+`en` (English), `ja` (Japanese),
+`ko` (Korean), `es` (Spanish), `pt-BR` (Brazilian Portuguese), `it` (Italian),
+`id` (Indonesian), `fr` (French), `de` (German), `ru` (Russian) and `tr` (Turkish).
+The selector shows native names and saves only the existing language preference;
+switching does not save configuration drafts or change an active inspection.
+Existing `zh`/`en` and omitted-language files remain compatible. Unknown codes
+fall back to Chinese in memory with a warning, preserving the file for repair.
+Optional untranslated text uses English. Technical identifiers, model labels and
+reason codes are preserved. Layout is left-to-right; the supported minimum is
+1080 Qt logical pixels. Windows must provide fonts for the selected script.
 
 ## History storage
 

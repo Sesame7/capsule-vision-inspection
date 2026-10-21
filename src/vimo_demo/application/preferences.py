@@ -5,17 +5,41 @@ import os
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypeGuard, cast
 
 from vimo_demo.configuration import ConfigurationError, ConfigurationIOError
 from vimo_demo.configuration.models import text
+
+type Language = Literal[
+    "zh", "en", "ja", "ko", "es", "pt-BR", "it", "id", "fr", "de", "ru", "tr", "zh-TW"
+]
+
+LANGUAGES: tuple[Language, ...] = (
+    "zh",
+    "en",
+    "ja",
+    "ko",
+    "es",
+    "pt-BR",
+    "it",
+    "id",
+    "fr",
+    "de",
+    "ru",
+    "tr",
+    "zh-TW",
+)
+
+
+def is_language(value: object) -> TypeGuard[Language]:
+    return isinstance(value, str) and value in LANGUAGES
 
 
 @dataclass(frozen=True, slots=True)
 class ApplicationPreferences:
     default_model_id: str | None = None
     last_applied_recipe_id: str | None = None
-    language: Literal["zh", "en"] = "zh"
+    language: Language = "zh"
     schema_version: int = 1
 
     def __post_init__(self) -> None:
@@ -25,8 +49,8 @@ class ApplicationPreferences:
         ):
             if value is not None:
                 text(value, name)
-        if self.language not in ("zh", "en"):
-            raise ConfigurationError("UI language must be zh or en")
+        if not is_language(self.language):
+            raise ConfigurationError("Unsupported UI language")
         if type(self.schema_version) is not int or self.schema_version != 1:
             raise ConfigurationError("Unsupported application preferences version")
 
@@ -75,14 +99,12 @@ def read_preferences(path: Path) -> LoadedPreferences:
         raise ConfigurationError("default_model_id must be text or null")
     if last is not None and not isinstance(last, str):
         raise ConfigurationError("last_applied_recipe_id must be text or null")
-    invalid_language = language not in ("zh", "en")
-    language = "zh" if invalid_language else language
+    invalid_language = not is_language(language)
+    selected: Language = language if is_language(language) else "zh"
     if type(version) is not int:
         raise ConfigurationError("Application preferences version must be an integer")
     return LoadedPreferences(
-        ApplicationPreferences(
-            default, last, "en" if language == "en" else "zh", version
-        ),
+        ApplicationPreferences(default, last, selected, version),
         invalid_language,
     )
 

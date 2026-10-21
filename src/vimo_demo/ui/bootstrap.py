@@ -26,6 +26,7 @@ from vimo_demo.application.folder_replay import FolderReplay, FolderSourceError
 from vimo_demo.application.history import ProductionHistory
 from vimo_demo.application.preferences import (
     ApplicationPreferences,
+    is_language,
     read_preferences,
     save_preferences,
 )
@@ -402,10 +403,8 @@ class PreferenceNotifications(QObject):
 
     @Slot(str)
     def language(self, value: str) -> None:
-        if value in ("zh", "en"):
-            self._save(
-                replace(self.preferences, language="zh" if value == "zh" else "en")
-            )
+        if is_language(value):
+            self._save(replace(self.preferences, language=value))
 
 
 def create_window(startup: Startup, delivery: FutureDelivery) -> ProductionWindow:
