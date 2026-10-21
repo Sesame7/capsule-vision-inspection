@@ -43,6 +43,14 @@ LANGUAGE_LABELS = {
     "de": "DE",
     "ru": "RU",
     "tr": "TR",
+    "nl": "NL",
+    "pl": "PL",
+    "uk": "UK",
+    "ro": "RO",
+    "cs": "CS",
+    "hu": "HU",
+    "sv": "SV",
+    "da": "DA",
 }
 
 
@@ -144,7 +152,7 @@ class NavigationBar(QFrame):
         self.language.setIconSize(QSize(20, 20))
         for language in LANGUAGES:
             self.language.addItem(LANGUAGE_NAMES[language], language)
-        self.language.setMaxVisibleItems(len(LANGUAGES))
+        self.language.setMaxVisibleItems(13)
         self.language.activated.connect(self._select_language)
         row.addWidget(self.language)
 

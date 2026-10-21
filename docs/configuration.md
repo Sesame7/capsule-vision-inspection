@@ -35,9 +35,12 @@ can fall back visibly; required Model/Recipe identities cannot be guessed.
 UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chinese),
 `en` (English), `ja` (Japanese),
 `ko` (Korean), `es` (Spanish), `pt-BR` (Brazilian Portuguese), `it` (Italian),
-`id` (Indonesian), `fr` (French), `de` (German), `ru` (Russian) and `tr` (Turkish).
+`id` (Indonesian), `fr` (French), `de` (German), `ru` (Russian), `tr` (Turkish),
+`nl` (Dutch), `pl` (Polish), `uk` (Ukrainian), `ro` (Romanian), `cs` (Czech),
+`hu` (Hungarian), `sv` (Swedish) and `da` (Danish).
 The collapsed selector uses compact language labels; its popup shows full native
-names. It saves only the existing language preference;
+names in a screen-bounded, scrollable list. All 21 languages are selectable.
+It saves only the existing language preference;
 switching does not save configuration drafts or change an active inspection.
 Existing `zh`/`en` and omitted-language files remain compatible. Unknown codes
 fall back to Chinese in memory with a warning, preserving the file for repair.

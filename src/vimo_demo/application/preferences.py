@@ -11,7 +11,27 @@ from vimo_demo.configuration import ConfigurationError, ConfigurationIOError
 from vimo_demo.configuration.models import text
 
 type Language = Literal[
-    "zh", "en", "ja", "ko", "es", "pt-BR", "it", "id", "fr", "de", "ru", "tr", "zh-TW"
+    "zh",
+    "en",
+    "ja",
+    "ko",
+    "es",
+    "pt-BR",
+    "it",
+    "id",
+    "fr",
+    "de",
+    "ru",
+    "tr",
+    "zh-TW",
+    "nl",
+    "pl",
+    "uk",
+    "ro",
+    "cs",
+    "hu",
+    "sv",
+    "da",
 ]
 
 LANGUAGES: tuple[Language, ...] = (
@@ -28,6 +48,14 @@ LANGUAGES: tuple[Language, ...] = (
     "ru",
     "tr",
     "zh-TW",
+    "nl",
+    "pl",
+    "uk",
+    "ro",
+    "cs",
+    "hu",
+    "sv",
+    "da",
 )
 
 

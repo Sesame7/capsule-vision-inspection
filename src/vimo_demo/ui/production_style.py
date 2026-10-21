@@ -1115,6 +1115,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QFrame#productionMetrics {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 8px; }}
     QFrame#navigation QComboBox {{ padding: 5px 8px; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
+    QComboBox#language {{ combobox-popup: 0; }}
     QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
     QComboBox#webAddress::drop-down {{ width: {Style.touch}px; }}
     QComboBox#webAddress::down-arrow {{ image: none; }}

@@ -21,6 +21,25 @@ from vimo_demo.ui import translations as translation_resources
 from vimo_demo.ui.production_style import STRINGS, text
 from vimo_demo.ui.translations import EXTRA_STRINGS, LANGUAGE_NAMES
 
+EUROPEAN_LANGUAGES: dict[Language, str] = {
+    "nl": "Nederlands",
+    "pl": "Polski",
+    "uk": "Українська",
+    "ro": "Română",
+    "cs": "Čeština",
+    "hu": "Magyar",
+    "sv": "Svenska",
+    "da": "Dansk",
+}
+
+
+def test_european_language_identities_and_complete_catalogs() -> None:
+    assert LANGUAGES[13:] == tuple(EUROPEAN_LANGUAGES)
+    for language, native_name in EUROPEAN_LANGUAGES.items():
+        assert is_language(language)
+        assert LANGUAGE_NAMES[language] == native_name
+        assert EXTRA_STRINGS[language].keys() == STRINGS.keys(), language
+
 
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_language_preferences_round_trip(tmp_path: Path, language: Language) -> None:
@@ -128,7 +147,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     }
     assert tuple(LANGUAGE_NAMES) == LANGUAGES
     assert set(EXTRA_STRINGS) == set(LANGUAGES) - {"zh", "en"}
-    assert len(set(LANGUAGES)) == len(LANGUAGES) == 13
+    assert len(set(LANGUAGES)) == len(LANGUAGES) == 21
     assert LANGUAGE_NAMES["zh-TW"] == "繁體中文"
     assert len(set(LANGUAGE_NAMES.values())) == len(LANGUAGES)
     formatter = Formatter()
@@ -156,17 +175,20 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
 
 @pytest.mark.parametrize("language", LANGUAGES[2:])
 def test_optional_translation_falls_back_to_english(language: Language) -> None:
-    assert "history_clock" not in EXTRA_STRINGS[language]
+    if language not in EUROPEAN_LANGUAGES:
+        assert "history_clock" not in EXTRA_STRINGS[language]
     for key in STRINGS.keys() - EXTRA_STRINGS[language].keys():
         assert text(key, language) == STRINGS[key][1], (key, language)
 
 
+@pytest.mark.parametrize("language", ("ja", *EUROPEAN_LANGUAGES))
 def test_optional_translation_can_be_omitted_for_only_one_language(
+    language: Language,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     other = text("production", "ko")
-    monkeypatch.delitem(EXTRA_STRINGS["ja"], "production")
-    assert text("production", "ja") == STRINGS["production"][1]
+    monkeypatch.delitem(EXTRA_STRINGS[language], "production")
+    assert text("production", language) == STRINGS["production"][1]
     assert text("production", "ko") == other
     assert text("production", "zh") == STRINGS["production"][0]
 
@@ -222,7 +244,7 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
         "tr": "108426368dbb70b4119277fc4266d0a14a17c3a2fbcfc0165056caf04304ec29",
         "zh-TW": "d8911e1cb916af4bbf2340e724e335bdbe8909aaaf970d2327cdb5361939eafe",
     }
-    assert tuple(expected) == LANGUAGES
+    assert tuple(expected) == LANGUAGES[:13]
     for language, digest in expected.items():
         catalog = {
             "resolved": {key: text(key, language) for key in STRINGS},

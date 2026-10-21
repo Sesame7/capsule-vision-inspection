@@ -1,8 +1,9 @@
 """Shared navigation/status contracts, with existing controlled sessions and fake engines."""
 
 import pytest
-from PySide6.QtCore import QPoint, QRect, QTimer
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QPalette
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
     QStyle,
@@ -322,8 +323,10 @@ def test_language_popup_retains_all_native_names_within_available_screen(
 ) -> None:
     window, _ = screen
     selector = window.language_selector
-    assert selector.count() == selector.maxVisibleItems() == 13
-    assert [(selector.itemText(i), selector.itemData(i)) for i in range(13)] == [
+    selected = selector.currentData()
+    application = window.bridge.application.snapshot()
+    assert selector.count() == 21 and selector.maxVisibleItems() == 13
+    assert [(selector.itemText(i), selector.itemData(i)) for i in range(21)] == [
         (LANGUAGE_NAMES[language], language) for language in LANGUAGES
     ]
     selector.showPopup()
@@ -333,8 +336,11 @@ def test_language_popup_retains_all_native_names_within_available_screen(
         popup = view.window()
         assert popup.isVisible()
         assert popup.screen().availableGeometry().contains(popup.frameGeometry())
-        for row in range(13):
-            rect = view.visualRect(selector.model().index(row, 0))
+        for row in range(21):
+            index = selector.model().index(row, 0)
+            view.scrollTo(index)
+            QApplication.processEvents()
+            rect = view.visualRect(index)
             assert 0 <= rect.top() <= rect.bottom() < view.viewport().height()
             # Native menu delegates can reserve extra blank trailing space in
             # their row rect; require the actual name/icon to fit the viewport.
@@ -344,9 +350,16 @@ def test_language_popup_retains_all_native_names_within_available_screen(
                 + 2 * Style.space
                 <= view.viewport().width()
             )
-        assert not view.verticalScrollBar().isVisible()
+        assert view.verticalScrollBar().maximum() > 0
+        assert selector.currentData() == selected
     finally:
         selector.hidePopup()
+    selector.showPopup()
+    QTest.keyClick(selector.view(), Qt.Key.Key_End)
+    QTest.keyClick(selector.view(), Qt.Key.Key_Return)
+    QApplication.processEvents()
+    assert selector.currentData() == "da" and window.language == "da"
+    assert window.bridge.application.snapshot() == application
 
 
 @pytest.mark.parametrize("outcome", [ReportOutcome.ACKNOWLEDGED, ReportOutcome.FAILED])
