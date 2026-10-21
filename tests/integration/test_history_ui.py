@@ -36,6 +36,7 @@ from vimo_demo.application.history import (
     HistoryQuery,
     ProductionHistory,
 )
+from vimo_demo.application.preferences import LANGUAGES
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CycleStatus
 from vimo_demo.inspection.production import (
@@ -190,6 +191,7 @@ def test_history_filters_pagination_selection_and_presentation(
         layout = page.layout()
         assert layout is not None
         margins = layout.contentsMargins()
+        assert margins.left() == margins.right() == 0
         assert page.workspace.width() == page.width() - margins.left() - margins.right()
         assert page.cycles.width() == page.channels.width() == page.workspace.width()
         assert window.grab().save(
@@ -1011,6 +1013,33 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         assert channel_at(page, 0, 4) == selected
         assert "execution_error" in page.channel_detail.toPlainText()
         assert page.grab().save(str(tmp_path / f"history-en-dark-{size[0]}-final.png"))
+        toolbar_geometry = tuple(
+            QRect(widget.mapTo(page, QPoint()), widget.size()) for widget in widgets[:7]
+        )
+        for language in LANGUAGES:
+            page.set_language(language)
+            qapp.processEvents()
+            assert toolbar_geometry == tuple(
+                QRect(widget.mapTo(page, QPoint()), widget.size())
+                for widget in widgets[:7]
+            ), language
+            assert (
+                page.all_dates.accessibleName()
+                == page.all_dates.toolTip()
+                == text("history_all_dates", language)
+            )
+            assert (
+                page.refresh_button.accessibleName()
+                == page.refresh_button.toolTip()
+                == text("history_refresh", language)
+            )
+            assert filters == (
+                page.date.date(),
+                page.batch.currentData(),
+                page.result.currentData(),
+            )
+            assert channel_at(page, 0, 4) == selected and not page.busy
+        page.set_language("en")
         page.batch.showPopup()
         until(page.batch.view().isVisible)
         assert (

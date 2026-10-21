@@ -36,7 +36,8 @@ UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chi
 `en` (English), `ja` (Japanese),
 `ko` (Korean), `es` (Spanish), `pt-BR` (Brazilian Portuguese), `it` (Italian),
 `id` (Indonesian), `fr` (French), `de` (German), `ru` (Russian) and `tr` (Turkish).
-The selector shows native names and saves only the existing language preference;
+The collapsed selector uses compact language labels; its popup shows full native
+names. It saves only the existing language preference;
 switching does not save configuration drafts or change an active inspection.
 Existing `zh`/`en` and omitted-language files remain compatible. Unknown codes
 fall back to Chinese in memory with a warning, preserving the file for repair.
@@ -281,6 +282,8 @@ Refresh, numeric parameters and image color sampling remain draft-only, with no
 production admission, counters, source commands or activation. The former separate
 Tune page and duplicate enablement controls are removed. Size and Color summaries
 use actual draft limits, including `H <target> ± <tolerance>` for circular Hue.
+The compact tuning fields use W/H, pixel units and ± notation; full localized
+parameter names remain in tooltips and accessibility labels.
 
 On first selection, Folder tuning reads the camera's first decodable image in the
 normal deterministic Folder order. Previous/Next and the image selector browse

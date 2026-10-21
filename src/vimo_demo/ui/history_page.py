@@ -59,7 +59,14 @@ from vimo_demo.application.history import (
 
 from .image_tools import image_icon
 from .inference_bridge import FutureDelivery
-from .production_style import Language, Style, text, theme_colors
+from .production_style import (
+    Language,
+    Style,
+    button_width,
+    set_button_caption,
+    text,
+    theme_colors,
+)
 
 
 class _ResultDelegate(QStyledItemDelegate):
@@ -222,7 +229,7 @@ class HistoryPage(QWidget):
             self._delivery.detach, Qt.ConnectionType.DirectConnection
         )
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
+        outer.setContentsMargins(0, 0, 0, 0)
         self.workspace = QWidget()
         self.workspace.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -502,10 +509,18 @@ class HistoryPage(QWidget):
         self.all_dates.setFixedWidth(
             max(
                 metrics.horizontalAdvance(text("history_all_dates", lang))
-                for lang in ("zh", "en", self.language)
+                for lang in ("zh", "en")
             )
-            + 30
+            + Style.touch
         )
+        all_dates = text("history_all_dates", self.language)
+        self.all_dates.setText(
+            metrics.elidedText(
+                all_dates, Qt.TextElideMode.ElideRight, self.all_dates.width() - 30
+            )
+        )
+        self.all_dates.setAccessibleName(all_dates)
+        self.all_dates.setToolTip(all_dates)
         filter_width = (
             max(
                 metrics.horizontalAdvance("12-31 23:59:59"),
@@ -520,23 +535,26 @@ class HistoryPage(QWidget):
                         "history_empty",
                         "history_unknown",
                     )
-                    for lang in ("zh", "en", self.language)
+                    for lang in ("zh", "en")
                 ),
             )
             + 40
         )
         self.batch.setFixedWidth(filter_width)
         self.result.setFixedWidth(filter_width)
-        button_width = (
-            max(
-                metrics.horizontalAdvance(text(key, lang))
-                for key in ("history_newer", "history_older", "history_refresh")
-                for lang in ("zh", "en", self.language)
-            )
-            + 24
+        width = button_width(
+            self.refresh_button,
+            ("history_newer", "history_older", "history_refresh"),
+            padding=2 * Style.space,
         )
-        for button in (self.newer, self.older, self.refresh_button):
-            button.setFixedSize(button_width, Style.touch)
+        for button, key in (
+            (self.newer, "history_newer"),
+            (self.older, "history_older"),
+            (self.refresh_button, "history_refresh"),
+        ):
+            set_button_caption(button, text(key, self.language), width)
+            button.setFixedHeight(Style.touch)
+            button.setToolTip(text(key, self.language))
         wrapped = (
             self.workspace.width()
             < self.filters.minimumSizeHint().width()
@@ -681,6 +699,10 @@ class HistoryPage(QWidget):
             )
         ):
             self.result.setItemText(index, text(key, language))
+            self.result.setItemData(
+                index, text(key, language), Qt.ItemDataRole.ToolTipRole
+            )
+        self.result.setToolTip(self.result.currentText())
         self.cycles.setHorizontalHeaderLabels(
             [
                 text(k, language)
@@ -711,6 +733,7 @@ class HistoryPage(QWidget):
         self._revision += 1
         self._query = self._filters()
         self.date.setEnabled(not self.all_dates.isChecked())
+        self.result.setToolTip(self.result.currentText())
         self.batch.setToolTip(
             str(
                 self.batch.currentData(Qt.ItemDataRole.ToolTipRole)

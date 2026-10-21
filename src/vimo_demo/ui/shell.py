@@ -1,7 +1,7 @@
 """Shared navigation and compact status presentation, without runtime ownership."""
 
 from PySide6.QtCore import QSize, Qt, Signal, Slot
-from PySide6.QtGui import QPainter, QPaintEvent, QResizeEvent
+from PySide6.QtGui import QPaintEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -10,6 +10,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
     QWidget,
 )
 
@@ -26,6 +29,21 @@ from .production_style import (
 from .translations import LANGUAGE_NAMES
 
 PAGES = ("production", "parameters", "diagnostics", "history", "settings")
+LANGUAGE_LABELS = {
+    "zh": "中文",
+    "zh-TW": "繁中",
+    "en": "EN",
+    "ja": "JA",
+    "ko": "KO",
+    "es": "ES",
+    "pt-BR": "PT-BR",
+    "it": "IT",
+    "id": "ID",
+    "fr": "FR",
+    "de": "DE",
+    "ru": "RU",
+    "tr": "TR",
+}
 
 
 class _StatusLabel(QLabel):
@@ -53,9 +71,33 @@ class _StatusLabel(QLabel):
 
 
 class _LanguageSelector(QComboBox):
+    def showPopup(self) -> None:
+        # The closed control is deliberately narrower than the native names.
+        # Size the popup itself, rather than forcing a child view wider than
+        # its container. Qt retains placement/height clipping to the screen.
+        self.view().window().setMinimumWidth(
+            min(
+                max(
+                    self.fontMetrics().horizontalAdvance(self.itemText(index))
+                    for index in range(self.count())
+                )
+                + 60,
+                self.screen().availableGeometry().width(),
+            )
+        )
+        super().showPopup()
+
     def paintEvent(self, event: QPaintEvent) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        # Only the closed label is compact; the native popup/model retains full
+        # language names, item identities and keyboard selection behavior.
+        option.currentText = LANGUAGE_LABELS.get(
+            str(self.currentData()), self.currentText()
+        )
+        painter = QStylePainter(self)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
         painter.drawPixmap(
             self.width() - 24,
             (self.height() - 16) // 2,
@@ -78,20 +120,13 @@ class NavigationBar(QFrame):
         self._row = row
         row.setContentsMargins(12, 8, 12, 8)
         row.setSpacing(6)
-        self.brand_icon = QLabel()
-        self.brand_icon.setFixedSize(30, 30)
-        row.addWidget(self.brand_icon)
-        brand = QLabel("ViMo")
-        self._brand = brand
-        brand.setStyleSheet("font-size: 21px; font-weight: 700;")
-        row.addWidget(brand)
-        row.addSpacing(10)
         self._pages = QButtonGroup(self)
         self._pages.idClicked.connect(self._select_page)
         self.buttons: list[QPushButton] = []
         for index, _ in enumerate(PAGES):
             button = QPushButton()
             button.setCheckable(True)
+            button.setProperty("iconAlignment", "leading")
             button.setMinimumHeight(Style.touch)
             button.setIconSize(QSize(20, 20))
             self._pages.addButton(button, index)
@@ -109,7 +144,7 @@ class NavigationBar(QFrame):
         self.language.setIconSize(QSize(20, 20))
         for language in LANGUAGES:
             self.language.addItem(LANGUAGE_NAMES[language], language)
-        self.language.view().setMinimumWidth(200)
+        self.language.setMaxVisibleItems(len(LANGUAGES))
         self.language.activated.connect(self._select_language)
         row.addWidget(self.language)
 
@@ -136,11 +171,10 @@ class NavigationBar(QFrame):
         self.language.setFixedWidth(
             max(
                 self.fontMetrics().horizontalAdvance(name)
-                for name in LANGUAGE_NAMES.values()
+                for name in LANGUAGE_LABELS.values()
             )
-            + 70
+            + 70  # Native edit field also reserves icon, padding and arrow space.
         )
-        self.brand_icon.setPixmap(shell_icon("brand", colors.accent).pixmap(30, 30))
         for index, (key, button) in enumerate(zip(PAGES, self.buttons, strict=True)):
             button.setToolTip(text(key, language))
             button.setAccessibleName(text(key, language))
@@ -159,8 +193,10 @@ class NavigationBar(QFrame):
         self.language.setCurrentIndex(self.language.findData(language))
         for index in range(self.language.count()):
             self.language.setItemIcon(index, shell_icon("globe", colors.primary))
-        self.language.setToolTip(text("interface_language", language))
-        self.language.setAccessibleName(self.language.toolTip())
+        self.language.setToolTip(
+            f"{text('interface_language', language)} · {LANGUAGE_NAMES[language]}"
+        )
+        self.language.setAccessibleName(text("interface_language", language))
         self._arrange_buttons()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -174,10 +210,7 @@ class NavigationBar(QFrame):
         language = self._presentation[0]
         margins = self._row.contentsMargins()
         reserved = (
-            self.brand_icon.width()
-            + self._brand.sizeHint().width()
-            + 10  # Existing gap after the logo.
-            + self.theme.width()
+            self.theme.width()
             + self.language.width()
             + (self._row.count() - 1) * self._row.spacing()
             + margins.left()

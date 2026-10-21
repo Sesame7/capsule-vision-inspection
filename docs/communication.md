@@ -143,8 +143,9 @@ Discard strictly reloads/validates the actual file, not an earlier page snapshot
 missing/invalid/unusable settings leave the draft intact with an error tooltip.
 It does not persist, restart/stop any owner or undo earlier network operations.
 The default settings can be explicitly saved before any edits. Production/Web
-share a row when their actual content fits the available width, and otherwise
-stack. Expanded routing/diagnostics grow in the outer scroll area.
+share a row when equally sized cards can accommodate their natural editor widths,
+and otherwise stack at full width. Diagnostics remains full width below them.
+Expanded routing/diagnostics grow in the outer scroll area.
 Service cards reflow when their actual container is shown/resized, including the
 first navigation after maximized startup; no manual resize is needed. Available
 scroll-viewport width, not content stretched by a previous two-column layout,

@@ -26,6 +26,7 @@ from vimo_demo.application import (
     PreparedConfiguration,
 )
 from vimo_demo.application.image_archive import ArchiveSnapshot
+from vimo_demo.application.preferences import LANGUAGES
 from vimo_demo.configuration import (
     ConfigurationError,
     ConfigurationIOError,
@@ -412,6 +413,69 @@ def test_compact_recipe_layout(
         and not runtimes
         and window.bridge.application.snapshot() == before
     )
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
+def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
+    configured_screen: Screen, size: tuple[int, int]
+) -> None:
+    window, session, runtimes = configured_screen
+    window.resize(*size)
+    page = window.parameters
+    page.open_preview("size")
+    preview = page.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    QApplication.processEvents()
+    before = window.bridge.application.snapshot()
+    draft = session.draft.to_recipe()
+    fields = tuple(spin.geometry() for spin in preview.spins.values())
+    save = page.buttons["save_apply"]
+    save_size = save.size()
+    for language in LANGUAGES:
+        window.set_language(language)
+        QApplication.processEvents()
+        assert save.size() == save_size
+        assert save.accessibleName() == save.toolTip() == text("save_apply", language)
+        assert tuple(spin.geometry() for spin in preview.spins.values()) == fields
+        for key, label in preview.labels.items():
+            assert label.text() in ("W (px)", "H (px)", "± W (px)", "± H (px)")
+            assert label.fontMetrics().horizontalAdvance(label.text()) <= label.width()
+            assert text(key, language) in label.toolTip() == label.accessibleName()
+        assert_inside(preview.controls, preview)
+    page.open_preview("color")
+    QApplication.processEvents()
+    sample_size = preview.sample.size()
+    tolerance_size = preview.tolerance_label.size()
+    for language in LANGUAGES:
+        window.set_language(language)
+        QApplication.processEvents()
+        assert preview.sample.size() == sample_size
+        assert preview.tolerance_label.size() == tolerance_size
+        assert text("color_tolerance", language) in preview.tolerance_label.toolTip()
+        assert preview.sample.accessibleName() == preview.sample.toolTip()
+        assert_inside(preview.controls, preview)
+    page.leave_preview(lambda: None)
+    until(lambda: page.preview is None)
+    window.navigate(4)
+    workspace = page.roi_workspace
+    assert workspace is not None
+    QApplication.processEvents()
+    sizes = tuple(
+        workspace.buttons[key].size() for key in ("roi_set_rect", "roi_save_apply")
+    )
+    for language in LANGUAGES:
+        window.set_language(language)
+        QApplication.processEvents()
+        for key, expected in zip(
+            ("roi_set_rect", "roi_save_apply"), sizes, strict=True
+        ):
+            button = workspace.buttons[key]
+            assert button.size() == expected
+            assert button.accessibleName() == button.toolTip() == text(key, language)
+            assert_inside(button, workspace)
+    assert session.draft.to_recipe() == draft and not session.dirty and not runtimes
+    assert window.bridge.application.snapshot() == before
 
 
 def test_metadata_model_and_hidden_overrides_preserved(

@@ -60,7 +60,15 @@ from vimo_demo.inspection.production.capsule import (
 
 from .display_frames import DisplayFrame, LatestDisplayFrameStore
 from .image_tools import ImageToolbar, image_icon
-from .production_style import Language, Style, camera_icon, text, theme_colors
+from .production_style import (
+    Language,
+    Style,
+    button_width,
+    camera_icon,
+    set_button_caption,
+    text,
+    theme_colors,
+)
 from .recipe_editor import RecipeEditorSession
 from .roi_canvas import RoiCanvas
 
@@ -473,13 +481,29 @@ class TraditionalPreview(QWidget):
             "target_height",
             "height_tolerance",
         ):
-            self.labels[key].setText(text(key, language))
-            caption = self.labels[key].text()
+            caption = text(key, language)
             if key.endswith("tolerance"):
                 caption += " (px)"
+            # Match Vision's W/H notation; long translated phrases must not
+            # squeeze neighboring parameters or silently clip their labels.
+            self.labels[key].setText(
+                {
+                    "target_width": "W (px)",
+                    "width_tolerance": "± W (px)",
+                    "target_height": "H (px)",
+                    "height_tolerance": "± H (px)",
+                }[key]
+            )
+            self.labels[key].setFixedWidth(self.spins[key].width())
+            self.labels[key].setToolTip(caption)
+            self.labels[key].setAccessibleName(caption)
             self.spins[key].setAccessibleName(caption)
             self.spins[key].setToolTip(caption)
-        self.sample.setText(text("color_sample", self.language))
+        set_button_caption(
+            self.sample,
+            text("color_sample", self.language),
+            button_width(self.sample, ("color_sample",)),
+        )
         self.sample.setToolTip(text("color_sample_tip", self.language))
         self.sample.setAccessibleName(self.sample.toolTip())
         self.show_settings()
@@ -504,9 +528,14 @@ class TraditionalPreview(QWidget):
         self.swatch.setToolTip(
             text("target_color", self.language) + f" · H {settings.color.target_hue}"
         )
-        self.tolerance_label.setText(
+        self.tolerance_label.setText(f"± H {settings.color.hue_tolerance}")
+        self.tolerance_label.setFixedWidth(
+            self.tolerance_label.fontMetrics().horizontalAdvance("± H 90") + Style.small
+        )
+        self.tolerance_label.setToolTip(
             text("color_tolerance", self.language) + f" {settings.color.hue_tolerance}"
         )
+        self.tolerance_label.setAccessibleName(self.tolerance_label.toolTip())
         self._loading = False
         self.ensure_measurement()
         self.refresh_state()

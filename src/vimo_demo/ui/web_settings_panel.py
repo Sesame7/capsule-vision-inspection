@@ -25,7 +25,9 @@ from vimo_demo.web.runtime import WebRuntime, WebState
 from .production_style import (
     Language,
     Style,
+    button_width,
     production_icon,
+    set_button_caption,
     shell_icon,
     text,
     theme_colors,
@@ -97,6 +99,7 @@ class WebSettingsPanel(QFrame):
         self.power = QPushButton()
         self.power.setMinimumHeight(Style.touch)
         self.power.setObjectName("webPower")
+        self.power.setProperty("iconAlignment", "leading")
         self.power.clicked.connect(lambda: self.requested.emit("power"))
         header.addWidget(self.power)
         root.addLayout(header)
@@ -142,6 +145,7 @@ class WebSettingsPanel(QFrame):
         actions = QHBoxLayout()
         actions.addStretch()
         self.apply_changes = QPushButton()
+        self.apply_changes.setProperty("iconAlignment", "leading")
         self.apply_changes.setMinimumHeight(Style.touch)
         self.apply_changes.clicked.connect(lambda: self.requested.emit("apply"))
         actions.addWidget(self.apply_changes)
@@ -279,30 +283,39 @@ class WebSettingsPanel(QFrame):
         blocked = (
             not self.editable or observed is None or observed.busy or observed.closing
         )
-        self.power.setText(
-            text(
-                "web_turn_off"
-                if (observed.owned if observed is not None else self.available)
-                else "web_turn_on",
-                self.language,
-            )
-        )
         self.power.setIcon(production_icon("power", colors.primary))
+        action = text(
+            "web_turn_off"
+            if (observed.owned if observed is not None else self.available)
+            else "web_turn_on",
+            self.language,
+        )
+        set_button_caption(
+            self.power,
+            action,
+            button_width(
+                self.power,
+                ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off"),
+                padding=Style.space + Style.small,
+            ),
+        )
         self.power.setEnabled(not blocked)
-        self.power.setAccessibleName(self.power.text())
-        self.power.setToolTip(text("web_power_tip", self.language))
+        self.power.setToolTip(action + "\n" + text("web_power_tip", self.language))
         changed = (
             observed is not None
             and observed.state is WebState.RUNNING
             and observed.configuration != self.saved
         )
         self.apply_changes.setVisible(changed)
-        self.apply_changes.setText(text("web_apply_changes", self.language))
         self.apply_changes.setIcon(production_icon("reset", colors.primary))
+        set_button_caption(
+            self.apply_changes,
+            text("web_apply_changes", self.language),
+            button_width(self.apply_changes, ("web_apply_changes",)),
+        )
         self.apply_changes.setEnabled(
             not blocked and not self.dirty and self.saved_available
         )
-        self.apply_changes.setAccessibleName(self.apply_changes.text())
         self.apply_changes.setToolTip(
             text("web_save_first" if self.dirty else "web_apply_changes", self.language)
         )

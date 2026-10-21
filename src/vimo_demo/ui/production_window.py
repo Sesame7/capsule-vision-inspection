@@ -61,6 +61,7 @@ from .production_style import (
     indicator_icon,
     navigation_icon,
     production_icon,
+    set_button_caption,
     shell_icon,
     text,
     theme_colors,
@@ -637,13 +638,14 @@ class ProductionWindow(QMainWindow):
                     "replay_step",
                     "production_stop",
                 )
-                for language in ("zh", "en", self.language)
+                for language in ("zh", "en")
             )
             + Style.icon
             + 28,
         )
         for key in ("operation", "pause", "stop"):
-            self.buttons[key].setFixedWidth(width)
+            button = self.buttons[key]
+            set_button_caption(button, button.accessibleName(), width)
         self.operation_group.setFixedWidth(Style.touch + 3 * width + 3 * Style.small)
         self.context_control.setCurrentIndex(1 if actions["secondary"] else 0)
 

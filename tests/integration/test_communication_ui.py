@@ -688,10 +688,12 @@ def test_auto_slow_pass_no_overlap_or_tick_backlog_and_snapshot(
         RegisterWatchGroup(FinsMemoryArea.DM, 112),
     ):
         assert page.add_watch_group(group)
+    auto_size = page.watch_auto.size()
     assert page.start_monitoring()
     try:
         until(entered.is_set)
         assert page.auto_refresh and page.busy and page.watch_auto.isEnabled()
+        assert page.watch_auto.size() == auto_size
         assert (
             not page.refresh_timer.isActive() and page.refresh_timer.interval() == 1000
         )
@@ -724,6 +726,7 @@ def test_auto_slow_pass_no_overlap_or_tick_backlog_and_snapshot(
     page.refresh_timer.timeout.emit()
     QApplication.processEvents()
     assert len(requests) == 4 and not page.auto_refresh
+    assert page.watch_auto.size() == auto_size
     assert page.host.isEnabled() and page.write_button.isEnabled()
 
 

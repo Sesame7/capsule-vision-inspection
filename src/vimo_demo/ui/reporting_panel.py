@@ -29,8 +29,10 @@ from vimo_demo.communication.reporting import (
 from .production_style import (
     Language,
     Style,
+    button_width,
     navigation_icon,
     production_icon,
+    set_button_caption,
     text,
     theme_colors,
 )
@@ -70,6 +72,7 @@ class ReportingPanel(QFrame):
         self.enabled = QPushButton()
         self.enabled.setCheckable(True)
         self.enabled.setObjectName("reportingPower")
+        self.enabled.setProperty("iconAlignment", "leading")
         self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.enabled)
         root.addLayout(header)
@@ -90,7 +93,8 @@ class ReportingPanel(QFrame):
         self.advanced_button.setMinimumHeight(Style.touch)
         self.advanced_button.setIcon(navigation_icon(2))
         self.advanced_button.setIconSize(QSize(Style.icon, Style.icon))
-        common = QGridLayout()
+        self.advanced_button.setProperty("iconAlignment", "leading")
+        common = self.fields_layout = QGridLayout()
         for column, (key, widget) in enumerate(
             (
                 ("comm_protocol", self.protocol),
@@ -205,6 +209,12 @@ class ReportingPanel(QFrame):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        self.enabled.setIcon(production_icon("power", theme_colors(self).primary))
+        self._power_width = button_width(
+            self.enabled,
+            ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off"),
+            padding=Style.space + Style.small,
+        )
         self.title.setText(text("plc_reporting", language))
         self.summary.setMinimumWidth(
             self.summary.fontMetrics().horizontalAdvance(
@@ -212,8 +222,12 @@ class ReportingPanel(QFrame):
             )
         )
         self.enabled.setToolTip(text("plc_next_start", language))
-        self.advanced_button.setText(text("comm_advanced", language))
-        self.advanced_button.setAccessibleName(self.advanced_button.text())
+        set_button_caption(
+            self.advanced_button,
+            text("comm_advanced", language),
+            button_width(self.advanced_button, ("comm_advanced",)),
+        )
+        self.advanced_button.setToolTip(text("comm_advanced", language))
         self.host.setAccessibleName(text("comm_host", language))
         self.host.setToolTip(text("plc_next_start", language))
         for key, caption in self._captions:
@@ -261,14 +275,16 @@ class ReportingPanel(QFrame):
         editable = self.state in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
         for widget in (self.enabled, self.host, self.protocol, *self._fields):
             widget.setEnabled(editable)
-        self.enabled.setText(
-            text(
-                "plc_disable" if self.enabled.isChecked() else "plc_enable",
-                self.language,
-            )
-        )
-        self.enabled.setAccessibleName(self.enabled.text())
         self.enabled.setIcon(production_icon("power", theme_colors(self).primary))
+        action = text(
+            "plc_disable" if self.enabled.isChecked() else "plc_enable", self.language
+        )
+        set_button_caption(
+            self.enabled,
+            action,
+            self._power_width,
+        )
+        self.enabled.setToolTip(action + "\n" + text("plc_next_start", self.language))
         selected = self.controller.reporting_selection()
         udp = self.protocol.currentIndex() == 0
         self.advanced.setEnabled(editable and udp)

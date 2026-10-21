@@ -3,7 +3,13 @@
 import pytest
 from PySide6.QtCore import QPoint, QRect, QTimer
 from PySide6.QtGui import QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import (
+    QApplication,
+    QStyle,
+    QStyleOption,
+    QStyleOptionComboBox,
+    QStylePainter,
+)
 from tests.application_support import FakeSession, production
 from tests.qt_support import screen as screen
 from tests.qt_support import until
@@ -21,6 +27,8 @@ from vimo_demo.inspection import CycleId
 from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
 from vimo_demo.ui.production_style import Language, Style, text
 from vimo_demo.ui.production_window import ProductionWindow
+from vimo_demo.ui.shell import LANGUAGE_LABELS
+from vimo_demo.ui.translations import LANGUAGE_NAMES
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
@@ -36,6 +44,11 @@ def test_navigation_language_and_themes_preserve_presentation_contract(
     timers = window.findChildren(QTimer)
     width = window.language_selector.width()
     navigation = tuple(button.geometry() for button in window.navigation)
+    row = window.navbar.layout()
+    assert row is not None
+    assert window.navigation[0].x() == (
+        window.navbar.contentsRect().left() + row.contentsMargins().left()
+    )
     anchored = (
         window.buttons["operation"],
         window.event_frame.state_icon,
@@ -162,7 +175,9 @@ def test_web_status_uses_owner_observation_without_a_new_timer(
 
 @pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
 def test_all_languages_fit_shell_and_preserve_active_inspection(
-    screen: tuple[ProductionWindow, FakeSession], size: tuple[int, int]
+    screen: tuple[ProductionWindow, FakeSession],
+    size: tuple[int, int],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     window, session = screen
     window.resize(*size)
@@ -172,16 +187,48 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
     complete_cycle(window, session, 1, TechnicalStatus.SUCCESS, ProductJudgment.NG)
     before = window.bridge.application.snapshot()
     geometry = tuple(button.geometry() for button in window.navigation)
+    icon_strips = tuple(
+        button.grab().toImage().copy(0, 0, Style.icon + Style.small, button.height())
+        for button in window.navigation
+    )
+    player_geometry = tuple(
+        QRect(button.mapTo(window, QPoint()), button.size())
+        for button in (window.buttons[key] for key in ("operation", "pause", "stop"))
+    )
+    painted: list[str] = []
+    original = QStylePainter.drawControl
+
+    def draw_control(
+        painter: QStylePainter, element: QStyle.ControlElement, option: QStyleOption
+    ) -> None:
+        if isinstance(option, QStyleOptionComboBox):
+            painted.append(option.currentText)
+        original(painter, element, option)
+
+    monkeypatch.setattr(QStylePainter, "drawControl", draw_control)
     for language in LANGUAGES:
         window.language_selector.activated.emit(
             window.language_selector.findData(language)
         )
         QApplication.processEvents()
+        window.language_selector.repaint()
+        assert painted[-1] == LANGUAGE_LABELS[language]
+        assert window.language_selector.currentText() == LANGUAGE_NAMES[language]
+        assert LANGUAGE_NAMES[language] in window.language_selector.toolTip()
         assert window.width() == size[0], (language, window.minimumSizeHint())
         assert len({button.width() for button in window.navigation}) == 1, language
         assert tuple(button.geometry() for button in window.navigation) == geometry, (
             language
         )
+        assert (
+            tuple(
+                button.grab()
+                .toImage()
+                .copy(0, 0, Style.icon + Style.small, button.height())
+                for button in window.navigation
+            )
+            == icon_strips
+        ), language
         for key, button in zip(
             ("production", "parameters", "diagnostics", "history", "settings"),
             window.navigation,
@@ -193,7 +240,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
                 <= button.width()
             ), language
             assert button.accessibleName() == button.toolTip() == text(key, language)
-            assert button.property("iconAlignment") != "leading"
+            assert button.property("iconAlignment") == "leading"
         assert window.navbar.rect().contains(window.language_selector.geometry()), (
             language
         )
@@ -205,15 +252,40 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         assert window.theme_button.geometry().right() < window.language_selector.x()
         assert (
             window.language_selector.fontMetrics().horizontalAdvance(
-                window.language_selector.currentText()
+                LANGUAGE_LABELS[language]
             )
             <= window.language_selector.width() - 60
+        ), language
+        option = QStyleOptionComboBox()
+        window.language_selector.initStyleOption(option)
+        field = window.language_selector.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxEditField,
+            window.language_selector,
+        )
+        assert (
+            window.language_selector.fontMetrics().horizontalAdvance(
+                LANGUAGE_LABELS[language]
+            )
+            + option.iconSize.width()
+            + Style.small
+            <= field.width()
         ), language
         for key in ("operation", "pause", "stop"):
             button = window.buttons[key]
             assert window.rect().contains(
                 button.mapTo(window, button.rect().bottomRight())
             ), language
+        assert (
+            tuple(
+                QRect(button.mapTo(window, QPoint()), button.size())
+                for button in (
+                    window.buttons[key] for key in ("operation", "pause", "stop")
+                )
+            )
+            == player_geometry
+        ), language
         window.navigate(2)
         page = window.communication
         QApplication.processEvents()
@@ -243,6 +315,38 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         assert window.navigation[-1].geometry().right() < window.theme_button.x()
         assert window.navbar.rect().contains(window.language_selector.geometry())
         assert window.bridge.application.snapshot() == before
+
+
+def test_language_popup_retains_all_native_names_within_available_screen(
+    screen: tuple[ProductionWindow, FakeSession],
+) -> None:
+    window, _ = screen
+    selector = window.language_selector
+    assert selector.count() == selector.maxVisibleItems() == 13
+    assert [(selector.itemText(i), selector.itemData(i)) for i in range(13)] == [
+        (LANGUAGE_NAMES[language], language) for language in LANGUAGES
+    ]
+    selector.showPopup()
+    try:
+        QApplication.processEvents()
+        view = selector.view()
+        popup = view.window()
+        assert popup.isVisible()
+        assert popup.screen().availableGeometry().contains(popup.frameGeometry())
+        for row in range(13):
+            rect = view.visualRect(selector.model().index(row, 0))
+            assert 0 <= rect.top() <= rect.bottom() < view.viewport().height()
+            # Native menu delegates can reserve extra blank trailing space in
+            # their row rect; require the actual name/icon to fit the viewport.
+            assert (
+                view.fontMetrics().horizontalAdvance(selector.itemText(row))
+                + selector.iconSize().width()
+                + 2 * Style.space
+                <= view.viewport().width()
+            )
+        assert not view.verticalScrollBar().isVisible()
+    finally:
+        selector.hidePopup()
 
 
 @pytest.mark.parametrize("outcome", [ReportOutcome.ACKNOWLEDGED, ReportOutcome.FAILED])

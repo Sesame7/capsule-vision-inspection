@@ -67,8 +67,10 @@ from .inference_bridge import FutureDelivery
 from .production_style import (
     Language,
     Style,
+    button_width,
     navigation_icon,
     production_icon,
+    set_button_caption,
     text,
     theme_colors,
 )
@@ -268,6 +270,7 @@ class CommunicationPage(QWidget):
         )
         self.watch_editor_button.setCheckable(True)
         self.watch_editor_button.setIcon(navigation_icon(0))
+        self.watch_editor_button.setProperty("iconAlignment", "leading")
         self.watch_editor = QWidget()
         group_fields = QGridLayout(self.watch_editor)
         group_fields.setContentsMargins(0, 0, 0, 0)
@@ -336,6 +339,7 @@ class CommunicationPage(QWidget):
         self.manual_button = self._button("comm_registers", self._toggle_manual)
         self.manual_button.setCheckable(True)
         self.manual_button.setIcon(navigation_icon(2))
+        self.manual_button.setProperty("iconAlignment", "leading")
         diagnostics.addWidget(self.manual_button)
         operations = diagnostics
         self.manual_body = QWidget()
@@ -486,10 +490,29 @@ class CommunicationPage(QWidget):
         panel = self.reporting_panel
         if panel is None:
             return
+        # The reporting form uses four equally stretched fields. Its minimum
+        # hint permits compressed editors, so reserve their natural widths
+        # before placing both cards in equally stretched columns.
+        margins = panel.contentsMargins()
+        fields_width = (
+            4
+            * max(
+                field.sizeHint().width()
+                for field in (panel.protocol, panel.host, panel.port, panel.timeout)
+            )
+            + 3 * panel.fields_layout.horizontalSpacing()
+            + 2 * Style.space
+            + margins.left()
+            + margins.right()
+        )
         required = (
-            panel.minimumSizeHint().width()
-            + self.web_panel.minimumSizeHint().width()
-            + Style.space
+            2
+            * max(
+                fields_width,
+                panel.sizeHint().width(),
+                self.web_panel.sizeHint().width(),
+            )
+            + self.service_layout.horizontalSpacing()
         )
         wide = self.scroll_area.viewport().width() >= required
         position = (0, 1) if wide else (1, 0)
@@ -837,8 +860,12 @@ class CommunicationPage(QWidget):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.web_panel.set_language(language)
-        self.save_settings.setText(text("comm_save_settings", language))
-        self.save_settings.setAccessibleName(self.save_settings.text())
+        set_button_caption(
+            self.save_settings,
+            text("comm_save_settings", language),
+            button_width(self.save_settings, ("comm_save_settings",)),
+        )
+        self.save_settings.setToolTip(text("comm_save_settings", language))
         self.discard_settings.setToolTip(text("comm_discard", language))
         self.discard_settings.setAccessibleName(text("comm_discard", language))
         self.refresh_icons()
@@ -850,6 +877,29 @@ class CommunicationPage(QWidget):
             button.setText(text(key, language))
             button.setAccessibleName(button.text())
             button.setToolTip(button.text())
+        self._watch_action_width = min(
+            3 * Style.touch,
+            button_width(
+                self.watch_once,
+                (
+                    "comm_watch_remove",
+                    "comm_watch_once",
+                    "comm_watch_auto",
+                    "comm_watch_stop",
+                ),
+            ),
+        )
+        for button, keys in (
+            (self.watch_editor_button, ("comm_watch_edit",)),
+            (self.advanced_button, ("comm_advanced",)),
+        ):
+            set_button_caption(
+                button, button.accessibleName(), button_width(button, keys)
+            )
+        for button in (self.watch_remove, self.watch_once):
+            set_button_caption(
+                button, button.accessibleName(), self._watch_action_width
+            )
         for key, widget in (
             ("comm_protocol", self.protocol),
             ("comm_host", self.host),
@@ -1447,14 +1497,16 @@ class CommunicationPage(QWidget):
             and (self._auto_refresh or (not self.busy and bool(self._watch_groups)))
         )
         self.watch_auto.setChecked(self._auto_refresh)
-        self.watch_auto.setText(
-            text(
-                "comm_watch_stop" if self._auto_refresh else "comm_watch_auto",
-                self.language,
-            )
+        action = text(
+            "comm_watch_stop" if self._auto_refresh else "comm_watch_auto",
+            self.language,
         )
-        self.watch_auto.setToolTip(self.watch_auto.text())
-        self.watch_auto.setAccessibleName(self.watch_auto.text())
+        set_button_caption(
+            self.watch_auto,
+            action,
+            self._watch_action_width,
+        )
+        self.watch_auto.setToolTip(action)
         self.write_button.setEnabled(editable)
         self.write_button.setToolTip(text("comm_local_write", self.language))
         self.permission.setText(text("comm_local_write", self.language))

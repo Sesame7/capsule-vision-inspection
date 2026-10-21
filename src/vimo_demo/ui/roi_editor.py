@@ -64,9 +64,11 @@ from .production_presentation import Indicator
 from .production_style import (
     Language,
     Style,
+    button_width,
     camera_icon,
     indicator_icon,
     production_icon,
+    set_button_caption,
     text,
     theme_colors,
 )
@@ -564,6 +566,7 @@ class MachineRoiWorkspace(QWidget):
         apply_geometry = self.button("roi_set_rect")
         apply_geometry.setIcon(image_icon("apply"))
         apply_geometry.setIconSize(QSize(Style.icon, Style.icon))
+        apply_geometry.setProperty("iconAlignment", "leading")
         geometry.addWidget(apply_geometry)
         bulk = QHBoxLayout(actions)
         bulk.setContentsMargins(0, 0, 0, 0)
@@ -792,11 +795,19 @@ class MachineRoiWorkspace(QWidget):
             ):
                 button.setText(text(key, language))
         numeric_apply = self.buttons["roi_set_rect"]
-        numeric_apply.setMinimumWidth(
-            numeric_apply.fontMetrics().horizontalAdvance(numeric_apply.text())
-            + Style.icon
-            + 2 * Style.space
-            + Style.small
+        set_button_caption(
+            numeric_apply,
+            text("roi_set_rect", language),
+            max(
+                3 * Style.touch + Style.small,
+                button_width(numeric_apply, ("roi_set_rect",)),
+            ),
+        )
+        primary = self.buttons["roi_save_apply"]
+        set_button_caption(
+            primary,
+            text("roi_save_apply", language),
+            button_width(primary, ("roi_save_apply",)),
         )
         for key, line in self.coordinates.items():
             line.setAccessibleName(text("roi_" + key.lower(), language))

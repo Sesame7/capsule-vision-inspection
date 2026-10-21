@@ -6,7 +6,7 @@ from typing import Literal
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QPushButton, QStyle, QStyleOptionButton, QWidget
 
 from vimo_demo.application.preferences import LANGUAGES as LANGUAGES
 from vimo_demo.application.preferences import Language as Language
@@ -975,10 +975,51 @@ class Style:
     radius = 10
     touch = 44
     icon = 22
+    icon_text_gap = 4
     body = 15
     title = 24
     number = 32
     minimum = (880, 720)
+
+
+def button_width(
+    button: QPushButton, keys: tuple[str, ...], *, padding: int = Style.small
+) -> int:
+    """A shared action budget from common captions, not the longest translation."""
+    button.ensurePolished()
+    return (
+        max(
+            button.fontMetrics().horizontalAdvance(text(key, language))
+            for key in keys
+            for language in ("zh", "en")
+        )
+        + 2 * Style.space
+        + padding
+        + (button.iconSize().width() + Style.small if not button.icon().isNull() else 0)
+    )
+
+
+def set_button_caption(button: QPushButton, caption: str, width: int) -> None:
+    """Keep an action's slot stable and its full meaning available to accessibility.
+
+    Callers retain their localized tooltips, including operation/error guidance.
+    """
+    button.setFixedWidth(width)
+    option = QStyleOptionButton()
+    button.initStyleOption(option)
+    available = (
+        button.style()
+        .subElementRect(QStyle.SubElement.SE_PushButtonContents, option, button)
+        .width()
+    )
+    if not button.icon().isNull():
+        available -= button.iconSize().width() + Style.icon_text_gap
+    button.setText(
+        button.fontMetrics().elidedText(
+            caption, Qt.TextElideMode.ElideRight, max(0, available)
+        )
+    )
+    button.setAccessibleName(caption)
 
 
 def apply_theme(widget: QWidget, theme: Theme) -> None:

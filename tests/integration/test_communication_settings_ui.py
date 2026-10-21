@@ -31,6 +31,7 @@ from vimo_demo.application.communication_preferences import (
     load_communication_preferences,
     save_communication_preferences,
 )
+from vimo_demo.application.preferences import LANGUAGES
 from vimo_demo.communication import FinsMemoryArea, FinsTransport
 from vimo_demo.communication.operations import (
     CommunicationRequest,
@@ -796,18 +797,11 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         page = window.communication
         panel = page.reporting_panel
         assert panel is not None
-        required = (
-            panel.minimumSizeHint().width()
-            + page.web_panel.minimumSizeHint().width()
-            + Style.space
-        )
-        initial_position = (
-            (0, 1) if page.scroll_area.viewport().width() >= required else (1, 0)
-        )
+        initial_position = (0, 1) if size[0] == 1920 else (1, 0)
         assert page.service_layout.itemAtPosition(*initial_position) is not None
         assert page.body.width() <= page.scroll_area.viewport().width()
 
-        window.resize(size[1], size[0])
+        window.resize(*((1080, 1857) if size[0] == 1920 else (1920, 1017)))
         opposite_position = (1, 0) if initial_position == (0, 1) else (0, 1)
         until(
             lambda: page.service_layout.itemAtPosition(*opposite_position) is not None
@@ -818,15 +812,16 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         assert panel.summary.text() == "ACK -- · Successful 0 · ERR 0"
         window.showMaximized()
         qapp.processEvents()
-        required = (
-            panel.minimumSizeHint().width()
-            + page.web_panel.minimumSizeHint().width()
-            + page.service_layout.horizontalSpacing()
-        )
-        wide = page.scroll_area.viewport().width() >= required
-        assert (
-            page.service_layout.itemAtPosition(*(0, 1) if wide else (1, 0)) is not None
-        )
+        # Maximization uses this platform's available geometry (offscreen/native
+        # screens differ). Either arrangement must contain both complete cards.
+        assert page.body.width() <= page.scroll_area.viewport().width()
+        if page.service_layout.itemAtPosition(0, 1) is not None:
+            assert panel.geometry().right() < page.web_panel.x()
+            assert panel.width() >= panel.sizeHint().width()
+            assert page.web_panel.width() >= page.web_panel.sizeHint().width()
+        else:
+            assert panel.width() == page.web_panel.width() == page.service_cards.width()
+            assert panel.geometry().bottom() < page.web_panel.y()
         assert panel.summary.text() == "ACK -- · Successful 0 · ERR 0"
         if size[0] == 1300:
             # Expanded controls must fit the viewport after first navigation,
@@ -844,12 +839,7 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
                     qapp.processEvents()
                     available = page.scroll_area.viewport().width()
                     assert page.body.width() <= available
-                    required = (
-                        panel.minimumSizeHint().width()
-                        + page.web_panel.minimumSizeHint().width()
-                        + Style.space
-                    )
-                    position = (0, 1) if available >= required else (1, 0)
+                    position = (0, 1) if width == 1920 else (1, 0)
                     until(
                         lambda pos=position: (
                             page.service_layout.itemAtPosition(*pos) is not None
@@ -859,7 +849,6 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
                         width,
                         language,
                         available,
-                        required,
                         page.service_cards.width(),
                         panel.minimumSizeHint(),
                         page.web_panel.minimumSizeHint(),
@@ -888,6 +877,46 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
     finally:
         close_window(window)
         delivery.detach()
+
+
+def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
+    settings_window: tuple[Startup, ProductionWindow],
+) -> None:
+    startup, window = settings_window
+    page = window.communication
+    panel = page.reporting_panel
+    assert panel is not None
+    before = startup.application.snapshot()
+    selected = panel.controller.reporting_selection()
+    buttons = (
+        panel.enabled,
+        page.web_panel.power,
+        page.save_settings,
+        page.watch_editor_button,
+        page.watch_remove,
+        page.watch_once,
+        page.watch_auto,
+    )
+    sizes = tuple(button.size() for button in buttons)
+    for language in LANGUAGES:
+        window.set_language(language)
+        QApplication.processEvents()
+        assert tuple(button.size() for button in buttons) == sizes
+        assert panel.enabled.size() == page.web_panel.power.size()
+        assert (
+            page.watch_remove.size() == page.watch_once.size() == page.watch_auto.size()
+        )
+        for button in buttons:
+            full = button.accessibleName()
+            assert full in button.toolTip()
+            assert button.text() == full or (
+                button.text().endswith("…") and full.startswith(button.text()[:-1])
+            )
+        panel.enabled.click()
+        assert panel.enabled.size() == sizes[0]
+        assert panel.controller.reporting_selection() == selected
+        panel.enabled.click()
+    assert startup.application.snapshot() == before and not page.dirty
 
 
 def test_reporting_power_edits_only_draft_until_save_or_discard(

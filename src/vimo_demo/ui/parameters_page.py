@@ -66,7 +66,9 @@ from .production_bridge import QtProductionBridge, RecipeChoice
 from .production_style import (
     Language,
     Style,
+    button_width,
     production_icon,
+    set_button_caption,
     shell_icon,
     text,
     theme_colors,
@@ -532,6 +534,12 @@ class ParametersPage(QWidget):
             button.setText(text(key, language) if key == "save_apply" else "")
             button.setToolTip(text(key, language))
             button.setAccessibleName(text(key, language))
+        primary = self.buttons["save_apply"]
+        set_button_caption(
+            primary,
+            text("save_apply", language),
+            button_width(primary, ("save_apply",)),
+        )
         for key, label in self.labels.items():
             label.setText(text(key, language))
         for key, line in self.metadata.items():
