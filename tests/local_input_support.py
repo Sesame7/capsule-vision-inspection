@@ -1,5 +1,6 @@
 """Qt-independent synthetic input files shared by local composition tests."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -15,7 +16,10 @@ from vimo_demo.configuration import (
 )
 
 
-def input_files(folder: Path) -> tuple[Path, Path, Path, tuple[Path, ...]]:
+def input_files(
+    folder: Path, *, camera_count: int = 6
+) -> tuple[Path, Path, Path, tuple[Path, ...]]:
+    assert camera_count in (5, 6)
     config = prepared(folder).configuration
     model, machine, recipe = (
         folder / name for name in ("model.json", "machine.json", "local.recipe.json")
@@ -23,11 +27,13 @@ def input_files(folder: Path) -> tuple[Path, Path, Path, tuple[Path, ...]]:
     save_model_definition(model, config.model)
     save_machine_layout(
         machine,
-        MachineLayoutDefinition(config.layout),
+        MachineLayoutDefinition(
+            replace(config.layout, cameras=config.layout.cameras[:camera_count])
+        ),
     )
     save_recipe(recipe, RecipeDefinition("local", "Local test"))
     paths: list[Path] = []
-    for index in range(6):
+    for index in range(camera_count):
         path = folder / f"图像-{index}.png"
         ok, encoded = cv2.imencode(
             ".png", np.full((20, 60, 3), index + 1, dtype=np.uint8)

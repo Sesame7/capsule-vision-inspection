@@ -29,15 +29,15 @@ the intended commissioned endpoint and operation.
 ## First-station registers
 
 `first_station_reject_words()` requires exactly one explicit business status for
-every ChannelId 1..36. Missing/duplicate/out-of-range/bool identities or invalid
+every ChannelId 1..30 or 1..36. Missing/duplicate/out-of-range/bool identities or invalid
 statuses fail before I/O. Arrival order and presentation slots never determine bits.
 
 | Register | Meaning |
 | --- | --- |
 | W49 | Unsigned attempted-result sequence, wrapping 65535 -> 0 |
 | W50 bits 0..15 | CH1..CH16 reject bits |
-| W51 bits 0..15 | CH17..CH32 reject bits |
-| W52 bits 0..3 | CH33..CH36 reject bits; bits 4..15 always zero |
+| W51 | 30 channels: CH17..CH30 in bits 0..13, bits 14..15 zero; 36 channels: CH17..CH32 in bits 0..15 |
+| W52 | 36 channels only: CH33..CH36 in bits 0..3, bits 4..15 zero |
 
 Business OK maps to 0; NG, EMPTY and UNKNOWN map to 1. This is one inspection
 pass's communication projection, not physical product tracking or a new counter.
@@ -46,7 +46,8 @@ Technical status and product judgment remain separate inspection data.
 `FirstStationReporter` borrows a client and one serial owner submits:
 
 1. Validate the entire projection and reserve the attempt sequence.
-2. Write all three bitmap words to W50–W52 in one request.
+2. Write exactly two bitmap words W50–W51 for 30 channels, or three W50–W52
+   for 36, in one request. A 30-channel submission never writes or clears W52.
 3. After its successful validated ACK, write the reserved W49 sequence.
 4. Return a commit only after the W49 ACK. Submission performs no readback.
 
@@ -74,7 +75,7 @@ a reporting client or sends before Start; warm-up still sends nothing. Productio
 settings remain locked during STARTING/RUNNING/STOPPING and FAULT. Old ACKs,
 counts and connectivity are never restored as live observations.
 
-`FirstStationReportingWorker` receives compact generation/CycleId and 36 scalar
+`FirstStationReportingWorker` receives compact generation/CycleId and 30 or 36 scalar
 statuses, never image/result histories. One non-daemon thread owns its connection,
 with a bounded FIFO (default eight pending plus one active) and bounded observations.
 Submission/settling is separate from terminal inspection and accounting. Socket
@@ -86,7 +87,7 @@ Stop. There is no retry loop. New-cycle reconnect may recover transport; failure
 does not reinterpret old results or claim their delivery.
 
 Basler reports attributable terminal cycles, including partial timeout/shutdown
-results with six camera results and at least one observed frame. Missing/unfinished
+results with all five or six configured camera results and at least one observed frame. Missing/unfinished
 camera channels are projected conservatively as UNKNOWN/reject; completed camera
 judgments survive. No observed cycle means no report. The source's ambiguity fence
 is checked at admission and again after bitmap ACK, before W49. A known ambiguous

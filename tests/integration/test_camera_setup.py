@@ -20,19 +20,27 @@ from tests.local_input_support import input_files
 from tests.qt_support import ensure_test_fonts, until
 from tests.unit.test_folder_replay import folders, write_image
 
-from vimo_demo.application import ApplicationState, ProductionCounters
+from vimo_demo.application import (
+    ApplicationState,
+    ApplicationStateError,
+    ProductionCounters,
+)
 from vimo_demo.application.basler import BaslerDevice
 from vimo_demo.application.basler_connection import ConnectedCamera, ConnectionState
 from vimo_demo.application.folder_replay import FolderSourceError, decode_image
 from vimo_demo.configuration import (
+    ChannelOverride,
     ConfigurationIOError,
+    RecipeDefinition,
     load_camera_sources,
     load_machine_layout,
     save_camera_sources,
     save_machine_layout,
+    save_recipe,
 )
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, Frame, FrameId
+from vimo_demo.inspection.production import ChannelId
 from vimo_demo.ui import roi_editor
 from vimo_demo.ui.inference_bridge import FutureDelivery
 from vimo_demo.ui.local_production import SourceNotifications, compose
@@ -188,6 +196,219 @@ def test_source_change_invalidates_reference_no_geometry_repair(
     assert "CAM1" in window.event_label.toolTip()
 
 
+def test_confirmed_camera_count_edit_save_discard_and_template_restoration(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, workspace, _ = camera_screen
+    sources = workspace.sources
+    assert sources is not None and workspace.draft.path is not None
+    original = workspace.draft.saved
+    workspace.camera_cards[CameraId("CAM6")].click()
+    until(lambda: not window.parameters.busy)
+    button = workspace.camera_cards[CameraId("CAM6")].configuration
+    button.click()
+    dialog = next(box for box in workspace.findChildren(QMessageBox) if box.isVisible())
+    dialog.reject()
+    assert workspace.draft.definition == original and not sources.dirty
+    button.click()
+    dialog = next(box for box in workspace.findChildren(QMessageBox) if box.isVisible())
+    remove = next(
+        b
+        for b in dialog.buttons()
+        if dialog.buttonRole(b) is QMessageBox.ButtonRole.DestructiveRole
+    )
+    remove.click()
+    until(lambda: not window.parameters.busy)
+    assert workspace.camera == "CAM1" and workspace.draft.dirty and sources.dirty
+    assert len(workspace.camera_cards) == 6
+    assert not workspace.camera_cards[CameraId("CAM6")].isCheckable()
+    assert workspace.camera_cards[CameraId("CAM6")].summary == text(
+        "source_unconfigured", window.language
+    )
+    dark_plus = button.icon().pixmap(24, 24).toImage()
+    window.set_theme("light")
+    assert button.icon().pixmap(24, 24).toImage() != dark_plus
+    window.set_theme("dark")
+    assert button.icon().pixmap(24, 24).toImage() == dark_plus
+    assert (
+        len(window.cards) == 6 and load_machine_layout(workspace.draft.path) == original
+    )
+    confirm_vision_discard(workspace)
+    until(lambda: not window.parameters.busy)
+    assert workspace.draft.definition == original and not sources.dirty
+    workspace.change_camera_configuration()
+    sources.set_serial(CameraId("CAM5"), "1005")
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert not workspace.draft.dirty and not sources.dirty
+    assert len(window.cards) == len(window.bridge.frames.cameras) == 5
+    assert (
+        load_machine_layout(workspace.draft.path).layout.cameras
+        == original.layout.cameras[:5]
+    )
+    assert len(load_camera_sources(sources.path).cameras) == 5
+    before = window.bridge.application.snapshot()
+    assert before.active is None and not before.counters.cycles_started
+
+    def no_file_selection(*_args: object, **_kwargs: object) -> tuple[str, str]:
+        raise AssertionError("CAM6 initialization must not select a file")
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", no_file_selection)
+    workspace.camera_cards[CameraId("CAM5")].click()
+    until(lambda: not window.parameters.busy)
+    workspace.coordinates["X"].setText("41")
+    workspace.apply_geometry()
+    five = workspace.draft.definition
+    button.click()
+    until(lambda: not window.parameters.busy)
+    assert workspace.draft.definition.layout.cameras[:5] == five.layout.cameras
+    cam5 = workspace.draft.camera(CameraId("CAM5"))
+    cam6 = workspace.draft.camera(CameraId("CAM6"))
+    assert cam5.slots[0].rect.x == cam6.slots[0].rect.x == 41
+    assert [s.channel_id for s in cam6.slots] == list(range(31, 37))
+    assert all(
+        a.rect == b.rect and a.rect is not b.rect
+        for a, b in zip(cam5.slots, cam6.slots, strict=True)
+    )
+    source = sources.definition.camera(CameraId("CAM6"))
+    assert source.folder == source.basler_serial == ""
+    dark_minus = button.icon().pixmap(24, 24).toImage()
+    window.set_theme("light")
+    assert button.icon().pixmap(24, 24).toImage() != dark_minus
+    window.set_theme("dark")
+    assert button.icon().pixmap(24, 24).toImage() == dark_minus
+    workspace.camera_cards[CameraId("CAM6")].click()
+    until(lambda: not window.parameters.busy)
+    workspace.coordinates["X"].setText("2")
+    workspace.apply_geometry()
+    assert workspace.draft.camera(CameraId("CAM5")) == cam5
+    assert workspace.draft.camera(CameraId("CAM6")).slots[0].rect.x == 2
+    assert len(load_machine_layout(workspace.draft.path).layout.cameras) == 5
+    confirm_vision_discard(workspace)
+    until(lambda: not window.parameters.busy)
+    assert workspace.draft.definition.layout.cameras == original.layout.cameras[:5]
+    assert not sources.dirty and not workspace.draft.dirty
+    assert (
+        workspace.camera == "CAM1"
+        and not workspace.camera_cards[CameraId("CAM6")].isCheckable()
+    )
+    button.click()
+    assert workspace.draft.camera(CameraId("CAM6")).slots[0].rect.x == 0
+    workspace.source_edited(sources.saved.cameras[0].folder, CameraId("CAM6"))
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert len(window.cards) == len(window.bridge.frames.cameras) == 6
+    assert not workspace.draft.dirty and not sources.dirty
+    assert window.bridge.application.snapshot().counters == before.counters
+    saved = load_machine_layout(workspace.draft.path)
+    window.navigate(0)
+    until(lambda: window.parameters.roi_workspace is None)
+    window.navigate(4)
+    until(lambda: not window.parameters.busy)
+    reopened = window.parameters.roi_workspace
+    assert reopened is not None and reopened.draft.definition == saved
+    assert reopened.sources is not None and not reopened.sources.dirty
+    assert len(reopened.sources.saved.cameras) == 6
+    assert window.bridge.application.snapshot().active is None
+
+
+@pytest.mark.parametrize("mode", ["folder", "basler"])
+def test_cam6_template_needs_its_own_source_and_valid_image_bounds(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    window, workspace, engine = camera_screen
+    sources = workspace.sources
+    assert sources is not None and workspace.draft.path is not None
+    workspace.change_camera_configuration()
+    if mode == "basler":
+        for index, row in enumerate(sources.definition.cameras, 1):
+            sources.set_serial(row.camera_id, str(1000 + index))
+        workspace.set_source_mode("basler")
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert len(window.cards) == 5 and not sources.dirty
+    saved_machine, saved_sources = (
+        workspace.draft.path.read_bytes(),
+        sources.path.read_bytes(),
+    )
+    before = window.bridge.application.snapshot()
+    workspace.camera_cards[CameraId("CAM6")].configuration.click()
+    assert sources.definition.camera(CameraId("CAM6")).folder == ""
+    assert sources.definition.camera(CameraId("CAM6")).basler_serial == ""
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert workspace.vision_dirty and window.event_label.text()
+    assert workspace.draft.path.read_bytes() == saved_machine
+    assert sources.path.read_bytes() == saved_sources
+    assert window.bridge.application.snapshot() == before
+    assert len(window.cards) == 5 and not engine.calls
+    if mode == "folder":
+        small = tmp_path / "small-cam6"
+        small.mkdir()
+        write_image(small / "reference.png", 9, (8, 60))
+        workspace.source_edited(str(small), CameraId("CAM6"))
+        workspace.camera_cards[CameraId("CAM6")].click()
+        until(lambda: not window.parameters.busy)
+        assert workspace.frame is not None and workspace.frame.image.shape == (8, 60, 3)
+        geometry = workspace.draft.definition
+        workspace.save_and_apply()
+        until(lambda: not window.parameters.busy)
+        assert (
+            workspace.draft.definition == geometry
+        )  # No clamping to the smaller image.
+        assert workspace.draft.path.read_bytes() == saved_machine
+        assert sources.path.read_bytes() == saved_sources
+        assert window.bridge.application.snapshot() == before
+        assert "CAM6" in window.event_label.toolTip()
+        confirm_vision_discard(workspace)
+        until(lambda: not window.parameters.busy)
+        assert workspace.camera == "CAM1" and not workspace.vision_dirty
+    else:
+        sources.set_serial(CameraId("CAM6"), "1006")
+        workspace.save_and_apply()
+        until(lambda: not window.parameters.busy)
+        assert len(window.cards) == 6 and not workspace.vision_dirty
+        with pytest.raises(ApplicationStateError, match="Connect"):
+            window.bridge.application.start()
+        assert window.bridge.application.snapshot().state is ApplicationState.READY
+        assert window.bridge.application.snapshot().active is None and not engine.calls
+        assert window.bridge.application.snapshot().counters == before.counters
+
+
+def test_camera_reduction_rejects_inactive_recipe_overrides_before_writing(
+    camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
+    tmp_path: Path,
+) -> None:
+    window, workspace, _ = camera_screen
+    sources = workspace.sources
+    assert sources is not None and workspace.draft.path is not None
+    save_recipe(
+        tmp_path / "other.recipe.json",
+        RecipeDefinition(
+            "other", "Other", channel_overrides=(ChannelOverride(ChannelId(31)),)
+        ),
+    )
+    machine_bytes, source_bytes = (
+        workspace.draft.path.read_bytes(),
+        sources.path.read_bytes(),
+    )
+    workspace.change_camera_configuration()
+    workspace.save_and_apply()
+    until(lambda: not window.parameters.busy)
+    assert workspace.draft.dirty and sources.dirty
+    assert (
+        workspace.draft.path.read_bytes() == machine_bytes
+        and sources.path.read_bytes() == source_bytes
+    )
+    assert (
+        "31" in window.event_label.toolTip() and "other" in window.event_label.toolTip()
+    )
+    assert len(window.cards) == 6
+
+
 @pytest.mark.parametrize("bad", ["empty", "corrupt"])
 def test_reference_error_no_substitution(
     camera_screen: tuple[ProductionWindow, MachineRoiWorkspace, ControlledEngine],
@@ -252,6 +473,9 @@ def test_save_reload_partial_failure_and_running_guards(
     assert not workspace.loop.isEnabled() and not workspace.editable()
     assert all(not button.isEnabled() for button in workspace.source_modes.values())
     assert not workspace.playback_options.isEnabled() and not workspace.fps.isEnabled()
+    assert not workspace.camera_cards[CameraId("CAM6")].configuration.isEnabled()
+    workspace.change_camera_configuration()
+    assert len(workspace.draft.definition.layout.cameras) == 6
     assert all(
         not card.folder.isEnabled()
         and not card.device.isEnabled()

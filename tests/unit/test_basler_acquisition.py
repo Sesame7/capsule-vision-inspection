@@ -574,8 +574,14 @@ def test_invalid_timeout_before_sdk_import(timeout: float) -> None:
         BaslerAcquisitionSource(SERIALS, timeout=timeout)
 
 
-def test_explicit_unique_six_identities_required() -> None:
-    for serials in (SERIALS[:5], (*SERIALS[:5], SERIALS[0]), (*SERIALS[:5], " CAM6")):
+def test_explicit_unique_five_or_six_identities_required() -> None:
+    assert BaslerAcquisitionSource(SERIALS[:5]).serials == SERIALS[:5]
+    for serials in (
+        SERIALS[:4],
+        (*SERIALS, "7"),
+        (*SERIALS[:5], SERIALS[0]),
+        (*SERIALS[:5], " CAM6"),
+    ):
         with pytest.raises(ValueError):
             BaslerAcquisitionSource(serials)
 

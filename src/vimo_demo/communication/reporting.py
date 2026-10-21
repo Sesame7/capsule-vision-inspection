@@ -95,7 +95,7 @@ class FirstStationReport:
 
     identity: ReportIdentity
     statuses: tuple[tuple[ChannelId, ChannelBusinessStatus], ...]
-    reject_words: tuple[int, int, int] = field(init=False)
+    reject_words: tuple[int, int] | tuple[int, int, int] = field(init=False)
     result_ready_at: float | None = None
 
     def __post_init__(self) -> None:
@@ -107,9 +107,11 @@ class FirstStationReport:
     def from_result(
         cls, generation: int, result: ProductionInspectionResult
     ) -> FirstStationReport:
-        if len(result.cameras) != 6 or not any(c.frame_id for c in result.cameras):
+        if len(result.cameras) not in (5, 6) or not any(
+            c.frame_id for c in result.cameras
+        ):
             raise ValueError(
-                "Reporting requires an observed cycle and six camera results"
+                "Reporting requires an observed cycle and five or six camera results"
             )
         return cls(
             ReportIdentity(generation, result.cycle_id),
@@ -172,7 +174,7 @@ class ReportObservation:
     identity: ReportIdentity
     outcome: ReportOutcome
     sequence: int | None = None
-    reject_words: tuple[int, int, int] | None = None
+    reject_words: tuple[int, int] | tuple[int, int, int] | None = None
     stage: ReportStage | None = None
     issue: ReportingIssue | None = None
     duration_ms: float | None = None

@@ -82,12 +82,12 @@ class CameraSources:
         if self.mode == "basler":
             serials = tuple(c.basler_serial for c in self.cameras)
             if (
-                len(serials) != 6
+                len(serials) not in (5, 6)
                 or any(not s for s in serials)
-                or len(set(serials)) != 6
+                or len(set(serials)) != len(serials)
             ):
                 raise ConfigurationError(
-                    "Basler mode requires six distinct nonempty serials"
+                    "Basler mode requires five or six distinct nonempty serials"
                 )
 
     def basler_serials(self, cameras: tuple[CameraId, ...]) -> tuple[str, ...]:

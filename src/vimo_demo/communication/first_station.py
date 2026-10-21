@@ -31,8 +31,8 @@ def _rejects(status: object) -> bool:
 
 def first_station_reject_words(
     statuses: Iterable[tuple[ChannelId, ChannelBusinessStatus]],
-) -> tuple[int, int, int]:
-    """Project exactly CH1..36 by identity; only business OK clears a bit.
+) -> tuple[int, int] | tuple[int, int, int]:
+    """Project exactly CH1..30 or CH1..36; only business OK clears a bit.
 
     Import the domain enum only when projecting. Low-level FINS/CLI use remains
     standard-library-only, without importing the inspection image stack.
@@ -47,9 +47,12 @@ def first_station_reject_words(
         if _rejects(status):
             word, bit = divmod(channel_id - 1, 16)
             words[word] |= 1 << bit
-    missing = sorted(set(range(1, 37)) - seen)
+    expected = 30 if len(seen) == 30 else 36
+    missing = sorted(set(range(1, expected + 1)) - seen)
     if missing:
         raise ValueError(f"Missing ChannelIds: {missing}")
+    if expected == 30:
+        return words[0], words[1]
     return words[0], words[1], words[2]
 
 
@@ -63,7 +66,7 @@ class FirstStationCommit:
     """Both FINS writes acknowledged; does not assert PLC scan consumption."""
 
     sequence: int
-    reject_words: tuple[int, int, int]
+    reject_words: tuple[int, int] | tuple[int, int, int]
     bitmap_ms: float = 0.0
     sequence_ms: float = 0.0
 
@@ -75,7 +78,7 @@ class FirstStationSubmissionError(FinsError):
         self,
         stage: SubmissionStage,
         sequence: int,
-        reject_words: tuple[int, int, int],
+        reject_words: tuple[int, int] | tuple[int, int, int],
         cause: FinsError,
     ) -> None:
         self.stage = stage

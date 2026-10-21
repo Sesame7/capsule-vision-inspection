@@ -32,7 +32,8 @@ CAMERAS = tuple(CameraId(f"CAM{i + 1}") for i in range(6))
 
 
 class Backend:
-    def __init__(self) -> None:
+    def __init__(self, serials: tuple[str, ...] = SERIALS) -> None:
+        self.serials = serials
         self.lock = Lock()
         self.queues: dict[str, deque[tuple[AcquisitionMetadata, NDArray[np.uint8]]]] = {
             s: deque() for s in SERIALS
@@ -45,14 +46,14 @@ class Backend:
         self.release.set()
 
     def inventory(self, serials: tuple[str, ...]) -> None:
-        assert serials == SERIALS
+        assert serials == self.serials
 
     def prepare(self, serial: str) -> None:
         self.prepared.append(serial)
 
     def arm(self) -> tuple[CameraReadiness, ...]:
         self.arms += 1
-        return tuple(CameraReadiness(s, True, True, monotonic()) for s in SERIALS)
+        return tuple(CameraReadiness(s, True, True, monotonic()) for s in self.serials)
 
     def available(self, serial: str, timeout_ms: int) -> bool:
         with self.lock:
@@ -103,7 +104,7 @@ class Backend:
     def cleanup(self) -> tuple[CameraCleanup, ...]:
         self.cleaned = True
         return tuple(
-            CameraCleanup(s, True, not self.unsafe, True, True) for s in SERIALS
+            CameraCleanup(s, True, not self.unsafe, True, True) for s in self.serials
         )
 
 
@@ -123,10 +124,14 @@ class Clock:
 
 class Run:
     def __init__(
-        self, monkeypatch: pytest.MonkeyPatch, *, controlled: bool = False
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        controlled: bool = False,
+        camera_count: int = 6,
     ) -> None:
         self.backend, self.clock, self.stop, self.armed = (
-            Backend(),
+            Backend(SERIALS[:camera_count]),
             Clock(),
             Event(),
             Event(),
@@ -141,7 +146,9 @@ class Run:
             return self.backend
 
         monkeypatch.setattr(_basler_sdk, "PylonBackend", factory)
-        self.source = ContinuousBaslerSource(CAMERAS, SERIALS, clock=self.clock)
+        self.source = ContinuousBaslerSource(
+            CAMERAS[:camera_count], SERIALS[:camera_count], clock=self.clock
+        )
         self.control = BaslerAdmissionControl(1) if controlled else None
         self.source.control = self.control
         self.raw_received = tuple(Event() for _ in range(36))
@@ -161,10 +168,9 @@ class Run:
             assert frame.image.flags.owndata and not frame.image.flags.writeable
             self.frames.append(frame)
             self.received[len(self.frames) - 1].set()
-            if (
-                self.control is not None
-                and sum(f.id.cycle_id == frame.id.cycle_id for f in self.frames) == 6
-            ):
+            if self.control is not None and sum(
+                f.id.cycle_id == frame.id.cycle_id for f in self.frames
+            ) == len(self.source.serials):
                 self.control.inspected(frame.id.cycle_id)
                 self.control.reported(frame.id.cycle_id)
 
@@ -236,10 +242,12 @@ def test_stop_during_preparation_checks_only_owned_devices(
     assert not starts and not frames and not armed and source.frames == 0
 
 
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_idle_armed_stop_finishes_without_a_frame_or_cycle(
     monkeypatch: pytest.MonkeyPatch,
+    camera_count: int,
 ) -> None:
-    run = Run(monkeypatch)
+    run = Run(monkeypatch, camera_count=camera_count)
     try:
         run.start()
         assert run.backend.waited.wait(WAIT)
@@ -290,18 +298,21 @@ def test_idle_external_frames_early_admission_and_persistent_ownership(
     assert run.source.cleanup_safe and run.source.frames == 18
 
 
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_missing_frame_times_out_only_after_observed_cycle(
     monkeypatch: pytest.MonkeyPatch,
+    camera_count: int,
 ) -> None:
-    run = Run(monkeypatch)
+    run = Run(monkeypatch, camera_count=camera_count)
     try:
         run.start()
-        run.backend.expose(1, (0, 1, 3, 4, 5))
-        assert run.received[4].wait(WAIT)
+        run.backend.expose(1, tuple(i for i in range(camera_count) if i != 2))
+        assert run.received[camera_count - 2].wait(WAIT)
         run.clock.advance(0.101)
         with pytest.raises(TimeoutError, match="Missing camera"):
             run.done.result(WAIT)
-        assert run.starts == [1] and len(run.frames) == 5
+        assert run.starts == [1] and len(run.frames) == camera_count - 1
+        assert run.source.cameras == CAMERAS[:camera_count]
         assert run.source.attributable(CycleId(1))
     finally:
         run.close()
@@ -373,10 +384,12 @@ def test_unsafe_cleanup_remains_visible(monkeypatch: pytest.MonkeyPatch) -> None
     assert not run.source.cleanup_safe
 
 
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_pause_drains_frames_step_once_and_resume_preserve_sdk_identity(
     monkeypatch: pytest.MonkeyPatch,
+    camera_count: int,
 ) -> None:
-    run = Run(monkeypatch, controlled=True)
+    run = Run(monkeypatch, controlled=True, camera_count=camera_count)
     control = run.control
     assert control is not None
     try:
@@ -384,25 +397,28 @@ def test_pause_drains_frames_step_once_and_resume_preserve_sdk_identity(
         control.pause().result(WAIT)
         assert control.snapshot().state is ReplayState.PAUSED
         for ordinal in (1, 2, 3):
-            run.backend.expose(ordinal)
-            assert run.raw_received[ordinal * 6 - 1].wait(WAIT)
+            run.backend.expose(ordinal, tuple(range(camera_count)))
+            assert run.raw_received[ordinal * camera_count - 1].wait(WAIT)
         assert run.source.frames == 0 and not run.starts
-        assert control.snapshot().discarded_frames == 18
+        assert control.snapshot().discarded_frames == 3 * camera_count
         step = control.step()
         # Wait for the source's empty-queue fence, not a time-based trigger guess.
         run.backend.waited.clear()
         assert run.backend.waited.wait(WAIT)
         assert control.snapshot().admission_armed
-        run.backend.expose(4)
+        run.backend.expose(4, tuple(range(camera_count)))
         step.result(WAIT)
-        assert run.starts == [4] and [f.id.sequence for f in run.frames] == [4] * 6
+        assert (
+            run.starts == [4]
+            and [f.id.sequence for f in run.frames] == [4] * camera_count
+        )
         assert control.snapshot().state is ReplayState.PAUSED
-        run.backend.expose(5)
-        assert run.raw_received[29].wait(WAIT)
-        assert run.starts == [4] and run.source.frames == 6
+        run.backend.expose(5, tuple(range(camera_count)))
+        assert run.raw_received[5 * camera_count - 1].wait(WAIT)
+        assert run.starts == [4] and run.source.frames == camera_count
         control.resume().result(WAIT)
-        run.backend.expose(6)
-        assert run.received[11].wait(WAIT)
+        run.backend.expose(6, tuple(range(camera_count)))
+        assert run.received[2 * camera_count - 1].wait(WAIT)
         assert run.starts == [4, 6]
         assert run.backend.arms == 1
     finally:

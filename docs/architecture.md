@@ -91,6 +91,14 @@ Captured timestamps are source metadata, not a proximity-based association rule.
 Configured camera/slot order determines output order regardless of frame arrival.
 Duplicate/unknown/late frames fail explicitly; finalized cycles never reopen.
 
+Normal persisted machines support exactly CAM1–CAM5/CH1–CH30 or
+CAM1–CAM6/CH1–CH36, six explicit slots per camera. Saved/applied MachineLayout
+defines the set; CameraSources matches by identity. A missing configured camera
+remains a missing result, never an automatic count reduction. One Folder/Basler
+runtime serves both configurations. Count edits require stopped/disconnected
+sources and take session effect only on successful Start; existing active identity
+and cumulative counters are retained until their ordinary lifecycle/reset actions.
+
 `CycleCollector` has one serialized runtime owner. Admission acknowledgements,
 worker task Futures and cycle terminal results are different observations; none
 implicitly returns Frame storage. Every admitted cycle gets one terminal result
@@ -110,7 +118,7 @@ PAUSED at the safe boundary, and Step produces one formal result. This is still
 application RUNNING, with editing locks retained. The Stop control requests actual
 shutdown.
 
-Vision's explicit Connect all opens/arms six saved/applied Basler mappings on one
+Vision's explicit Connect all opens/arms all five or six saved/applied Basler mappings on one
 application-owned SDK thread. Connection survives page/Recipe/Batch changes and
 Production Stop. CONNECTED/ARMED is independent of inspection RUNNING; there is no
 automatic connection/retry. Idle connected frames are retrieved, validated and
@@ -134,7 +142,7 @@ metadata stop the source; no shifted reassociation or software-trigger fallback.
 These counters are **not independent hardware trigger IDs**: undetectable missed
 electrical triggers remain a commissioning limit.
 
-Normal Basler Pause closes new inspection admission while keeping all six cameras
+Normal Basler Pause closes new inspection admission while keeping all configured cameras
 grabbing and the same worker/engine alive. The SDK owner continues retrieving,
 validating and releasing paused frames without publishing images, cycles, counters
 or reports. PAUSING becomes PAUSED only after the admitted capture boundary,
@@ -380,8 +388,12 @@ explicit and does not change saved settings or Production state.
 
 It keeps one current publication plus a replacement being built; JPEGs are at
 most 640 pixels on the longest side, quality 70, with unchanged frame bytes reused.
-Application/display snapshots are sampled separately, not atomic six-camera capture.
+Application/display snapshots are sampled separately, not atomic multi-camera capture.
 Publisher ID, revision and source identities prevent old bytes/new evidence aliasing.
+Applying a changed camera set clears retained display pixels and advances its
+revision; the existing publisher follows that configured set without another Web
+owner. History stores each cycle's own five/six-camera identities and order, so
+older 36-channel records remain unchanged beside new 30-channel records.
 
 Default server/browser interval is 500 ms (saved Communication preferences also
 allow 1000/2000 ms; Save is separate from explicit runtime application). The publisher

@@ -17,6 +17,15 @@ from .translations import EXTRA_STRINGS
 type Theme = Literal["dark", "light"]
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "vision_remove_cam6": ("移除 CAM6 配置", "Remove CAM6 configuration"),
+    "vision_restore_cam6": (
+        "从 CAM5 ROI 模板初始化 CAM6；需校准并配置来源",
+        "Initialize CAM6 from CAM5 ROI template; calibrate and assign a source",
+    ),
+    "vision_remove_cam6_question": (
+        "移除草稿中的 CAM6 几何和来源配置？保存并应用后生效；不会自动保留备份。",
+        "Remove CAM6 geometry and source assignment from this draft? Save/apply makes it effective; no backup is created automatically.",
+    ),
     "interface_language": ("界面语言", "Interface language"),
     "theme_light": ("切换浅色主题", "Switch to light theme"),
     "theme_dark": ("切换深色主题", "Switch to dark theme"),
@@ -448,8 +457,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Configured serial only; connection status has not been checked.",
     ),
     "source_mapping_hint": (
-        "按实际接线明确分配六台相机。刷新只读取设备信息，不打开相机；选择仅更新草稿。",
-        "Assign six cameras explicitly by physical wiring. Refresh reads device info only; selection updates the draft only.",
+        "按实际接线明确分配已配置的相机。刷新只读取设备信息，不打开相机；选择仅更新草稿。",
+        "Assign configured cameras explicitly by physical wiring. Refresh reads device info only; selection updates the draft only.",
     ),
     "source_discover": ("刷新设备", "Refresh devices"),
     "source_discovering": ("正在读取设备信息…", "Reading device information…"),
@@ -483,13 +492,13 @@ STRINGS: dict[str, tuple[str, str]] = {
     "source_unconfigured": ("未配置", "Unconfigured"),
     "source_not_discovered": ("未发现", "Not discovered"),
     "source_mode_tip": (
-        "六台相机统一使用此模式；切换只修改草稿，保存并应用后生效。",
-        "One mode for all six cameras; changes edit the draft until Save and apply.",
+        "已配置的相机统一使用此模式；切换只修改草稿，保存并应用后生效。",
+        "One mode for all configured cameras; changes edit the draft until Save and apply.",
     ),
     "source_serial": ("相机序列号", "Camera serial"),
     "source_serial_tip": (
-        "选择已发现的设备；保留未发现的已存映射，不自动分配。Basler 需要六台不同设备。",
-        "Select a discovered device; undiscovered saved mappings are retained, never assigned automatically. Basler requires six distinct devices.",
+        "选择已发现的设备；保留未发现的已存映射，不自动分配。Basler 每台已配置相机需对应不同设备。",
+        "Select a discovered device; undiscovered saved mappings are retained, never assigned automatically. Each configured camera requires a distinct Basler device.",
     ),
     "basler_preparing": (
         "Basler 准备中；尚未就绪，请勿触发",

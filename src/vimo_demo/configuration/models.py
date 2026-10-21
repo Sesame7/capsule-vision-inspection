@@ -230,6 +230,11 @@ class MachineLayoutDefinition:
 
     def __post_init__(self) -> None:
         version(self.schema_version)
+        count = len(self.layout.cameras)
+        if count not in (5, 6) or set(self.layout.camera_ids) != {
+            f"CAM{i}" for i in range(1, count + 1)
+        }:
+            raise ConfigurationError("Machine requires CAM1–CAM5 or CAM1–CAM6")
         for camera in self.layout.cameras:
             text(camera.camera_id, "camera_id")
 

@@ -87,7 +87,7 @@ class ProductionWindow(QMainWindow):
     ) -> None:
         super().__init__()
         if (
-            len(bridge.frames.cameras) != 6
+            len(bridge.frames.cameras) not in (5, 6)
             or any(
                 c.prepared.configuration.layout.camera_ids != bridge.frames.cameras
                 for c in choices
@@ -95,7 +95,7 @@ class ProductionWindow(QMainWindow):
             or (layout is not None and layout.camera_ids != bridge.frames.cameras)
         ):
             raise ValueError(
-                "Production screen requires six consistent camera identities"
+                "Production screen requires five or six consistent camera identities"
             )
         self.bridge = bridge
         bridge.setParent(self)
@@ -366,7 +366,9 @@ class ProductionWindow(QMainWindow):
         for card in self.cards:
             self.grid.removeWidget(card)
         for i in range(3):
-            self.grid.setRowStretch(i, 1 if i < 6 // columns else 0)
+            self.grid.setRowStretch(
+                i, 1 if i < (len(self.cards) + columns - 1) // columns else 0
+            )
             self.grid.setColumnStretch(i, 1 if i < columns else 0)
         for index, card in enumerate(self.cards):
             self.grid.addWidget(card, index // columns, index % columns)
@@ -669,6 +671,18 @@ class ProductionWindow(QMainWindow):
         ]
         choices.append(choice)
         self.choices = tuple(choices)
+        layouts = choice.prepared.configuration.layout.cameras
+        if tuple(card.camera_layout.camera_id for card in self.cards) != tuple(
+            camera.camera_id for camera in layouts
+        ):
+            self._frames.clear()
+            for card in self.cards:
+                self.grid.removeWidget(card)
+                card.hide()
+                card.deleteLater()
+            self.cards = tuple(CameraCard(camera) for camera in layouts)
+            self._columns = 0
+            self._arrange()
         # Candidate preparation does not verify acquisition or repair app.json.
         self._retain_configuration_feedback(
             ("startup_source_unavailable", "startup_language", "startup_preferences")

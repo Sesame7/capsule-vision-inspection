@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from contextlib import ExitStack
+from dataclasses import replace
 from threading import enumerate as threads
 from threading import get_ident
 
@@ -22,8 +23,17 @@ from vimo_demo.communication.reporting import (
 )
 
 
-def report(cycle: int) -> FirstStationReport:
-    return FirstStationReport.from_result(7, mixed_result(cycle))
+def report(cycle: int, camera_count: int = 6) -> FirstStationReport:
+    result = mixed_result(cycle)
+    cameras = result.cameras[:camera_count]
+    return FirstStationReport.from_result(
+        7,
+        replace(
+            result,
+            layout=replace(result.layout, cameras=tuple(c.layout for c in cameras)),
+            cameras=cameras,
+        ),
+    )
 
 
 def stop(worker: FirstStationReportingWorker) -> None:
@@ -33,8 +43,10 @@ def stop(worker: FirstStationReportingWorker) -> None:
 
 
 @pytest.mark.parametrize("transport", list(FinsTransport))
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_identical_ordered_bitmap_and_sequence_rollover_across_transports(
     transport: FinsTransport,
+    camera_count: int,
 ) -> None:
     with ExitStack() as stack:
         peer = (
@@ -51,10 +63,22 @@ def test_identical_ordered_bitmap_and_sequence_rollover_across_transports(
         worker.start()
         try:
             for cycle, sequence in ((100, 65535), (101, 0), (102, 1)):
-                outcome = worker.submit(report(cycle)).result(WAIT)
+                result = mixed_result(cycle)
+                cameras = result.cameras[:camera_count]
+                result = replace(
+                    result,
+                    layout=replace(
+                        result.layout, cameras=tuple(c.layout for c in cameras)
+                    ),
+                    cameras=cameras,
+                )
+                outcome = worker.submit(
+                    FirstStationReport.from_result(7, result)
+                ).result(WAIT)
                 assert outcome.outcome is ReportOutcome.ACKNOWLEDGED
                 assert outcome.sequence == sequence
-                assert outcome.reject_words == (0xEFBE, 0xBEFB, 15)
+                words = (0xEFBE, 0x3EFB) if camera_count == 5 else (0xEFBE, 0xBEFB, 15)
+                assert outcome.reject_words == words
             packets = peer.packets[before:]
             assert [(p[10:12], int.from_bytes(p[13:15], "big")) for p in packets] == [
                 (b"\x01\x01", 49),
@@ -66,20 +90,31 @@ def test_identical_ordered_bitmap_and_sequence_rollover_across_transports(
                 (b"\x01\x02", 49),
             ]
             assert [p[18:] for p in packets[1::2]] == [
-                bytes.fromhex("EFBE BEFB 000F")
+                bytes.fromhex("EFBE 3EFB" if camera_count == 5 else "EFBE BEFB 000F")
             ] * 3
+            assert all(
+                int.from_bytes(p[16:18], "big") == len(words) for p in packets[1::2]
+            )
             assert [p[18:] for p in packets[2::2]] == [
                 bytes.fromhex(v) for v in ("FFFF", "0000", "0001")
             ]
             assert worker.snapshot().next_sequence == 2
             if isinstance(peer, TcpPeer):
-                assert peer.words(49, 4) == (1, 0xEFBE, 0xBEFB, 15)
+                assert peer.words(49, 4) == (
+                    1,
+                    *words,
+                    *((0,) if camera_count == 5 else ()),
+                )
                 assert peer.connections == 1
                 assert all(
                     p[3:9] == bytes.fromhex("00 14 00 00 65 00") for p in packets
                 )
             else:
-                assert readback(peer) == (1, 0xEFBE, 0xBEFB, 15)
+                assert readback(peer) == (
+                    1,
+                    *words,
+                    *((0,) if camera_count == 5 else ()),
+                )
         finally:
             stop(worker)
 
@@ -103,9 +138,11 @@ def test_identical_ordered_bitmap_and_sequence_rollover_across_transports(
         ("sequence", "disconnect"),
     ],
 )
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_tcp_failed_report_is_not_retried_and_later_cycle_keeps_sequence(
     stage: Stage,
     fault: Fault,
+    camera_count: int,
 ) -> None:
     with TcpPeer(200) as peer:
         peer.fail_next(stage, fault)
@@ -117,7 +154,7 @@ def test_tcp_failed_report_is_not_retried_and_later_cycle_keeps_sequence(
         )
         worker.start()
         try:
-            first = worker.submit(report(1)).result(WAIT)
+            first = worker.submit(report(1, camera_count)).result(WAIT)
             initialized = stage in ("bitmap", "sequence")
             assert first.outcome is ReportOutcome.FAILED
             assert first.sequence == (201 if initialized else None)
@@ -139,10 +176,15 @@ def test_tcp_failed_report_is_not_retried_and_later_cycle_keeps_sequence(
                 ]
             )
             with pytest.raises(ReportingStateError):
-                worker.submit(report(1))  # No resend of an already observed identity.
+                worker.submit(
+                    report(1, camera_count)
+                )  # No resend of an already observed identity.
             assert len(peer.packets) == captured
-            second = worker.submit(report(2)).result(WAIT)
+            second = worker.submit(report(2, camera_count)).result(WAIT)
             assert second.outcome is ReportOutcome.ACKNOWLEDGED
+            assert second.reject_words == (
+                (0xEFBE, 0x3EFB) if camera_count == 5 else (0xEFBE, 0xBEFB, 15)
+            )
             assert second.sequence == (202 if initialized else 201)
             reads = [p for p in peer.packets if p[10:12] == b"\x01\x01"]
             assert len(reads) == (

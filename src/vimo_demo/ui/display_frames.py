@@ -43,6 +43,16 @@ class LatestDisplayFrameStore:
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._revision = 0
 
+    def reconfigure(self, cameras: tuple[CameraId, ...]) -> None:
+        """Called by stopped Application configuration; invalidate former pixels."""
+        if not cameras or len(set(cameras)) != len(cameras):
+            raise ValueError("Expected unique camera identities")
+        with self._lock:
+            if self.cameras != cameras:
+                self.cameras = cameras
+                self._frames.clear()
+                self._revision += 1
+
     def publish(
         self, frame: Frame, *, generation: int, source_key: str | None = None
     ) -> bool:
@@ -77,6 +87,8 @@ class LatestDisplayFrameStore:
         # bytes backing prevents consumers from re-enabling ndarray writes.
         image = np.frombuffer(pixels.tobytes(), dtype=np.uint8).reshape(pixels.shape)
         with self._lock:
+            if frame_id.camera_id not in self.cameras:
+                raise ValueError("Unknown display camera")
             previous = self._frames.get(frame_id.camera_id)
             if previous is not None and (
                 generation,

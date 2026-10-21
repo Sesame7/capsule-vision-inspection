@@ -122,6 +122,44 @@ def test_metadata_preserves_configured_order_identity_and_domain_status() -> Non
     assert "mask" not in metadata and "counters" not in metadata
 
 
+def test_configured_camera_change_clears_pixels_and_updates_existing_publisher() -> (
+    None
+):
+    source, store = inputs()
+    publisher = SnapshotPublisher(source, store)
+    publisher.publish()
+    old = publisher.latest()
+    assert old is not None and len(old.images) == 6
+    five = tuple(c for c in CAMERAS if c != "CAM6")
+    store.reconfigure(five)
+    assert not store.snapshot().frames
+    result = source.value.latest_production_result
+    assert result is not None
+    cameras = tuple(c for c in result.cameras if c.camera_id != "CAM6")
+    source.value = replace(
+        source.value,
+        generation=2,
+        latest_production_result=replace(
+            result,
+            layout=replace(result.layout, cameras=tuple(c.layout for c in cameras)),
+            cameras=cameras,
+        ),
+    )
+    for camera in five:
+        store.publish(source_frame(camera), generation=2)
+    publisher.publish()
+    current = publisher.latest()
+    assert current is not None and current.revision > old.revision
+    assert current.publisher_id == old.publisher_id
+    metadata = json.loads(current.metadata)
+    assert metadata["configured_camera_ids"] == list(five)
+    assert len(current.images) == len(metadata["cameras"]) == 5
+    assert sum(len(row["channels"]) for row in metadata["cameras"]) == 30
+    assert all(row["result_status"] == "matched" for row in metadata["cameras"])
+    with pytest.raises(ValueError, match="Unknown display camera"):
+        store.publish(source_frame(CameraId("CAM6")), generation=2)
+
+
 @pytest.mark.parametrize("mismatch", ["generation", "cycle", "sequence", "dimensions"])
 def test_mismatched_evidence_is_not_published_as_current_judgment(
     mismatch: str,

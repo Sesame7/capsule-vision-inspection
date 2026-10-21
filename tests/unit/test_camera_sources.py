@@ -97,7 +97,7 @@ def test_v2_roundtrip_order_keys_and_deterministic_serialization(
         "serial_unicode",
         "duplicate",
         "empty",
-        "five",
+        "four",
         "mixed",
         "loop",
         "fps",
@@ -136,8 +136,8 @@ def test_v2_rejects_malformed_sources_without_overwriting(
         row["basler_serial"] = value["cameras"][1]["basler_serial"]
     elif bad == "empty":
         row["basler_serial"] = ""
-    elif bad == "five":
-        value["cameras"].pop()
+    elif bad == "four":
+        value["cameras"] = value["cameras"][:4]
     elif bad == "mixed":
         row["source_type"] = "folder"
     elif bad == "loop":
@@ -149,6 +149,21 @@ def test_v2_rejects_malformed_sources_without_overwriting(
     with pytest.raises(ConfigurationError):
         load_camera_sources(path)
     assert path.read_bytes() == original
+
+
+def test_five_sources_roundtrip_and_exact_machine_mapping(tmp_path: Path) -> None:
+    original = sources()
+    five = replace(original, cameras=original.cameras[1:], mode="basler")
+    path = tmp_path / "sources.json"
+    save_camera_sources(path, five)
+    assert load_camera_sources(path) == five
+    cameras = tuple(row.camera_id for row in five.cameras)
+    five.validate_cameras(cameras)
+    assert five.basler_serials(tuple(reversed(cameras))) == tuple(
+        row.basler_serial for row in reversed(five.cameras)
+    )
+    with pytest.raises(ConfigurationError):
+        five.validate_cameras((*cameras, CameraId("CAM6")))
 
 
 def test_incomplete_basler_draft_can_be_edited_but_not_saved(tmp_path: Path) -> None:

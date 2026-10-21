@@ -124,17 +124,33 @@ and URL are presented separately from edited/saved values.
 
 ## MachineLayout
 
-`cameras` is a nonempty ordered array. Camera identities are unique; JSON order,
+`cameras` is an ordered array of exactly CAM1–CAM5 (30 channels) or CAM1–CAM6
+(36 channels). Camera identities are unique; JSON order,
 not alphabetical names or Basler enumeration, is machine order. Each camera has
 slots 0..5 exactly once, canonicalized into slot order. Every slot contains
 `slot`, `channel_id` and `roi: {x,y,width,height}`. Global channels occur exactly
-once as contiguous positive IDs 1..N; the six-camera UI requires 36 channels.
+once as contiguous positive IDs 1..30 or 1..36. Slots retain their explicit
+ChannelIds; neither discovery order nor camera-count changes renumber them.
 
 ROI origins are nonnegative integers and sizes positive integers in original
 image coordinates. Overlap is allowed; actual reference/input dimensions supply
 bounds validation. No silent clamping is performed. Saved MachineLayout is the
 sole persisted geometry authority: Recipes cannot override it, and opening or
 refreshing Vision never replaces or repairs saved geometry.
+
+Vision keeps six configuration positions. An unconfigured CAM6 is not an offline
+configured camera. While stopped and disconnected, its minus action confirms
+removing CAM6 geometry/source from the draft; ordinary Save/apply makes the edit
+effective. No automatic backup is created. Its plus action copies only the current
+CAM5 draft's six ROI rectangles into independent CAM6 values, preserving slots 0–5
+and assigning CH31–CH36. CAM1–CAM5 are unchanged; CAM6's Folder path and Basler
+serial remain empty. This is an editable starting template, not verified calibration;
+actual CAM6 image/dimension bounds are still validated without clamping. Nothing is
+persisted or activated by + alone. Incompatible channel numbering on removal fails
+instead of being remapped. Before saving a count change, every saved Recipe is
+resolved against the proposed layout; unknown overrides must be repaired explicitly.
+Discard reloads actual persisted files, including after partial multi-file saves;
+inconsistent saved MachineLayout/CameraSources fail without replacing the draft.
 
 For newly generated demo geometry only, six vertical slots use boundaries
 `floor(i*W/6)` for i=0..6, full height H. This covers the frame without gaps or
@@ -192,7 +208,8 @@ See [archive ownership and output](architecture.md#image-archiving).
 v2 requires global `mode` (`folder`/`basler`), `cameras`, `loop`, `target_fps` and
 `schema_version: 2`. Each camera has exactly `camera_id`, `folder`, `basler_serial`.
 Folders are strings. Serials are empty or ASCII digit strings, never numbers or
-inferred positions. Basler requires exactly six distinct nonempty serials.
+inferred positions. Basler requires five or six distinct nonempty serials matching
+the configured MachineLayout camera set exactly.
 Mappings are resolved by CameraId into MachineLayout order. Incomplete drafts
 cannot be saved or executed as Basler.
 

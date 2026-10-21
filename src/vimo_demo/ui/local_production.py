@@ -520,6 +520,7 @@ class _LocalApplication(ProductionApplication):
         self,
         factory: Callable[[PreparedConfiguration, int], LocalRuntimeSession],
         cache: FolderReplayCache,
+        store: LatestDisplayFrameStore | None = None,
         *,
         replay_controls: bool = False,
         reporting: LocalReportingSettings | None = None,
@@ -532,6 +533,7 @@ class _LocalApplication(ProductionApplication):
         ),
     ) -> None:
         self.replay_cache = cache
+        self._display_store = store
         self._reporting_lock = Lock()
         self._reporting_worker: FirstStationReportingWorker | None = None
         self._archive_owner: ImageArchive | None = None
@@ -551,6 +553,27 @@ class _LocalApplication(ProductionApplication):
         self._source_cameras = source_cameras
         self._observe_acquisition = observe_acquisition
         super().__init__(factory, history=history)
+
+    def configure(self, candidate: PreparedConfiguration) -> None:
+        with self._condition:
+            cameras = candidate.configuration.layout.camera_ids
+            changed = bool(self._source_cameras) and cameras != self._source_cameras
+            if changed:
+                self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+                if self.connection.snapshot().locked:
+                    raise ApplicationStateError(
+                        "Disconnect before changing configured cameras"
+                    )
+                if self._source_draft is None:
+                    raise ApplicationStateError(
+                        "Fixed image inputs cannot change camera identities"
+                    )
+                self._source_draft.saved.validate_cameras(cameras)
+            super().configure(candidate)
+            if changed:
+                self._source_cameras = cameras
+                if self._display_store is not None:
+                    self._display_store.reconfigure(cameras)
 
     def source_snapshot(self) -> SourceConnectionSnapshot:
         return self.connection.snapshot()
@@ -883,8 +906,6 @@ def compose(
     Relative model paths are resolved against the model-description directory.
     Selected files follow configured camera order, not filename camera guesses.
     """
-    if paths and len(paths) != 6:
-        raise ValueError("Exactly six local image paths are required")
     model = load_model_definition(model_file)
     machine = load_machine_layout(machine_file)
     recipe = load_recipe(recipe_file)
@@ -893,8 +914,8 @@ def compose(
         resolve_configuration(machine, recipe, registry, model.model_id),
         base_directory=model_file.resolve().parent,
     )
-    if len(prepared.configuration.layout.cameras) != 6:
-        raise ValueError("Local Production UI requires exactly six configured cameras")
+    if paths and len(paths) != len(prepared.configuration.layout.cameras):
+        raise ValueError("One local image path per configured camera is required")
     sources_file = (
         sources_file or machine_file.parent / "camera_sources.json"
     ).resolve()
@@ -952,8 +973,8 @@ def local_application(
     observe_acquisition: Callable[[ContinuousArmedAcquisition], None] = lambda _: None,
 ) -> tuple[_LocalApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
-    if paths and len(paths) != 6:
-        raise ValueError("Exactly six local image paths are required")
+    if paths and len(paths) != len(editor.machine.layout.cameras):
+        raise ValueError("One local image path per configured camera is required")
     if editor.camera_sources is None:
         raise ValueError("Local production requires camera sources")
     source_draft = editor.camera_sources
@@ -1090,6 +1111,7 @@ def local_application(
     app = _LocalApplication(
         factory,
         cache,
+        store,
         replay_controls=replay_controls,
         reporting=reporting,
         reporting_editable=reporting_editable,

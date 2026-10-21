@@ -59,12 +59,20 @@ def finish(owner: ProductionHistory) -> None:
 
 
 @pytest.mark.parametrize("status", [CycleStatus.COMPLETE, CycleStatus.TIMED_OUT])
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_persisted_evidence_is_exact_compact_and_survives_restart(
-    tmp_path: Path, status: CycleStatus
+    tmp_path: Path,
+    status: CycleStatus,
+    camera_count: int,
 ) -> None:
     path = tmp_path / "history.sqlite3"
     owner = ProductionHistory(path)
     original = mixed_result()
+    original = replace(
+        original,
+        layout=replace(original.layout, cameras=original.layout.cameras[:camera_count]),
+        cameras=original.cameras[:camera_count],
+    )
     camera = original.cameras[0]
     forced = replace(
         camera.channels[0],
@@ -91,7 +99,10 @@ def test_persisted_evidence_is_exact_compact_and_survives_restart(
             result.assessment.technical_status.name,
             result.assessment.judgment.name,
         )
-        assert len(record.channels) == 36 and len(record.cameras) == 6
+        assert (
+            len(record.channels) == camera_count * 6
+            and len(record.cameras) == camera_count
+        )
         assert {c.business for c in record.channels} == {"OK", "NG", "EMPTY", "UNKNOWN"}
         assert any(
             c.technical == "ERROR" and c.judgment == "UNKNOWN" for c in record.channels

@@ -1,7 +1,7 @@
 """Passive continuous Basler acquisition, with no PLC connection or trigger writes.
 
 One source thread owns pylon. Connection-lifetime acquisition ordinals associate the
-six cameras under the verified no-loss external-trigger condition; they are NOT
+configured cameras under the verified no-loss external-trigger condition; they are NOT
 hardware trigger IDs. Observed gaps/duplicates/late inputs fail closed.
 """
 
@@ -43,8 +43,8 @@ class ContinuousBaslerSource:
         self._clock = clock
         self.cameras = cameras
         self.serials = BaslerAcquisitionSource(serials).serials
-        if len(cameras) != 6 or len(set(cameras)) != 6:
-            raise ValueError("Six configured camera identities required")
+        if len(cameras) != len(self.serials) or len(set(cameras)) != len(cameras):
+            raise ValueError("Configured camera identities must match explicit serials")
         self.cleanup: tuple[CameraCleanup, ...] = ()
         self.cleanup_safe = True
         self.frames = 0
@@ -100,7 +100,7 @@ class ContinuousBaslerSource:
         admitted = False
 
         def clean_boundary() -> bool:
-            return (cycle is None or len(seen) == 6) and not any(
+            return (cycle is None or len(seen) == len(self.serials)) and not any(
                 backend.available(serial, 0) for serial in self.serials
             )
 
@@ -112,7 +112,7 @@ class ContinuousBaslerSource:
                 admitted
                 and cycle is not None
                 and self._clock() >= deadline
-                and len(seen) != 6
+                and len(seen) != len(self.serials)
             ):
                 if self.control is None or not self.control.settling:
                     raise TimeoutError(
@@ -186,13 +186,17 @@ class ContinuousBaslerSource:
                         raise self._ambiguity(
                             cycle, f"Camera sequence discontinuity: {serial}"
                         )
-                    expected = 1 if cycle is None else int(cycle) + (len(seen) == 6)
+                    expected = (
+                        1
+                        if cycle is None
+                        else int(cycle) + (len(seen) == len(self.serials))
+                    )
                     if ordinal != expected:
                         raise self._ambiguity(
                             cycle,
                             f"Unexpected acquisition ordinal {ordinal}, expected {expected}; association unsafe: {serial}",
                         )
-                    if cycle is None or len(seen) == 6:
+                    if cycle is None or len(seen) == len(self.serials):
                         cycle = CycleId(ordinal)
                         # Admission occurs only after actual valid, independently owned
                         # pixels exist. Idle armed time creates no cycles/deadlines.
@@ -228,14 +232,16 @@ class ContinuousBaslerSource:
                     )  # Eligible camera inspection need not wait for its peers.
                     self.frames += 1
                     on_frame(cycle, row)
-                    if len(seen) == 6 and self.control is not None:
+                    if len(seen) == len(self.serials) and self.control is not None:
                         self.control.capture_finished(cycle)
                 expire_capture()
                 if not found:
                     if self.control is not None:
-                        self.control.boundary(clean=cycle is None or len(seen) == 6)
+                        self.control.boundary(
+                            clean=cycle is None or len(seen) == len(self.serials)
+                        )
                     backend.available(self.serials[cursor], 1)
-                    cursor = (cursor + 1) % 6
+                    cursor = (cursor + 1) % len(self.serials)
         finally:
             try:
                 self.cleanup = backend.cleanup()

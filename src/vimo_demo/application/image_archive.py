@@ -158,8 +158,12 @@ class ImageArchive:
     ) -> None:
         if min(max_pending, max_bytes, max_cycles, max_frame_bytes) < 1:
             raise ValueError("Archive limits must be positive")
-        if not settings.enabled or len(cameras) != 6 or len(set(cameras)) != 6:
-            raise ValueError("Enabled archive requires six distinct cameras")
+        if (
+            not settings.enabled
+            or len(cameras) not in (5, 6)
+            or len(set(cameras)) != len(cameras)
+        ):
+            raise ValueError("Enabled archive requires five or six distinct cameras")
         self.settings, self.generation, self.cameras = settings, generation, cameras
         self._max_pending, self._max_bytes = max_pending, max_bytes
         self._max_cycles, self._max_frame_bytes = max_cycles, max_frame_bytes

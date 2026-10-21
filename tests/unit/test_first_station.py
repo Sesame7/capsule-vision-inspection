@@ -30,8 +30,8 @@ type Statuses = tuple[tuple[ChannelId, Status], ...]
 type FaultMode = Literal["plc", "drop_before", "drop_after", "malformed_after"]
 
 
-def statuses(default: Status = Status.OK) -> Statuses:
-    return tuple((ChannelId(i), default) for i in range(1, 37))
+def statuses(default: Status = Status.OK, count: int = 36) -> Statuses:
+    return tuple((ChannelId(i), default) for i in range(1, count + 1))
 
 
 @pytest.mark.parametrize("channel_id", range(1, 37))
@@ -47,10 +47,12 @@ def test_every_reject_bit_uses_channel_identity(channel_id: int) -> None:
 
 
 @pytest.mark.parametrize("status", list(Status))
-def test_uniform_status_and_reserved_bits(status: Status) -> None:
-    words = first_station_reject_words(statuses(status))
-    assert words == ((0, 0, 0) if status is Status.OK else (65535, 65535, 15))
-    assert words[2] & 0xFFF0 == 0
+@pytest.mark.parametrize("count", [30, 36])
+def test_uniform_status_and_reserved_bits(status: Status, count: int) -> None:
+    words = first_station_reject_words(statuses(status, count))
+    expected = (65535, 16383) if count == 30 else (65535, 65535, 15)
+    assert words == (tuple(0 for _ in expected) if status is Status.OK else expected)
+    assert words[-1] & (0xC000 if count == 30 else 0xFFF0) == 0
 
 
 def test_real_business_results_are_projected_without_mutation() -> None:
@@ -64,6 +66,25 @@ def test_real_business_results_are_projected_without_mutation() -> None:
     assert words == (0xEFBE, 0xBEFB, 0x000F)
     assert result.channels == channels
     assert sum(row.business_status is Status.OK for row in channels) == 6
+
+
+def test_thirty_channel_bits_use_identity_and_reject_holes() -> None:
+    for channel in range(1, 31):
+        inputs = tuple(
+            (i, Status.NG if i == channel else state)
+            for i, state in reversed(statuses(count=30))
+        )
+        expected = [0, 0]
+        word, bit = divmod(channel - 1, 16)
+        expected[word] = 1 << bit
+        assert first_station_reject_words(inputs) == tuple(expected), channel
+    for invalid in (
+        statuses(count=29),
+        statuses(count=31),
+        statuses(count=30)[:-1] + ((ChannelId(36), Status.OK),),
+    ):
+        with pytest.raises(ValueError):
+            first_station_reject_words(invalid)
 
 
 @pytest.mark.parametrize(
@@ -161,20 +182,22 @@ def connection(port: int) -> FinsUdpClient:
     )
 
 
-def test_unchanged_results_progress_and_wrap_with_readback() -> None:
+@pytest.mark.parametrize("count", [30, 36])
+def test_unchanged_results_progress_and_wrap_with_readback(count: int) -> None:
     with station_server() as server, connection(server.port) as client:
         reporter = FirstStationReporter(client, initial_sequence=65535)
-        inputs = statuses(Status.UNKNOWN)
-        assert client.read_words(49, 4, area=FinsMemoryArea.W) == (0, 0, 0, 0)
+        inputs = statuses(Status.UNKNOWN, count)
+        client.write_words(52, (0xA5A5,), area=FinsMemoryArea.W)
+        server.requests.clear()
+        words = (65535, 16383) if count == 30 else (65535, 65535, 15)
         for sequence in (65535, 0, 1):
             commit = reporter.submit(inputs)
             assert commit.sequence == sequence
-            assert commit.reject_words == (65535, 65535, 15)
+            assert commit.reject_words == words
             assert client.read_words(49, 4, area=FinsMemoryArea.W) == (
                 sequence,
-                65535,
-                65535,
-                15,
+                *words,
+                *((0xA5A5,) if count == 30 else ()),
             )
         assert reporter.next_sequence == 2
         # Exactly two writes per result, not readback/retry inside submit().
@@ -182,7 +205,11 @@ def test_unchanged_results_progress_and_wrap_with_readback() -> None:
         assert len(writes) == 6
         for i, sequence in enumerate((65535, 0, 1)):
             bitmap, commit_request = writes[2 * i : 2 * i + 2]
-            assert bitmap[12:] == bytes.fromhex("B1 00 32 00 00 03 FF FF FF FF 00 0F")
+            assert bitmap[12:] == bytes.fromhex(
+                "B1 00 32 00 00 02 FF FF 3F FF"
+                if count == 30
+                else "B1 00 32 00 00 03 FF FF FF FF 00 0F"
+            )
             assert commit_request[12:] == bytes.fromhex(
                 "B1 00 31 00 00 01"
             ) + sequence.to_bytes(2, "big")
@@ -190,20 +217,22 @@ def test_unchanged_results_progress_and_wrap_with_readback() -> None:
 
 
 @pytest.mark.parametrize("stage", list(SubmissionStage))
+@pytest.mark.parametrize("count", [30, 36])
 @pytest.mark.parametrize(
     "mode", ["plc", "drop_before", "drop_after", "malformed_after"]
 )
 def test_stage_failures_preserve_uncertainty_and_never_retry(
-    stage: SubmissionStage, mode: FaultMode
+    stage: SubmissionStage, mode: FaultMode, count: int
 ) -> None:
     with station_server(stage, mode) as server:
         with connection(server.port) as client:
             reporter = FirstStationReporter(client, initial_sequence=123)
             with pytest.raises(FirstStationSubmissionError) as caught:
-                reporter.submit(statuses(Status.NG))
+                reporter.submit(statuses(Status.NG, count))
             assert caught.value.stage is stage
             assert caught.value.sequence == 123
-            assert caught.value.reject_words == (65535, 65535, 15)
+            words = (65535, 16383) if count == 30 else (65535, 65535, 15)
+            assert caught.value.reject_words == words
             assert reporter.next_sequence == 124  # Attempt reserved, not auto-reused.
             expected_type = (
                 FinsPlcError
@@ -227,7 +256,7 @@ def test_stage_failures_preserve_uncertainty_and_never_retry(
             actual = reader.read_words(49, 4, area=FinsMemoryArea.W)
         applied = mode in ("drop_after", "malformed_after")
         expected_words = (
-            (65535, 65535, 15)
+            (*words, *((0,) if count == 30 else ()))
             if applied or stage is SubmissionStage.SEQUENCE
             else (0, 0, 0)
         )

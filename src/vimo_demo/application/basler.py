@@ -1,4 +1,4 @@
-"""One serial, externally controlled six-camera attempt, separate from Production."""
+"""One serial, externally controlled camera-group attempt, separate from Production."""
 
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -152,7 +152,7 @@ class BaslerAcquisitionError(RuntimeError):
 
 
 class BaslerAcquisitionCancelled(BaslerAcquisitionError):
-    """Owner Stop observed; no successful group, even if six frames had arrived."""
+    """Owner Stop observed; no successful group, even if all frames had arrived."""
 
 
 class _Backend(Protocol):
@@ -188,11 +188,11 @@ class BaslerAcquisitionSource:
     def __init__(self, serials: Sequence[str], *, timeout: float = 5.0) -> None:
         values = tuple(serials)
         if (
-            len(values) != 6
+            len(values) not in (5, 6)
             or any(not s or not s.isascii() or not s.isdecimal() for s in values)
-            or len(set(values)) != 6
+            or len(set(values)) != len(values)
         ):
-            raise ValueError("Supply exactly six unique, explicit numeric serials")
+            raise ValueError("Supply five or six unique, explicit numeric serials")
         if isinstance(timeout, bool) or not isfinite(timeout) or not 0 < timeout <= 120:
             raise ValueError("timeout must be finite and in (0, 120] seconds")
         self.serials = values
@@ -292,8 +292,8 @@ class BaslerAcquisitionSource:
                         f"Pending frame at deadline on {serial}; ambiguous"
                     )
             serial = None
-            if len(images) != 6:
-                raise TimeoutError("Window expired without six valid frames")
+            if len(images) != len(self.serials):
+                raise TimeoutError("Window expired without all configured frames")
         except BaseException as exc:
             cause = exc
             issues.append(acquisition_issue(stage, serial, exc))

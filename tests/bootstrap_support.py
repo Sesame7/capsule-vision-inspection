@@ -17,13 +17,15 @@ from vimo_demo.inspection import CameraId
 from vimo_demo.ui.bootstrap import ApplicationData
 
 
-def saved_data(root: Path) -> ApplicationData:
+def saved_data(root: Path, *, camera_count: int = 6) -> ApplicationData:
     data = ApplicationData.at_entry(root)
     for folder in (data.models, data.recipes, data.machine.parent, data.sources.parent):
         folder.mkdir(parents=True)
     frames = root / "frames"
     frames.mkdir()
-    model_file, machine_file, recipe_file, _ = input_files(frames)
+    model_file, machine_file, recipe_file, _ = input_files(
+        frames, camera_count=camera_count
+    )
     model = load_model_definition(model_file)
     shutil.copyfile(model.model_path, data.models / "general.vimosln")
     save_model_definition(
@@ -35,7 +37,8 @@ def saved_data(root: Path) -> ApplicationData:
         data.sources,
         CameraSources(
             tuple(
-                CameraFolder(CameraId(f"CAM{i}"), "../../frames") for i in range(1, 7)
+                CameraFolder(CameraId(f"CAM{i}"), "../../frames")
+                for i in range(1, camera_count + 1)
             ),
             loop=False,
             target_fps=3.5,

@@ -190,11 +190,6 @@ def load_startup(
         try:
             if kind == "machine":
                 machine = load_machine_layout(path)
-                if len(machine.layout.cameras) != 6:
-                    machine = None
-                    raise ConfigurationError(
-                        "Production requires six configured cameras"
-                    )
             elif kind == "models":
                 registry = discover_models(path)
             elif kind == "sources":
@@ -457,7 +452,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
             return ProductionSnapshotService(
                 startup.application,
                 startup.frames,
-                cameras=startup.machine.layout.camera_ids if startup.machine else (),
+                cameras=None if startup.machine else (),
                 host=settings.host,
                 port=settings.port,
                 interval=settings.interval_ms / 1000,

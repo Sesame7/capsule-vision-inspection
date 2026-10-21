@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import monotonic
 from typing import Literal, cast
@@ -46,11 +46,13 @@ from vimo_demo.application.folder_replay import (
     folder_images,
 )
 from vimo_demo.configuration import (
+    CameraFolder,
     CameraSources,
     ConfigurationError,
     MachineLayoutDefinition,
     load_camera_sources,
     load_machine_layout,
+    resolve_configuration,
 )
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId, CycleId, FrameId
@@ -157,6 +159,11 @@ class _SourceCard(QPushButton):
         self.browse.setIconSize(QSize(Style.icon, Style.icon))
         fields.addWidget(self.browse)
         folder.addWidget(self.folder_row, 1)
+        self.configuration = QPushButton()
+        self.configuration.setFixedSize(Style.touch, Style.touch)
+        self.configuration.setIconSize(QSize(Style.icon, Style.icon))
+        folder.addWidget(self.configuration)
+        self.configuration.hide()
         contents.addLayout(folder)
 
     def sizeHint(self) -> QSize:
@@ -336,7 +343,10 @@ class MachineRoiWorkspace(QWidget):
         self._cameras = QButtonGroup(self)
         self.camera_cards: dict[CameraId, _SourceCard] = {}
         self.source_cards = _SourceCards()
-        for index, identity in enumerate(self.draft.definition.layout.camera_ids):
+        positions = self.draft.definition.layout.camera_ids
+        if CameraId("CAM6") not in positions:
+            positions = (*positions, CameraId("CAM6"))
+        for index, identity in enumerate(positions):
             card = _SourceCard()
             self._cameras.addButton(card, index)
             self.camera_cards[identity] = card
@@ -365,6 +375,7 @@ class MachineRoiWorkspace(QWidget):
                 self.select_device(target, index)
 
             card.device.activated.connect(select_device)
+            card.configuration.clicked.connect(self.request_camera_configuration)
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setFixedSize(24, Style.touch)
@@ -591,7 +602,84 @@ class MachineRoiWorkspace(QWidget):
 
     @property
     def camera(self) -> CameraId:
-        return self.draft.definition.layout.camera_ids[self._cameras.checkedId()]
+        return next(
+            camera for camera, card in self.camera_cards.items() if card.isChecked()
+        )
+
+    def request_camera_configuration(self) -> None:
+        if (
+            not self.source_editable()
+            or self.sources is None
+            or self.session.cli_sources
+        ):
+            return
+        configured = CameraId("CAM6") in self.draft.definition.layout.camera_ids
+        if configured:
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle(text("vision_remove_cam6", self.language))
+            dialog.setText(text("vision_remove_cam6_question", self.language))
+            remove = dialog.addButton(
+                text("vision_remove_cam6", self.language),
+                QMessageBox.ButtonRole.DestructiveRole,
+            )
+            cancel = dialog.addButton(
+                text("cancel", self.language), QMessageBox.ButtonRole.RejectRole
+            )
+            dialog.setDefaultButton(cancel)
+            self._decision = dialog
+
+            def decided(_result: int) -> None:
+                chosen = dialog.clickedButton()
+                self._decision = None
+                dialog.deleteLater()
+                if chosen is remove and self.source_editable():
+                    self.change_camera_configuration()
+
+            dialog.finished.connect(decided)
+            dialog.open()
+        else:
+            self.change_camera_configuration(restore=True)
+        self.refresh()
+
+    def change_camera_configuration(self, *, restore: bool = False) -> None:
+        """Confirmed stopped/disconnected draft edit; persistence remains Save/apply."""
+        if (
+            not self.source_editable()
+            or self.sources is None
+            or self.session.cli_sources
+        ):
+            return
+        try:
+            if not restore:
+                self.draft.remove_camera_six()
+                cameras = tuple(
+                    row
+                    for row in self.sources.definition.cameras
+                    if row.camera_id != "CAM6"
+                )
+            else:
+                self.draft.restore_camera_six()
+                cameras = (
+                    *self.sources.definition.cameras,
+                    CameraFolder(CameraId("CAM6"), ""),
+                )
+            self.sources.definition = replace(self.sources.definition, cameras=cameras)
+            self.draft.bounds.pop(CameraId("CAM6"), None)
+            self._folder_paths.pop(CameraId("CAM6"), None)
+            self._positions.pop(CameraId("CAM6"), None)
+            self._reference_modes.pop(CameraId("CAM6"), None)
+            self._populate_devices()
+            self._sync_configured_camera()
+            self._changed()
+            self.refresh()
+        except (ValueError, ConfigurationError) as exc:
+            self._report_error(exc, "vision_validation_error")
+            self.refresh()
+
+    def _sync_configured_camera(self) -> None:
+        cameras = self.draft.definition.layout.camera_ids
+        if self.camera not in cameras:
+            self.camera_cards[cameras[0]].setChecked(True)
 
     @property
     def folder(self) -> QLineEdit:
@@ -618,8 +706,16 @@ class MachineRoiWorkspace(QWidget):
 
     def refresh_theme(self) -> None:
         colors = theme_colors(self)
-        for card in self.camera_cards.values():
+        for camera, card in self.camera_cards.items():
             card.browse.setIcon(image_icon("folder", colors.primary))
+            card.configuration.setIcon(
+                image_icon(
+                    "minus"
+                    if camera in self.draft.definition.layout.camera_ids
+                    else "plus",
+                    colors.primary,
+                )
+            )
             card.update()
         for key, tool in (
             ("reference_previous", "previous"),
@@ -940,6 +1036,8 @@ class MachineRoiWorkspace(QWidget):
             else {}
         )
         for camera, card in self.camera_cards.items():
+            if camera not in self.draft.definition.layout.camera_ids:
+                continue
             selected = (
                 self.sources.definition.camera(camera).basler_serial
                 if self.sources
@@ -1640,7 +1738,7 @@ class MachineRoiWorkspace(QWidget):
             return
         machine_path = self.draft.path
         source_path = self.sources.path if self.sources is not None else None
-        cameras = tuple(self.camera_cards)
+        cameras = self.draft.saved.layout.camera_ids
         if machine_path is None or self._run_io is None:
             self._report_error(
                 "Saved Vision paths or configuration loader unavailable",
@@ -1651,7 +1749,9 @@ class MachineRoiWorkspace(QWidget):
 
         def read() -> _SavedVision:
             machine = load_machine_layout(machine_path)
-            if machine.layout.camera_ids != cameras:
+            if machine.layout.camera_ids != cameras and len(
+                machine.layout.cameras
+            ) == len(cameras):
                 raise ConfigurationError(
                     "Saved camera order/identities changed; reopen the application before reloading"
                 )
@@ -1659,7 +1759,7 @@ class MachineRoiWorkspace(QWidget):
                 load_camera_sources(source_path) if source_path is not None else None
             )
             if sources is not None:
-                sources.validate_cameras(cameras)
+                sources.validate_cameras(machine.layout.camera_ids)
             return _SavedVision(machine, sources)
 
         def completed(value: object, error: BaseException | None) -> None:
@@ -1693,11 +1793,15 @@ class MachineRoiWorkspace(QWidget):
             if self.sources is not None and value.sources is not None:
                 old = self.sources.definition
                 for row in value.sources.cameras:
-                    if old.camera(row.camera_id).folder != row.folder:
+                    previous = next(
+                        (c for c in old.cameras if c.camera_id == row.camera_id), None
+                    )
+                    if previous is None or previous.folder != row.folder:
                         self._folder_paths.pop(row.camera_id, None)
                         self._positions.pop(row.camera_id, None)
                 if (
                     self.frame is not None
+                    and self.camera in value.machine.layout.camera_ids
                     and self.reference_mode == "folder"
                     and self.frame.source_key
                     != value.sources.source_key(self.camera, self.sources.path.parent)
@@ -1707,6 +1811,8 @@ class MachineRoiWorkspace(QWidget):
                     )
                 self.sources.saved = self.sources.definition = value.sources
             self.draft.saved = self.draft.definition = value.machine
+            self._populate_devices()
+            self._sync_configured_camera()
             self._save_failed = False
             self._error = self._feedback = ""
             self._selector_key = None
@@ -1745,7 +1851,9 @@ class MachineRoiWorkspace(QWidget):
                 widget.setVisible(basler_mode)
             state_text = text("source_" + connection.state.name.lower(), self.language)
             count = len(actual) if connection.state is ConnectionState.CONNECTED else 0
-            self.connection_status.setText(f"{count}/6")
+            self.connection_status.setText(
+                f"{count}/{len(self.draft.definition.layout.cameras)}"
+            )
             self.connection_status.setToolTip(
                 state_text + ("\n" + connection.error if connection.error else "")
             )
@@ -1765,6 +1873,31 @@ class MachineRoiWorkspace(QWidget):
         for camera, card in self.camera_cards.items():
             card.title = str(camera).removeprefix("CAM")
             name = text("camera_number", self.language).format(number=card.title)
+            configured = camera in self.draft.definition.layout.camera_ids
+            card.setCheckable(configured)
+            card.configuration.setVisible(camera == "CAM6" and self.sources is not None)
+            card.configuration.setEnabled(
+                self.source_editable() and not self.session.cli_sources
+            )
+            card.configuration.setIcon(
+                image_icon("minus" if configured else "plus", colors.primary)
+            )
+            operation = text(
+                "vision_remove_cam6" if configured else "vision_restore_cam6",
+                self.language,
+            )
+            card.configuration.setToolTip(operation)
+            card.configuration.setAccessibleName(operation)
+            if not configured:
+                card.folder_row.hide()
+                card.serial_row.hide()
+                card.detail = text("source_unconfigured", self.language)
+                card.summary = card.detail
+                card.status_color = ""
+                card.setToolTip(f"{name} · {card.detail}\n{operation}")
+                card.setAccessibleName(card.toolTip())
+                card.update()
+                continue
             card.status_color = ""
             card.summary = ""
             if self.sources is None:
@@ -1925,6 +2058,26 @@ class MachineRoiWorkspace(QWidget):
         base = self.sources.path.parent if self.sources is not None else None
 
         def validate() -> None:
+            if self.draft.saved.layout.camera_ids != layout.camera_ids:
+                if (
+                    self.connection is not None
+                    and self.connection.source_snapshot().locked
+                ):
+                    raise ConfigurationError(
+                        "Disconnect before changing configured cameras"
+                    )
+                catalog = self.session.catalog.discover()
+                if catalog.issues:
+                    raise ConfigurationError(
+                        "Repair invalid Recipe definitions before changing cameras"
+                    )
+                for entry in catalog.entries:
+                    resolve_configuration(
+                        self.draft.definition,
+                        entry.recipe,
+                        self.session.registry,
+                        self.session.default_model_id,
+                    )
             if sources is not None and base is not None:
                 sources.validate_cameras(layout.camera_ids)
                 state = self.connection.source_snapshot() if self.connection else None

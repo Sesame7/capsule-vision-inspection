@@ -102,7 +102,7 @@ def test_enabled_archive_requires_valid_absolute_directory(path: str) -> None:
         ImageArchiveSettings(path, save_empty=True)
 
 
-def machine(*, mirrored: bool = False) -> MachineLayoutDefinition:
+def machine(*, mirrored: bool = False, count: int = 6) -> MachineLayoutDefinition:
     return MachineLayoutDefinition(
         InspectionLayout(
             tuple(
@@ -119,10 +119,44 @@ def machine(*, mirrored: bool = False) -> MachineLayoutDefinition:
                         for slot in range(6)
                     ),
                 )
-                for camera in range(6)
+                for camera in range(count)
             )
         )
     )
+
+
+@pytest.mark.parametrize("count", [5, 6])
+def test_supported_machine_roundtrip_and_explicit_override_validation(
+    tmp_path: Path, count: int
+) -> None:
+    definition = machine(count=count, mirrored=True)
+    path = tmp_path / "machine.json"
+    save_machine_layout(path, definition)
+    assert load_machine_layout(path) == definition
+    resolved = resolve_configuration(
+        definition, RecipeDefinition("r", "R"), registry(), "general"
+    )
+    assert resolved.layout.camera_ids == tuple(
+        CameraId(f"CAM{i}") for i in range(1, count + 1)
+    )
+    assert [c.channel_id for c in resolved.channels] == list(range(1, count * 6 + 1))
+    if count == 5:
+        for recipe in (
+            RecipeDefinition(
+                "r", "R", camera_overrides=(CameraOverride(CameraId("CAM6")),)
+            ),
+            RecipeDefinition(
+                "r", "R", channel_overrides=(ChannelOverride(ChannelId(31)),)
+            ),
+        ):
+            with pytest.raises(ConfigurationError, match="unknown"):
+                resolve_configuration(definition, recipe, registry(), "general")
+
+
+@pytest.mark.parametrize("count", [4, 7])
+def test_unsupported_machine_count_is_not_a_configuration(count: int) -> None:
+    with pytest.raises(ConfigurationError):
+        machine(count=count)
 
 
 def model(model_id: str = "general") -> ModelDefinition:

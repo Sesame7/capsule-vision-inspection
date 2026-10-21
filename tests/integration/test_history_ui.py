@@ -775,9 +775,11 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
         page.deleteLater()
 
 
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
     qapp: QApplication,
     tmp_path: Path,
+    camera_count: int,
 ) -> None:
     ensure_test_fonts()
     result = mixed_result()
@@ -787,16 +789,26 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
             layout=replace(
                 camera.layout,
                 slots=tuple(
-                    replace(slot, channel_id=ChannelId(37 - int(slot.channel_id)))
+                    replace(
+                        slot,
+                        channel_id=ChannelId(
+                            camera_count * 6 + 1 - int(slot.channel_id)
+                        ),
+                    )
                     for slot in camera.layout.slots
                 ),
             ),
             channels=tuple(
-                replace(channel, channel_id=ChannelId(37 - int(channel.channel_id)))
+                replace(
+                    channel,
+                    channel_id=ChannelId(
+                        camera_count * 6 + 1 - int(channel.channel_id)
+                    ),
+                )
                 for channel in camera.channels
             ),
         )
-        for camera in reversed(result.cameras)
+        for camera in reversed(result.cameras[:camera_count])
     )
     result = replace(
         result,
@@ -823,7 +835,10 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
         until(lambda: not page.busy)
         qapp.processEvents()
         assert page.width() == 1080
-        assert page.channels.rowCount() == 6 and page.channels.columnCount() == 7
+        assert (
+            page.channels.rowCount() == camera_count
+            and page.channels.columnCount() == 7
+        )
         assert not page.channels.horizontalScrollBar().isVisible()
         for row, camera in enumerate(cameras):
             assert content(page.channels, row, 0) == camera.camera_id
@@ -850,7 +865,7 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
         assert channel_at(page, 0, 6).channel == 1
         page.channels.setCurrentCell(0, 4)
         assert (
-            "CAM6" in page.channel_detail.toPlainText()
+            f"CAM{camera_count}" in page.channel_detail.toPlainText()
             and "CH03" in page.channel_detail.toPlainText()
         )
         assert (

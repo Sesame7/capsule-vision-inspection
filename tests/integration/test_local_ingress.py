@@ -22,12 +22,6 @@ from vimo_demo.application import (
     ProductionCounters,
     ProductionRuntimeSession,
 )
-from vimo_demo.configuration import (
-    MachineLayoutDefinition,
-    ModelRegistry,
-    RecipeDefinition,
-    resolve_configuration,
-)
 from vimo_demo.inference import ImageResult
 from vimo_demo.inference._validation import uint8_array
 from vimo_demo.inspection import CameraId, CycleId, CycleStateError, UnknownCameraError
@@ -77,11 +71,17 @@ def running(
     )
     candidate = replace(
         candidate,
-        configuration=resolve_configuration(
-            MachineLayoutDefinition(InspectionLayout(cameras)),
-            RecipeDefinition("local", "Local input"),
-            ModelRegistry((candidate.configuration.model,)),
-            candidate.configuration.model.model_id,
+        # This lower-domain identity test deliberately uses non-machine names;
+        # normal persisted MachineLayout accepts only CAM1..CAM5/CAM6.
+        configuration=replace(
+            candidate.configuration,
+            layout=InspectionLayout(cameras),
+            channels=tuple(
+                replace(row, camera_id=camera.camera_id)
+                for row in candidate.configuration.channels
+                for camera in cameras
+                if any(slot.channel_id == row.channel_id for slot in camera.slots)
+            ),
         ),
     )
     engines: list[ProbeEngine] = []

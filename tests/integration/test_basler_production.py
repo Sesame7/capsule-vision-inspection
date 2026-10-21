@@ -56,6 +56,7 @@ from vimo_demo.communication.reporting import (
     ReportStage,
 )
 from vimo_demo.configuration import (
+    CameraFolder,
     ImageArchiveSettings,
     load_camera_sources,
     load_recipe,
@@ -76,11 +77,77 @@ from vimo_demo.ui.production_style import Language, Theme, text
 SERIALS = ("25334173", "25334174", "25334178", "25334180", "25334188", "25334184")
 
 
-@pytest.mark.parametrize("save_empty", [False, True])
-def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
-    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, save_empty: bool
+@pytest.mark.parametrize("camera_count", [5, 6])
+def test_normal_folder_configuration_cycles_and_six_vision_positions(
+    qapp: QApplication, tmp_path: Path, camera_count: int
 ) -> None:
-    data = saved_data(tmp_path)
+    data = saved_data(tmp_path, camera_count=camera_count)
+    source = load_camera_sources(data.sources)
+    rows: list[CameraFolder] = []
+    for index, row in enumerate(source.cameras):
+        folder = tmp_path / str(row.camera_id)
+        folder.mkdir()
+        ok, encoded = cv2.imencode(".png", np.full((20, 60, 3), 10 + index, np.uint8))
+        assert ok
+        encoded.tofile(folder / "only.png")
+        rows.append(replace(row, folder=str(folder)))
+    save_camera_sources(data.sources, replace(source, cameras=tuple(rows)))
+    engine = Engine()
+    engine.release_warm.set()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.resize(1080, 1600)
+    window.show()
+    try:
+        assert app.snapshot().state is ApplicationState.READY
+        assert len(window.cards) == camera_count
+        window.navigate(4)
+        until(lambda: not window.parameters.busy)
+        workspace = window.parameters.roi_workspace
+        assert workspace is not None and len(workspace.camera_cards) == 6
+        assert workspace.camera_cards[CameraId("CAM6")].isCheckable() == (
+            camera_count == 6
+        )
+        window.navigate(0)
+        app.start().result(WAIT)
+        until(lambda: app.snapshot().state is ApplicationState.READY)
+        result = app.snapshot().latest_production_result
+        assert result is not None
+        assert (
+            len(result.cameras) == camera_count
+            and len(result.channels) == camera_count * 6
+        )
+        assert [c.channel_id for c in result.channels] == list(
+            range(1, camera_count * 6 + 1)
+        )
+        assert [value for value, _ in engine.calls][2:] == list(
+            range(10, 10 + camera_count)
+        )
+        assert app.snapshot().counters.cycles_completed == 1
+        assert app.snapshot().counters.business_empty == camera_count * 6
+        assert (
+            tuple(f.frame_id.camera_id for f in startup.frames.snapshot().frames)
+            == result.layout.camera_ids
+        )
+        assert engine.closed and len({owner for _, owner in engine.calls}) == 1
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+@pytest.mark.parametrize("save_empty", [False, True])
+@pytest.mark.parametrize("camera_count", [5, 6])
+def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    save_empty: bool,
+    camera_count: int,
+) -> None:
+    data = saved_data(tmp_path, camera_count=camera_count)
+    passive.serials = SERIALS[:camera_count]
     save_basler(data.sources)
     recipe_file = data.recipes / "local.recipe.json"
     root = tmp_path / "empty-archive"
@@ -106,19 +173,34 @@ def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
         app.start().result(WAIT)
         assert startup.editor is not None
         startup.editor.draft.image_archive.save_empty = not save_empty
-        passive.expose(1, (4, 2, 5, 1, 3, 0))
+        passive.expose(1, tuple(i for i in (4, 2, 5, 1, 3, 0) if i < camera_count))
         until(lambda: app.snapshot().counters.cycles_completed == 1)
         app.stop().result(WAIT)
         assert app.snapshot().state is ApplicationState.READY
-        assert app.snapshot().counters.business_empty == 36
+        result = app.snapshot().latest_production_result
+        assert result is not None
+        assert (
+            len(result.cameras) == camera_count
+            and len(result.channels) == camera_count * 6
+        )
+        assert tuple(c.camera_id for c in result.cameras) == tuple(
+            f"CAM{i}" for i in range(1, camera_count + 1)
+        )
+        assert all(
+            c.frame_id is not None and c.frame_id.camera_id == c.camera_id
+            for c in result.cameras
+        )
+        assert len(startup.frames.snapshot().frames) == camera_count
+        assert app.snapshot().counters.business_empty == camera_count * 6
         observation = app.archive_snapshot()
         assert observation is not None and not observation.alive
         assert (
-            observation.written == (6 if save_empty else 0) and observation.failed == 0
+            observation.written == (camera_count if save_empty else 0)
+            and observation.failed == 0
         )
         assert observation.pending == observation.retained_bytes == 0
         files = sorted(root.rglob("*.png"))
-        assert len(files) == (6 if save_empty else 0)
+        assert len(files) == (camera_count if save_empty else 0)
         for path in files:
             assert path.name.startswith("3_") and path.name.endswith("_1.png")
             index = int(path.parent.name.removeprefix("CAM")) - 1
@@ -376,7 +458,9 @@ def save_basler(path: Path) -> None:
             mode="basler",
             cameras=tuple(
                 replace(c, basler_serial=s)
-                for c, s in zip(source.cameras, SERIALS, strict=True)
+                for c, s in zip(
+                    source.cameras, SERIALS[: len(source.cameras)], strict=True
+                )
             ),
         ),
     )
@@ -517,6 +601,7 @@ class PassiveBackend:
     """SDK FIFO fake; exercises the real source/control/session implementation."""
 
     def __init__(self) -> None:
+        self.serials: tuple[str, ...] = SERIALS
         self.condition = Condition()
         self.queues = {
             s: deque[tuple[AcquisitionMetadata, NDArray[np.uint8]]]() for s in SERIALS
@@ -536,7 +621,7 @@ class PassiveBackend:
 
     def inventory(self, serials: tuple[str, ...]) -> None:
         self.owner_ids.append(get_ident())
-        assert serials == SERIALS
+        assert serials == self.serials
 
     def prepare(self, serial: str) -> CameraSettings:
         self.prepared.append(serial)
@@ -551,7 +636,9 @@ class PassiveBackend:
     def arm(self) -> tuple[CameraReadiness, ...]:
         self.owner_ids.append(get_ident())
         self.armed.set()
-        return tuple(CameraReadiness(s, True, True, perf_counter()) for s in SERIALS)
+        return tuple(
+            CameraReadiness(s, True, True, perf_counter()) for s in self.serials
+        )
 
     def available(self, serial: str, timeout_ms: int) -> bool:
         if self.failure:
@@ -1341,6 +1428,10 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
             not card.device.isEnabled() for card in workspace.camera_cards.values()
         )
         assert not workspace.discover.isEnabled() and workspace.editable()
+        assert not workspace.camera_cards[CameraId("CAM6")].configuration.isEnabled()
+        geometry = workspace.draft.definition
+        workspace.change_camera_configuration()
+        assert workspace.draft.definition == geometry
         presentations: tuple[tuple[Language, Theme, tuple[int, int]], ...] = (
             ("zh", "dark", (1080, 1920)),
             ("zh", "light", (1080, 1920)),
@@ -1411,10 +1502,16 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
 @pytest.mark.parametrize(
     "kind", ["complete", "partial", "native", "report", "ambiguous"]
 )
+@pytest.mark.parametrize("camera_count", [5, 6])
 def test_persistent_source_stop_settles_admitted_results_and_reports(
-    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, kind: str
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    kind: str,
+    camera_count: int,
 ) -> None:
-    data = saved_data(tmp_path)
+    data = saved_data(tmp_path, camera_count=camera_count)
+    passive.serials = SERIALS[:camera_count]
     save_basler(data.sources)
     engine = Engine()
     engine.release_warm.set()
@@ -1436,7 +1533,7 @@ def test_persistent_source_stop_settles_admitted_results_and_reports(
                 peer.hold_next(ReportStage.BITMAP)
             passive.expose(
                 2 if kind == "ambiguous" else 1,
-                (0,) if kind in ("partial", "native") else tuple(range(6)),
+                (0,) if kind in ("partial", "native") else tuple(range(camera_count)),
             )
             if kind == "ambiguous":
                 until(lambda: app.snapshot().state is ApplicationState.READY)
@@ -1465,7 +1562,7 @@ def test_persistent_source_stop_settles_admitted_results_and_reports(
             assert (
                 result is not None
                 and result.cycle_id == 1
-                and len(result.channels) == 36
+                and len(result.channels) == camera_count * 6
             )
             assert app.snapshot().counters.cycles_completed == 1
             if kind in ("partial", "native"):

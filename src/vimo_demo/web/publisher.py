@@ -70,6 +70,7 @@ class SnapshotPublisher:
         *,
         refresh_interval_ms: float = 500,
     ) -> None:
+        configured = cameras
         cameras = frames.cameras if cameras is None else cameras
         if (
             len(cameras) > 6
@@ -77,12 +78,16 @@ class SnapshotPublisher:
             or not set(cameras) <= set(frames.cameras)
         ):
             raise ValueError("Expected at most six unique configured display cameras")
-        self.source, self.frames, self.cameras = source, frames, cameras
+        self.source, self.frames, self._cameras = source, frames, configured
         self.refresh_interval_ms = refresh_interval_ms
         self.publisher_id = uuid4().hex
         self._lock = Lock()
         self._latest: Publication | None = None
         self._error: str | None = None
+
+    @property
+    def cameras(self) -> tuple[CameraId, ...]:
+        return self.frames.cameras if self._cameras is None else self._cameras
 
     def latest(self) -> Publication | None:
         with self._lock:
@@ -99,6 +104,7 @@ class SnapshotPublisher:
     def publish(self) -> None:
         snapshot = self.source.snapshot()
         display = self.frames.snapshot()
+        cameras = self.cameras
         observed_at = datetime.now(UTC).isoformat()
         previous = self.latest()
         revision = previous.revision + 1 if previous else 1
@@ -108,7 +114,7 @@ class SnapshotPublisher:
         frames = {frame.frame_id.camera_id: frame for frame in display.frames}
         images: list[EncodedImage] = []
         rows: list[dict[str, object]] = []
-        for camera_id in self.cameras:
+        for camera_id in cameras:
             frame = frames.get(camera_id)
             row: dict[str, object] = {
                 "camera_id": str(camera_id),
@@ -198,7 +204,7 @@ class SnapshotPublisher:
             "generation": snapshot.generation,
             "latest_cycle_id": int(result.cycle_id) if result else None,
             "display_revision": display.revision,
-            "configured_camera_ids": [str(camera) for camera in self.cameras],
+            "configured_camera_ids": [str(camera) for camera in cameras],
             "cameras": rows,
         }
         publication = Publication(

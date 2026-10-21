@@ -1,6 +1,6 @@
 # Capsule Vision Inspection
 
-Windows desktop application for six-camera, 36-channel capsule inspection.
+Windows desktop application for five-camera/30-channel or six-camera/36-channel capsule inspection.
 It combines passive Basler hardware-trigger acquisition or Folder Replay, one
 serial ViMo engine, Occupancy/Size/Color checks, FINS UDP/TCP communication and
 PLC result reporting. The multilingual Qt UI has Production, Recipe,
@@ -59,7 +59,10 @@ required data produces UNCONFIGURED with actionable feedback. It never chooses
 the first available model/Recipe, invents ROIs or substitutes fake inference.
 
 - **Vision:** edit Folder inputs or explicitly assign/discover Basler serials on
-  the six camera cards, calibrate Machine ROIs and Save/apply. Basler Connect all
+  the six configuration positions, calibrate Machine ROIs and Save/apply. CAM6 can
+  be explicitly removed while stopped/disconnected; its + action initializes an
+  editable CAM5 ROI template with fresh CAM6/CH31–CH36 identities and empty sources.
+  Calibrate it against CAM6's actual image and assign its source before use. Basler Connect all
   is explicit; disconnect before editing source identity. While inspection is
   stopped, Capture image waits up to ten seconds for the selected camera's next
   external-triggered frame. Import and eligible frozen Runtime images are also

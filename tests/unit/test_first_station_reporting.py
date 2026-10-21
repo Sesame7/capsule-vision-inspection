@@ -63,6 +63,7 @@ def test_partial_outcomes_preserve_completed_and_reject_missing(
     )
     data = FirstStationReport.from_result(1, partial)
     expected = FirstStationReport.from_result(1, result).reject_words
+    assert len(expected) == 3
     assert data.reject_words == (expected[0] | 0x3F, expected[1], expected[2])
     assert len(data.statuses) == 36 and data.result_ready_at == partial.result_ready_at
 

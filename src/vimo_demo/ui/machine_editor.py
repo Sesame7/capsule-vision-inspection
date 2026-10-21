@@ -6,7 +6,12 @@ from pathlib import Path
 from vimo_demo.configuration import MachineLayoutDefinition, save_machine_layout
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId
-from vimo_demo.inspection.production import CameraLayout, InspectionLayout
+from vimo_demo.inspection.production import (
+    CameraLayout,
+    ChannelId,
+    ChannelROI,
+    InspectionLayout,
+)
 
 from .roi_geometry import fits, pixel
 
@@ -48,6 +53,37 @@ class MachineLayoutDraft:
                     for c in self.definition.layout.cameras
                 )
             ),
+        )
+
+    def remove_camera_six(self) -> None:
+        """Explicit draft edit; callers confirm loss before invoking this operation."""
+        if len(self.definition.layout.cameras) != 6:
+            raise ValueError("CAM6 is not configured")
+        self.definition = replace(
+            self.definition,
+            layout=InspectionLayout(
+                tuple(
+                    row
+                    for row in self.definition.layout.cameras
+                    if row.camera_id != CameraId("CAM6")
+                )
+            ),
+        )
+
+    def restore_camera_six(self) -> None:
+        """Initialize an editable, uncalibrated CAM6 template from current CAM5."""
+        if len(self.definition.layout.cameras) != 5:
+            raise ValueError("CAM6 is already configured")
+        camera = CameraLayout(
+            CameraId("CAM6"),
+            tuple(
+                ChannelROI(slot.slot, ChannelId(31 + slot.slot), replace(slot.rect))
+                for slot in self.camera(CameraId("CAM5")).slots
+            ),
+        )
+        self.definition = replace(
+            self.definition,
+            layout=InspectionLayout((*self.definition.layout.cameras, camera)),
         )
 
     def common_size(self, camera: CameraId, width: int, height: int) -> None:

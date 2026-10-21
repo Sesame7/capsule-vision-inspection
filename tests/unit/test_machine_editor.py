@@ -9,8 +9,80 @@ from tests.unit.test_configuration import machine
 from vimo_demo.configuration import ConfigurationIOError, load_machine_layout
 from vimo_demo.inference import BoundingRect
 from vimo_demo.inspection import CameraId
-from vimo_demo.inspection.production import InspectionLayout
+from vimo_demo.inspection.production import ChannelId, InspectionLayout
 from vimo_demo.ui.machine_editor import MachineLayoutDraft
+
+
+def test_cam6_template_uses_draft_cam5_with_independent_geometry_and_identities(
+    tmp_path: Path,
+) -> None:
+    original = machine(mirrored=True)
+    working = MachineLayoutDraft(original, tmp_path / "machine.json")
+    working.remove_camera_six()
+    assert working.saved == original and working.dirty
+    assert working.definition.layout.cameras == original.layout.cameras[:5]
+    working.replace_rects(
+        CameraId("CAM5"),
+        tuple(
+            replace(s.rect, x=s.rect.x + s.slot + 2, height=11 + s.slot)
+            for s in working.camera(CameraId("CAM5")).slots
+        ),
+    )
+    five = working.definition
+    working.restore_camera_six()
+    assert working.definition.layout.cameras[:5] == five.layout.cameras
+    assert working.saved == original and working.dirty
+    template = working.camera(CameraId("CAM6"))
+    assert [s.slot for s in template.slots] == list(range(6))
+    assert [s.channel_id for s in template.slots] == list(range(31, 37))
+    cam5 = working.camera(CameraId("CAM5"))
+    for source, target in zip(cam5.slots, template.slots, strict=True):
+        assert source.rect == target.rect and source.rect is not target.rect
+        assert source is not target and source.channel_id != target.channel_id
+    with pytest.raises(ValueError):
+        working.restore_camera_six()
+    working.replace_rects(
+        CameraId("CAM6"),
+        (replace(template.slots[0].rect, x=8), *(s.rect for s in template.slots[1:])),
+    )
+    assert working.camera(CameraId("CAM5")) == cam5
+    working.bounds[CameraId("CAM6")] = (60, 8)
+    before = working.definition
+    with pytest.raises(ValueError, match="outside"):
+        working.save()
+    assert working.definition == before and working.saved == original
+    assert working.path is not None and not working.path.exists()
+    working.bounds[CameraId("CAM6")] = (200, 40)
+    working.save()
+    assert load_machine_layout(working.path) == before and not working.dirty
+    working.replace_rects(CameraId("CAM6"), tuple(s.rect for s in template.slots))
+    assert working.dirty
+    working.discard()
+    assert working.definition == before and not working.dirty
+
+
+def test_camera_removal_does_not_renumber_incompatible_existing_mapping() -> None:
+    original = machine(mirrored=True)
+    # Reversed global identity cannot be made into thirty channels by renumbering.
+    remapped = replace(
+        original,
+        layout=InspectionLayout(
+            tuple(
+                replace(
+                    c,
+                    slots=tuple(
+                        replace(s, channel_id=ChannelId(37 - s.channel_id))
+                        for s in c.slots
+                    ),
+                )
+                for c in original.layout.cameras
+            )
+        ),
+    )
+    working = MachineLayoutDraft(remapped, None)
+    with pytest.raises(ValueError):
+        working.remove_camera_six()
+    assert working.definition == remapped
 
 
 def draft(path: Path) -> MachineLayoutDraft:
