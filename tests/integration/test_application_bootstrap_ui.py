@@ -48,7 +48,7 @@ def test_absent_data_opens_five_page_unconfigured_shell(
         window.navigate(1)
         window.navigate(4)
         window.language_selector.activated.emit(
-            1 - window.language_selector.currentIndex()
+            window.language_selector.findData("en" if window.language == "zh" else "zh")
         )
         assert window.language == "en"
         preferences = load_preferences(startup.data.preferences)
@@ -91,7 +91,7 @@ def test_saved_apply_language_restart_and_no_production_side_effects(
         )
         assert startup.application.snapshot().candidate is not None
         window.language_selector.activated.emit(
-            1 - window.language_selector.currentIndex()
+            window.language_selector.findData("en" if window.language == "zh" else "zh")
         )
         assert load_preferences(data.preferences).language == "zh"
         snapshot = startup.application.snapshot()
@@ -234,7 +234,7 @@ def test_unreliable_preferences_are_never_overwritten_by_ui(
         for index in range(5):
             window.navigate(index)
         window.language_selector.activated.emit(
-            1 - window.language_selector.currentIndex()
+            window.language_selector.findData("en" if window.language == "zh" else "zh")
         )
         assert data.preferences.read_bytes() == original
         assert "ConfigurationError" in window.event_label.toolTip()
@@ -349,7 +349,7 @@ def test_preferences_write_error_is_visible_and_retains_selection(
     monkeypatch.setattr("vimo_demo.application.preferences.os.replace", fail)
     try:
         window.language_selector.activated.emit(
-            1 - window.language_selector.currentIndex()
+            window.language_selector.findData("en" if window.language == "zh" else "zh")
         )
         assert load_preferences(data.preferences) == before
         assert "ConfigurationIOError" in window.event_label.toolTip()

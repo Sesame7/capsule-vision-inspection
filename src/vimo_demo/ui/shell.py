@@ -26,7 +26,7 @@ from .production_style import (
     text,
     theme_colors,
 )
-from .translations import LANGUAGE_NAMES
+from .translations import LANGUAGE_DISPLAY_ORDER, LANGUAGE_NAMES
 
 PAGES = ("production", "parameters", "diagnostics", "history", "settings")
 LANGUAGE_LABELS = {
@@ -59,6 +59,13 @@ LANGUAGE_LABELS = {
     "sr-Latn": "SR",
     "el": "EL",
     "pt-PT": "PT-PT",
+    "vi": "VI",
+    "ms": "MS",
+    "fil": "FIL",
+    "sw": "SW",
+    "th": "TH",
+    "hi": "HI",
+    "bn": "BN",
 }
 
 
@@ -189,7 +196,7 @@ class NavigationBar(QFrame):
         self.language.setObjectName("language")
         self.language.setFixedHeight(Style.touch)
         self.language.setIconSize(QSize(20, 20))
-        for language in LANGUAGES:
+        for language in LANGUAGE_DISPLAY_ORDER:
             self.language.addItem(LANGUAGE_NAMES[language], language)
         # Use the screen's available height before Qt falls back to scrolling.
         self.language.setMaxVisibleItems(len(LANGUAGES))

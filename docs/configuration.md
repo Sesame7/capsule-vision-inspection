@@ -39,19 +39,27 @@ UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chi
 `nl` (Dutch), `pl` (Polish), `uk` (Ukrainian), `ro` (Romanian), `cs` (Czech),
 `hu` (Hungarian), `sv` (Swedish), `da` (Danish), `fi` (Finnish),
 `nb` (Norwegian Bokmål), `sk` (Slovak), `bg` (Bulgarian), `hr` (Croatian),
-`sr-Latn` (Serbian Latin), `el` (Greek) and `pt-PT` (European Portuguese).
+`sr-Latn` (Serbian Latin), `el` (Greek), `pt-PT` (European Portuguese),
+`vi` (Vietnamese), `ms` (Malay), `fil` (Filipino), `sw` (Swahili),
+`th` (Thai), `hi` (Hindi) and `bn` (Bengali).
 The collapsed selector uses compact language labels; its popup shows full native
-names in a single column that expands to fit all 29 languages when screen height
+names in a single column that expands to fit all 36 languages when screen height
 permits. On shorter screens the popup stays within the available work area and
-provides scrolling; mouse and keyboard selection retain the same ordering.
-`pt-PT` and `pt-BR` are distinct.
+provides scrolling. Display order pins `zh`, `zh-TW`, `en`, then sorts Latin-script
+native names case/accent-insensitively. Greek, Cyrillic, Japanese, Korean, Thai,
+Devanagari and Bengali groups follow; native-name order is stable within groups.
+This presentation order is independent of saved codes and does not change with
+the active language or theme. `pt-PT` and `pt-BR` are distinct.
 It saves only the existing language preference;
 switching does not save configuration drafts or change an active inspection.
 Existing `zh`/`en` and omitted-language files remain compatible. Unknown codes
 fall back to Chinese in memory with a warning, preserving the file for repair.
 Optional untranslated text uses English. Technical identifiers, model labels and
 reason codes are preserved. Layout is left-to-right; the supported minimum is
-1080 Qt logical pixels. Windows must provide fonts for the selected script.
+1080 Qt logical pixels. Windows must provide fonts for the selected script,
+including Vietnamese marks, Thai, Devanagari and Bengali shaping. Qt uses existing
+Windows font fallback (such as Tahoma/Leelawadee UI and Nirmala UI); fonts are not
+downloaded, bundled or converted at runtime.
 
 ## History storage
 

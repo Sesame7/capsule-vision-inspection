@@ -19,7 +19,11 @@ from vimo_demo.application.preferences import (
 )
 from vimo_demo.ui import translations as translation_resources
 from vimo_demo.ui.production_style import STRINGS, text
-from vimo_demo.ui.translations import EXTRA_STRINGS, LANGUAGE_NAMES
+from vimo_demo.ui.translations import (
+    EXTRA_STRINGS,
+    LANGUAGE_DISPLAY_ORDER,
+    LANGUAGE_NAMES,
+)
 
 EUROPEAN_LANGUAGES: dict[Language, str] = {
     "nl": "Nederlands",
@@ -40,10 +44,21 @@ EUROPEAN_LANGUAGES: dict[Language, str] = {
     "pt-PT": "Português (Portugal)",
 }
 
+ASIAN_AFRICAN_LANGUAGES: dict[Language, str] = {
+    "vi": "Tiếng Việt",
+    "ms": "Bahasa Melayu",
+    "fil": "Filipino",
+    "sw": "Kiswahili",
+    "th": "ไทย",
+    "hi": "हिन्दी",
+    "bn": "বাংলা",
+}
+
 
 def test_european_language_identities_and_complete_catalogs() -> None:
-    assert LANGUAGES[13:] == tuple(EUROPEAN_LANGUAGES)
-    for language, native_name in EUROPEAN_LANGUAGES.items():
+    assert LANGUAGES[13:29] == tuple(EUROPEAN_LANGUAGES)
+    assert LANGUAGES[29:] == tuple(ASIAN_AFRICAN_LANGUAGES)
+    for language, native_name in (EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES).items():
         assert is_language(language)
         assert LANGUAGE_NAMES[language] == native_name
         assert EXTRA_STRINGS[language].keys() == STRINGS.keys(), language
@@ -62,6 +77,73 @@ def test_explicit_variants_have_independent_translations(
     assert EXTRA_STRINGS["pt-BR"] == brazilian
 
 
+def test_display_order_is_separate_from_saved_language_identities() -> None:
+    assert LANGUAGE_DISPLAY_ORDER == (
+        "zh",
+        "zh-TW",
+        "en",
+        "id",
+        "ms",
+        "cs",
+        "da",
+        "de",
+        "es",
+        "fil",
+        "fr",
+        "hr",
+        "it",
+        "sw",
+        "hu",
+        "nl",
+        "nb",
+        "pl",
+        "pt-BR",
+        "pt-PT",
+        "ro",
+        "sk",
+        "sr-Latn",
+        "fi",
+        "sv",
+        "vi",
+        "tr",
+        "el",
+        "bg",
+        "ru",
+        "uk",
+        "ja",
+        "ko",
+        "th",
+        "hi",
+        "bn",
+    )
+    assert set(LANGUAGE_DISPLAY_ORDER) == set(LANGUAGES)
+    assert len(LANGUAGE_DISPLAY_ORDER) == len(set(LANGUAGE_DISPLAY_ORDER))
+    assert LANGUAGES[:3] == ("zh", "en", "ja")
+    assert LANGUAGES[12] == "zh-TW"
+
+
+@pytest.mark.parametrize("language", ASIAN_AFRICAN_LANGUAGES)
+def test_new_catalogs_preserve_critical_protocol_and_result_distinctions(
+    language: Language,
+) -> None:
+    assert "FINS" in text("plc_ack_hint", language)
+    assert "ACK" in text("plc_ack_hint", language)
+    assert "PLC" in text("plc_ack_hint", language)
+    assert "W49" in text("plc_reserved_write", language)
+    assert "W52" in text("plc_reserved_write", language)
+    assert "EMPTY" in text("preview_scope_tip", language)
+    assert "Occupancy" in text("preview_scope_tip", language)
+    for key, code in (
+        ("technical_success", "SUCCESS"),
+        ("technical_error", "ERROR"),
+        ("technical_disabled", "DISABLED"),
+        ("occupancy_empty", "EMPTY"),
+        ("occupancy_present", "PRESENT"),
+        ("occupancy_unknown", "UNKNOWN"),
+    ):
+        assert text(key, language) == code
+
+
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_language_preferences_round_trip(tmp_path: Path, language: Language) -> None:
     path = tmp_path / "app.json"
@@ -70,6 +152,13 @@ def test_language_preferences_round_trip(tmp_path: Path, language: Language) -> 
     loaded = read_preferences(path)
     assert loaded.preferences == expected
     assert not loaded.invalid_language
+
+
+def test_vietnamese_ack_does_not_confirm_physical_product_rejection() -> None:
+    assert text("plc_next_start", "vi") == (
+        "Chỉ áp dụng cấu hình đã lưu ở lần Start tới; "
+        "ACK không xác nhận sản phẩm đã thực sự bị loại bỏ."
+    )
 
 
 def test_catalog_essential_coverage_and_format_fields() -> None:
@@ -168,7 +257,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     }
     assert tuple(LANGUAGE_NAMES) == LANGUAGES
     assert set(EXTRA_STRINGS) == set(LANGUAGES) - {"zh", "en"}
-    assert len(set(LANGUAGES)) == len(LANGUAGES) == 29
+    assert len(set(LANGUAGES)) == len(LANGUAGES) == 36
     assert LANGUAGE_NAMES["zh-TW"] == "繁體中文"
     assert len(set(LANGUAGE_NAMES.values())) == len(LANGUAGES)
     formatter = Formatter()
@@ -196,13 +285,15 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
 
 @pytest.mark.parametrize("language", LANGUAGES[2:])
 def test_optional_translation_falls_back_to_english(language: Language) -> None:
-    if language not in EUROPEAN_LANGUAGES:
+    if language not in EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES:
         assert "history_clock" not in EXTRA_STRINGS[language]
     for key in STRINGS.keys() - EXTRA_STRINGS[language].keys():
         assert text(key, language) == STRINGS[key][1], (key, language)
 
 
-@pytest.mark.parametrize("language", ("ja", *EUROPEAN_LANGUAGES))
+@pytest.mark.parametrize(
+    "language", ("ja", *EUROPEAN_LANGUAGES, *ASIAN_AFRICAN_LANGUAGES)
+)
 def test_optional_translation_can_be_omitted_for_only_one_language(
     language: Language,
     monkeypatch: pytest.MonkeyPatch,
@@ -248,7 +339,7 @@ def test_catalog_literals_have_no_duplicate_language_or_text_keys() -> None:
 
 
 def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
-    # Pre-L2-0 (13) and pre-L2-A2 (8) resolved text and explicit keys.
+    # Pre-L2-0 (13), pre-L2-A2 (8), and pre-L2-B1 (8) text and explicit keys.
     # Review these migration snapshots explicitly when catalog content changes.
     expected: dict[Language, str] = {
         "zh": "172cc2b271d593db07941b65f57444e39d8840a2bbbe0df7c57f3e87ac0de1d1",
@@ -272,8 +363,16 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
         "hu": "5ba97d3227739ef47c439d8ff1d812857c0526d710acc9bb69eddba182cc9b51",
         "sv": "a14d337c547e29d59ce1021cf2b55acb8c2efd9534dbe01d3009635a49f6ae6d",
         "da": "b238673e678a97d7f134edaf7d2f242d9212fbc45a9bc58a05437ef6a321c90b",
+        "fi": "97136b3d3cb8a0969b1889bbcc7922473638daac402d256f704841888d2e435b",
+        "nb": "2494537d36c23fb923cf682d903d00c553190f26254358ad1574a1dcfc5ef06a",
+        "sk": "19d4514fd7b04a9076466361375c3add10e4e7fe940423498cef5ed4a2f4c70c",
+        "bg": "06c77c1e7304e2315b01f9611f29a8b5a373a4e2eb704eac496534e0915a7e95",
+        "hr": "1c3119e5acaa56eac97f71f1a205fc2e8b071adacd18aa9f04a3bf8dc722534b",
+        "sr-Latn": "e66be778ee69d4fb018713d7cbccf9b7314023bd8532b0b4cafc39ae52416d3a",
+        "el": "1155761b93a1e38ea01cb5d3c1e86d6ca3a487fd9d95fccf03c6dd4373151d28",
+        "pt-PT": "0cba9d1fbeaf742da4aa9bec5efa2a182fe4d57733efa3722a301eb595566a2f",
     }
-    assert tuple(expected) == LANGUAGES[:21]
+    assert tuple(expected) == LANGUAGES[:29]
     for language, digest in expected.items():
         catalog = {
             "resolved": {key: text(key, language) for key in STRINGS},
@@ -296,8 +395,13 @@ def test_language_codes_are_exact_and_invalid_types_remain_rejected() -> None:
         "sr-Cyrl",
         "EN",
         "zh-CN",
-        "vi",
-        "th",
+        "vi-VN",
+        "ms-MY",
+        "tl",
+        "sw-KE",
+        "th-TH",
+        "hi-IN",
+        "bn-BD",
         None,
         1,
         ["en"],

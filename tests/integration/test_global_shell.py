@@ -29,7 +29,7 @@ from vimo_demo.inspection.production import ProductJudgment, TechnicalStatus
 from vimo_demo.ui.production_style import Language, Style, text
 from vimo_demo.ui.production_window import ProductionWindow
 from vimo_demo.ui.shell import LANGUAGE_LABELS
-from vimo_demo.ui.translations import LANGUAGE_NAMES
+from vimo_demo.ui.translations import LANGUAGE_DISPLAY_ORDER, LANGUAGE_NAMES
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
@@ -129,7 +129,7 @@ def test_navigation_language_and_themes_preserve_presentation_contract(
                 case
             )
             window.language_selector.activated.emit(
-                1 - window.language_selector.currentIndex()
+                window.language_selector.findData("en" if current == "zh" else "zh")
             )
             QApplication.processEvents()
             assert window.language != current, case
@@ -325,9 +325,9 @@ def test_language_popup_retains_all_native_names_within_available_screen(
     selector = window.language_selector
     selected = selector.currentData()
     application = window.bridge.application.snapshot()
-    assert selector.count() == selector.maxVisibleItems() == 29
-    assert [(selector.itemText(i), selector.itemData(i)) for i in range(29)] == [
-        (LANGUAGE_NAMES[language], language) for language in LANGUAGES
+    assert selector.count() == selector.maxVisibleItems() == 36
+    assert [(selector.itemText(i), selector.itemData(i)) for i in range(36)] == [
+        (LANGUAGE_NAMES[language], language) for language in LANGUAGE_DISPLAY_ORDER
     ]
     selector.showPopup()
     try:
@@ -336,7 +336,7 @@ def test_language_popup_retains_all_native_names_within_available_screen(
         popup = view.window()
         assert popup.isVisible()
         assert popup.screen().availableGeometry().contains(popup.frameGeometry())
-        for row in range(29):
+        for row in range(36):
             index = selector.model().index(row, 0)
             view.scrollTo(index)
             QApplication.processEvents()
@@ -361,11 +361,11 @@ def test_language_popup_retains_all_native_names_within_available_screen(
     QTest.keyClick(selector.view(), Qt.Key.Key_End)
     QTest.keyClick(selector.view(), Qt.Key.Key_Return)
     QApplication.processEvents()
-    assert selector.currentData() == "pt-PT" and window.language == "pt-PT"
+    assert selector.currentData() == "bn" and window.language == "bn"
     assert window.bridge.application.snapshot() == application
 
 
-@pytest.mark.parametrize("height", [500, 1040])
+@pytest.mark.parametrize("height", [500, 1040, 1857])
 def test_language_popup_uses_available_work_area_before_scrolling(
     screen: tuple[ProductionWindow, FakeSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -386,11 +386,14 @@ def test_language_popup_uses_available_work_area_before_scrolling(
             view = selector.view()
             assert bounds.contains(view.window().frameGeometry())
             rows_height = sum(view.sizeHintForRow(i) for i in range(selector.count()))
-            if height == 1040:
+            if height == 1857:
                 assert view.viewport().height() >= rows_height
                 assert view.verticalScrollBar().maximum() == 0
-            else:
+            elif height == 500:
                 assert view.verticalScrollBar().maximum() > 0
+            assert (view.verticalScrollBar().maximum() == 0) == (
+                rows_height <= view.viewport().height()
+            )
             for row in range(selector.count()):
                 index = selector.model().index(row, 0)
                 view.scrollTo(index)
