@@ -52,6 +52,13 @@ ASIAN_AFRICAN_LANGUAGES: dict[Language, str] = {
     "th": "ไทย",
     "hi": "हिन्दी",
     "bn": "বাংলা",
+    "ta": "தமிழ்",
+    "te": "తెలుగు",
+    "mr": "मराठी",
+    "ne": "नेपाली",
+    "si": "සිංහල",
+    "am": "አማርኛ",
+    "km": "ខ្មែរ",
 }
 
 
@@ -113,8 +120,15 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "ja",
         "ko",
         "th",
+        "ne",
+        "mr",
         "hi",
         "bn",
+        "ta",
+        "te",
+        "si",
+        "am",
+        "km",
     )
     assert set(LANGUAGE_DISPLAY_ORDER) == set(LANGUAGES)
     assert len(LANGUAGE_DISPLAY_ORDER) == len(set(LANGUAGE_DISPLAY_ORDER))
@@ -159,6 +173,108 @@ def test_vietnamese_ack_does_not_confirm_physical_product_rejection() -> None:
         "Chỉ áp dụng cấu hình đã lưu ở lần Start tới; "
         "ACK không xác nhận sản phẩm đã thực sự bị loại bỏ."
     )
+
+
+def test_tamil_fault_ack_and_history_observations_keep_their_scope() -> None:
+    assert text("FAULT", "ta") == "அமைப்புக் கோளாறு"
+    assert text("error_ng", "ta") == "NG + தொழில்நுட்ப பிழை"
+    assert text("plc_ack_hint", "ta") == (
+        "ACK என்பது FINS எழுதுதல் பதிலை மட்டுமே உறுதிப்படுத்துகிறது; "
+        "PLC முடிவைப் பயன்படுத்தியதையோ தொடர்ச்சியான இணைப்பையோ உறுதிப்படுத்தாது. "
+        "எண்ணிக்கைகள் காட்டப்பட்ட அறிக்கை தலைமுறைக்கு உரியவை."
+    )
+    assert text("history_clock", "ta") == (
+        "கணினியின் உள்ளூர் கடிகாரப்படி கவனிக்கப்பட்ட நிறைவு நேரம்; "
+        "கேமரா வெளிப்பாட்டு நேரம் அல்ல. "
+        "வரலாறு வரம்புடன் இயன்றவரை சேமிக்கப்படுகிறது."
+    )
+
+
+def test_telugu_enable_and_admission_do_not_claim_machine_control() -> None:
+    assert text("plc_enable", "te") == "సక్రియం చేయి"
+    assert text("plc_enable", "te") != text("replay_start", "te")
+    assert text("basler_control_help", "te") == (
+        "తనిఖీకి చిత్రాల ప్రవేశాన్ని మాత్రమే నియంత్రిస్తుంది; "
+        "యంత్రాన్ని లేదా PLCని నియంత్రించదు. "
+        "విరామంలో చిత్రాలు విస్మరించబడతాయి; "
+        "ఒక అడుగు తదుపరి బాహ్య ట్రిగర్ కోసం మరియు "
+        "ఫలితం/నివేదిక పూర్తయ్యే వరకు వేచి ఉంటుంది."
+    )
+
+
+@pytest.mark.parametrize("language, camera", [("te", "కెమెరా"), ("mr", "कॅमेरा")])
+def test_reviewed_camera_terms_preserve_camera_number_identity(
+    language: Language, camera: str
+) -> None:
+    assert text("camera_setup", language).startswith(camera + " ")
+    assert text("camera_number", language).format(number=6) == camera + " 6"
+
+
+def test_marathi_manual_write_guard_retains_reporting_ownership() -> None:
+    assert text("plc_reserved_write", "mr") == (
+        "स्वयंचलित अहवालाकडे सत्राचा ताबा असताना W49–W52 मध्ये हाताने लिहिणे रोखले जाते."
+    )
+
+
+def test_nepali_unsaved_and_failed_save_are_not_safety_or_success_claims() -> None:
+    assert text("unsaved", "ne") == "सेभ नगरिएका परिवर्तनहरू"
+    assert text("dirty_question", "ne") == (
+        "सेभ नगरिएको मस्यौदा। सेभ गरी लागू गर्ने, परिवर्तन त्याग्ने वा रद्द गर्ने?"
+    )
+    assert text("comm_settings_failed", "ne") == (
+        "सेभ गर्न असफल; सेटिङ वा फाइल अनुमति जाँच्नुहोस्"
+    )
+    assert text("result_unavailable", "ne") == "नतिजा उपलब्ध छैन"
+
+
+def test_sinhala_start_spelling_preserves_next_start_and_failure_states() -> None:
+    assert text("start", "si") == "පරීක්ෂාව ආරම්භ කරන්න"
+    assert text("plc_enabled", "si") == "සක්‍රිය · ඊළඟ ආරම්භය"
+    assert text("plc_starting", "si") == "සක්‍රිය · ආරම්භ කරමින්"
+    assert text("startup_error", "si") == "ආරම්භය අසාර්ථක"
+
+
+@pytest.mark.parametrize("language", LANGUAGES[36:])
+def test_additional_catalogs_translate_text_and_keep_protocol_codes(
+    language: Language,
+) -> None:
+    unchanged_codes = {
+        "production_ng",
+        "production_ok",
+        "production_empty",
+        "preview_disabled_short",
+        "preview_error_short",
+        "ok",
+        "ng",
+        "empty",
+        "occupancy_empty",
+        "occupancy_present",
+        "occupancy_unknown",
+        "technical_success",
+        "technical_error",
+        "technical_disabled",
+        "comm_dec",
+        "comm_table_hex",
+    }
+    assert {
+        key
+        for key, value in EXTRA_STRINGS[language].items()
+        if value == STRINGS[key][1]
+    } == unchanged_codes
+    # Reviewed terms distinguish physical removal from product type, and
+    # retention of the unsaved draft from a successful save.
+    terms: dict[Language, tuple[str, str]] = {
+        "ta": ("வெளியேற்ற", "வரைவு பாதுகாக்கப்பட்டது"),
+        "te": ("భౌతికంగా", "ముసాయిదా నిలబడింది"),
+        "mr": ("प्रत्यक्ष", "मसुदा कायम"),
+        "ne": ("भौतिकरूपमा", "मस्यौदा कायम छ"),
+        "si": ("භෞතිකව", "කෙටුම්පත රැකී ඇත"),
+        "am": ("በአካል", "ረቂቁ ተጠብቋል"),
+        "km": ("ពិតប្រាកដ", "សេចក្តីព្រាងនៅដដែល"),
+    }
+    physical_rejection, retained_draft = terms[language]
+    assert physical_rejection in text("plc_next_start", language)
+    assert retained_draft in text("comm_reload_failed", language)
 
 
 def test_catalog_essential_coverage_and_format_fields() -> None:
@@ -257,7 +373,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     }
     assert tuple(LANGUAGE_NAMES) == LANGUAGES
     assert set(EXTRA_STRINGS) == set(LANGUAGES) - {"zh", "en"}
-    assert len(set(LANGUAGES)) == len(LANGUAGES) == 36
+    assert len(set(LANGUAGES)) == len(LANGUAGES) == 43
     assert LANGUAGE_NAMES["zh-TW"] == "繁體中文"
     assert len(set(LANGUAGE_NAMES.values())) == len(LANGUAGES)
     formatter = Formatter()
@@ -339,7 +455,7 @@ def test_catalog_literals_have_no_duplicate_language_or_text_keys() -> None:
 
 
 def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
-    # Pre-L2-0 (13), pre-L2-A2 (8), and pre-L2-B1 (8) text and explicit keys.
+    # Accepted catalogs preceding each expansion, including all pre-L2-B2 text.
     # Review these migration snapshots explicitly when catalog content changes.
     expected: dict[Language, str] = {
         "zh": "172cc2b271d593db07941b65f57444e39d8840a2bbbe0df7c57f3e87ac0de1d1",
@@ -371,8 +487,15 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
         "sr-Latn": "e66be778ee69d4fb018713d7cbccf9b7314023bd8532b0b4cafc39ae52416d3a",
         "el": "1155761b93a1e38ea01cb5d3c1e86d6ca3a487fd9d95fccf03c6dd4373151d28",
         "pt-PT": "0cba9d1fbeaf742da4aa9bec5efa2a182fe4d57733efa3722a301eb595566a2f",
+        "vi": "fe2234a5fd8a62ebecc9e2f1571b3f4c50ec534d2d472f934d82e8eab669f325",
+        "ms": "fa9a6e4972020e4c76406843cfc8dbb707f76b37af10a5f41c3aeeed59e4ebac",
+        "fil": "b47418951e2e6bcfd15d12d7bf057b372ac4a7ebe04939821f4d084a47999421",
+        "sw": "5188b3d553674f518bd607b40c1dc94ac2fb189f926091a05708380bf7f9c82d",
+        "th": "d4a21693d597d2083945244d0094c8bbb054b11bb90e00331da448f22d2af9fb",
+        "hi": "7fca2040d86812fe2c58537b6f4cb64dfa5df6eb20a090664ab4ed3ff00ebac2",
+        "bn": "d942fb44c47e9bf7f277dfbfca0b4c5283c484bc38553df6e92814b4e78eb7a5",
     }
-    assert tuple(expected) == LANGUAGES[:29]
+    assert tuple(expected) == LANGUAGES[:36]
     for language, digest in expected.items():
         catalog = {
             "resolved": {key: text(key, language) for key in STRINGS},
@@ -402,6 +525,13 @@ def test_language_codes_are_exact_and_invalid_types_remain_rejected() -> None:
         "th-TH",
         "hi-IN",
         "bn-BD",
+        "ta-IN",
+        "te-IN",
+        "mr-IN",
+        "ne-NP",
+        "si-LK",
+        "am-ET",
+        "km-KH",
         None,
         1,
         ["en"],

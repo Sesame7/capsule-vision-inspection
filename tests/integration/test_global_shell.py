@@ -325,8 +325,8 @@ def test_language_popup_retains_all_native_names_within_available_screen(
     selector = window.language_selector
     selected = selector.currentData()
     application = window.bridge.application.snapshot()
-    assert selector.count() == selector.maxVisibleItems() == 36
-    assert [(selector.itemText(i), selector.itemData(i)) for i in range(36)] == [
+    assert selector.count() == selector.maxVisibleItems() == 43
+    assert [(selector.itemText(i), selector.itemData(i)) for i in range(43)] == [
         (LANGUAGE_NAMES[language], language) for language in LANGUAGE_DISPLAY_ORDER
     ]
     selector.showPopup()
@@ -336,7 +336,7 @@ def test_language_popup_retains_all_native_names_within_available_screen(
         popup = view.window()
         assert popup.isVisible()
         assert popup.screen().availableGeometry().contains(popup.frameGeometry())
-        for row in range(36):
+        for row in range(43):
             index = selector.model().index(row, 0)
             view.scrollTo(index)
             QApplication.processEvents()
@@ -361,7 +361,7 @@ def test_language_popup_retains_all_native_names_within_available_screen(
     QTest.keyClick(selector.view(), Qt.Key.Key_End)
     QTest.keyClick(selector.view(), Qt.Key.Key_Return)
     QApplication.processEvents()
-    assert selector.currentData() == "bn" and window.language == "bn"
+    assert selector.currentData() == "km" and window.language == "km"
     assert window.bridge.application.snapshot() == application
 
 

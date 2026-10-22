@@ -66,6 +66,13 @@ LANGUAGE_LABELS = {
     "th": "TH",
     "hi": "HI",
     "bn": "BN",
+    "ta": "TA",
+    "te": "TE",
+    "mr": "MR",
+    "ne": "NE",
+    "si": "SI",
+    "am": "AM",
+    "km": "KM",
 }
 
 
