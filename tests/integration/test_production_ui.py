@@ -13,8 +13,8 @@ from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QLabel, QWi
 from tests.application_support import FakeSession, production
 from tests.business_support import channel, mixed_result
 from tests.production_support import source_frame
+from tests.qt_support import assert_full_caption, until
 from tests.qt_support import screen as screen
-from tests.qt_support import until
 
 from vimo_demo.application import (
     ApplicationState,
@@ -22,6 +22,8 @@ from vimo_demo.application import (
     ProductionApplicationSnapshot,
     ProductionCounters,
 )
+from vimo_demo.application.local_replay import ReplaySnapshot, ReplayState
+from vimo_demo.application.preferences import LANGUAGES
 from vimo_demo.inspection import CameraId, CycleId
 from vimo_demo.inspection.production import (
     Assessment,
@@ -1525,7 +1527,14 @@ def _assert_long_summary(
     )
     identity = window.identity_group
     center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
-    assert abs(center - window.summary.width() / 2) <= 1
+    if (
+        2 * window.operation_group.width() + identity.width() + 2 * Style.space
+        <= window.summary.width()
+    ):
+        assert abs(center - window.summary.width() / 2) <= 1
+    else:
+        assert batch.geometry().right() < identity.geometry().left()
+        assert identity.geometry().right() < window.operation_group.geometry().left()
     assert not window.pending_label.isVisible()
     assert "Long Recipe" in window.identity_label.toolTip()
     operation = window.buttons["operation"]
@@ -1610,7 +1619,16 @@ def _assert_batch_snapshots(
         )
         identity = window.identity_group
         center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
-        assert abs(center - window.summary.width() / 2) <= 1
+        if (
+            2 * window.operation_group.width() + identity.width() + 2 * Style.space
+            <= window.summary.width()
+        ):
+            assert abs(center - window.summary.width() / 2) <= 1
+        else:
+            assert group.geometry().right() < identity.geometry().left()
+            assert (
+                identity.geometry().right() < window.operation_group.geometry().left()
+            )
         operation_positions.append(
             window.buttons["operation"].mapTo(window.summary, QPoint())
         )
@@ -1707,3 +1725,60 @@ def test_production_layout_indicators_and_header_stability(
     except Exception as exc:
         exc.add_note(f"Production stages: size={size}, language={language}")
         raise
+
+
+@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
+def test_multilingual_player_captions_fit_without_moving_camera_layout(
+    screen: tuple[ProductionWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+    size: tuple[int, int],
+) -> None:
+    window, session = screen
+    window.resize(*size)
+    QApplication.processEvents()
+    before = window.bridge.application.snapshot()
+    buttons = tuple(window.buttons[key] for key in ("operation", "pause", "stop"))
+    slots = tuple(button.geometry() for button in buttons)
+    cameras = tuple(card.geometry() for card in window.cards)
+    monkeypatch.setattr(
+        type(window.bridge), "controls_enabled", property(lambda _: True)
+    )
+    for language in LANGUAGES:
+        for paused in (False, True):
+            actions = {
+                "operation": "replay_continue" if paused else "start",
+                "pause": "replay_step" if paused else "replay_pause",
+                "stop": "stop",
+                "secondary": None,
+            }
+
+            def selected_actions(
+                value: dict[str, str | None] = actions,
+            ) -> dict[str, str | None]:
+                return value
+
+            monkeypatch.setattr(window, "_actions", selected_actions)
+            window.bridge.replay_snapshot = ReplaySnapshot(
+                1, ReplayState.PAUSED if paused else ReplayState.AUTOMATIC
+            )
+            window.set_language(language)
+            window.bridge.replay_changed.emit(window.bridge.replay_snapshot)
+            keys = (
+                "replay_continue" if paused else "replay_start",
+                "replay_step" if paused else "replay_pause",
+                "production_stop",
+            )
+            assert tuple(button.geometry() for button in buttons) == slots
+            assert window.size().toTuple() == size, (
+                language,
+                window.size().toTuple(),
+                window.minimumSizeHint().toTuple(),
+            )
+            assert tuple(card.geometry() for card in window.cards) == cameras, language
+            for button, key in zip(buttons, keys, strict=True):
+                assert_full_caption(button, text(key, language))
+                assert button.accessibleName() == text(key, language)
+                assert button.toolTip() and not button.icon().isNull()
+                assert window.operation_group.rect().contains(button.geometry())
+            assert window.summary.rect().contains(window.operation_group.geometry())
+    assert window.bridge.application.snapshot() == before and not session.cycles

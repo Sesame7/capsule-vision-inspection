@@ -2,10 +2,20 @@
 
 from dataclasses import dataclass
 from functools import cache
+from math import ceil
 from typing import Literal
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPalette, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QFontMetricsF,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import QPushButton, QStyle, QStyleOptionButton, QWidget
 
 from vimo_demo.application.preferences import LANGUAGES as LANGUAGES
@@ -982,19 +992,35 @@ class Style:
 
 
 def button_width(
-    button: QPushButton, keys: tuple[str, ...], *, padding: int = Style.small
+    button: QPushButton,
+    keys: tuple[str, ...],
+    *,
+    padding: int = Style.small,
+    languages: tuple[Language, ...] = LANGUAGES,
 ) -> int:
-    """A shared action budget from common captions, not the longest translation."""
+    """A stable budget for this action group, including shaped localized captions."""
     button.ensurePolished()
+    option = QStyleOptionButton()
+    button.initStyleOption(option)
+    # Focus decoration must not move a localized action's slot.
+    option.state &= ~QStyle.StateFlag.State_HasFocus
+    contents = button.style().subElementRect(
+        QStyle.SubElement.SE_PushButtonContents, option, button
+    )
     return (
         max(
-            button.fontMetrics().horizontalAdvance(text(key, language))
+            ceil(QFontMetricsF(button.font()).horizontalAdvance(text(key, language)))
             for key in keys
-            for language in ("zh", "en")
+            for language in languages
         )
-        + 2 * Style.space
+        + button.width()
+        - contents.width()
         + padding
-        + (button.iconSize().width() + Style.small if not button.icon().isNull() else 0)
+        + (
+            button.iconSize().width() + Style.icon_text_gap
+            if not button.icon().isNull()
+            else 0
+        )
     )
 
 
@@ -1075,6 +1101,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}
     QPushButton#recipeRule {{ text-align: left; }}
+    QWidget#production QPushButton#start, QPushButton#productionAction {{ padding: 6px 8px; }}
     QPushButton:checked {{ color: {c.accent}; background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:focus:enabled {{ border: 2px solid {c.accent}; }}
     QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}

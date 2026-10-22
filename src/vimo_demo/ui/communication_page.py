@@ -65,6 +65,7 @@ from vimo_demo.web.runtime import WebRuntime, WebState
 
 from .inference_bridge import FutureDelivery
 from .production_style import (
+    LANGUAGES,
     Language,
     Style,
     button_width,
@@ -893,9 +894,17 @@ class CommunicationPage(QWidget):
             (self.watch_editor_button, ("comm_watch_edit",)),
             (self.advanced_button, ("comm_advanced",)),
         ):
-            set_button_caption(
-                button, button.accessibleName(), button_width(button, keys)
+            width = button_width(
+                button,
+                keys,
+                languages=("zh", "en")
+                if button is self.watch_editor_button
+                else LANGUAGES,
             )
+            if button is self.watch_editor_button:
+                # Preserve the existing narrow watch row; larger row changes are separate.
+                width = max(3 * Style.touch, width)
+            set_button_caption(button, button.accessibleName(), width)
         for button in (self.watch_remove, self.watch_once):
             set_button_caption(
                 button, button.accessibleName(), self._watch_action_width

@@ -3,6 +3,7 @@
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta
+from math import ceil
 
 from PySide6.QtCore import (
     QDate,
@@ -21,6 +22,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QFontMetrics,
+    QFontMetricsF,
     QPainter,
     QPainterPath,
     QRegion,
@@ -60,6 +62,7 @@ from vimo_demo.application.history import (
 from .image_tools import image_icon
 from .inference_bridge import FutureDelivery
 from .production_style import (
+    LANGUAGES,
     Language,
     Style,
     button_width,
@@ -239,6 +242,10 @@ class HistoryPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(Style.small)
         self.toolbar = QWidget()
+        # Wide filter allocations must not raise a hidden page's window minimum.
+        self.toolbar.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         self.toolbar_layout = QGridLayout(self.toolbar)
         self.toolbar_layout.setContentsMargins(0, 0, 0, 0)
         self.toolbar_layout.setSpacing(Style.small)
@@ -505,7 +512,21 @@ class HistoryPage(QWidget):
         self._size_cycles()
         metrics = self.cycles.fontMetrics()
         padding = 2 * Style.small + 8
-        self.date.setFixedWidth(metrics.horizontalAdvance("2000-12-31") + Style.touch)
+        date_metrics = QFontMetricsF(self.date.font())
+        date_samples: list[str] = []
+        for lang in LANGUAGES:
+            locale = QLocale(lang)
+            locale.setNumberOptions(QLocale.NumberOption.OmitGroupSeparator)
+            # A date sample containing narrow zeroes underbudgets proportional digits.
+            digit = max(
+                (locale.toString(i) for i in range(10)),
+                key=date_metrics.horizontalAdvance,
+            )
+            date_samples.append(f"{digit * 4}-{digit * 2}-{digit * 2}")
+        self.date.setFixedWidth(
+            ceil(max(date_metrics.horizontalAdvance(value) for value in date_samples))
+            + Style.touch
+        )
         self.all_dates.setFixedWidth(
             max(
                 metrics.horizontalAdvance(text("history_all_dates", lang))
@@ -545,7 +566,7 @@ class HistoryPage(QWidget):
         width = button_width(
             self.refresh_button,
             ("history_newer", "history_older", "history_refresh"),
-            padding=2 * Style.space,
+            padding=Style.small,
         )
         for button, key in (
             (self.newer, "history_newer"),
@@ -555,6 +576,53 @@ class HistoryPage(QWidget):
             set_button_caption(button, text(key, self.language), width)
             button.setFixedHeight(Style.touch)
             button.setToolTip(text(key, self.language))
+        desired_dates = (
+            max(
+                ceil(
+                    QFontMetricsF(self.all_dates.font()).horizontalAdvance(
+                        text("history_all_dates", lang)
+                    )
+                )
+                for lang in LANGUAGES
+            )
+            + Style.touch
+        )
+        desired_filter = (
+            max(
+                ceil(
+                    QFontMetricsF(self.batch.font()).horizontalAdvance(text(key, lang))
+                )
+                for lang in LANGUAGES
+                for key in (
+                    "history_all_batches",
+                    "history_all",
+                    "history_ok",
+                    "history_ng",
+                    "history_error",
+                    "history_empty",
+                    "history_unknown",
+                )
+            )
+            + 40
+        )
+        spare = max(
+            0,
+            self.workspace.width()
+            - self.date.width()
+            - self.all_dates.width()
+            - 2 * filter_width
+            - 3 * width
+            - 6 * Style.small,
+        )
+        dates_width = min(desired_dates, self.all_dates.width() + spare)
+        spare -= dates_width - self.all_dates.width()
+        self.all_dates.setFixedWidth(dates_width)
+        self.all_dates.setText(
+            metrics.elidedText(all_dates, Qt.TextElideMode.ElideRight, dates_width - 30)
+        )
+        filter_width = min(desired_filter, filter_width + spare // 2)
+        self.batch.setFixedWidth(filter_width)
+        self.result.setFixedWidth(filter_width)
         wrapped = (
             self.workspace.width()
             < self.filters.minimumSizeHint().width()

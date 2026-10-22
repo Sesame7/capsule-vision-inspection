@@ -343,6 +343,14 @@ acceptance targets. This support boundary does not change Qt's existing minimum
 size constraints or the image canvas coordinate system.
 
 Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
+Each role reserves a shaped-text budget across the supported languages; switching
+languages or action states does not move its slot. Header space after Batch can
+shrink to retain the active/pending Recipe identity. Save/apply actions reserve
+localized group budgets, borrowing flexible feedback/summary space. Compact
+register-watch actions retain bounded slots and expose their full localized names
+through tooltips/accessibility.
+History spends available toolbar space on date/filter captions while retaining
+equal pagination buttons and bounded filters at narrow widths.
 The middle control becomes Step while paused; Folder and Basler retain distinct
 source-boundary semantics. Reset is a separate fault-recovery action. Basler control
 only affects software admission, never equipment or PLC mode. Empty canvases and routine acquisition waits stay quiet, with

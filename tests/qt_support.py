@@ -10,7 +10,7 @@ from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtGui import QFontDatabase
 
 if TYPE_CHECKING:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QPushButton
 
     from tests.application_support import FakeSession
     from vimo_demo.ui.production_window import ProductionWindow
@@ -19,7 +19,24 @@ if TYPE_CHECKING:
 def ensure_test_fonts() -> None:
     """Load existing Windows fonts when offscreen Qt exposes no font families."""
     if not QFontDatabase.families():
-        for filename in ("segoeui.ttf", "msyh.ttc"):
+        # Native Windows Qt finds these installed fallback families automatically;
+        # offscreen Qt otherwise measures several supported scripts as missing glyphs.
+        for filename in (
+            "segoeui.ttf",
+            "segoeuib.ttf",
+            "msyh.ttc",
+            "msyhbd.ttc",
+            "tahoma.ttf",
+            "tahomabd.ttf",
+            "Nirmala.ttf",
+            "NirmalaB.ttf",
+            "ebrima.ttf",
+            "ebrimabd.ttf",
+            "LeelawUI.ttf",
+            "LeelaUIb.ttf",
+            "malgun.ttf",
+            "malgunbd.ttf",
+        ):
             path = Path("C:/Windows/Fonts") / filename
             if path.exists():
                 QFontDatabase.addApplicationFont(str(path))
@@ -46,6 +63,27 @@ def until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
     poll.stop()
     deadline.stop()
     assert predicate(), "Qt condition timed out"
+
+
+def assert_full_caption(button: QPushButton, caption: str) -> None:
+    """Check both the retained caption and the native style's actual text budget."""
+    from math import ceil
+
+    from PySide6.QtGui import QFontMetricsF
+    from PySide6.QtWidgets import QStyle, QStyleOptionButton
+
+    assert button.text() == caption, (button.text(), caption, button.accessibleName())
+    option = QStyleOptionButton()
+    button.initStyleOption(option)
+    available = (
+        button.style()
+        .subElementRect(QStyle.SubElement.SE_PushButtonContents, option, button)
+        .width()
+    )
+    if not button.icon().isNull():
+        available -= button.iconSize().width() + 4
+    required = ceil(QFontMetricsF(button.font()).horizontalAdvance(caption))
+    assert required <= available, (caption, required, available)
 
 
 def close_window(window: ProductionWindow) -> None:

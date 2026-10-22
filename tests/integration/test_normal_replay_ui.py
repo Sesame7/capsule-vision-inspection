@@ -177,7 +177,16 @@ def test_normal_start_pause_then_steps_in_same_generation(
         assert window.operation_group.geometry() == region
         identity = window.identity_group
         center = identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
-        assert abs(center - window.summary.width() / 2) <= 1
+        if (
+            2 * window.operation_group.width() + identity.width() + 2 * Style.space
+            <= window.summary.width()
+        ):
+            assert abs(center - window.summary.width() / 2) <= 1
+        else:
+            assert window.batch_group.geometry().right() < identity.geometry().left()
+            assert (
+                identity.geometry().right() < window.operation_group.geometry().left()
+            )
         assert (
             window.batch_group.mapTo(window.summary, QPoint()).x()
             == window.summary.contentsRect().left()
@@ -281,14 +290,26 @@ def test_normal_pause_continue_end_and_restart_preserve_existing_cursor_rules(
                 == geometry
             )
             identity = window.identity_group
-            assert (
-                abs(
-                    identity.mapTo(window.summary, QPoint()).x()
-                    + identity.width() / 2
-                    - window.summary.width() / 2
+            if (
+                2 * window.operation_group.width() + identity.width() + 2 * Style.space
+                <= window.summary.width()
+            ):
+                assert (
+                    abs(
+                        identity.mapTo(window.summary, QPoint()).x()
+                        + identity.width() / 2
+                        - window.summary.width() / 2
+                    )
+                    <= 1
                 )
-                <= 1
-            )
+            else:
+                assert (
+                    window.batch_group.geometry().right() < identity.geometry().left()
+                )
+                assert (
+                    identity.geometry().right()
+                    < window.operation_group.geometry().left()
+                )
 
         primary.click()
         until(lambda: bool(engines) and engines[0].entered.is_set())

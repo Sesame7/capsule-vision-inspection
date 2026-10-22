@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.bootstrap_support import saved_data
-from tests.qt_support import close_window, ensure_test_fonts, until
+from tests.qt_support import assert_full_caption, close_window, ensure_test_fonts, until
 
 from vimo_demo.application import ApplicationState, ProductionCounters
 from vimo_demo.application.communication_preferences import (
@@ -903,6 +903,8 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
         QApplication.processEvents()
         assert tuple(button.size() for button in buttons) == sizes
         assert panel.enabled.size() == page.web_panel.power.size()
+        for button in (panel.enabled, page.web_panel.power, page.save_settings):
+            assert_full_caption(button, button.accessibleName())
         assert (
             page.watch_remove.size() == page.watch_once.size() == page.watch_auto.size()
         )
@@ -914,6 +916,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
             )
         panel.enabled.click()
         assert panel.enabled.size() == sizes[0]
+        assert_full_caption(panel.enabled, text("plc_disable", language))
         assert panel.controller.reporting_selection() == selected
         panel.enabled.click()
     assert startup.application.snapshot() == before and not page.dirty

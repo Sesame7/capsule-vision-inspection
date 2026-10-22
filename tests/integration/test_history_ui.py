@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QHeaderView,
+    QLineEdit,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableView,
@@ -26,7 +27,7 @@ from tests.application_support import WAIT, production
 from tests.bootstrap_support import saved_data
 from tests.business_support import channel as business_channel
 from tests.business_support import mixed_result
-from tests.qt_support import close_window, ensure_test_fonts, until
+from tests.qt_support import assert_full_caption, close_window, ensure_test_fonts, until
 
 from vimo_demo.application import ConfigurationIdentity
 from vimo_demo.application.history import (
@@ -966,6 +967,9 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         geometry = tuple(
             QRect(widget.mapTo(page, QPoint()), widget.size()) for widget in widgets
         )
+        matrix_body_height = (
+            page.channels.height() - page.channels.horizontalHeader().height()
+        )
         columns = tuple(page.cycles.columnWidth(i) for i in range(5))
         matrix_columns = tuple(page.channels.columnWidth(i) for i in range(7))
         assert page.batch.width() == page.result.width()
@@ -1000,9 +1004,24 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         page.set_language("en")
         qapp.processEvents()
         assert not page.busy
-        assert geometry == tuple(
+        localized_geometry = tuple(
             QRect(widget.mapTo(page, QPoint()), widget.size()) for widget in widgets
         )
+        assert geometry[:7] == localized_geometry[:7]
+        assert geometry[9] == localized_geometry[9]
+        # Native header glyph extents may differ between scripts. Preserve the
+        # exact row body and contiguous list/matrix allocation, not that font metric.
+        assert (
+            page.channels.height() - page.channels.horizontalHeader().height()
+            == matrix_body_height
+        )
+        assert page.cycles.y() == geometry[7].y()
+        assert (
+            page.cycles.height() + page.channels.height()
+            == geometry[7].height() + geometry[8].height()
+        )
+        assert page.channels.y() == page.cycles.y() + page.cycles.height() + Style.small
+        assert all(page.rect().contains(rect) for rect in localized_geometry)
         assert columns == tuple(page.cycles.columnWidth(i) for i in range(5))
         assert matrix_columns == tuple(page.channels.columnWidth(i) for i in range(7))
         assert filters == (
@@ -1018,11 +1037,26 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         )
         for language in LANGUAGES:
             page.set_language(language)
+            for button, key in (
+                (page.newer, "history_newer"),
+                (page.older, "history_older"),
+                (page.refresh_button, "history_refresh"),
+            ):
+                assert_full_caption(button, text(key, language))
             qapp.processEvents()
+            date_text = page.date.findChild(QLineEdit)
+            assert date_text is not None
+            assert (
+                date_text.fontMetrics().horizontalAdvance(date_text.text())
+                <= date_text.contentsRect().width() - 4
+            )
+
             assert toolbar_geometry == tuple(
                 QRect(widget.mapTo(page, QPoint()), widget.size())
                 for widget in widgets[:7]
             ), language
+            if size[0] == 1920:
+                assert page.all_dates.text() == text("history_all_dates", language)
             assert (
                 page.all_dates.accessibleName()
                 == page.all_dates.toolTip()

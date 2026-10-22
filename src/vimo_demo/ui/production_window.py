@@ -57,6 +57,7 @@ from .production_style import (
     Style,
     Theme,
     apply_theme,
+    button_width,
     camera_icon,
     indicator_icon,
     navigation_icon,
@@ -625,28 +626,20 @@ class ProductionWindow(QMainWindow):
                 )
             )
             button.ensurePolished()
-        width = max(
-            96,
-            max(
-                button.fontMetrics().horizontalAdvance(text(caption, language))
-                for key, button in self.buttons.items()
-                if key in ("operation", "pause", "stop")
-                for caption in (
-                    "replay_start",
-                    "replay_continue",
-                    "replay_pause",
-                    "replay_step",
-                    "production_stop",
-                )
-                for language in ("zh", "en")
+        widths = {
+            key: button_width(self.buttons[key], captions, padding=2)
+            for key, captions in (
+                ("operation", ("replay_start", "replay_continue")),
+                ("pause", ("replay_pause", "replay_step")),
+                ("stop", ("production_stop",)),
             )
-            + Style.icon
-            + 28,
-        )
-        for key in ("operation", "pause", "stop"):
+        }
+        for key, width in widths.items():
             button = self.buttons[key]
             set_button_caption(button, button.accessibleName(), width)
-        self.operation_group.setFixedWidth(Style.touch + 3 * width + 3 * Style.small)
+        self.operation_group.setFixedWidth(
+            Style.touch + sum(widths.values()) + 3 * Style.small
+        )
         self.context_control.setCurrentIndex(1 if actions["secondary"] else 0)
 
     @Slot(object)
@@ -1457,22 +1450,6 @@ class ProductionWindow(QMainWindow):
             + batch_padding
             + 2 * Style.small
         )
-        batch_width = max(1, side_width - batch_fixed)
-        self.batch_label.setFixedWidth(
-            min(
-                batch_width,
-                max(
-                    # Integer metrics can round below the elision width at high DPI.
-                    ceil(
-                        QFontMetricsF(self.batch_label.font()).horizontalAdvance(
-                            f"{text('batch_id', lang)} {snapshot.batch_id or '—'}"
-                        )
-                    )
-                    for lang in ("zh", "en", self.language)
-                ),
-            )
-        )
-        self.batch_group.setFixedWidth(self.batch_label.width() + batch_fixed)
         main_width = max(
             self.identity_label.minimumWidth(),
             ceil(
@@ -1495,7 +1472,33 @@ class ProductionWindow(QMainWindow):
             - margins.right()
             - 2 * self.summary_header.horizontalSpacing()
         )
-        identity_width = max(state_width, self.recipe_identity.maximumWidth())
+        identity_width = max(
+            state_width,
+            self.recipe_identity.maximumWidth(),
+            self.pending_label.fontMetrics().horizontalAdvance(pending_text)
+            if pending
+            else 0,
+        )
+        # Borrow unused Batch reservation before shortening the active/pending name.
+        # Arbitrary Batch IDs retain their full identity in the existing tooltip.
+        batch_width = max(
+            1, min(side_width, header_width - side_width - identity_width) - batch_fixed
+        )
+        self.batch_label.setFixedWidth(
+            min(
+                batch_width,
+                max(
+                    # Integer metrics can round below the elision width at high DPI.
+                    ceil(
+                        QFontMetricsF(self.batch_label.font()).horizontalAdvance(
+                            f"{text('batch_id', lang)} {snapshot.batch_id or '—'}"
+                        )
+                    )
+                    for lang in ("zh", "en", self.language)
+                ),
+            )
+        )
+        self.batch_group.setFixedWidth(self.batch_label.width() + batch_fixed)
         self._batch_balance.changeSize(
             min(side_width, max(0, header_width - side_width - identity_width)),
             0,
@@ -1512,6 +1515,8 @@ class ProductionWindow(QMainWindow):
         # Let the center column shrink without retaining widths from a larger window.
         self.identity_label.setText(display_name)
         self.pending_label.setText(pending_text)
+        self.recipe_identity.updateGeometry()
+        self.identity_group.updateGeometry()
         self.summary_header.activate()
         for group in (self.batch_group, self.identity_group, self.recipe_identity):
             layout = group.layout()

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
 )
-from tests.qt_support import until
+from tests.qt_support import assert_full_caption, until
 from tests.recipe_ui_support import Screen, assert_inside, edit
 from tests.recipe_ui_support import configured_screen as configured_screen
 
@@ -436,6 +436,7 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         window.set_language(language)
         QApplication.processEvents()
         assert save.size() == save_size
+        assert_full_caption(save, text("save_apply", language))
         assert save.accessibleName() == save.toolTip() == text("save_apply", language)
         assert tuple(spin.geometry() for spin in preview.spins.values()) == fields
         for key, label in preview.labels.items():
@@ -451,6 +452,7 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         window.set_language(language)
         QApplication.processEvents()
         assert preview.sample.size() == sample_size
+        assert_full_caption(preview.sample, text("color_sample", language))
         assert preview.tolerance_label.size() == tolerance_size
         assert text("color_tolerance", language) in preview.tolerance_label.toolTip()
         assert preview.sample.accessibleName() == preview.sample.toolTip()
@@ -461,6 +463,8 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
     workspace = page.roi_workspace
     assert workspace is not None
     QApplication.processEvents()
+    assert workspace.geometry_toolbar.height() == Style.touch
+    assert all(line.width() == 72 for line in workspace.coordinates.values())
     sizes = tuple(
         workspace.buttons[key].size() for key in ("roi_set_rect", "roi_save_apply")
     )
@@ -472,6 +476,7 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         ):
             button = workspace.buttons[key]
             assert button.size() == expected
+            assert_full_caption(button, text(key, language))
             assert button.accessibleName() == button.toolTip() == text(key, language)
             assert_inside(button, workspace)
     assert session.draft.to_recipe() == draft and not session.dirty and not runtimes

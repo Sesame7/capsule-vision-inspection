@@ -1670,6 +1670,7 @@ def test_roi_toolbar_wraps_without_shrinking_fields(
     window, workspace, engine = camera_screen
     window.set_language(language)
     QApplication.processEvents()
+    restored_width = workspace.width()
     toolbar = workspace.geometry_toolbar
     numeric = workspace.buttons["roi_set_rect"]
     bulk = workspace.buttons["roi_common"]
@@ -1716,7 +1717,7 @@ def test_roi_toolbar_wraps_without_shrinking_fields(
         assert upper.rect().contains(control.mapTo(upper, control.rect().bottomRight()))
     assert [field.width() for field in workspace.coordinates.values()] == widths
     assert save.mapTo(toolbar, save.rect().topRight()).x() == toolbar.width() - 1
-    workspace.setFixedWidth(1000)
+    workspace.setFixedWidth(restored_width)
     QApplication.processEvents()
     assert numeric.mapTo(toolbar, QPoint()).y() == bulk.mapTo(toolbar, QPoint()).y()
     assert save.mapTo(toolbar, QPoint()).y() == numeric.mapTo(toolbar, QPoint()).y()

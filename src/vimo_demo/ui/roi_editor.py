@@ -545,7 +545,8 @@ class MachineRoiWorkspace(QWidget):
         numeric, actions, saving = QWidget(), QWidget(), QWidget()
         geometry = QHBoxLayout(numeric)
         geometry.setContentsMargins(0, 0, 0, 0)
-        geometry.setSpacing(Style.small)
+        # Spend label/field gaps on localized actions; keep coordinate fields intact.
+        geometry.setSpacing(Style.small // 2)
         self.channel = QComboBox()
         self.channel.setMinimumHeight(Style.touch)
         self.channel.activated.connect(self.select_roi)
