@@ -346,11 +346,20 @@ Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
 Each role reserves a shaped-text budget across the supported languages; switching
 languages or action states does not move its slot. Header space after Batch can
 shrink to retain the active/pending Recipe identity. Save/apply actions reserve
-localized group budgets, borrowing flexible feedback/summary space. Compact
-register-watch actions retain bounded slots and expose their full localized names
-through tooltips/accessibility.
-History spends available toolbar space on date/filter captions while retaining
-equal pagination buttons and bounded filters at narrow widths.
+localized group budgets, borrowing flexible feedback/summary space. Register-watch
+actions reserve compact equal slots for complete localized short captions across
+supported languages and refresh states. Full action descriptions remain in
+tooltips/accessibility. Action buttons never stretch into surplus row space;
+the selector receives it, or the narrow action row leaves space after the group.
+When the selector/editor and actions cannot share the available
+width, the selector/editor stay above the three actions; wide workspaces use one
+row. Reflow retains the same controls and network operation. Dynamic group names
+may elide, with their full values in tooltips/accessibility. Watch columns reserve
+language-stable heading/value budgets before sharing surplus width.
+History wraps pagination below filters when their full fixed captions cannot share
+a row. Date and filter budgets use that row's available space, retaining equal
+pagination buttons and equal bounded Batch/Result selectors. Dynamic values may
+elide with full tooltips; localized date digits retain their measured width.
 The middle control becomes Step while paused; Folder and Basler retain distinct
 source-boundary semantics. Reset is a separate fault-recovery action. Basler control
 only affects software admission, never equipment or PLC mode. Empty canvases and routine acquisition waits stay quiet, with

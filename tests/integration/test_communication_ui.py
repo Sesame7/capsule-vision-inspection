@@ -704,6 +704,29 @@ def test_auto_slow_pass_no_overlap_or_tick_backlog_and_snapshot(
         assert not page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 3))
         assert not page.remove_watch_group(0)
         assert not page.host.isEnabled() and not page.watch_name.isEnabled()
+        controls = (
+            page.watch_selector,
+            page.watch_editor_button,
+            page.watch_remove,
+            page.watch_once,
+            page.watch_auto,
+        )
+        for width in (1920, 1080, 1920):
+            page.resize(width, 1080)
+            page.set_language("el")
+            QApplication.processEvents()
+            assert page.busy and page.auto_refresh and page.watch_auto.isChecked()
+            assert not page.watch_remove.isEnabled() and not page.watch_once.isEnabled()
+            assert controls == (
+                page.watch_selector,
+                page.watch_editor_button,
+                page.watch_remove,
+                page.watch_once,
+                page.watch_auto,
+            )
+            assert (
+                len(requests) == 1
+            )  # Reflow never restarts or duplicates the active read.
         page.host.setText("192.0.2.99")
         page.destination[1].setValue(33)
         for _ in range(10):

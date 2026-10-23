@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStyle,
     QStyledItemDelegate,
+    QStyleOptionComboBox,
     QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
@@ -527,19 +528,7 @@ class HistoryPage(QWidget):
             ceil(max(date_metrics.horizontalAdvance(value) for value in date_samples))
             + Style.touch
         )
-        self.all_dates.setFixedWidth(
-            max(
-                metrics.horizontalAdvance(text("history_all_dates", lang))
-                for lang in ("zh", "en")
-            )
-            + Style.touch
-        )
         all_dates = text("history_all_dates", self.language)
-        self.all_dates.setText(
-            metrics.elidedText(
-                all_dates, Qt.TextElideMode.ElideRight, self.all_dates.width() - 30
-            )
-        )
         self.all_dates.setAccessibleName(all_dates)
         self.all_dates.setToolTip(all_dates)
         filter_width = (
@@ -587,11 +576,21 @@ class HistoryPage(QWidget):
             )
             + Style.touch
         )
+        filter_insets: list[int] = []
+        for combo in (self.batch, self.result):
+            option = QStyleOptionComboBox()
+            combo.initStyleOption(option)
+            contents = combo.style().subControlRect(
+                QStyle.ComplexControl.CC_ComboBox,
+                option,
+                QStyle.SubControl.SC_ComboBoxEditField,
+                combo,
+            )
+            filter_insets.append(combo.width() - contents.width())
         desired_filter = (
             max(
-                ceil(
-                    QFontMetricsF(self.batch.font()).horizontalAdvance(text(key, lang))
-                )
+                ceil(QFontMetricsF(combo.font()).horizontalAdvance(text(key, lang)))
+                for combo in (self.batch, self.result)
                 for lang in LANGUAGES
                 for key in (
                     "history_all_batches",
@@ -603,19 +602,31 @@ class HistoryPage(QWidget):
                     "history_unknown",
                 )
             )
-            + 40
+            + max(filter_insets)
+            + Style.small
+        )
+        # Decide wrapping from full fixed captions, then spend only the space
+        # belonging to the filters' actual row. Pagination on another row must
+        # not consume that budget.
+        desired_row = (
+            self.date.width() + desired_dates + 2 * desired_filter + 3 * Style.small
+        )
+        wrapped = self.workspace.width() < desired_row + 3 * width + 3 * Style.small
+        available = self.workspace.width() - (
+            0 if wrapped else 3 * width + 3 * Style.small
+        )
+        dates_width = min(
+            desired_dates,
+            max(0, available - self.date.width() - 2 * filter_width - 3 * Style.small),
         )
         spare = max(
             0,
-            self.workspace.width()
+            available
             - self.date.width()
-            - self.all_dates.width()
+            - dates_width
             - 2 * filter_width
-            - 3 * width
-            - 6 * Style.small,
+            - 3 * Style.small,
         )
-        dates_width = min(desired_dates, self.all_dates.width() + spare)
-        spare -= dates_width - self.all_dates.width()
         self.all_dates.setFixedWidth(dates_width)
         self.all_dates.setText(
             metrics.elidedText(all_dates, Qt.TextElideMode.ElideRight, dates_width - 30)
@@ -623,12 +634,6 @@ class HistoryPage(QWidget):
         filter_width = min(desired_filter, filter_width + spare // 2)
         self.batch.setFixedWidth(filter_width)
         self.result.setFixedWidth(filter_width)
-        wrapped = (
-            self.workspace.width()
-            < self.filters.minimumSizeHint().width()
-            + self.pagination_tools.minimumSizeHint().width()
-            + Style.small
-        )
         if wrapped != self._toolbar_wrapped:
             self._toolbar_wrapped = wrapped
             self.toolbar_layout.removeWidget(self.filters)

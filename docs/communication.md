@@ -119,7 +119,8 @@ Diagnostics has its own independently saved endpoint and routing, grouped DM/WR
 watches and serialized manual/auto refresh, plus explicit one-shot writes.
 Requests always snapshot the saved/effective diagnostic endpoint, identified above
 the operations; draft edits never silently redirect them. The watch table has five
-evenly stretching columns: Group, Address, DEC, HEX and Last successful read.
+columns: Group, Address, DEC, HEX and Last successful read. They reserve readable
+heading/value widths and share the remaining space, giving longer headings room.
 The last column shows local `HH:mm:ss.SSS` from the validated response's completion timestamp,
 not delayed Qt delivery. Failed/malformed reads retain the last successful values
 and timestamp, with an ERR marker on the affected group and stale/error tooltips.

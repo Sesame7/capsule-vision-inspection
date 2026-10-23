@@ -6,11 +6,12 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from datetime import datetime
+from math import ceil
 from pathlib import Path
 from threading import Event, Thread
 
-from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer, Slot
-from PySide6.QtGui import QColor, QHideEvent, QResizeEvent
+from PySide6.QtCore import QEvent, QObject, QRect, Qt, QThread, QTimer, Slot
+from PySide6.QtGui import QColor, QFontMetricsF, QHideEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -26,6 +27,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyleOptionHeader,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -294,24 +297,44 @@ class CommunicationPage(QWidget):
             group_fields.setColumnStretch(column, 2 if column == 3 else 1)
         self.watch_add = self._button("comm_watch_add", self._add_watch)
         group_fields.addWidget(self.watch_add, 1, 4)
-        actions = QHBoxLayout()
+        self.watch_tools = QWidget()
+        self.watch_tools.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.watch_tools_layout = QGridLayout(self.watch_tools)
+        self.watch_tools_layout.setContentsMargins(0, 0, 0, 0)
+        self.watch_tools_layout.setSpacing(Style.small)
+        self.watch_tools_layout.setColumnStretch(0, 1)
+        self._watch_wrapped: bool | None = None
+        self.watch_selection = QWidget()
+        selection = QHBoxLayout(self.watch_selection)
+        selection.setContentsMargins(0, 0, 0, 0)
+        selection.setSpacing(Style.small)
         self.watch_selector = QComboBox()
         self.watch_selector.setMinimumHeight(Style.touch)
-        self.watch_selector.setMinimumContentsLength(12)
+        # Retain readable space for the group name and indexed register range.
+        self.watch_selector.setMinimumContentsLength(48)
         self.watch_selector.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.watch_selector.currentIndexChanged.connect(self._refresh)
         self._inputs.append(self.watch_selector)
-        actions.addWidget(self.watch_selector, 1)
-        actions.addWidget(self.watch_editor_button)
+        selection.addWidget(self.watch_selector, 1)
+        selection.addWidget(self.watch_editor_button)
+        self.watch_actions = QWidget()
+        self.watch_actions.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        actions = QHBoxLayout(self.watch_actions)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(Style.small)
         self.watch_remove = self._button("comm_watch_remove", self._remove_watch)
         self.watch_once = self._button("comm_watch_once", self.read_watch_once)
         self.watch_auto = self._button("comm_watch_auto", self._toggle_auto)
         self.watch_auto.setCheckable(True)
         for button in (self.watch_remove, self.watch_once, self.watch_auto):
             actions.addWidget(button)
-        watch.addLayout(actions)
+        watch.addWidget(self.watch_tools)
         watch.addWidget(self.watch_editor)
         self.watch_editor.hide()
         self.watch_status = QLabel()
@@ -323,7 +346,7 @@ class CommunicationPage(QWidget):
         self.watch_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.watch_table.verticalHeader().hide()
         self.watch_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
+            QHeaderView.ResizeMode.Fixed
         )
         self.watch_table.horizontalHeader().setMinimumSectionSize(90)
         self.watch_table.setMinimumWidth(200)
@@ -407,6 +430,8 @@ class CommunicationPage(QWidget):
         self.set_language("zh")
         self.service_cards.installEventFilter(self)
         self.scroll_area.viewport().installEventFilter(self)
+        self.watch_tools.installEventFilter(self)
+        self.watch_table.viewport().installEventFilter(self)
 
     def _panel(
         self,
@@ -474,6 +499,15 @@ class CommunicationPage(QWidget):
         self._arrange_services()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+            QEvent.Type.LayoutRequest,
+        ):
+            if watched is self.watch_tools:
+                self._arrange_watch()
+            elif watched is self.watch_table.viewport():
+                self._size_watch_columns()
         if watched in (
             self.service_cards,
             self.scroll_area.viewport(),
@@ -486,6 +520,74 @@ class CommunicationPage(QWidget):
             # appears. Content minimums can temporarily exceed this viewport.
             self._arrange_services()
         return super().eventFilter(watched, event)
+
+    def _arrange_watch(self) -> None:
+        required = (
+            self.watch_selection.minimumSizeHint().width()
+            + self.watch_actions.minimumSizeHint().width()
+            + Style.small
+        )
+        wrapped = self.watch_tools.width() < required
+        if wrapped == self._watch_wrapped:
+            return
+        self._watch_wrapped = wrapped
+        for widget in (self.watch_selection, self.watch_actions):
+            self.watch_tools_layout.removeWidget(widget)
+        self.watch_tools_layout.addWidget(
+            self.watch_selection, 0, 0, 1, 2 if wrapped else 1
+        )
+        self.watch_tools_layout.addWidget(
+            self.watch_actions,
+            1 if wrapped else 0,
+            0 if wrapped else 1,
+            1,
+            2 if wrapped else 1,
+            Qt.AlignmentFlag.AlignLeft if wrapped else Qt.AlignmentFlag.AlignRight,
+        )
+
+    def _size_watch_columns(self) -> None:
+        header = self.watch_table.horizontalHeader()
+        metrics = QFontMetricsF(header.font())
+        widths: list[int] = []
+        for column, (key, sample) in enumerate(
+            zip(
+                (
+                    "comm_table_group",
+                    "comm_word_address",
+                    "comm_dec",
+                    "comm_table_hex",
+                    "comm_last_read",
+                ),
+                ("", "W32767", "65535", "0xFFFF", "23:59:59.999"),
+                strict=True,
+            )
+        ):
+            option = QStyleOptionHeader()
+            header.initStyleOptionForIndex(option, column)
+            option.rect = QRect(0, 0, 100, header.height())
+            contents = header.style().subElementRect(
+                QStyle.SubElement.SE_HeaderLabel, option, header
+            )
+            widths.append(
+                max(
+                    header.minimumSectionSize(),
+                    ceil(
+                        max(
+                            metrics.horizontalAdvance(text(key, lang))
+                            for lang in LANGUAGES
+                        )
+                    )
+                    + option.rect.width()
+                    - contents.width()
+                    + Style.small,
+                    ceil(metrics.horizontalAdvance(sample)) + 2 * Style.small,
+                )
+            )
+        spare = max(0, self.watch_table.viewport().width() - sum(widths))
+        for column, width in enumerate(widths):
+            self.watch_table.setColumnWidth(
+                column, width + spare // 5 + (column < spare % 5)
+            )
 
     def _arrange_services(self) -> None:
         panel = self.reporting_panel
@@ -878,37 +980,33 @@ class CommunicationPage(QWidget):
             button.setText(text(key, language))
             button.setAccessibleName(button.text())
             button.setToolTip(button.text())
-        self._watch_action_width = min(
-            3 * Style.touch,
-            button_width(
-                self.watch_once,
-                (
-                    "comm_watch_remove",
-                    "comm_watch_once",
-                    "comm_watch_auto",
-                    "comm_watch_stop",
-                ),
+        self._watch_action_width = button_width(
+            self.watch_once,
+            (
+                "comm_watch_remove_short",
+                "comm_watch_once_short",
+                "comm_watch_auto_short",
+                "comm_watch_stop_short",
             ),
         )
         for button, keys in (
             (self.watch_editor_button, ("comm_watch_edit",)),
             (self.advanced_button, ("comm_advanced",)),
         ):
-            width = button_width(
-                button,
-                keys,
-                languages=("zh", "en")
-                if button is self.watch_editor_button
-                else LANGUAGES,
-            )
-            if button is self.watch_editor_button:
-                # Preserve the existing narrow watch row; larger row changes are separate.
-                width = max(3 * Style.touch, width)
+            width = button_width(button, keys)
             set_button_caption(button, button.accessibleName(), width)
-        for button in (self.watch_remove, self.watch_once):
+        for button, key in (
+            (self.watch_remove, "comm_watch_remove"),
+            (self.watch_once, "comm_watch_once"),
+        ):
             set_button_caption(
-                button, button.accessibleName(), self._watch_action_width
+                button, text(key + "_short", language), self._watch_action_width
             )
+            button.setAccessibleName(text(key, language))
+            button.setToolTip(
+                text("comm_watch", language) + " · " + text(key, language)
+            )
+            button.setAccessibleDescription(button.toolTip())
         for key, widget in (
             ("comm_protocol", self.protocol),
             ("comm_host", self.host),
@@ -967,6 +1065,8 @@ class CommunicationPage(QWidget):
         self._render_watch()
         self._refresh()
         self._arrange_services()
+        self._arrange_watch()
+        self._size_watch_columns()
 
     def _snapshot(self, kind: RequestKind, count: int = 1) -> CommunicationRequest:
         values = (
@@ -1506,16 +1606,18 @@ class CommunicationPage(QWidget):
             and (self._auto_refresh or (not self.busy and bool(self._watch_groups)))
         )
         self.watch_auto.setChecked(self._auto_refresh)
-        action = text(
-            "comm_watch_stop" if self._auto_refresh else "comm_watch_auto",
-            self.language,
-        )
+        action_key = "comm_watch_stop" if self._auto_refresh else "comm_watch_auto"
+        action = text(action_key, self.language)
         set_button_caption(
             self.watch_auto,
-            action,
+            text(action_key + "_short", self.language),
             self._watch_action_width,
         )
-        self.watch_auto.setToolTip(action)
+        self.watch_auto.setAccessibleName(action)
+        self.watch_auto.setToolTip(text("comm_watch", self.language) + " · " + action)
+        self.watch_auto.setAccessibleDescription(self.watch_auto.toolTip())
+        self.watch_selector.setToolTip(self.watch_selector.currentText())
+        self.watch_selector.setAccessibleDescription(self.watch_selector.currentText())
         self.write_button.setEnabled(editable)
         self.write_button.setToolTip(text("comm_local_write", self.language))
         self.permission.setText(text("comm_local_write", self.language))

@@ -25,6 +25,13 @@ from vimo_demo.ui.translations import (
     LANGUAGE_NAMES,
 )
 
+WATCH_SHORT_KEYS = (
+    "comm_watch_remove_short",
+    "comm_watch_once_short",
+    "comm_watch_auto_short",
+    "comm_watch_stop_short",
+)
+
 EUROPEAN_LANGUAGES: dict[Language, str] = {
     "nl": "Nederlands",
     "pl": "Polski",
@@ -279,6 +286,7 @@ def test_additional_catalogs_translate_text_and_keep_protocol_codes(
 
 def test_catalog_essential_coverage_and_format_fields() -> None:
     essential = {
+        *WATCH_SHORT_KEYS,
         "production",
         "parameters",
         "diagnostics",
@@ -399,6 +407,29 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
         assert text(key, "zh") == zh and text(key, "en") == en
 
 
+def test_watch_short_captions_are_explicit_for_every_language() -> None:
+    for language in LANGUAGES:
+        if language not in ("zh", "en"):
+            assert set(WATCH_SHORT_KEYS) <= EXTRA_STRINGS[language].keys()
+        captions = tuple(text(key, language) for key in WATCH_SHORT_KEYS)
+        assert all(caption.strip() and "…" not in caption for caption in captions)
+        assert "1" in captions[2] and captions[2] != captions[3]
+    assert tuple(text(key, "en") for key in WATCH_SHORT_KEYS) == (
+        "Remove",
+        "Read once",
+        "Auto · 1s",
+        "Stop auto",
+    )
+    assert tuple(text(key, "pt-PT") for key in WATCH_SHORT_KEYS) == (
+        "Remover",
+        "Ler",
+        "Auto · 1s",
+        "Parar auto",
+    )
+    assert text("comm_watch_once", "pt-PT") == "Ler uma vez"
+    assert text("comm_watch_stop", "pt-PT") == "Parar atualização"
+
+
 @pytest.mark.parametrize("language", LANGUAGES[2:])
 def test_optional_translation_falls_back_to_english(language: Language) -> None:
     if language not in EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES:
@@ -494,12 +525,27 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
         "th": "d4a21693d597d2083945244d0094c8bbb054b11bb90e00331da448f22d2af9fb",
         "hi": "7fca2040d86812fe2c58537b6f4cb64dfa5df6eb20a090664ab4ed3ff00ebac2",
         "bn": "d942fb44c47e9bf7f277dfbfca0b4c5283c484bc38553df6e92814b4e78eb7a5",
+        "ta": "af84cc3eb007c2c369b86803e3c45a3d8c9b2d58257bdfc5c30d05126d77e4ae",
+        "te": "9daa5a779f2a2aa4378f6ba5015e7b855ccf5734a75d644dc9a2aec904560dd0",
+        "mr": "8c0bfccaf99ce5749ffde9be0dcc9d0bd324857731f5fa920bc85d0488149ead",
+        "ne": "d70206acfb6fcae14d10ea10bd0924fc1ce18b4b59f642cf457250b816d035b0",
+        "si": "f58bdfa3f9da3be1a67b83444625615999c2a091df4cd22c98b868645423c3be",
+        "am": "40b3874e95c26d2ee5e4c3b47669725de15bd18acb7c8f1e362bf0eed1c6b6a6",
+        "km": "e6c09a2da6544453bc603b4be13fc3157f24b7dce8aacb0cf0d248e941f6daac",
     }
-    assert tuple(expected) == LANGUAGES[:36]
+    assert tuple(expected) == LANGUAGES
     for language, digest in expected.items():
         catalog = {
-            "resolved": {key: text(key, language) for key in STRINGS},
-            "translated_keys": sorted(EXTRA_STRINGS.get(language, {})),
+            # New Watch presentation keys extend the catalog; preserve every
+            # original resolved value and explicit/fallback membership verbatim.
+            "resolved": {
+                key: text(key, language)
+                for key in STRINGS
+                if key not in WATCH_SHORT_KEYS
+            },
+            "translated_keys": sorted(
+                EXTRA_STRINGS.get(language, {}).keys() - set(WATCH_SHORT_KEYS)
+            ),
         }
         serialized = json.dumps(catalog, ensure_ascii=False, sort_keys=True)
         assert hashlib.sha256(serialized.encode("utf-8")).hexdigest() == digest, (

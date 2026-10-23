@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QHeaderView,
     QLineEdit,
+    QStyle,
     QStyledItemDelegate,
+    QStyleOptionComboBox,
     QStyleOptionViewItem,
     QTableView,
     QTableWidget,
@@ -1055,8 +1057,23 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
                 QRect(widget.mapTo(page, QPoint()), widget.size())
                 for widget in widgets[:7]
             ), language
-            if size[0] == 1920:
-                assert page.all_dates.text() == text("history_all_dates", language)
+            assert page.all_dates.text() == text("history_all_dates", language)
+            for combo in (page.batch, page.result):
+                option = QStyleOptionComboBox()
+                combo.initStyleOption(option)
+                contents = combo.style().subControlRect(
+                    QStyle.ComplexControl.CC_ComboBox,
+                    option,
+                    QStyle.SubControl.SC_ComboBoxEditField,
+                    combo,
+                )
+                for index in range(combo.count()):
+                    if combo is page.batch and index != 0:
+                        continue  # Dynamic segment names remain bounded with full tooltips.
+                    assert (
+                        combo.fontMetrics().horizontalAdvance(combo.itemText(index))
+                        <= contents.width()
+                    ), (language, combo.itemText(index))
             assert (
                 page.all_dates.accessibleName()
                 == page.all_dates.toolTip()
