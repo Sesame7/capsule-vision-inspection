@@ -938,6 +938,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
         until(
             lambda: (
                 page.watch_tools.rect().contains(page.watch_actions.geometry())
+                and page.watch_actions.y() == 0
                 and page.watch_selection.height() == Style.touch
                 and page.watch_actions.height() == Style.touch
                 and page.watch_selection.y() == 0
@@ -1042,6 +1043,11 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 == page.watch_selector.toolTip()
                 == page.watch_selector.accessibleDescription()
             )
+            assert page.watch_actions.y() == 0
+            assert geometry == tuple(
+                QRect(button.mapTo(page.watch_tools, QPoint()), button.size())
+                for button in buttons[3:]
+            )
             editor_rect = QRect(
                 page.watch_editor_button.mapTo(page.watch_tools, QPoint()),
                 page.watch_editor_button.size(),
@@ -1113,6 +1119,73 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 page.watch_auto,
             )
     assert startup.application.snapshot() == before and not page.dirty
+
+
+def test_watch_toolbar_wraps_only_when_client_space_is_insufficient(
+    settings_window: tuple[Startup, ProductionWindow],
+) -> None:
+    startup, window = settings_window
+    page = window.communication
+    before = startup.application.snapshot()
+    window.resize(1080, 1920)
+    window.navigate(2)
+    until(
+        lambda: (
+            page.watch_actions.y() == 0
+            and page.watch_selection.geometry().right() < page.watch_actions.x()
+        )
+    )
+    assert page.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Long group name " * 4)
+    )
+    groups = page.watch_groups
+    buttons = (page.watch_remove, page.watch_once, page.watch_auto)
+    sizes = tuple(button.size() for button in buttons)
+    selection_minimum = page.watch_selection.minimumSizeHint().width()
+    actions_minimum = page.watch_actions.minimumSizeHint().width()
+    required = selection_minimum + actions_minimum + Style.small
+    assert page.watch_tools.width() >= required
+    maximum = page.watch_tools.maximumWidth()
+    # Model reduced client space without changing the supported window width.
+    constrained = (max(selection_minimum, actions_minimum) + required) // 2
+    try:
+        page.watch_tools.setMaximumWidth(constrained)
+        until(
+            lambda: (
+                page.watch_tools.width() <= constrained
+                and page.watch_actions.y() == Style.touch + Style.small
+            )
+        )
+        geometry = tuple(button.geometry() for button in buttons)
+        for language in LANGUAGES:
+            window.set_language(language)
+            QApplication.processEvents()
+            assert page.watch_tools.width() < required
+            assert page.watch_selection.geometry().bottom() < page.watch_actions.y()
+            assert tuple(button.size() for button in buttons) == sizes
+            assert tuple(button.geometry() for button in buttons) == geometry
+            assert page.watch_selection.y() == 0
+            assert page.watch_actions.y() == Style.touch + Style.small
+            for widget in (page.watch_selection, page.watch_actions):
+                assert page.watch_tools.rect().contains(widget.geometry())
+            assert (
+                page.watch_selector.currentText()
+                == page.watch_selector.toolTip()
+                == page.watch_selector.accessibleDescription()
+            )
+            assert page.body.width() <= page.scroll_area.viewport().width()
+            assert page.watch_table.horizontalScrollBar().maximum() == 0
+    finally:
+        page.watch_tools.setMaximumWidth(maximum)
+    until(
+        lambda: (
+            page.watch_actions.y() == 0
+            and page.watch_selection.geometry().right() < page.watch_actions.x()
+        )
+    )
+    assert page.watch_groups == groups
+    assert tuple(button.size() for button in buttons) == sizes
+    assert startup.application.snapshot() == before
 
 
 def test_reporting_power_edits_only_draft_until_save_or_discard(

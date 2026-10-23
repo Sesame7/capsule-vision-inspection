@@ -50,6 +50,10 @@ tag, push, add features or redesign architecture without authorization.
   settings and Save/preparation/activation separation. Saved MachineLayout is
   authoritative; opening an editor never repairs or reinitializes geometry.
   Normal `app.py` uses explicit entry-relative `data/`, with no fake fallback.
+- Prefer concise contextual captions, meaningful project-native icons and minimal
+  redundant text. Coordinate related controls and keep action sizes stable across
+  languages. Update geometry tests when an approved presentation redesign changes
+  the contract; preserve operational distinctions, tooltips and accessibility.
 
 ## Validation
 
@@ -60,11 +64,17 @@ focused interaction tests and checks relevant to changed files. Review screensho
 and fix visual issues before final comprehensive validation; do not rerun the full
 suite for each styling adjustment. At phase completion, run the normal gates once:
 
+Every independent pytest invocation, focused or full, must use a fresh, unique
+`--basetemp`; never reuse an earlier test directory. Generate the path anew for
+each invocation, as below. Isolation reduces possible cross-run interference but
+does not establish the cause of intermittent Windows WinError 5.
+
 ```powershell
 uv run --no-sync ruff check src tests scripts app.py
 uv run --no-sync ruff format --check src tests scripts app.py
 uv run --no-sync pyright src tests scripts app.py
-uv run --no-sync pytest --tb=short
+$pytestBase = Join-Path "outputs/pytest" ([guid]::NewGuid().ToString("N"))
+uv run --no-sync pytest --tb=short --basetemp $pytestBase
 git diff --check
 ```
 

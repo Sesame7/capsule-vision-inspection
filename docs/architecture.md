@@ -365,12 +365,13 @@ Automatic refresh keeps its one-second interval visible, a loop icon, a checked 
 Stop caption while active, distinct from Production Stop. Manual writing retains
 a localized verb. Save/apply and service power controls retain visible verbs.
 Action buttons never stretch into surplus row space;
-the selector receives it, or the narrow action row leaves space after the group.
-When the selector/editor and actions cannot share the available
-width, the selector/editor stay above the three actions; wide workspaces use one
-row. Reflow retains the same controls and network operation. Dynamic group names
-may elide, with their full values in tooltips/accessibility. Watch columns reserve
-language-stable heading/value budgets before sharing surplus width.
+the Watch selector receives the remaining space. A single selector/Add/action row
+is preferred whenever the actual available logical width accommodates the controls.
+Dynamic group names do not enlarge its minimum or force wrapping; long values may
+elide, with their full text in tooltips/accessibility. When space is insufficient,
+the selector/Add stay above the three actions, leaving surplus space after that
+narrow action group. Reflow retains the same controls and Watch operations.
+Watch columns reserve language-stable heading/value budgets before sharing surplus width.
 History wraps pagination below filters when their compact icon group cannot share
 a row. Date and filter budgets use that row's available space, retaining equal
 pagination buttons and equal bounded Batch/Result selectors. Dynamic values may

@@ -311,8 +311,8 @@ class CommunicationPage(QWidget):
         selection.setSpacing(Style.small)
         self.watch_selector = QComboBox()
         self.watch_selector.setMinimumHeight(Style.touch)
-        # Retain readable space for the group name and indexed register range.
-        self.watch_selector.setMinimumContentsLength(48)
+        # Reserve compact group/register context, not the longest dynamic name.
+        self.watch_selector.setMinimumContentsLength(24)
         self.watch_selector.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
