@@ -72,6 +72,9 @@ type Language = Literal[
     "az-Latn",
     "mg",
     "ky",
+    "ka",
+    "hy",
+    "ti",
 ]
 
 LANGUAGES: tuple[Language, ...] = (
@@ -136,6 +139,9 @@ LANGUAGES: tuple[Language, ...] = (
     "az-Latn",
     "mg",
     "ky",
+    "ka",
+    "hy",
+    "ti",
 )
 
 

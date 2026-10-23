@@ -109,6 +109,74 @@ HIGH_COVERAGE_LANGUAGES: dict[Language, str] = {
 }
 
 
+NEW_SCRIPT_LANGUAGES: dict[Language, str] = {
+    "ka": "ქართული",
+    "hy": "Հայերեն",
+    "ti": "ትግርኛ",
+}
+
+
+@pytest.mark.parametrize("language", NEW_SCRIPT_LANGUAGES)
+def test_new_scripts_preserve_operational_distinctions(language: Language) -> None:
+    assert len(EXTRA_STRINGS[language]) == len(STRINGS) == 502
+    for keys in (
+        ("replay_start", "replay_pause", "production_stop", "reset"),
+        ("save", "roi_set_rect", "discard", "cancel"),
+        ("saved", "roi_applied"),
+        ("source_unconfigured", "source_connected", "state_READY", "active"),
+        ("ng", "error", "FAULT", "empty", "unknown"),
+    ):
+        assert len({text(key, language) for key in keys}) == len(keys)
+    assert text("plc_enable", language) != text("replay_start", language)
+    assert text("comm_watch_stop", language) != text("production_stop", language)
+    physical_rejection = {
+        "ka": "ACK არ ადასტურებს პროდუქტის ფიზიკურ ამოღებას",
+        "hy": "ACK-ը չի հաստատում արտադրանքի ֆիզիկական հեռացումը",
+        "ti": "ACK ፍርያት ብኣካል ከም ዝተኣለየ ኣየረጋግጽን",
+    }
+    assert physical_rejection[language] in text("plc_next_start", language)
+    retained_draft = {
+        "ka": "მონახაზი უცვლელია",
+        "hy": "սևագիրն անփոփոխ է",
+        "ti": "ንድፊ ኣይተቐየረን",
+    }
+    assert retained_draft[language] in text("comm_reload_failed", language)
+    assert text("comm_settings_saved", language) not in text(
+        "comm_reload_failed", language
+    )
+
+
+def test_georgian_armenian_and_tigrinya_use_native_scripts() -> None:
+    scripts: tuple[tuple[Language, str, str], ...] = (
+        ("ka", "\u10a0", "\u10ff"),
+        ("hy", "\u0530", "\u058f"),
+        ("ti", "\u1200", "\u137f"),
+    )
+    for language, start, end in scripts:
+        for key in (
+            "production",
+            "save",
+            "discard",
+            "source_connected",
+            "camera_setup",
+        ):
+            caption = text(key, language)
+            assert any(start <= char <= end for char in caption), (language, key)
+            assert not any(c.isascii() and c.isalpha() for c in caption)
+    # Shared script does not make Amharic a Tigrinya translation catalog.
+    for key, expected in (
+        ("size", "ዓቐን"),
+        ("color", "ሕብሪ"),
+        ("history", "ታሪኽ"),
+        ("source_connected", "ተራኺቡ"),
+    ):
+        assert text(key, "ti") == expected
+        assert text(key, "ti") != text(key, "am")
+    assert text("production_stop", "hy") == "Կանգ"
+    assert text("stop", "hy") == "Կանգնեցնել ստուգումը"
+    assert text("replay_continue", "ka") == "განაგრძე"
+
+
 @pytest.mark.parametrize("language", HIGH_COVERAGE_LANGUAGES)
 def test_additional_languages_preserve_operational_distinctions(
     language: Language,
@@ -233,13 +301,15 @@ def test_european_language_identities_and_complete_catalogs() -> None:
     assert LANGUAGES[29:43] == tuple(ASIAN_AFRICAN_LANGUAGES)
     assert LANGUAGES[43:49] == tuple(NEW_EUROPEAN_LANGUAGES)
     assert LANGUAGES[49:55] == tuple(AFRICAN_CENTRAL_ASIAN_LANGUAGES)
-    assert LANGUAGES[55:] == tuple(HIGH_COVERAGE_LANGUAGES)
+    assert LANGUAGES[55:61] == tuple(HIGH_COVERAGE_LANGUAGES)
+    assert LANGUAGES[61:] == tuple(NEW_SCRIPT_LANGUAGES)
     for language, native_name in (
         EUROPEAN_LANGUAGES
         | ASIAN_AFRICAN_LANGUAGES
         | NEW_EUROPEAN_LANGUAGES
         | AFRICAN_CENTRAL_ASIAN_LANGUAGES
         | HIGH_COVERAGE_LANGUAGES
+        | NEW_SCRIPT_LANGUAGES
     ).items():
         assert is_language(language)
         assert LANGUAGE_NAMES[language] == native_name
@@ -284,6 +354,7 @@ def test_new_european_actions_and_operational_distinctions(language: Language) -
         (43, "0a43e286e9f2928f3da887adda6e4f3602644cae7d668f0242c0bd164b296c40"),
         (49, "f4ec294eed483e2e363f69f8ddc88d11d7ec22eeb46abd0a2b6994c0b10584a6"),
         (55, "5cca2ff28d2832b85ec0802886a8a37f1712841ef519bae27cb4793eff4a7f6e"),
+        (61, "79e6bfd34ab4dd7d48c0732610315e3916a78212585815adf3fb52ef99fa53bc"),
     ],
 )
 def test_previous_languages_remain_exactly_unchanged(
@@ -309,7 +380,7 @@ def test_previous_languages_remain_exactly_unchanged(
     digest = hashlib.sha256(
         json.dumps(catalog, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
-    # Frozen before adding these six languages; includes compact captions,
+    # Frozen before each language addition; includes compact captions,
     # explicit/fallback membership, native names, codes and relative order.
     assert digest == expected_digest
 
@@ -378,6 +449,8 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "tg",
         "uk",
         "kk",
+        "hy",
+        "ka",
         "ja",
         "ko",
         "th",
@@ -388,6 +461,7 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "ta",
         "te",
         "si",
+        "ti",
         "am",
         "km",
     )
@@ -402,7 +476,8 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
     ASIAN_AFRICAN_LANGUAGES
     | NEW_EUROPEAN_LANGUAGES
     | AFRICAN_CENTRAL_ASIAN_LANGUAGES
-    | HIGH_COVERAGE_LANGUAGES,
+    | HIGH_COVERAGE_LANGUAGES
+    | NEW_SCRIPT_LANGUAGES,
 )
 def test_new_catalogs_preserve_critical_protocol_and_result_distinctions(
     language: Language,
@@ -643,7 +718,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     }
     assert tuple(LANGUAGE_NAMES) == LANGUAGES
     assert set(EXTRA_STRINGS) == set(LANGUAGES) - {"zh", "en"}
-    assert len(set(LANGUAGES)) == len(LANGUAGES) == 61
+    assert len(set(LANGUAGES)) == len(LANGUAGES) == 64
     assert LANGUAGE_NAMES["zh-TW"] == "繁體中文"
     assert len(set(LANGUAGE_NAMES.values())) == len(LANGUAGES)
     formatter = Formatter()
@@ -727,6 +802,7 @@ def test_optional_translation_falls_back_to_english(language: Language) -> None:
         | NEW_EUROPEAN_LANGUAGES
         | AFRICAN_CENTRAL_ASIAN_LANGUAGES
         | HIGH_COVERAGE_LANGUAGES
+        | NEW_SCRIPT_LANGUAGES
     ):
         assert "history_clock" not in EXTRA_STRINGS[language]
     for key in STRINGS.keys() - EXTRA_STRINGS[language].keys():
@@ -742,6 +818,7 @@ def test_optional_translation_falls_back_to_english(language: Language) -> None:
         *NEW_EUROPEAN_LANGUAGES,
         *AFRICAN_CENTRAL_ASIAN_LANGUAGES,
         *HIGH_COVERAGE_LANGUAGES,
+        *NEW_SCRIPT_LANGUAGES,
     ),
 )
 def test_optional_translation_can_be_omitted_for_only_one_language(
@@ -907,6 +984,13 @@ def test_language_codes_are_exact_and_invalid_types_remain_rejected() -> None:
         "az-Arab",
         "mg-MG",
         "ky-KG",
+        "ka-GE",
+        "hy-AM",
+        "ti-ER",
+        "ti-ET",
+        "KA",
+        "HY",
+        "TI",
         None,
         1,
         ["en"],

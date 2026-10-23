@@ -91,6 +91,9 @@ LANGUAGE_LABELS = {
     "az-Latn": "AZ",
     "mg": "MG",
     "ky": "KY",
+    "ka": "KA",
+    "hy": "HY",
+    "ti": "TI",
 }
 
 

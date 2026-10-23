@@ -47,16 +47,18 @@ UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chi
 `sq` (Albanian), `ca` (Catalan), `af` (Afrikaans), `zu` (Zulu),
 `ha` (Hausa, Latin/Boko), `kk` (Kazakh Cyrillic), `uz` (Uzbek Latin),
 `mn` (Mongolian Cyrillic), `so` (Somali Latin), `tk` (Turkmen Latin),
-`tg` (Tajik Cyrillic), `az-Latn` (Azerbaijani Latin), `mg` (Malagasy Latin)
-and `ky` (Kyrgyz Cyrillic). Afrikaans and Zulu use Latin script;
+`tg` (Tajik Cyrillic), `az-Latn` (Azerbaijani Latin), `mg` (Malagasy Latin),
+`ky` (Kyrgyz Cyrillic), `ka` (Georgian), `hy` (Armenian) and `ti` (Tigrinya, Ethiopic).
+Tigrinya has an independent catalog, not Amharic translations.
+Afrikaans and Zulu use Latin script;
 Hausa preserves ɓ/ɗ/ƙ and Uzbek uses oʻ/gʻ. Alternative scripts are not aliases.
 `az-Latn` supports Latin-script Azerbaijani only; `az` and other scripts are not aliases.
 The collapsed selector uses compact language labels; its popup shows full native
-names in a single column that expands to fit all 61 languages when screen height
+names in a single column that expands to fit all 64 languages when screen height
 permits. On shorter screens the popup stays within the available work area and
 provides scrolling. Display order pins `zh`, `zh-TW`, `en`, then sorts Latin-script
-native names case/accent-insensitively. Greek, Cyrillic, Japanese, Korean, Thai,
-Devanagari, Bengali, Tamil, Telugu, Sinhala, Ethiopic and Khmer groups follow;
+native names case/accent-insensitively. Greek, Cyrillic, Armenian, Georgian,
+Japanese, Korean, Thai, Devanagari, Bengali, Tamil, Telugu, Sinhala, Ethiopic and Khmer groups follow;
 native-name order is stable within groups.
 This presentation order is independent of saved codes and does not change with
 the active language or theme. `pt-PT` and `pt-BR` are distinct.
@@ -67,7 +69,8 @@ fall back to Chinese in memory with a warning, preserving the file for repair.
 Optional untranslated text uses English. Technical identifiers, model labels and
 reason codes are preserved. Layout is left-to-right; the supported minimum is
 1080 Qt logical pixels. Windows must provide fonts for the selected script,
-including Vietnamese marks, Thai, Indic scripts, Sinhala, Ethiopic and Khmer.
+including Georgian, Armenian, Vietnamese marks, Thai, Indic scripts, Sinhala,
+Ethiopic and Khmer.
 Qt uses existing Windows font fallback (such as Nirmala UI for Indic scripts and
 Sinhala, Ebrima for Ethiopic, Tahoma for Thai and Leelawadee UI for Khmer); fonts
 are not downloaded, bundled or converted at runtime.
