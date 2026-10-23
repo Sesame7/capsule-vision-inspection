@@ -79,6 +79,12 @@ LANGUAGE_LABELS = {
     "sl": "SL",
     "sq": "SQ",
     "ca": "CA",
+    "af": "AF",
+    "zu": "ZU",
+    "ha": "HA",
+    "kk": "KK",
+    "uz": "UZ",
+    "mn": "MN",
 }
 
 
