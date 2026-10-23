@@ -99,6 +99,76 @@ AFRICAN_CENTRAL_ASIAN_LANGUAGES: dict[Language, str] = {
 }
 
 
+HIGH_COVERAGE_LANGUAGES: dict[Language, str] = {
+    "so": "Soomaali",
+    "tk": "Türkmençe",
+    "tg": "Тоҷикӣ",
+    "az-Latn": "Azərbaycanca",
+    "mg": "Malagasy",
+    "ky": "Кыргызча",
+}
+
+
+@pytest.mark.parametrize("language", HIGH_COVERAGE_LANGUAGES)
+def test_additional_languages_preserve_operational_distinctions(
+    language: Language,
+) -> None:
+    for keys in (
+        ("replay_start", "replay_pause", "production_stop", "reset"),
+        ("save", "apply", "discard", "cancel"),
+        ("source_unconfigured", "source_connected", "state_READY", "active"),
+        ("ng", "error", "FAULT"),
+    ):
+        assert len({text(key, language) for key in keys}) == len(keys)
+    assert text("plc_enable", language) != text("replay_start", language)
+    assert text("comm_watch_stop", language) != text("production_stop", language)
+    physical_rejection = {
+        "so": "ma xaqiijiyo ka-saaridda dhabta ah ee badeecadda",
+        "tk": "fiziki çykarylandygyny tassyklamaýar",
+        "tg": "хориҷкунии воқеии маҳсулотро тасдиқ намекунад",
+        "az-Latn": "fiziki olaraq kənarlaşdırıldığını təsdiqləmir",
+        "mg": "tsy manamarina ny fanesorana ara-batana ny vokatra",
+        "ky": "физикалык чыгарылганын ырастабайт",
+    }
+    assert physical_rejection[language] in text("plc_next_start", language)
+    retained_draft = {
+        "so": "qabyadu isma beddelin",
+        "tk": "garalama üýtgemedi",
+        "tg": "пешнавис бетағйир монд",
+        "az-Latn": "qaralama dəyişməyib",
+        "mg": "tsy niova ny volavola",
+        "ky": "долбоор өзгөргөн жок",
+    }
+    assert retained_draft[language] in text("comm_reload_failed", language)
+    assert text("comm_settings_saved", language) not in text(
+        "comm_reload_failed", language
+    )
+
+
+def test_additional_catalogs_keep_latin_and_cyrillic_orthography() -> None:
+    for language in ("so", "tk", "az-Latn", "mg"):
+        assert not any(
+            "\u0400" <= c <= "\u04ff" or "\u0600" <= c <= "\u06ff"
+            for value in EXTRA_STRINGS[language].values()
+            for c in value
+        ), language
+    for language in ("tg", "ky"):
+        for key in (
+            "production",
+            "save",
+            "discard",
+            "source_connected",
+            "camera_setup",
+        ):
+            assert any("\u0400" <= c <= "\u04ff" for c in text(key, language))
+            assert not any(c.isascii() and c.isalpha() for c in text(key, language))
+    assert set("äňöşüý") <= set("".join(EXTRA_STRINGS["tk"].values()).lower())
+    assert not any(c in value for value in EXTRA_STRINGS["tk"].values() for c in "ıİəƏ")
+    assert set("ғқҳҷӣӯ") <= set("".join(EXTRA_STRINGS["tg"].values()).lower())
+    assert set("əğıöşüç") <= set("".join(EXTRA_STRINGS["az-Latn"].values()).lower())
+    assert set("ңөү") <= set("".join(EXTRA_STRINGS["ky"].values()).lower())
+
+
 @pytest.mark.parametrize("language", AFRICAN_CENTRAL_ASIAN_LANGUAGES)
 def test_african_central_asian_operational_distinctions(language: Language) -> None:
     for keys in (
@@ -162,12 +232,14 @@ def test_european_language_identities_and_complete_catalogs() -> None:
     assert LANGUAGES[13:29] == tuple(EUROPEAN_LANGUAGES)
     assert LANGUAGES[29:43] == tuple(ASIAN_AFRICAN_LANGUAGES)
     assert LANGUAGES[43:49] == tuple(NEW_EUROPEAN_LANGUAGES)
-    assert LANGUAGES[49:] == tuple(AFRICAN_CENTRAL_ASIAN_LANGUAGES)
+    assert LANGUAGES[49:55] == tuple(AFRICAN_CENTRAL_ASIAN_LANGUAGES)
+    assert LANGUAGES[55:] == tuple(HIGH_COVERAGE_LANGUAGES)
     for language, native_name in (
         EUROPEAN_LANGUAGES
         | ASIAN_AFRICAN_LANGUAGES
         | NEW_EUROPEAN_LANGUAGES
         | AFRICAN_CENTRAL_ASIAN_LANGUAGES
+        | HIGH_COVERAGE_LANGUAGES
     ).items():
         assert is_language(language)
         assert LANGUAGE_NAMES[language] == native_name
@@ -211,6 +283,7 @@ def test_new_european_actions_and_operational_distinctions(language: Language) -
     [
         (43, "0a43e286e9f2928f3da887adda6e4f3602644cae7d668f0242c0bd164b296c40"),
         (49, "f4ec294eed483e2e363f69f8ddc88d11d7ec22eeb46abd0a2b6994c0b10584a6"),
+        (55, "5cca2ff28d2832b85ec0802886a8a37f1712841ef519bae27cb4793eff4a7f6e"),
     ],
 )
 def test_previous_languages_remain_exactly_unchanged(
@@ -260,6 +333,7 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "zh-TW",
         "en",
         "af",
+        "az-Latn",
         "id",
         "ms",
         "ca",
@@ -278,6 +352,7 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "lv",
         "lt",
         "hu",
+        "mg",
         "nl",
         "nb",
         "uz",
@@ -288,15 +363,19 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "sq",
         "sk",
         "sl",
+        "so",
         "sr-Latn",
         "fi",
         "sv",
         "vi",
         "tr",
+        "tk",
         "el",
         "bg",
+        "ky",
         "mn",
         "ru",
+        "tg",
         "uk",
         "kk",
         "ja",
@@ -320,7 +399,10 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
 
 @pytest.mark.parametrize(
     "language",
-    ASIAN_AFRICAN_LANGUAGES | NEW_EUROPEAN_LANGUAGES | AFRICAN_CENTRAL_ASIAN_LANGUAGES,
+    ASIAN_AFRICAN_LANGUAGES
+    | NEW_EUROPEAN_LANGUAGES
+    | AFRICAN_CENTRAL_ASIAN_LANGUAGES
+    | HIGH_COVERAGE_LANGUAGES,
 )
 def test_new_catalogs_preserve_critical_protocol_and_result_distinctions(
     language: Language,
@@ -561,7 +643,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     }
     assert tuple(LANGUAGE_NAMES) == LANGUAGES
     assert set(EXTRA_STRINGS) == set(LANGUAGES) - {"zh", "en"}
-    assert len(set(LANGUAGES)) == len(LANGUAGES) == 55
+    assert len(set(LANGUAGES)) == len(LANGUAGES) == 61
     assert LANGUAGE_NAMES["zh-TW"] == "繁體中文"
     assert len(set(LANGUAGE_NAMES.values())) == len(LANGUAGES)
     formatter = Formatter()
@@ -644,6 +726,7 @@ def test_optional_translation_falls_back_to_english(language: Language) -> None:
         | ASIAN_AFRICAN_LANGUAGES
         | NEW_EUROPEAN_LANGUAGES
         | AFRICAN_CENTRAL_ASIAN_LANGUAGES
+        | HIGH_COVERAGE_LANGUAGES
     ):
         assert "history_clock" not in EXTRA_STRINGS[language]
     for key in STRINGS.keys() - EXTRA_STRINGS[language].keys():
@@ -658,6 +741,7 @@ def test_optional_translation_falls_back_to_english(language: Language) -> None:
         *ASIAN_AFRICAN_LANGUAGES,
         *NEW_EUROPEAN_LANGUAGES,
         *AFRICAN_CENTRAL_ASIAN_LANGUAGES,
+        *HIGH_COVERAGE_LANGUAGES,
     ),
 )
 def test_optional_translation_can_be_omitted_for_only_one_language(
@@ -814,6 +898,15 @@ def test_language_codes_are_exact_and_invalid_types_remain_rejected() -> None:
         "uz-Cyrl",
         "mn-MN",
         "mn-Mong",
+        "so-SO",
+        "tk-TM",
+        "tg-TJ",
+        "az",
+        "az-AZ",
+        "az-Cyrl",
+        "az-Arab",
+        "mg-MG",
+        "ky-KG",
         None,
         1,
         ["en"],

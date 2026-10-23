@@ -45,11 +45,14 @@ UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chi
 `mr` (Marathi), `ne` (Nepali), `si` (Sinhala), `am` (Amharic), `km` (Khmer),
 `lt` (Lithuanian), `lv` (Latvian), `et` (Estonian), `sl` (Slovenian),
 `sq` (Albanian), `ca` (Catalan), `af` (Afrikaans), `zu` (Zulu),
-`ha` (Hausa, Latin/Boko), `kk` (Kazakh Cyrillic), `uz` (Uzbek Latin)
-and `mn` (Mongolian Cyrillic). Afrikaans and Zulu use Latin script;
+`ha` (Hausa, Latin/Boko), `kk` (Kazakh Cyrillic), `uz` (Uzbek Latin),
+`mn` (Mongolian Cyrillic), `so` (Somali Latin), `tk` (Turkmen Latin),
+`tg` (Tajik Cyrillic), `az-Latn` (Azerbaijani Latin), `mg` (Malagasy Latin)
+and `ky` (Kyrgyz Cyrillic). Afrikaans and Zulu use Latin script;
 Hausa preserves ɓ/ɗ/ƙ and Uzbek uses oʻ/gʻ. Alternative scripts are not aliases.
+`az-Latn` supports Latin-script Azerbaijani only; `az` and other scripts are not aliases.
 The collapsed selector uses compact language labels; its popup shows full native
-names in a single column that expands to fit all 55 languages when screen height
+names in a single column that expands to fit all 61 languages when screen height
 permits. On shorter screens the popup stays within the available work area and
 provides scrolling. Display order pins `zh`, `zh-TW`, `en`, then sorts Latin-script
 native names case/accent-insensitively. Greek, Cyrillic, Japanese, Korean, Thai,

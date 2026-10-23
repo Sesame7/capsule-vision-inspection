@@ -85,6 +85,12 @@ LANGUAGE_LABELS = {
     "kk": "KK",
     "uz": "UZ",
     "mn": "MN",
+    "so": "SO",
+    "tk": "TK",
+    "tg": "TG",
+    "az-Latn": "AZ",
+    "mg": "MG",
+    "ky": "KY",
 }
 
 
