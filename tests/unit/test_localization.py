@@ -79,14 +79,84 @@ ASIAN_AFRICAN_LANGUAGES: dict[Language, str] = {
     "km": "ខ្មែរ",
 }
 
+NEW_EUROPEAN_LANGUAGES: dict[Language, str] = {
+    "lt": "Lietuvių",
+    "lv": "Latviešu",
+    "et": "Eesti",
+    "sl": "Slovenščina",
+    "sq": "Shqip",
+    "ca": "Català",
+}
+
 
 def test_european_language_identities_and_complete_catalogs() -> None:
     assert LANGUAGES[13:29] == tuple(EUROPEAN_LANGUAGES)
-    assert LANGUAGES[29:] == tuple(ASIAN_AFRICAN_LANGUAGES)
-    for language, native_name in (EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES).items():
+    assert LANGUAGES[29:43] == tuple(ASIAN_AFRICAN_LANGUAGES)
+    assert LANGUAGES[43:] == tuple(NEW_EUROPEAN_LANGUAGES)
+    for language, native_name in (
+        EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES | NEW_EUROPEAN_LANGUAGES
+    ).items():
         assert is_language(language)
         assert LANGUAGE_NAMES[language] == native_name
         assert EXTRA_STRINGS[language].keys() == STRINGS.keys(), language
+
+
+@pytest.mark.parametrize("language", NEW_EUROPEAN_LANGUAGES)
+def test_new_european_actions_and_operational_distinctions(language: Language) -> None:
+    assert EXTRA_STRINGS[language].keys() == STRINGS.keys()
+    for keys in (
+        ("replay_start", "replay_pause", "production_stop", "reset"),
+        ("save", "apply", "discard", "cancel"),
+        ("source_connected", "state_READY", "active", "plc_enabled"),
+        ("ng", "error", "FAULT"),
+    ):
+        assert len({text(key, language) for key in keys}) == len(keys)
+    assert text("plc_enable", language) != text("replay_start", language)
+    assert text("comm_watch_stop", language) != text("production_stop", language)
+    physical_rejection = {
+        "lt": "nepatvirtina fizinio atmetimo",
+        "lv": "neapstiprina fizisku izbrāķēšanu",
+        "et": "ei kinnita füüsilist väljapraakimist",
+        "sl": "ne potrjuje fizičnega izmeta",
+        "sq": "nuk konfirmon nxjerrjen fizike",
+        "ca": "no confirma el rebuig físic",
+    }
+    assert physical_rejection[language] in text("plc_next_start", language)
+    retained_draft = {
+        "lt": "juodraštis išlaikytas",
+        "lv": "melnraksts ir paturēts",
+        "et": "mustand säilitati",
+        "sl": "osnutek je ohranjen",
+        "sq": "drafti mbetet i pandryshuar",
+        "ca": "es conserva l'esborrany",
+    }
+    assert retained_draft[language] in text("comm_reload_failed", language)
+
+
+def test_original_43_languages_remain_exactly_unchanged() -> None:
+    original = LANGUAGES[:43]
+    catalog = {
+        "languages": list(original),
+        "order": [
+            language for language in LANGUAGE_DISPLAY_ORDER if language in original
+        ],
+        "names": {language: LANGUAGE_NAMES[language] for language in original},
+        "catalog": {
+            language: {key: text(key, language) for key in STRINGS}
+            for language in original
+        },
+        "resources": {
+            language: EXTRA_STRINGS[language]
+            for language in original
+            if language in EXTRA_STRINGS
+        },
+    }
+    digest = hashlib.sha256(
+        json.dumps(catalog, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    # Frozen before adding these six languages; includes compact captions,
+    # explicit/fallback membership, native names, codes and relative order.
+    assert digest == "0a43e286e9f2928f3da887adda6e4f3602644cae7d668f0242c0bd164b296c40"
 
 
 def test_explicit_variants_have_independent_translations(
@@ -109,15 +179,19 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "en",
         "id",
         "ms",
+        "ca",
         "cs",
         "da",
         "de",
+        "et",
         "es",
         "fil",
         "fr",
         "hr",
         "it",
         "sw",
+        "lv",
+        "lt",
         "hu",
         "nl",
         "nb",
@@ -125,7 +199,9 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
         "pt-BR",
         "pt-PT",
         "ro",
+        "sq",
         "sk",
+        "sl",
         "sr-Latn",
         "fi",
         "sv",
@@ -154,7 +230,7 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
     assert LANGUAGES[12] == "zh-TW"
 
 
-@pytest.mark.parametrize("language", ASIAN_AFRICAN_LANGUAGES)
+@pytest.mark.parametrize("language", ASIAN_AFRICAN_LANGUAGES | NEW_EUROPEAN_LANGUAGES)
 def test_new_catalogs_preserve_critical_protocol_and_result_distinctions(
     language: Language,
 ) -> None:
@@ -252,7 +328,7 @@ def test_sinhala_start_spelling_preserves_next_start_and_failure_states() -> Non
     assert text("startup_error", "si") == "ආරම්භය අසාර්ථක"
 
 
-@pytest.mark.parametrize("language", LANGUAGES[36:])
+@pytest.mark.parametrize("language", LANGUAGES[36:43])
 def test_additional_catalogs_translate_text_and_keep_protocol_codes(
     language: Language,
 ) -> None:
@@ -394,7 +470,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     }
     assert tuple(LANGUAGE_NAMES) == LANGUAGES
     assert set(EXTRA_STRINGS) == set(LANGUAGES) - {"zh", "en"}
-    assert len(set(LANGUAGES)) == len(LANGUAGES) == 43
+    assert len(set(LANGUAGES)) == len(LANGUAGES) == 49
     assert LANGUAGE_NAMES["zh-TW"] == "繁體中文"
     assert len(set(LANGUAGE_NAMES.values())) == len(LANGUAGES)
     formatter = Formatter()
@@ -472,14 +548,17 @@ def test_compact_captions_preserve_full_context_resources() -> None:
 
 @pytest.mark.parametrize("language", LANGUAGES[2:])
 def test_optional_translation_falls_back_to_english(language: Language) -> None:
-    if language not in EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES:
+    if language not in (
+        EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES | NEW_EUROPEAN_LANGUAGES
+    ):
         assert "history_clock" not in EXTRA_STRINGS[language]
     for key in STRINGS.keys() - EXTRA_STRINGS[language].keys():
         assert text(key, language) == STRINGS[key][1], (key, language)
 
 
 @pytest.mark.parametrize(
-    "language", ("ja", *EUROPEAN_LANGUAGES, *ASIAN_AFRICAN_LANGUAGES)
+    "language",
+    ("ja", *EUROPEAN_LANGUAGES, *ASIAN_AFRICAN_LANGUAGES, *NEW_EUROPEAN_LANGUAGES),
 )
 def test_optional_translation_can_be_omitted_for_only_one_language(
     language: Language,
@@ -573,7 +652,7 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
         "am": "40b3874e95c26d2ee5e4c3b47669725de15bd18acb7c8f1e362bf0eed1c6b6a6",
         "km": "e6c09a2da6544453bc603b4be13fc3157f24b7dce8aacb0cf0d248e941f6daac",
     }
-    assert tuple(expected) == LANGUAGES
+    assert tuple(expected) == LANGUAGES[:43]
     for language, digest in expected.items():
         catalog = {
             # New Watch presentation keys extend the catalog; preserve every
@@ -619,6 +698,12 @@ def test_language_codes_are_exact_and_invalid_types_remain_rejected() -> None:
         "si-LK",
         "am-ET",
         "km-KH",
+        "lt-LT",
+        "lv-LV",
+        "et-EE",
+        "sl-SI",
+        "sq-AL",
+        "ca-ES",
         None,
         1,
         ["en"],

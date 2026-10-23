@@ -325,10 +325,10 @@ def test_language_popup_retains_all_native_names_within_available_screen(
     selector = window.language_selector
     selected = selector.currentData()
     application = window.bridge.application.snapshot()
-    assert selector.count() == selector.maxVisibleItems() == 43
-    assert [(selector.itemText(i), selector.itemData(i)) for i in range(43)] == [
-        (LANGUAGE_NAMES[language], language) for language in LANGUAGE_DISPLAY_ORDER
-    ]
+    assert selector.count() == selector.maxVisibleItems() == len(LANGUAGES)
+    assert [
+        (selector.itemText(i), selector.itemData(i)) for i in range(selector.count())
+    ] == [(LANGUAGE_NAMES[language], language) for language in LANGUAGE_DISPLAY_ORDER]
     selector.showPopup()
     try:
         QApplication.processEvents()
@@ -336,7 +336,7 @@ def test_language_popup_retains_all_native_names_within_available_screen(
         popup = view.window()
         assert popup.isVisible()
         assert popup.screen().availableGeometry().contains(popup.frameGeometry())
-        for row in range(43):
+        for row in range(selector.count()):
             index = selector.model().index(row, 0)
             view.scrollTo(index)
             QApplication.processEvents()

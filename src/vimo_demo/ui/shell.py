@@ -73,6 +73,12 @@ LANGUAGE_LABELS = {
     "si": "SI",
     "am": "AM",
     "km": "KM",
+    "lt": "LT",
+    "lv": "LV",
+    "et": "ET",
+    "sl": "SL",
+    "sq": "SQ",
+    "ca": "CA",
 }
 
 

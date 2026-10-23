@@ -42,9 +42,11 @@ UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chi
 `sr-Latn` (Serbian Latin), `el` (Greek), `pt-PT` (European Portuguese),
 `vi` (Vietnamese), `ms` (Malay), `fil` (Filipino), `sw` (Swahili),
 `th` (Thai), `hi` (Hindi), `bn` (Bengali), `ta` (Tamil), `te` (Telugu),
-`mr` (Marathi), `ne` (Nepali), `si` (Sinhala), `am` (Amharic) and `km` (Khmer).
+`mr` (Marathi), `ne` (Nepali), `si` (Sinhala), `am` (Amharic), `km` (Khmer),
+`lt` (Lithuanian), `lv` (Latvian), `et` (Estonian), `sl` (Slovenian),
+`sq` (Albanian) and `ca` (Catalan).
 The collapsed selector uses compact language labels; its popup shows full native
-names in a single column that expands to fit all 43 languages when screen height
+names in a single column that expands to fit all 49 languages when screen height
 permits. On shorter screens the popup stays within the available work area and
 provides scrolling. Display order pins `zh`, `zh-TW`, `en`, then sorts Latin-script
 native names case/accent-insensitively. Greek, Cyrillic, Japanese, Korean, Thai,
