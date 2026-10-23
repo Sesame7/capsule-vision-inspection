@@ -1442,9 +1442,11 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
             window.set_theme(theme)
             window.resize(*size)
             QApplication.processEvents()
-            assert workspace.reference.currentText() == text(
-                "vision_dimensions_only", language
-            ).format(width=60, height=20)
+            assert workspace.reference.currentText() == "— · 60×20"
+            assert (
+                text("vision_dimensions_only", language).format(width=60, height=20)
+                in workspace.reference.accessibleDescription()
+            )
             assert workspace.canvas.model.size == (60, 20)
             assert workspace.canvas.model.schematic_size is None
             assert not workspace.canvas.model.can_drag

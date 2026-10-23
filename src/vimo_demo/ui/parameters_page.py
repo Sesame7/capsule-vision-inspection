@@ -516,8 +516,12 @@ class ParametersPage(QWidget):
             check.setAccessibleName(check.toolTip())
         self.label_choices.setAccessibleName(text("recipe_labels", language))
         for mode, button in self.expand_tuning.items():
-            button.setToolTip(text("tune_" + mode, language))
-            button.setAccessibleName(button.toolTip())
+            button.setToolTip(
+                text("tune_" + mode, language)
+                + "\n"
+                + text("preview_scope_tip", language)
+            )
+            button.setAccessibleName(text("tune_" + mode, language))
         self.recipes.setAccessibleName(text("recipe", language))
         self.model.setAccessibleName(text("inspection_model", language))
         for key, button in self.buttons.items():
@@ -531,7 +535,14 @@ class ParametersPage(QWidget):
             button_width(primary, ("save_apply",)),
         )
         for key, label in self.labels.items():
-            label.setText(text(key, language))
+            label.setText(
+                text(
+                    {"display_name": "short_name", "product_code": "short_code"}.get(
+                        key, key
+                    ),
+                    language,
+                )
+            )
             label.setToolTip(text(key, language))
             label.setAccessibleName(text(key, language))
         self.labels["image_archive"].setText("PNG")
@@ -753,10 +764,10 @@ class ParametersPage(QWidget):
             self.preview.refresh_state()
         for mode in ("size", "color"):
             check = self.capsule_enabled[mode]
-            caption = text(mode + "_check", language)
+            caption = text(mode, language)
             check.setText("")
-            check.setAccessibleName(caption)
-            check.setToolTip(caption)
+            check.setAccessibleName(text(mode + "_check", language))
+            check.setToolTip(check.accessibleName())
             check.setEnabled(allowed)
             if session is not None:
                 settings = session.draft.capsule

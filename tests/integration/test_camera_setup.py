@@ -887,8 +887,10 @@ def test_async_image_status_follows_current_camera_not_stale_delivery(
     until(entered.is_set)
     try:
         assert workspace.frame is None
-        assert workspace.reference.currentText() == text(
-            "vision_schematic", window.language
+        assert workspace.reference.currentText() == "ROI ≈"
+        assert (
+            text("vision_schematic", window.language)
+            in workspace.reference.accessibleDescription()
         )
         workspace.camera_cards[CameraId("CAM2")].click()
     finally:
@@ -2045,8 +2047,10 @@ def test_no_image_schematic_is_not_camera_bounds_or_persisted_geometry(
     assert workspace.reference.isVisible()
     assert workspace.camera not in workspace.draft.bounds
     assert canvas.model.schematic_size is not None
-    assert workspace.reference.currentText() == text(
-        "vision_schematic", window.language
+    assert workspace.reference.currentText() == "ROI ≈"
+    assert (
+        text("vision_schematic", window.language)
+        in workspace.reference.accessibleDescription()
     )
     assert workspace.reference.toolTip() == text(
         "vision_schematic_tip", window.language

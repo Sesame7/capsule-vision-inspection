@@ -281,7 +281,7 @@ class NavigationBar(QFrame):
         preferred = (
             max(
                 self.fontMetrics().horizontalAdvance(
-                    text("nav_diagnostics" if key == "diagnostics" else key, lang)
+                    "PLC / Web" if key == "diagnostics" else text(key, lang)
                 )
                 for key in PAGES
                 for lang in LANGUAGES
@@ -296,7 +296,7 @@ class NavigationBar(QFrame):
         )
         for key, button in zip(PAGES, self.buttons, strict=True):
             button.setFixedWidth(width)
-            caption = text("nav_diagnostics" if key == "diagnostics" else key, language)
+            caption = "PLC / Web" if key == "diagnostics" else text(key, language)
             button.setText(
                 button.fontMetrics().elidedText(
                     caption, Qt.TextElideMode.ElideRight, max(0, width - 48)

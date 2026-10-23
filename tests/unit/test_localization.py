@@ -32,6 +32,17 @@ WATCH_SHORT_KEYS = (
     "comm_watch_stop_short",
 )
 
+COMPACT_KEYS = (
+    "short_cycles",
+    "short_name",
+    "short_code",
+    "short_reporting",
+    "short_timeout",
+    "short_refresh",
+    "short_words",
+    "short_time",
+)
+
 EUROPEAN_LANGUAGES: dict[Language, str] = {
     "nl": "Nederlands",
     "pl": "Polski",
@@ -286,6 +297,7 @@ def test_additional_catalogs_translate_text_and_keep_protocol_codes(
 
 def test_catalog_essential_coverage_and_format_fields() -> None:
     essential = {
+        *COMPACT_KEYS,
         *WATCH_SHORT_KEYS,
         "comm_watch_short",
         "production",
@@ -435,6 +447,29 @@ def test_watch_short_captions_are_explicit_for_every_language() -> None:
     assert text("comm_watch_stop", "pt-PT") == "Parar atualização"
 
 
+def test_compact_captions_preserve_full_context_resources() -> None:
+    for language in LANGUAGES:
+        for compact, full in zip(
+            COMPACT_KEYS,
+            (
+                "cycles",
+                "display_name",
+                "product_code",
+                "plc_reporting",
+                "comm_timeout",
+                "web_refresh",
+                "comm_count",
+                "history_time",
+            ),
+            strict=True,
+        ):
+            assert text(compact, language).strip()
+            assert "…" not in text(compact, language)
+            assert text(full, language).strip()
+            if language not in ("zh", "en"):
+                assert compact in EXTRA_STRINGS[language]
+
+
 @pytest.mark.parametrize("language", LANGUAGES[2:])
 def test_optional_translation_falls_back_to_english(language: Language) -> None:
     if language not in EUROPEAN_LANGUAGES | ASIAN_AFRICAN_LANGUAGES:
@@ -546,11 +581,11 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
             "resolved": {
                 key: text(key, language)
                 for key in STRINGS
-                if key not in (*WATCH_SHORT_KEYS, "comm_watch_short")
+                if key not in (*WATCH_SHORT_KEYS, "comm_watch_short", *COMPACT_KEYS)
             },
             "translated_keys": sorted(
                 EXTRA_STRINGS.get(language, {}).keys()
-                - set((*WATCH_SHORT_KEYS, "comm_watch_short"))
+                - set((*WATCH_SHORT_KEYS, "comm_watch_short", *COMPACT_KEYS))
             ),
         }
         serialized = json.dumps(catalog, ensure_ascii=False, sort_keys=True)

@@ -786,6 +786,9 @@ def test_view_judgment_is_separate_from_other_view_and_check(
         preview.results[0]
         and preview.results[0].assessment.judgment is ProductJudgment.OK
     )
+    assert preview.selection_detail.text() == ""
+    assert preview.selection_detail.toolTip() == text("preview_select", "en")
+    assert text("preview_scope_tip", "en") in preview.canvas.toolTip()
     preview.select_view(0, 1)
     assert "Size OK" in preview.selection_detail.text()
     preview.set_mode("color")
@@ -858,6 +861,9 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     assert "DISABLED" in preview.selection_detail.text()
     assert ("W —" if mode == "size" else "Hue —") in preview.selection_detail.text()
     assert not preview.canvas.check_enabled and not preview.message.isVisible()
+    preview.canvas.selection = None
+    preview.refresh_state()
+    assert preview.selection_detail.text() == text("preview_disabled_short", "en")
 
 
 def test_selection_clears_on_image_camera_change_and_while_evidence_pending(

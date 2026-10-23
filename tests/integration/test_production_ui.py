@@ -756,8 +756,8 @@ def test_metrics_wrap_without_shrinking_labels(
     window.resize(1080, 1400)
     window.set_language("en")
     for value, caption in window.metrics.values():
-        caption.setStyleSheet("font-size: 36px;")
-        value.setStyleSheet("font-size: 36px;")
+        caption.setStyleSheet("font-size: 88px;")
+        value.setStyleSheet("font-size: 88px;")
     qapp.processEvents()
     until(lambda: window.metric_row.itemAtPosition(1, 0) is not None)
     for value, caption in window.metrics.values():
@@ -1359,9 +1359,9 @@ def _inspect_and_assert_business_presentation(
     assert window.metrics["channel_ok"][0].text() == "6"  # Business OK only.
     assert window.metrics["channel_ng"][0].text() == "12"
     assert window.metrics["channel_empty"][0].text() == "6"
-    assert window.metrics["channel_ok"][1].text() == "CH OK"
-    assert window.metrics["channel_ng"][1].text() == "CH NG"
-    assert window.metrics["channel_empty"][1].text() == "CH EMPTY"
+    assert window.metrics["channel_ok"][1].text() == "OK"
+    assert window.metrics["channel_ng"][1].text() == "NG"
+    assert window.metrics["channel_empty"][1].text() == "EMPTY"
     assert set(window.metrics) == {
         "cycles",
         "channel_ok",
@@ -1763,6 +1763,12 @@ def test_multilingual_player_captions_fit_without_moving_camera_layout(
             )
             window.set_language(language)
             window.bridge.replay_changed.emit(window.bridge.replay_snapshot)
+            assert window.metrics["cycles"][1].text() == text("short_cycles", language)
+            assert window.metrics["cycles"][1].toolTip() == text("cycles", language)
+            assert window.metrics["processing"][1].text() == "Δt"
+            assert window.metrics["processing"][1].accessibleName() == text(
+                "processing", language
+            )
             keys = (
                 "replay_continue" if paused else "replay_start",
                 "replay_step" if paused else "replay_pause",

@@ -75,7 +75,7 @@ def test_navigation_language_and_themes_preserve_presentation_contract(
                 window.navigation,
                 strict=True,
             ):
-                full = text(key, current)
+                full = "PLC / Web" if key == "nav_diagnostics" else text(key, current)
                 visible = button.text()
                 assert visible == full or (
                     visible.endswith("…") and full.startswith(visible.removesuffix("…"))

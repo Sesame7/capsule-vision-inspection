@@ -1061,7 +1061,7 @@ class MachineRoiWorkspace(QWidget):
                     f"{selected} · {text('source_not_discovered', self.language)}"
                 )
             choices = [
-                ("", text("source_unconfigured", self.language)),
+                ("", "S/N —"),
                 *sorted(labels.items()),
             ]
             card.device.blockSignals(True)
@@ -1612,11 +1612,9 @@ class MachineRoiWorkspace(QWidget):
         )
         info = (
             (
-                text("vision_dimensions_only", self.language).format(
-                    width=self.canvas.model.size[0], height=self.canvas.model.size[1]
-                )
+                f"— · {self.canvas.model.size[0]}×{self.canvas.model.size[1]}"
                 if self.canvas.model.size is not None
-                else text("vision_schematic", self.language)
+                else "ROI ≈"
             )
             if self.frame is None
             else f"{position} · {self.frame.image.shape[1]}×{self.frame.image.shape[0]}"
@@ -1665,9 +1663,20 @@ class MachineRoiWorkspace(QWidget):
         self._selector_index = target
         self.reference.setEnabled(viewing and chooser)
         self.reference.setVisible(True)
-        self.reference.setAccessibleDescription(info)
-        self.canvas.setAccessibleDescription(info)
-        self.canvas.setToolTip(info)
+        meaning = (
+            text("vision_dimensions_only", self.language).format(
+                width=self.canvas.model.size[0], height=self.canvas.model.size[1]
+            )
+            if self.frame is None and self.canvas.model.size is not None
+            else text("vision_schematic", self.language)
+            + "\n"
+            + text("vision_schematic_tip", self.language)
+            if self.frame is None
+            else info
+        )
+        self.reference.setAccessibleDescription(meaning)
+        self.canvas.setAccessibleDescription(meaning)
+        self.canvas.setToolTip(meaning)
         self.reference_toolbar.sync_metrics()
         self.geometry_toolbar.sync_metrics()
         self.canvas.update()
@@ -1954,7 +1963,7 @@ class MachineRoiWorkspace(QWidget):
             card.folder.setEnabled(allowed)
             card.device.setEnabled(allowed)
             card.browse.setEnabled(allowed)
-            card.folder.setPlaceholderText(text("source_folder", self.language))
+            card.folder.setPlaceholderText(text("reference_folder", self.language))
             card.folder.setAccessibleName(
                 f"{camera} · {text('source_folder', self.language)}"
             )
@@ -1963,7 +1972,11 @@ class MachineRoiWorkspace(QWidget):
                 f"{camera} · {text('source_serial', self.language)}"
             )
             card.device.setToolTip(
-                card.device.currentText()
+                (
+                    card.device.currentText()
+                    if card.device.currentData()
+                    else text("source_unconfigured", self.language)
+                )
                 + "\n"
                 + text("source_serial_tip", self.language)
             )

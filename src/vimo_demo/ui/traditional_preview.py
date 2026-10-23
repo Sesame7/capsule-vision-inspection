@@ -567,6 +567,10 @@ class TraditionalPreview(QWidget):
 
     def _present_selection(self) -> None:
         selected = self.canvas.selection
+        settings = self.session.draft.capsule
+        enabled = (
+            settings.size.enabled if self.mode == "size" else settings.color.enabled
+        )
         if (
             selected is None
             or self._selection_frame is not self.frame
@@ -577,11 +581,18 @@ class TraditionalPreview(QWidget):
                 if self.busy
                 else text("preview_no_reference", self.language)
                 if self.frame is None
+                else text("preview_disabled_short", self.language)
+                if not enabled
                 else text("preview_unavailable", self.language)
                 if not self.measurements
-                else text("preview_select", self.language)
+                else ""
             )
-            self.selection_detail.setToolTip("")
+            self.selection_detail.setToolTip(text("preview_select", self.language))
+            self.canvas.setToolTip(
+                text("preview_select", self.language)
+                + "\n"
+                + text("preview_scope_tip", self.language)
+            )
             return
         index, view_index = selected
         slot = self.camera.slots[index]
@@ -592,10 +603,6 @@ class TraditionalPreview(QWidget):
         row = self.measurements[index] if index < len(self.measurements) else None
         measured = row.measured if row else None
         view = measured.views[view_index] if measured else None
-        settings = self.session.draft.capsule
-        enabled = (
-            settings.size.enabled if self.mode == "size" else settings.color.enabled
-        )
         available = measured is not None and (
             measured.size_measured if self.mode == "size" else measured.color_measured
         )
@@ -967,13 +974,7 @@ class TraditionalPreview(QWidget):
             )
         else:
             size = self.canvas.model.size
-            info = (
-                text("vision_dimensions_only", self.language).format(
-                    width=size[0], height=size[1]
-                )
-                if size
-                else text("vision_schematic", self.language)
-            )
+            info = f"— · {size[0]}×{size[1]}" if size else "ROI ≈"
             tip = text(
                 "roi_no_frame_tip" if size else "vision_schematic_tip", self.language
             )
@@ -991,7 +992,7 @@ class TraditionalPreview(QWidget):
         if self.reference.currentIndex() != target:
             self.reference.setCurrentIndex(target)
         self.reference.setToolTip(tip)
-        self.reference.setAccessibleDescription(info)
+        self.reference.setAccessibleDescription(info + "\n" + tip)
         # Size from the localized status, including combo padding/arrow; otherwise
         # "Imported · W×H" can lose the final dimension without an ellipsis.
         self.reference.setMinimumWidth(
@@ -999,7 +1000,7 @@ class TraditionalPreview(QWidget):
             + 2 * Style.space
             + Style.touch
         )
-        self.canvas.setAccessibleDescription(info)
+        self.canvas.setAccessibleDescription(info + "\n" + tip)
         viewing = not self.busy and self._close is None
         self.reference.setEnabled(viewing and bool(paths))
         self.previous_button.setEnabled(viewing and bool(paths) and index > 0)

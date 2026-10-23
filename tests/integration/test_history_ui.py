@@ -1046,6 +1046,24 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         )
         for language in LANGUAGES:
             page.set_language(language)
+            time_header = page.cycles.horizontalHeaderItem(0)
+            cycle_header = page.cycles.horizontalHeaderItem(1)
+            assert time_header is not None and cycle_header is not None
+            assert time_header.text() == text("short_time", language)
+            assert text("history_clock", language) in time_header.toolTip()
+            assert cycle_header.text() == "#" and cycle_header.toolTip() == text(
+                "history_cycle", language
+            )
+            assert tuple(page.result.itemText(i) for i in range(1, 6)) == (
+                "OK",
+                "NG",
+                "ERROR",
+                "EMPTY",
+                "UNKNOWN",
+            )
+            assert page.result.itemData(4, Qt.ItemDataRole.ToolTipRole) == text(
+                "history_empty", language
+            )
             for button, key in (
                 (page.newer, "history_newer"),
                 (page.older, "history_older"),

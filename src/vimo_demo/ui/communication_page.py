@@ -388,11 +388,6 @@ class CommunicationPage(QWidget):
         )
         write_row.addWidget(self.write_button)
         manual.addLayout(write_row)
-        self.permission = QLabel()
-        self.permission.setWordWrap(True)
-        self.permission.setTextFormat(Qt.TextFormat.PlainText)
-        self.permission.setProperty("role", "secondary")
-        manual.addWidget(self.permission)
         self.area.currentIndexChanged.connect(self._manual_area_changed)
         self._manual_area_changed()
 
@@ -740,9 +735,18 @@ class CommunicationPage(QWidget):
             if self._settings_missing
             else "comm_settings_saved"
         )
-        self.preferences_status.setText(text(key, self.language))
+        self.preferences_status.setText(
+            text(
+                {"comm_settings_saved": "saved", "comm_settings_dirty": "unsaved"}.get(
+                    key, key
+                ),
+                self.language,
+            )
+        )
         self.preferences_status.setToolTip(
-            self._settings_detail or str(self._preferences_path or "")
+            text(key, self.language)
+            + "\n"
+            + (self._settings_detail or str(self._preferences_path or ""))
         )
         self.preferences_status.setAccessibleDescription(
             self.preferences_status.toolTip()
@@ -987,7 +991,21 @@ class CommunicationPage(QWidget):
             self.reporting_panel.set_language(language)
         for key, caption in self._captions:
             caption.setText(
-                text("comm_watch_short" if key == "comm_watch" else key, language)
+                "IPv4"
+                if key == "comm_host"
+                else text("short_timeout", language) + " · s"
+                if key == "comm_timeout"
+                else "DEC"
+                if key == "comm_values"
+                else text(
+                    {
+                        "comm_watch": "comm_watch_short",
+                        "comm_count": "short_words",
+                        "comm_address": "comm_word_address",
+                        "comm_watch_name": "short_name",
+                    }.get(key, key),
+                    language,
+                )
             )
             caption.setToolTip(text(key, language))
             caption.setAccessibleName(text(key, language))
@@ -1620,10 +1638,15 @@ class CommunicationPage(QWidget):
             button.setEnabled(not (self._closing or self._disposed))
         endpoint = self._preferences.diagnostic
         self.manual_endpoint.setText(
-            text("comm_effective_endpoint", self.language)
+            text("target", self.language)
             + f" · FINS/{endpoint.transport.name} · {endpoint.host}:{endpoint.port}"
         )
-        self.manual_endpoint.setToolTip(text("comm_endpoint_hint", self.language))
+        self.manual_endpoint.setToolTip(
+            text("comm_effective_endpoint", self.language)
+            + f" · FINS/{endpoint.transport.name} · {endpoint.host}:{endpoint.port}\n"
+            + text("comm_endpoint_hint", self.language)
+        )
+        self.manual_endpoint.setAccessibleName(self.manual_endpoint.toolTip())
         self.watch_remove.setEnabled(editable and bool(self._watch_groups))
         self.watch_once.setEnabled(editable and bool(self._watch_groups))
         self.watch_auto.setEnabled(
@@ -1644,10 +1667,15 @@ class CommunicationPage(QWidget):
         self.watch_selector.setToolTip(self.watch_selector.currentText())
         self.watch_selector.setAccessibleDescription(self.watch_selector.currentText())
         self.write_button.setEnabled(editable)
-        self.write_button.setToolTip(text("comm_local_write", self.language))
-        self.permission.setText(text("comm_local_write", self.language))
+        self.write_button.setToolTip(
+            text("comm_write", self.language)
+            + "\n"
+            + text("comm_local_write", self.language)
+        )
+        self.write_button.setAccessibleDescription(self.write_button.toolTip())
         key = "comm_closing" if self._closing else self._write_state
         self.status.setText(text(key, self.language))
+        self.status.setVisible(key != "comm_idle")
         self.status.setToolTip(self._write_detail)
         self.status.setAccessibleDescription(self._write_detail)
         self.status.setStyleSheet(
@@ -1662,8 +1690,17 @@ class CommunicationPage(QWidget):
         )
         self.success.setToolTip(text("comm_observation", self.language))
         self.success.setVisible(self._last_write is not None)
+        watch_text = (
+            "OK"
+            if self._watch_state in ("comm_watch_ok", "comm_watch_wait")
+            else text("web_stopped", self.language)
+            if self._watch_state == "comm_watch_stopped"
+            else text("comm_watch_once_short", self.language) + "…"
+            if self._watch_state == "comm_watch_busy"
+            else text(self._watch_state, self.language)
+        )
         self.watch_status.setText(
-            text(self._watch_state, self.language)
+            watch_text
             + (
                 " · " + self._watch_success.astimezone().strftime("%H:%M:%S")
                 if self._watch_success
@@ -1671,11 +1708,18 @@ class CommunicationPage(QWidget):
             )
         )
         self.watch_status.setToolTip(
-            self._detail
-            if self._watch_state == "comm_watch_failed"
-            else text("comm_watch_limit", self.language)
+            text(self._watch_state, self.language)
+            + "\n"
+            + (
+                self._detail
+                if self._watch_state == "comm_watch_failed"
+                else text("comm_watch_limit", self.language)
+            )
         )
-        self.watch_status.setVisible(bool(self._watch_groups))
+        self.watch_status.setAccessibleDescription(self.watch_status.toolTip())
+        self.watch_status.setVisible(
+            bool(self._watch_groups) and self._watch_state != "comm_watch_idle"
+        )
         self.watch_status.setStyleSheet(
             f"color: {theme_colors(self).warning if self._watch_state == 'comm_watch_failed' else theme_colors(self).accent};"
         )

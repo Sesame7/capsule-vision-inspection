@@ -223,9 +223,19 @@ class WebSettingsPanel(QFrame):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        self.title.setText(text("web_observer", language))
+        self.title.setText("Web")
+        self.title.setToolTip(
+            text("web_observer", language) + "\n" + text("web_boundary", language)
+        )
+        self.title.setAccessibleName(text("web_observer", language))
         for key, label in self._captions:
-            label.setText(text(key, language))
+            label.setText(
+                "IPv4"
+                if key == "web_bind"
+                else text("short_refresh" if key == "web_refresh" else key, language)
+            )
+            label.setToolTip(text(key, language))
+            label.setAccessibleName(text(key, language))
         for key, field in (
             ("web_bind", self.addresses),
             ("comm_port", self.port),
@@ -265,9 +275,13 @@ class WebSettingsPanel(QFrame):
         )
         if observed is not None:
             key = "web_" + observed.state.name.lower()
-        self.actual.setText(text(key, self.language))
+        self.actual.setText(
+            "OFF" if key in ("web_off", "web_stopped") else text(key, self.language)
+        )
         self.actual.setToolTip(
-            text("web_boundary", self.language)
+            text(key, self.language)
+            + "\n"
+            + text("web_boundary", self.language)
             + ("\n" + self.detail if self.detail else "")
             + "\n"
             + text(

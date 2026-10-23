@@ -314,9 +314,10 @@ tuning remains open; new display publications and switching Size/Color never
 replace it. Import/selection/Refresh are explicit changes. Closing tuning releases
 its references. IO and measurement share one bounded background job; stale work
 cannot attach pixels or measurements to another camera.
-The centered image selector reports actual pixel dimensions, connected camera
-dimensions on a blank canvas, or explicitly schematic ROI extents when neither
-is available. Schematic extents never become measured image bounds or evidence.
+The centered image selector reports actual pixel dimensions, `— · W×H` for known
+dimensions on a blank canvas, or `ROI ≈` for schematic ROI extents when neither
+is available. Full localized explanations remain in tooltips/accessibility.
+Schematic extents never become measured image bounds or evidence.
 Image tools reuse Vision's icons, whole-group wrapping, Fit and 1:1; Recipe
 management icons retain localized names/tooltips and the existing confirmations.
 
@@ -335,8 +336,10 @@ not collect Occupancy evidence or infer EMPTY from a missing body. Routine
 always-on/unavailable explanations are omitted from Qt presentation; actual
 production Occupancy state/evidence and technical errors remain visible. This
 does not change Size/Color judgment or the production EMPTY skip contract.
-Routine tuning scope/success prose is omitted; the scope remains available in the
-parameter tooltip. Selected-view feedback translates existing missing-body, unusable-color
+Routine tuning scope/success and selection-invitation prose is omitted; the scope
+and selection instructions remain in parameter/canvas tooltips. Without a selected
+view, a disabled check shows `OFF` rather than unavailable measurements.
+Selected-view feedback translates existing missing-body, unusable-color
 and tolerance reasons, retaining exact diagnostics in tooltips. Missing reference,
 pending measurement, technical ERROR and disabled checks remain distinct; a valid
 image without usable measurement evidence keeps its existing NG and `—` values.
@@ -397,7 +400,7 @@ image; Use runtime image freezes the latest eligible same-camera/source display
 frame, with explicit refresh. Neither tracks live pixels. Fit and 1:1 retain their
 canvas transforms. The image toolbar center always describes the current canvas:
 real pixels show dimensions and the Folder index where applicable; a blank view
-shows known dimensions; an unbounded view says ROI schematic, with its illustrative
+shows known dimensions as `— · W×H`; an unbounded view says `ROI ≈`, with its illustrative
 meaning in a tooltip. The chooser list is separate from this current caption;
 source changes and asynchronous image delivery cannot reuse an old schematic caption.
 The canvas does not repeat status text. ROI channel selection changes

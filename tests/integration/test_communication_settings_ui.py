@@ -532,8 +532,8 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
         assert not startup.communication.web.enabled
         assert not startup.communication.reporting.enabled
         assert (
-            window.communication.preferences_status.toolTip()
-            == startup.communication_error
+            startup.communication_error
+            in window.communication.preferences_status.toolTip()
         )
         assert window.communication.reporting_panel is not None
         assert (
@@ -596,8 +596,10 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         page.persist_settings()  # Explicitly establish neutral disabled settings.
         payload = data.communication.read_bytes()
         assert not page.dirty and page.web_panel.saved_available
-        assert page.preferences_status.text() == text(
-            "comm_settings_saved", window.language
+        assert page.preferences_status.text() == text("saved", window.language)
+        assert (
+            text("comm_settings_saved", window.language)
+            in page.preferences_status.toolTip()
         )
         restored = load_startup(data)
         try:
@@ -799,11 +801,15 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         page = window.communication
         panel = page.reporting_panel
         assert panel is not None
-        initial_position = (0, 1) if size[0] == 1920 else (1, 0)
+        initial_position = (
+            (0, 1) if page.service_layout.itemAtPosition(0, 1) is not None else (1, 0)
+        )
         assert page.service_layout.itemAtPosition(*initial_position) is not None
+        if size[0] in (1080, 1920):
+            assert initial_position == ((0, 1) if size[0] == 1920 else (1, 0))
         assert page.body.width() <= page.scroll_area.viewport().width()
 
-        window.resize(*((1080, 1857) if size[0] == 1920 else (1920, 1017)))
+        window.resize(*((1080, 1857) if initial_position == (0, 1) else (1920, 1017)))
         opposite_position = (1, 0) if initial_position == (0, 1) else (0, 1)
         until(
             lambda: page.service_layout.itemAtPosition(*opposite_position) is not None
@@ -841,7 +847,15 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
                     qapp.processEvents()
                     available = page.scroll_area.viewport().width()
                     assert page.body.width() <= available
-                    position = (0, 1) if width == 1920 else (1, 0)
+                    position = (
+                        (
+                            (0, 1)
+                            if page.service_layout.itemAtPosition(0, 1) is not None
+                            else (1, 0)
+                        )
+                        if width == 1300
+                        else ((0, 1) if width == 1920 else (1, 0))
+                    )
                     until(
                         lambda pos=position: (
                             page.service_layout.itemAtPosition(*pos) is not None
@@ -985,6 +999,19 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 == text("comm_save_settings", language)
             )
             assert not page.save_settings.icon().isNull()
+            assert panel.title.text() == text("short_reporting", language)
+            assert panel.title.toolTip() == text("plc_reporting", language)
+            assert page.web_panel.title.text() == "Web"
+            assert text("web_boundary", language) in page.web_panel.title.toolTip()
+            for label in page.findChildren(QLabel):
+                if label.accessibleName() == text("comm_timeout", language):
+                    assert label.text() == text("short_timeout", language) + " · s"
+                    assert label.toolTip() == text("comm_timeout", language)
+            assert text("target", language) in page.manual_endpoint.text()
+            assert (
+                text("comm_effective_endpoint", language)
+                in page.manual_endpoint.toolTip()
+            )
             assert_full_caption(
                 page.watch_remove, text("comm_watch_remove_short", language)
             )
@@ -1051,6 +1078,8 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
             count = len(requests)
             page.watch_once.click()
             until(lambda: not page.busy)
+            assert page.watch_status.text().startswith("OK · ")
+            assert text("comm_watch_ok", language) in page.watch_status.toolTip()
             assert [(r.kind, r.area, r.start, r.count) for r in requests[count:]] == [
                 (RequestKind.READ, item.area, item.start, item.count) for item in group
             ]
@@ -1102,13 +1131,15 @@ def test_reporting_power_edits_only_draft_until_save_or_discard(
     assert panel.enabled.text() == text("plc_disable", window.language)
     assert load_communication_preferences(startup.data.communication) == original
     assert not panel.controller.reporting_selection().enabled
-    assert panel.service_status.text() == text("plc_disabled", window.language)
+    assert panel.service_status.text() == "OFF"
+    assert text("plc_disabled", window.language) in panel.service_status.toolTip()
     page.reload_settings()
     assert not panel.enabled.isChecked() and not page.dirty
     panel.enabled.click()
     page.persist_settings()
     assert load_communication_preferences(startup.data.communication).reporting.enabled
-    assert panel.service_status.text() == text("plc_enabled", window.language)
+    assert panel.service_status.text() == text("service_next_start", window.language)
+    assert text("plc_enabled", window.language) in panel.service_status.toolTip()
     panel.enabled.click()
     assert page.dirty and panel.controller.reporting_selection().enabled
     page.reload_settings()
@@ -1189,7 +1220,12 @@ def test_communication_presentation_matrix(
     panel.advanced_button.click()
     window.communication.advanced_button.click()
     qapp.processEvents()
-    assert panel.title.text() == text("plc_reporting", language)
+    assert panel.title.text() == text("short_reporting", language)
+    assert (
+        panel.title.toolTip()
+        == panel.title.accessibleName()
+        == text("plc_reporting", language)
+    )
     assert panel.summary.y() == panel.service_status.y()
     assert panel.title.geometry().right() < panel.summary.x()
     assert panel.summary.geometry().right() < panel.service_status.x()

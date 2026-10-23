@@ -336,6 +336,15 @@ recent PLC reporting observation (ACK is not connectivity/consumption), Web owne
 availability and current feedback. It reuses bridge refresh/notifications without
 another timer or network request.
 
+Compact captions use their surrounding page/card context: navigation shows
+`PLC / Web`, service cards show Reporting and Web, and field labels use IPv4,
+units and short localized names. Full localized meanings remain in tooltips and
+accessibility text. Routine disabled services show `OFF`; waiting for the next
+Start, active transitions, failures and ACK observations remain distinct. Idle
+diagnostics omit no-request prose; watch success uses `OK` with its observation
+time, while read/write failures remain visible. The diagnostic target stays
+explicit and is not evidence that an edited preference was saved or applied.
+
 The minimum supported window width is 1080 Qt logical pixels. UI validation uses
 1080-wide portrait at 100% Windows scaling and 1920-wide landscape; wider cases
 are retained where they exercise responsive allocation. Sub-1080 windows are not
@@ -373,11 +382,16 @@ acquisition progress available in the state tooltip. Read-only channel symbols
 retain full ChannelIds and technical evidence in tooltips; only identity-matched
 results draw defect boxes.
 
-Production shows completed cycles, CH OK, CH NG, CH EMPTY and last inspection
-duration. Counts come directly from the application business counters; unavailable
+Production shows localized Cycles, `OK`, `NG`, `EMPTY` and `Δt` captions for completed
+cycles, channel occurrences and last inspection duration. Counts come directly
+from the application business counters; unavailable
 timing displays `--`. Whole metric groups wrap when their text cannot fit one row.
 These are cumulative occurrences, retained by Stop/Start and Recipe changes and
 reset only by explicit Batch, not physical capsule counts.
+
+History uses short Time, `#`, Batch and `CAM` headings, retaining full identity and
+clock semantics in tooltips. Result filters show the original status codes with
+their independent product/technical/business meanings in localized tooltips.
 
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,

@@ -492,16 +492,26 @@ class ProductionWindow(QMainWindow):
         self.buttons["batch"].setToolTip(text("batch", language))
         self.buttons["batch"].setAccessibleName(text("batch", language))
         for key, (_, caption) in self.metrics.items():
-            caption.setText(
-                text(
-                    {
-                        "channel_ok": "production_ok",
-                        "channel_ng": "production_ng",
-                        "channel_empty": "production_empty",
-                    }.get(key, key),
-                    language,
-                )
+            full = text(
+                {
+                    "channel_ok": "production_ok",
+                    "channel_ng": "production_ng",
+                    "channel_empty": "production_empty",
+                }.get(key, key),
+                language,
             )
+            caption.setText(
+                text("short_cycles", language)
+                if key == "cycles"
+                else {
+                    "channel_ok": "OK",
+                    "channel_ng": "NG",
+                    "channel_empty": "EMPTY",
+                    "processing": "Δt",
+                }[key]
+            )
+            caption.setToolTip(full)
+            caption.setAccessibleName(full)
         for key in ("channel_ok", "channel_ng", "channel_empty"):
             for label in self.metrics[key]:
                 label.setToolTip(text("channel_count_help", language))
@@ -1123,20 +1133,25 @@ class ProductionWindow(QMainWindow):
             else None
         )
         report = self.bridge.reporting_snapshot
-        plc = text("service_disabled", self.language)
+        plc_key = "service_disabled"
+        plc = text(plc_key, self.language)
         if selection and selection.enabled:
-            plc = text("service_next_start", self.language)
+            plc_key = "service_next_start"
+            plc = text(plc_key, self.language)
         if report:
             outcome = report.last_outcome
             if outcome and outcome.outcome is ReportOutcome.ACKNOWLEDGED:
+                plc_key = "service_ack"
                 plc = f"{text('service_ack', self.language)} {outcome.sequence}"
             elif outcome and outcome.outcome in (
                 ReportOutcome.FAILED,
                 ReportOutcome.REJECTED,
             ):
-                plc = text("service_failed", self.language)
+                plc_key = "service_failed"
+                plc = text(plc_key, self.language)
             elif report.thread_alive:
-                plc = text("service_reporting", self.language)
+                plc_key = "service_reporting"
+                plc = text(plc_key, self.language)
         available, detail = (
             self._web_observation() if self._web_observation else (False, "")
         )
@@ -1156,11 +1171,13 @@ class ProductionWindow(QMainWindow):
             if detail
             else text("service_off", self.language)
         )
+        web_off = not available and not detail
         if observed is not None and observed.state in (
             WebState.STARTING,
             WebState.STOPPING,
         ):
             web = text("web_" + observed.state.name.lower(), self.language)
+            web_off = False
         state_text, state_tip = self.state_label.text(), self.state_label.toolTip()
         state_color = (
             colors.fault
@@ -1243,9 +1260,9 @@ class ProductionWindow(QMainWindow):
         bar.state_icon.setAccessibleName(state_tip)
         bar.state_icon.setPixmap(state_icon.pixmap(20, 20))
         bar.state.setStyleSheet(f"color: {state_color};")
-        bar.plc.setText(f"PLC · {plc}")
+        bar.plc.setText(f"PLC · {'OFF' if plc_key == 'service_disabled' else plc}")
         bar.plc.setToolTip(f"PLC · {plc}\n{text('plc_ack_hint', self.language)}")
-        bar.web.setText(f"Web · {web}")
+        bar.web.setText(f"Web · {'OFF' if web_off else web}")
         bar.web.setToolTip(f"Web · {web}" + (f"\n{detail}" if detail else ""))
         bar.web.setStyleSheet(
             f"color: {colors.secondary if available or not detail else colors.warning};"

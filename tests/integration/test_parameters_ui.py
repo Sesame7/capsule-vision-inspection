@@ -438,6 +438,24 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         assert save.size() == save_size
         assert_full_caption(save, text("save_apply", language))
         assert save.accessibleName() == save.toolTip() == text("save_apply", language)
+        for key, compact in (
+            ("display_name", "short_name"),
+            ("product_code", "short_code"),
+        ):
+            assert page.labels[key].text() == text(compact, language)
+            assert (
+                page.labels[key].toolTip()
+                == page.labels[key].accessibleName()
+                == text(key, language)
+            )
+        for mode in ("size", "color"):
+            assert (
+                page.expand_tuning[mode].text().startswith(text(mode, language) + " · ")
+            )
+            assert (
+                text("preview_scope_tip", language)
+                in page.expand_tuning[mode].toolTip()
+            )
         assert tuple(spin.geometry() for spin in preview.spins.values()) == fields
         for key, label in preview.labels.items():
             assert label.text() in ("W (px)", "H (px)", "± W (px)", "± H (px)")

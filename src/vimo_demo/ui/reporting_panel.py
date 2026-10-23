@@ -215,7 +215,9 @@ class ReportingPanel(QFrame):
             ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off"),
             padding=Style.space + Style.small,
         )
-        self.title.setText(text("plc_reporting", language))
+        self.title.setText(text("short_reporting", language))
+        self.title.setToolTip(text("plc_reporting", language))
+        self.title.setAccessibleName(self.title.toolTip())
         self.summary.setMinimumWidth(
             self.summary.fontMetrics().horizontalAdvance(
                 f"ACK -- · {text('plc_success', language)} 0 · ERR 0"
@@ -231,7 +233,15 @@ class ReportingPanel(QFrame):
         self.host.setAccessibleName(text("comm_host", language))
         self.host.setToolTip(text("plc_next_start", language))
         for key, caption in self._captions:
-            caption.setText(text(key, language))
+            caption.setText(
+                "IPv4"
+                if key == "comm_host"
+                else text("short_timeout", language) + " · s"
+                if key == "comm_timeout"
+                else text(key, language)
+            )
+            caption.setToolTip(text(key, language))
+            caption.setAccessibleName(text(key, language))
         for key, widget in (
             ("comm_protocol", self.protocol),
             ("comm_port", self.port),
@@ -313,7 +323,19 @@ class ReportingPanel(QFrame):
         ):
             key = "plc_report_failed"
         ack = snapshot.last_acknowledged if snapshot else None
-        self.service_status.setText(text(key, self.language))
+        self.service_status.setText(
+            "OFF"
+            if key == "plc_disabled"
+            else text(
+                {
+                    "plc_enabled": "service_next_start",
+                    "plc_starting": "web_starting",
+                    "plc_stopping": "web_stopping",
+                    "plc_active": "state_RUNNING",
+                }.get(key, key),
+                self.language,
+            )
+        )
         self._summary_text = (
             f"ACK {ack.sequence if ack else '--'} · "
             f"{text('plc_success', self.language)} {snapshot.acknowledged_count if snapshot else 0} · "

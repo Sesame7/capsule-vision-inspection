@@ -406,10 +406,7 @@ class HistoryPage(QWidget):
         )
         cycle_width = (
             max(
-                max(
-                    metrics.horizontalAdvance(text("history_cycle", lang))
-                    for lang in ("zh", "en", self.language)
-                ),
+                metrics.horizontalAdvance("#"),
                 min(
                     max(
                         (
@@ -462,14 +459,14 @@ class HistoryPage(QWidget):
                 ),
             )
             + padding
-            for column, key in ((2, "history_batch"), (3, "parameters"))
+            for column, key in ((2, "batch_id"), (3, "parameters"))
         ]
         minimums = [
             time_width,
             cycle_width,
             max(
                 max(
-                    metrics.horizontalAdvance(text("history_batch", lang))
+                    metrics.horizontalAdvance(text("batch_id", lang))
                     for lang in ("zh", "en", self.language)
                 ),
                 metrics.horizontalAdvance("000000"),
@@ -772,14 +769,28 @@ class HistoryPage(QWidget):
                 "history_unknown",
             )
         ):
-            self.result.setItemText(index, text(key, language))
+            self.result.setItemText(
+                index,
+                text(key, language)
+                if index == 0
+                else ("OK", "NG", "ERROR", "EMPTY", "UNKNOWN")[index - 1],
+            )
             self.result.setItemData(
                 index, text(key, language), Qt.ItemDataRole.ToolTipRole
             )
-        self.result.setToolTip(self.result.currentText())
+        self.result.setToolTip(
+            str(self.result.currentData(Qt.ItemDataRole.ToolTipRole))
+        )
         self.cycles.setHorizontalHeaderLabels(
             [
-                text(k, language)
+                "#"
+                if k == "history_cycle"
+                else text(
+                    {"history_time": "short_time", "history_batch": "batch_id"}.get(
+                        k, k
+                    ),
+                    language,
+                )
                 for k in (
                     "history_time",
                     "history_cycle",
@@ -789,9 +800,27 @@ class HistoryPage(QWidget):
                 )
             ]
         )
+        for column, key in enumerate(
+            (
+                "history_time",
+                "history_cycle",
+                "history_batch",
+                "parameters",
+                "history_result",
+            )
+        ):
+            item = self.cycles.horizontalHeaderItem(column)
+            assert item is not None
+            item.setToolTip(
+                text(key, language)
+                + ("\n" + text("history_clock", language) if column == 0 else "")
+            )
         self.channels.setHorizontalHeaderLabels(
-            [text("history_camera", language), *(str(i + 1) for i in range(6))]
+            ["CAM", *(str(i + 1) for i in range(6))]
         )
+        camera_header = self.channels.horizontalHeaderItem(0)
+        assert camera_header is not None
+        camera_header.setToolTip(text("history_camera", language))
         self.channels.setToolTip(text("history_matrix_key", language))
         self.channel_detail.setAccessibleName(text("history_channel", language))
         self.channel_detail.setPlaceholderText(text("history_select_channel", language))
@@ -807,7 +836,9 @@ class HistoryPage(QWidget):
         self._revision += 1
         self._query = self._filters()
         self.date.setEnabled(not self.all_dates.isChecked())
-        self.result.setToolTip(self.result.currentText())
+        self.result.setToolTip(
+            str(self.result.currentData(Qt.ItemDataRole.ToolTipRole))
+        )
         self.batch.setToolTip(
             str(
                 self.batch.currentData(Qt.ItemDataRole.ToolTipRole)

@@ -138,7 +138,9 @@ def test_validation_remote_read_and_write(
         assert page.advanced.isVisible()
         page.host.setText("192.0.2.10")
         assert page.write_button.isEnabled() and page.write_button.isEnabled()
-        assert text("comm_local_write", language) == page.permission.text()
+        assert text("comm_local_write", language) in page.write_button.toolTip()
+        assert page.write_button.accessibleDescription() == page.write_button.toolTip()
+        assert not hasattr(page, "permission")
         page.write_values.setText("4321")
         page.persist_settings()
         assert page.dispatch(RequestKind.WRITE)
@@ -165,7 +167,7 @@ def test_validation_remote_read_and_write(
         page.address.setValue(area.word_count - 1)
         assert not page.dispatch(RequestKind.READ, count=2)
         assert len(calls) == 3
-        assert page.write_button.toolTip() == text("comm_local_write", language)
+        assert text("comm_local_write", language) in page.write_button.toolTip()
     finally:
         page.request_close(lambda: None)
         until(lambda: page.closed)
@@ -947,7 +949,8 @@ def test_auto_waits_for_actual_exit_and_stopped_delivery_does_not_restart(
         release.set()
         until(lambda: not page.busy)
     assert not page.auto_refresh and not page.refresh_timer.isActive()
-    assert text("comm_watch_stopped", page.language) in page.watch_status.text()
+    assert text("web_stopped", page.language) in page.watch_status.text()
+    assert text("comm_watch_stopped", page.language) in page.watch_status.toolTip()
     assert not any(t.name == "FinsCommunication" for t in threads())
 
 
