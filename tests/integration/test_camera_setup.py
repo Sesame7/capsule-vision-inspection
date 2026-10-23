@@ -1368,12 +1368,12 @@ def test_compact_icon_states_and_loop_click_preserve_configuration(
         assert button.text() == "" and not button.icon().isNull()
         assert button.accessibleName() == button.toolTip() == text(key, language)
     numeric_apply = workspace.buttons["roi_set_rect"]
-    assert numeric_apply.text() == text("roi_set_rect", language)
+    assert numeric_apply.text() == "" and not numeric_apply.icon().isNull()
+    assert numeric_apply.width() == numeric_apply.height() == Style.touch
     assert (
-        numeric_apply.width()
-        >= numeric_apply.fontMetrics().horizontalAdvance(numeric_apply.text())
-        + numeric_apply.iconSize().width()
-        + 24
+        numeric_apply.accessibleName()
+        == numeric_apply.toolTip()
+        == text("roi_set_rect", language)
     )
     assert workspace.buttons["roi_save_apply"].text() == text(
         "roi_save_apply", language

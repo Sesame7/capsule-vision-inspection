@@ -346,17 +346,23 @@ Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
 Each role reserves a shaped-text budget across the supported languages; switching
 languages or action states does not move its slot. Header space after Batch can
 shrink to retain the active/pending Recipe identity. Save/apply actions reserve
-localized group budgets, borrowing flexible feedback/summary space. Register-watch
-actions reserve compact equal slots for complete localized short captions across
-supported languages and refresh states. Full action descriptions remain in
-tooltips/accessibility. Action buttons never stretch into surplus row space;
+localized group budgets, borrowing flexible feedback/summary space. Conventional
+utilities use touch-sized icons with full localized tooltips/accessibility:
+History paging/refresh, Recipe color sampling, Vision numeric ROI Apply, and
+Communication group creation and advanced-settings disclosures.
+Watch removal, single read and automatic refresh form equal compact icon/text
+slots budgeted across languages and refresh states; Add remains a separate square.
+Automatic refresh keeps its one-second interval visible, a loop icon, a checked state and an explicit
+Stop caption while active, distinct from Production Stop. Manual writing retains
+a localized verb. Save/apply and service power controls retain visible verbs.
+Action buttons never stretch into surplus row space;
 the selector receives it, or the narrow action row leaves space after the group.
 When the selector/editor and actions cannot share the available
 width, the selector/editor stay above the three actions; wide workspaces use one
 row. Reflow retains the same controls and network operation. Dynamic group names
 may elide, with their full values in tooltips/accessibility. Watch columns reserve
 language-stable heading/value budgets before sharing surplus width.
-History wraps pagination below filters when their full fixed captions cannot share
+History wraps pagination below filters when their compact icon group cannot share
 a row. Date and filter budgets use that row's available space, retaining equal
 pagination buttons and equal bounded Batch/Result selectors. Dynamic values may
 elide with full tooltips; localized date digits retain their measured width.

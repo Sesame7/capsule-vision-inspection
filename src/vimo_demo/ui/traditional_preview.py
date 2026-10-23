@@ -63,9 +63,7 @@ from .image_tools import ImageToolbar, image_icon
 from .production_style import (
     Language,
     Style,
-    button_width,
     camera_icon,
-    set_button_caption,
     text,
     theme_colors,
 )
@@ -379,7 +377,8 @@ class TraditionalPreview(QWidget):
         self.swatch = QLabel()
         self.swatch.setFixedSize(Style.touch, Style.touch)
         self.sample = QPushButton()
-        self.sample.setMinimumHeight(Style.touch)
+        self.sample.setFixedSize(Style.touch, Style.touch)
+        self.sample.setIconSize(QSize(Style.icon, Style.icon))
         self.tolerance = QSlider(Qt.Orientation.Horizontal)
         self.tolerance.setRange(0, 90)
         self.tolerance.setMinimumHeight(Style.touch)
@@ -450,6 +449,7 @@ class TraditionalPreview(QWidget):
             (self.next_button, "next"),
             (self.refresh_button, "refresh"),
             (self.fit_button, "fit"),
+            (self.sample, "sample"),
         ):
             button.setIcon(image_icon(tool, color))
 
@@ -499,11 +499,6 @@ class TraditionalPreview(QWidget):
             self.labels[key].setAccessibleName(caption)
             self.spins[key].setAccessibleName(caption)
             self.spins[key].setToolTip(caption)
-        set_button_caption(
-            self.sample,
-            text("color_sample", self.language),
-            button_width(self.sample, ("color_sample",)),
-        )
         self.sample.setToolTip(text("color_sample_tip", self.language))
         self.sample.setAccessibleName(self.sample.toolTip())
         self.show_settings()

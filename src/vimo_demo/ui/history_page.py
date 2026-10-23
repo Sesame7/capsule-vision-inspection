@@ -66,8 +66,6 @@ from .production_style import (
     LANGUAGES,
     Language,
     Style,
-    button_width,
-    set_button_caption,
     text,
     theme_colors,
 )
@@ -552,18 +550,26 @@ class HistoryPage(QWidget):
         )
         self.batch.setFixedWidth(filter_width)
         self.result.setFixedWidth(filter_width)
-        width = button_width(
-            self.refresh_button,
-            ("history_newer", "history_older", "history_refresh"),
-            padding=Style.small,
-        )
+        width = Style.touch
         for button, key in (
             (self.newer, "history_newer"),
             (self.older, "history_older"),
             (self.refresh_button, "history_refresh"),
         ):
-            set_button_caption(button, text(key, self.language), width)
-            button.setFixedHeight(Style.touch)
+            button.setText("")
+            button.setFixedSize(Style.touch, Style.touch)
+            button.setIconSize(QSize(Style.icon, Style.icon))
+            button.setIcon(
+                image_icon(
+                    "previous"
+                    if button is self.newer
+                    else "next"
+                    if button is self.older
+                    else "refresh",
+                    theme_colors(self).primary,
+                )
+            )
+            button.setAccessibleName(text(key, self.language))
             button.setToolTip(text(key, self.language))
         desired_dates = (
             max(
@@ -752,15 +758,10 @@ class HistoryPage(QWidget):
                 button.setIcon(image_icon(icon, theme_colors(self).primary))
                 button.setIconSize(QSize(Style.icon, Style.icon))
         self.all_dates.setText(text("history_all_dates", language))
-        self.refresh_button.setText(text("history_refresh", language))
         self.date.setAccessibleName(text("history_date", language))
         self.date.setToolTip(text("history_clock", language))
         self.batch.setAccessibleName(text("history_batch", language))
         self.result.setAccessibleName(text("history_result", language))
-        self.newer.setText(text("history_newer", language))
-        self.older.setText(text("history_older", language))
-        self.newer.setToolTip(text("history_newer", language))
-        self.older.setToolTip(text("history_older", language))
         for index, key in enumerate(
             (
                 "history_all",

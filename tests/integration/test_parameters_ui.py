@@ -452,7 +452,8 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         window.set_language(language)
         QApplication.processEvents()
         assert preview.sample.size() == sample_size
-        assert_full_caption(preview.sample, text("color_sample", language))
+        assert preview.sample.text() == "" and not preview.sample.icon().isNull()
+        assert preview.sample.width() == preview.sample.height() == Style.touch
         assert preview.tolerance_label.size() == tolerance_size
         assert text("color_tolerance", language) in preview.tolerance_label.toolTip()
         assert preview.sample.accessibleName() == preview.sample.toolTip()
@@ -476,7 +477,11 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         ):
             button = workspace.buttons[key]
             assert button.size() == expected
-            assert_full_caption(button, text(key, language))
+            if key == "roi_set_rect":
+                assert button.text() == "" and not button.icon().isNull()
+                assert button.width() == button.height() == Style.touch
+            else:
+                assert_full_caption(button, text(key, language))
             assert button.accessibleName() == button.toolTip() == text(key, language)
             assert_inside(button, workspace)
     assert session.draft.to_recipe() == draft and not session.dirty and not runtimes

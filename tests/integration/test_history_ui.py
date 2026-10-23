@@ -29,7 +29,7 @@ from tests.application_support import WAIT, production
 from tests.bootstrap_support import saved_data
 from tests.business_support import channel as business_channel
 from tests.business_support import mixed_result
-from tests.qt_support import assert_full_caption, close_window, ensure_test_fonts, until
+from tests.qt_support import close_window, ensure_test_fonts, until
 
 from vimo_demo.application import ConfigurationIdentity
 from vimo_demo.application.history import (
@@ -246,7 +246,14 @@ def test_history_filters_pagination_selection_and_presentation(
         page.channels.setCurrentCell(0, 4)
         window.set_language("en" if language == "zh" else "zh")
         window.set_theme("light" if theme == "dark" else "dark")
-        assert page.refresh_button.text() == text("history_refresh", window.language)
+        assert (
+            page.refresh_button.text() == "" and not page.refresh_button.icon().isNull()
+        )
+        assert (
+            page.refresh_button.accessibleName()
+            == page.refresh_button.toolTip()
+            == text("history_refresh", window.language)
+        )
         assert (
             page.channels.rowCount() == 6 and startup.application.snapshot() == before
         )
@@ -984,7 +991,7 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
             )
             == 1
         )
-        assert page.refresh_button.icon().isNull()
+        assert not page.refresh_button.icon().isNull()
         filters = (
             page.date.date(),
             page.batch.currentData(),
@@ -1044,7 +1051,11 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
                 (page.older, "history_older"),
                 (page.refresh_button, "history_refresh"),
             ):
-                assert_full_caption(button, text(key, language))
+                assert button.text() == "" and not button.icon().isNull()
+                assert button.width() == button.height() == Style.touch
+                assert (
+                    button.accessibleName() == button.toolTip() == text(key, language)
+                )
             qapp.processEvents()
             date_text = page.date.findChild(QLineEdit)
             assert date_text is not None

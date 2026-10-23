@@ -222,11 +222,11 @@ class ReportingPanel(QFrame):
             )
         )
         self.enabled.setToolTip(text("plc_next_start", language))
-        set_button_caption(
-            self.advanced_button,
-            text("comm_advanced", language),
-            button_width(self.advanced_button, ("comm_advanced",)),
-        )
+        self.advanced_button.setText("")
+        self.advanced_button.setFixedSize(Style.touch, Style.touch)
+        self.advanced_button.setIcon(navigation_icon(1, theme_colors(self).primary))
+        self.advanced_button.setProperty("iconAlignment", None)
+        self.advanced_button.setAccessibleName(text("comm_advanced", language))
         self.advanced_button.setToolTip(text("comm_advanced", language))
         self.host.setAccessibleName(text("comm_host", language))
         self.host.setToolTip(text("plc_next_start", language))

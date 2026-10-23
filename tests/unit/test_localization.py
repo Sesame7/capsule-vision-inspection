@@ -287,6 +287,7 @@ def test_additional_catalogs_translate_text_and_keep_protocol_codes(
 def test_catalog_essential_coverage_and_format_fields() -> None:
     essential = {
         *WATCH_SHORT_KEYS,
+        "comm_watch_short",
         "production",
         "parameters",
         "diagnostics",
@@ -410,21 +411,25 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
 def test_watch_short_captions_are_explicit_for_every_language() -> None:
     for language in LANGUAGES:
         if language not in ("zh", "en"):
-            assert set(WATCH_SHORT_KEYS) <= EXTRA_STRINGS[language].keys()
+            assert (
+                set((*WATCH_SHORT_KEYS, "comm_watch_short"))
+                <= EXTRA_STRINGS[language].keys()
+            )
         captions = tuple(text(key, language) for key in WATCH_SHORT_KEYS)
         assert all(caption.strip() and "…" not in caption for caption in captions)
-        assert "1" in captions[2] and captions[2] != captions[3]
+        assert "1" in captions[2] and captions[3].endswith("1s")
+        assert captions[2] != captions[3]
     assert tuple(text(key, "en") for key in WATCH_SHORT_KEYS) == (
         "Remove",
-        "Read once",
+        "Read",
         "Auto · 1s",
-        "Stop auto",
+        "Stop · 1s",
     )
     assert tuple(text(key, "pt-PT") for key in WATCH_SHORT_KEYS) == (
         "Remover",
         "Ler",
         "Auto · 1s",
-        "Parar auto",
+        "Parar · 1s",
     )
     assert text("comm_watch_once", "pt-PT") == "Ler uma vez"
     assert text("comm_watch_stop", "pt-PT") == "Parar atualização"
@@ -541,10 +546,11 @@ def test_resolved_catalog_matches_pre_migration_text_verbatim() -> None:
             "resolved": {
                 key: text(key, language)
                 for key in STRINGS
-                if key not in WATCH_SHORT_KEYS
+                if key not in (*WATCH_SHORT_KEYS, "comm_watch_short")
             },
             "translated_keys": sorted(
-                EXTRA_STRINGS.get(language, {}).keys() - set(WATCH_SHORT_KEYS)
+                EXTRA_STRINGS.get(language, {}).keys()
+                - set((*WATCH_SHORT_KEYS, "comm_watch_short"))
             ),
         }
         serialized = json.dumps(catalog, ensure_ascii=False, sort_keys=True)

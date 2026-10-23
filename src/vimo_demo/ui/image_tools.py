@@ -66,6 +66,47 @@ def image_icon(tool: str, color: str = Style.primary) -> QIcon:
             elif tool == "apply":
                 painter.drawLine(4, 12, 9, 17)
                 painter.drawLine(9, 17, 20, 6)
+            elif tool == "sample":
+                painter.drawPolyline(
+                    [
+                        QPoint(4, 20),
+                        QPoint(5, 15),
+                        QPoint(15, 5),
+                        QPoint(19, 9),
+                        QPoint(9, 19),
+                        QPoint(4, 20),
+                    ]
+                )
+                painter.drawLine(12, 4, 20, 12)
+                painter.drawLine(16, 5, 19, 2)
+                painter.drawLine(19, 2, 22, 5)
+                painter.drawLine(22, 5, 19, 8)
+            elif tool == "write":
+                painter.drawPolyline(
+                    [
+                        QPoint(4, 20),
+                        QPoint(5, 15),
+                        QPoint(17, 3),
+                        QPoint(21, 7),
+                        QPoint(9, 19),
+                        QPoint(4, 20),
+                    ]
+                )
+                painter.drawLine(14, 6, 18, 10)
+            elif tool == "save":
+                painter.drawPolyline(
+                    [
+                        QPoint(4, 3),
+                        QPoint(17, 3),
+                        QPoint(21, 7),
+                        QPoint(21, 21),
+                        QPoint(3, 21),
+                        QPoint(3, 3),
+                        QPoint(4, 3),
+                    ]
+                )
+                painter.drawRect(7, 3, 9, 6)
+                painter.drawRect(7, 14, 10, 7)
             elif tool == "common":
                 painter.drawRect(3, 3, 12, 12)
                 painter.drawRect(8, 8, 12, 12)

@@ -10,7 +10,7 @@ from math import ceil
 from pathlib import Path
 from threading import Event, Thread
 
-from PySide6.QtCore import QEvent, QObject, QRect, Qt, QThread, QTimer, Slot
+from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QThread, QTimer, Slot
 from PySide6.QtGui import QColor, QFontMetricsF, QHideEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -66,6 +66,7 @@ from vimo_demo.communication.reporting import (
 from vimo_demo.configuration import ConfigurationError
 from vimo_demo.web.runtime import WebRuntime, WebState
 
+from .image_tools import image_icon
 from .inference_bridge import FutureDelivery
 from .production_style import (
     LANGUAGES,
@@ -273,8 +274,6 @@ class CommunicationPage(QWidget):
             "comm_watch_edit", self._toggle_watch_editor
         )
         self.watch_editor_button.setCheckable(True)
-        self.watch_editor_button.setIcon(navigation_icon(0))
-        self.watch_editor_button.setProperty("iconAlignment", "leading")
         self.watch_editor = QWidget()
         group_fields = QGridLayout(self.watch_editor)
         group_fields.setContentsMargins(0, 0, 0, 0)
@@ -362,9 +361,8 @@ class CommunicationPage(QWidget):
 
         self.manual_button = self._button("comm_registers", self._toggle_manual)
         self.manual_button.setCheckable(True)
-        self.manual_button.setIcon(navigation_icon(2))
         self.manual_button.setProperty("iconAlignment", "leading")
-        diagnostics.addWidget(self.manual_button)
+        diagnostics.addWidget(self.manual_button, 0, Qt.AlignmentFlag.AlignLeft)
         operations = diagnostics
         self.manual_body = QWidget()
         manual = QVBoxLayout(self.manual_body)
@@ -490,9 +488,21 @@ class CommunicationPage(QWidget):
         self.watch_editor.setVisible(self.watch_editor_button.isChecked())
 
     def refresh_icons(self) -> None:
-        self.discard_settings.setIcon(
-            production_icon("reset", theme_colors(self).primary)
-        )
+        colors = theme_colors(self)
+        for button, tool in (
+            (self.watch_editor_button, "plus"),
+            (self.watch_add, "apply"),
+            (self.watch_remove, "delete"),
+            (self.watch_once, "refresh"),
+            (self.watch_auto, "loop"),
+            (self.manual_button, "write"),
+            (self.write_button, "write"),
+            (self.save_settings, "save"),
+        ):
+            button.setIcon(image_icon(tool, colors.primary))
+            button.setIconSize(QSize(Style.icon, Style.icon))
+        self.advanced_button.setIcon(navigation_icon(1, colors.primary))
+        self.discard_settings.setIcon(production_icon("reset", colors.primary))
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -963,25 +973,44 @@ class CommunicationPage(QWidget):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.web_panel.set_language(language)
+        self.refresh_icons()
         set_button_caption(
             self.save_settings,
-            text("comm_save_settings", language),
-            button_width(self.save_settings, ("comm_save_settings",)),
+            text("save", language),
+            button_width(self.save_settings, ("save",)),
         )
         self.save_settings.setToolTip(text("comm_save_settings", language))
+        self.save_settings.setAccessibleName(self.save_settings.toolTip())
         self.discard_settings.setToolTip(text("comm_discard", language))
         self.discard_settings.setAccessibleName(text("comm_discard", language))
-        self.refresh_icons()
         if self.reporting_panel is not None:
             self.reporting_panel.set_language(language)
         for key, caption in self._captions:
-            caption.setText(text(key, language))
+            caption.setText(
+                text("comm_watch_short" if key == "comm_watch" else key, language)
+            )
+            caption.setToolTip(text(key, language))
+            caption.setAccessibleName(text(key, language))
         for key, button in self._buttons.items():
             button.setText(text(key, language))
             button.setAccessibleName(button.text())
             button.setToolTip(button.text())
+        for button in (
+            self.watch_editor_button,
+            self.watch_add,
+            self.advanced_button,
+        ):
+            button.setText("")
+            button.setFixedSize(Style.touch, Style.touch)
+            button.setProperty("iconAlignment", None)
+        set_button_caption(
+            self.manual_button,
+            text("comm_write", language),
+            button_width(self.manual_button, ("comm_write",)),
+        )
+        self.manual_button.setAccessibleName(text("comm_registers", language))
         self._watch_action_width = button_width(
-            self.watch_once,
+            self.watch_auto,
             (
                 "comm_watch_remove_short",
                 "comm_watch_once_short",
@@ -989,12 +1018,6 @@ class CommunicationPage(QWidget):
                 "comm_watch_stop_short",
             ),
         )
-        for button, keys in (
-            (self.watch_editor_button, ("comm_watch_edit",)),
-            (self.advanced_button, ("comm_advanced",)),
-        ):
-            width = button_width(button, keys)
-            set_button_caption(button, button.accessibleName(), width)
         for button, key in (
             (self.watch_remove, "comm_watch_remove"),
             (self.watch_once, "comm_watch_once"),
@@ -1007,6 +1030,8 @@ class CommunicationPage(QWidget):
                 text("comm_watch", language) + " · " + text(key, language)
             )
             button.setAccessibleDescription(button.toolTip())
+        for button in (self.watch_remove, self.watch_once, self.watch_auto):
+            button.setFixedHeight(Style.touch)
         for key, widget in (
             ("comm_protocol", self.protocol),
             ("comm_host", self.host),

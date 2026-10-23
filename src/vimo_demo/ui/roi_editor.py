@@ -564,10 +564,7 @@ class MachineRoiWorkspace(QWidget):
             self.coordinates["W"],
             self.coordinates["H"],
         )
-        apply_geometry = self.button("roi_set_rect")
-        apply_geometry.setIcon(image_icon("apply"))
-        apply_geometry.setIconSize(QSize(Style.icon, Style.icon))
-        apply_geometry.setProperty("iconAlignment", "leading")
+        apply_geometry = self.icon_button("roi_set_rect", "apply")
         geometry.addWidget(apply_geometry)
         bulk = QHBoxLayout(actions)
         bulk.setContentsMargins(0, 0, 0, 0)
@@ -793,17 +790,9 @@ class MachineRoiWorkspace(QWidget):
                 "vision_capture",
                 "cancel",
                 "vision_discard",
+                "roi_set_rect",
             ):
                 button.setText(text(key, language))
-        numeric_apply = self.buttons["roi_set_rect"]
-        set_button_caption(
-            numeric_apply,
-            text("roi_set_rect", language),
-            max(
-                3 * Style.touch + Style.small,
-                button_width(numeric_apply, ("roi_set_rect",)),
-            ),
-        )
         primary = self.buttons["roi_save_apply"]
         set_button_caption(
             primary,
