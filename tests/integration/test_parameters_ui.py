@@ -1,10 +1,12 @@
 from collections.abc import Callable
 from dataclasses import replace
+from math import ceil
 from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
 from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtGui import QFontMetricsF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -432,6 +434,18 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
     fields = tuple(spin.geometry() for spin in preview.spins.values())
     save = page.buttons["save_apply"]
     save_size = save.size()
+    assert (
+        save.width()
+        <= ceil(
+            max(
+                QFontMetricsF(save.font()).horizontalAdvance(
+                    text("save_apply", language)
+                )
+                for language in LANGUAGES
+            )
+        )
+        + Style.space
+    )
     for language in LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
@@ -482,6 +496,19 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
     workspace = page.roi_workspace
     assert workspace is not None
     QApplication.processEvents()
+    primary = workspace.buttons["roi_save_apply"]
+    assert (
+        primary.width()
+        <= ceil(
+            max(
+                QFontMetricsF(primary.font()).horizontalAdvance(
+                    text("roi_save_apply", language)
+                )
+                for language in LANGUAGES
+            )
+        )
+        + Style.space
+    )
     assert workspace.geometry_toolbar.height() == Style.touch
     assert all(line.width() == 72 for line in workspace.coordinates.values())
     sizes = tuple(

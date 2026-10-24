@@ -578,6 +578,7 @@ class MachineRoiWorkspace(QWidget):
         save_row.addWidget(self.icon_button("vision_discard", "refresh"))
         primary = self.button("roi_save_apply")
         primary.setObjectName("start")
+        primary.setProperty("compactAction", True)
         save_row.addWidget(primary)
         self.geometry_toolbar = ImageToolbar(numeric, actions, saving)
         roi.addWidget(self.geometry_toolbar)
@@ -797,7 +798,7 @@ class MachineRoiWorkspace(QWidget):
         set_button_caption(
             primary,
             text("roi_save_apply", language),
-            button_width(primary, ("roi_save_apply",)),
+            button_width(primary, ("roi_save_apply",), padding=2),
         )
         for key, line in self.coordinates.items():
             line.setAccessibleName(text("roi_" + key.lower(), language))

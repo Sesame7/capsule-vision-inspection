@@ -454,6 +454,7 @@ class ParametersPage(QWidget):
         actions.addWidget(discard)
         primary = QPushButton(self)
         primary.setObjectName("start")
+        primary.setProperty("compactAction", True)
         primary.setMinimumHeight(Style.touch)
         self.buttons["save_apply"] = primary
         actions.addWidget(primary)
@@ -532,7 +533,7 @@ class ParametersPage(QWidget):
         set_button_caption(
             primary,
             text("save_apply", language),
-            button_width(primary, ("save_apply",)),
+            button_width(primary, ("save_apply",), padding=2),
         )
         for key, label in self.labels.items():
             label.setText(

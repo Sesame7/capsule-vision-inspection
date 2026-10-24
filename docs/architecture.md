@@ -364,6 +364,11 @@ slots budgeted across languages and refresh states; Add remains a separate squar
 Automatic refresh keeps its one-second interval visible, a loop icon, a checked state and an explicit
 Stop caption while active, distinct from Production Stop. Manual writing retains
 a localized verb. Save/apply and service power controls retain visible verbs.
+These compact action groups use four-pixel horizontal style padding and a
+two-pixel focus allowance beyond their shaped caption/icon budget. Watch peers
+use three-pixel gaps; their surrounding selector/Add spacing remains unchanged.
+Touch heights, fonts and translations are unchanged; widths remain content-based
+and stable across languages and action states.
 Action buttons never stretch into surplus row space;
 the Watch selector receives the remaining space. A single selector/Add/action row
 is preferred whenever the actual available logical width accommodates the controls.

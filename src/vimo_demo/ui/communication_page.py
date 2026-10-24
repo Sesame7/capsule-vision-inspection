@@ -326,12 +326,13 @@ class CommunicationPage(QWidget):
         )
         actions = QHBoxLayout(self.watch_actions)
         actions.setContentsMargins(0, 0, 0, 0)
-        actions.setSpacing(Style.small)
+        actions.setSpacing(Style.small // 2)
         self.watch_remove = self._button("comm_watch_remove", self._remove_watch)
         self.watch_once = self._button("comm_watch_once", self.read_watch_once)
         self.watch_auto = self._button("comm_watch_auto", self._toggle_auto)
         self.watch_auto.setCheckable(True)
         for button in (self.watch_remove, self.watch_once, self.watch_auto):
+            button.setProperty("compactAction", True)
             actions.addWidget(button)
         watch.addWidget(self.watch_tools)
         watch.addWidget(self.watch_editor)
@@ -405,6 +406,7 @@ class CommunicationPage(QWidget):
         self.preferences_status.setTextFormat(Qt.TextFormat.PlainText)
         self.save_settings = QPushButton()
         self.save_settings.setObjectName("start")
+        self.save_settings.setProperty("compactAction", True)
         self.save_settings.setMinimumHeight(Style.touch)
         self.save_settings.clicked.connect(self.persist_settings)
         preferences_row.addWidget(self.preferences_status, 1)
@@ -981,7 +983,7 @@ class CommunicationPage(QWidget):
         set_button_caption(
             self.save_settings,
             text("save", language),
-            button_width(self.save_settings, ("save",)),
+            button_width(self.save_settings, ("save",), padding=2),
         )
         self.save_settings.setToolTip(text("comm_save_settings", language))
         self.save_settings.setAccessibleName(self.save_settings.toolTip())
@@ -1035,6 +1037,7 @@ class CommunicationPage(QWidget):
                 "comm_watch_auto_short",
                 "comm_watch_stop_short",
             ),
+            padding=2,
         )
         for button, key in (
             (self.watch_remove, "comm_watch_remove"),

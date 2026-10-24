@@ -99,6 +99,7 @@ class WebSettingsPanel(QFrame):
         self.power = QPushButton()
         self.power.setMinimumHeight(Style.touch)
         self.power.setObjectName("webPower")
+        self.power.setProperty("compactAction", True)
         self.power.setProperty("iconAlignment", "leading")
         self.power.clicked.connect(lambda: self.requested.emit("power"))
         header.addWidget(self.power)
@@ -310,7 +311,7 @@ class WebSettingsPanel(QFrame):
             button_width(
                 self.power,
                 ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off"),
-                padding=Style.space + Style.small,
+                padding=2,
             ),
         )
         self.power.setEnabled(not blocked)

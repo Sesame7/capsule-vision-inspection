@@ -4,12 +4,13 @@ import socket
 from collections.abc import Generator
 from dataclasses import replace
 from datetime import UTC, datetime
+from math import ceil
 from pathlib import Path
 from threading import Event
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QFontMetricsF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -931,6 +932,37 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
 
     monkeypatch.setattr(page, "_execute", execute)
     action_sizes = tuple(button.size() for button in buttons[4:])
+    for button, keys in (
+        (panel.enabled, ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off")),
+        (
+            page.web_panel.power,
+            ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off"),
+        ),
+        (page.save_settings, ("save",)),
+        (
+            page.watch_once,
+            (
+                "comm_watch_remove_short",
+                "comm_watch_once_short",
+                "comm_watch_auto_short",
+                "comm_watch_stop_short",
+            ),
+        ),
+    ):
+        caption_width = ceil(
+            max(
+                QFontMetricsF(button.font()).horizontalAdvance(text(key, language))
+                for key in keys
+                for language in LANGUAGES
+            )
+        )
+        assert button.width() <= (
+            caption_width
+            + button.iconSize().width()
+            + Style.icon_text_gap
+            + Style.space
+        )
+        assert button.height() >= Style.touch
     for width, height in ((1080, 1920), (1920, 1080), (1080, 1920)):
         window.resize(width, height)
         QApplication.processEvents()
@@ -958,8 +990,8 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
         )
         sizes = tuple(button.size() for button in buttons)
         assert tuple(button.size() for button in buttons[4:]) == action_sizes
-        assert (
-            page.watch_actions.width() == 3 * page.watch_once.width() + 2 * Style.small
+        assert page.watch_actions.width() == 3 * page.watch_once.width() + 2 * (
+            Style.small // 2
         )
         assert (
             page.watch_remove.size() == page.watch_once.size() == page.watch_auto.size()

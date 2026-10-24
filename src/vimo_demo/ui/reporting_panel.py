@@ -72,6 +72,7 @@ class ReportingPanel(QFrame):
         self.enabled = QPushButton()
         self.enabled.setCheckable(True)
         self.enabled.setObjectName("reportingPower")
+        self.enabled.setProperty("compactAction", True)
         self.enabled.setProperty("iconAlignment", "leading")
         self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.enabled)
@@ -213,7 +214,7 @@ class ReportingPanel(QFrame):
         self._power_width = button_width(
             self.enabled,
             ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off"),
-            padding=Style.space + Style.small,
+            padding=2,
         )
         self.title.setText(text("short_reporting", language))
         self.title.setToolTip(text("plc_reporting", language))
