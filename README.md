@@ -118,6 +118,9 @@ publication, not machine readiness.
 
 ## Developer tools and checks
 
+For workstation access, native desktop evidence and normal application smoke tests,
+see [field UI validation](docs/field-ui-validation.md).
+
 | Tool | Purpose |
 | --- | --- |
 | [run_production_ui.py](scripts/run_production_ui.py) | Fake-engine UI review; no hardware/model required |

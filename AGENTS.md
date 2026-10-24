@@ -5,6 +5,9 @@ Read [README](README.md), [architecture](docs/architecture.md) and the relevant
 contract before changing behavior. Keep changes small and testable. Do not commit,
 tag, push, add features or redesign architecture without authorization.
 
+For field UI smoke checks, follow [field UI validation](docs/field-ui-validation.md)
+for interactive-desktop evidence, normal launch/Close and protected-asset checks.
+
 ## Environment and assets
 
 - Preserve the vendor-provisioned `.venv`, Windows/Python/vendor environment and
