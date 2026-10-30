@@ -1,0 +1,11 @@
+{
+  "defaults": {
+    "vimo": {
+      "disabled_labels": [],
+      "enabled": true,
+      "required": true
+    }
+  },
+  "display_name": "产品乙（合成示例）",
+  "model_id": "special"
+}

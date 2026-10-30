@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "capsule-vision-inspection"
+version = "0.1.0"
+description = "Capsule inspection with passive Basler acquisition, ViMo and FINS/Modbus reporting"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "numpy>=2.5,<3",
+    "opencv-python>=4.12,<6",
+    "PySide6>=6.11,<7",
+]
+
+[dependency-groups]
+dev = [
+    "Pillow>=12,<13",
+    "pytest>=9.1,<10",
+    "ruff>=0.16,<1",
+    "pyright>=1.1,<2",
+]
+
+[project.scripts]
+capsule-vision = "capsule_vision.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+capsule_vision = ["py.typed", "web/static/*"]
+
+[tool.uv]
+cache-dir = "outputs/uv-cache"
+
+[tool.ruff]
+target-version = "py314"
+src = ["src"]
+extend-exclude = ["models", "images", "outputs", "data"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
+
+[tool.pyright]
+include = ["src", "tests", "scripts", "app.py"]
+exclude = ["models", "images", "outputs", "data", ".venv"]
+extraPaths = ["scripts"]
+pythonVersion = "3.14"
+pythonPlatform = "Windows"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "scripts"]
+addopts = "-ra --strict-markers"

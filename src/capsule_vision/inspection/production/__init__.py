@@ -1,0 +1,67 @@
+"""Production evidence and channel judgments; no engines, scheduling or UI."""
+
+from .evidence import (
+    assign_vimo_findings,
+    extract_vimo_findings,
+)
+from .layout import CameraLayout, ChannelId, ChannelROI, InspectionLayout, OverlapPolicy
+from .models import (
+    Assessment,
+    CameraInspectionResult,
+    CameraTiming,
+    ChannelBusinessStatus,
+    ChannelInspectionResult,
+    CheckPolicy,
+    CheckResult,
+    ConfiguredCycleCompletion,
+    FindingAssignment,
+    FindingSource,
+    Measurement,
+    ProductionInspectionResult,
+    ProductJudgment,
+    Reason,
+    TechnicalStatus,
+    TraditionalSkipReason,
+    ViMoFinding,
+    aggregate,
+)
+from .occupancy import (
+    OccupancyEvidence,
+    OccupancyResult,
+    OccupancyState,
+    OccupancyView,
+    measure_occupancy,
+)
+
+__all__ = [
+    "Assessment",
+    "CameraInspectionResult",
+    "CameraLayout",
+    "CameraTiming",
+    "ChannelBusinessStatus",
+    "ChannelId",
+    "ChannelInspectionResult",
+    "ChannelROI",
+    "CheckPolicy",
+    "CheckResult",
+    "ConfiguredCycleCompletion",
+    "FindingAssignment",
+    "FindingSource",
+    "InspectionLayout",
+    "Measurement",
+    "OccupancyEvidence",
+    "OccupancyResult",
+    "OccupancyState",
+    "OccupancyView",
+    "OverlapPolicy",
+    "ProductJudgment",
+    "ProductionInspectionResult",
+    "Reason",
+    "TechnicalStatus",
+    "TraditionalSkipReason",
+    "ViMoFinding",
+    "aggregate",
+    "assign_vimo_findings",
+    "extract_vimo_findings",
+    "measure_occupancy",
+]

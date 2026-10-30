@@ -1,0 +1,138 @@
+"""Small Qt test facilities, without pytest-qt or sleeps."""
+
+from collections.abc import Callable, Iterator
+from pathlib import Path
+from threading import Event
+from typing import TYPE_CHECKING
+
+import pytest
+from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtGui import QFontDatabase
+
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import QApplication, QPushButton
+
+    from capsule_vision.ui.main_window import MainWindow
+    from tests.support.application import FakeSession
+
+
+def ensure_test_fonts() -> None:
+    """Load existing Windows fonts when offscreen Qt exposes no font families."""
+    if not QFontDatabase.families():
+        # Native Windows Qt finds these installed fallback families automatically;
+        # offscreen Qt otherwise measures several supported scripts as missing glyphs.
+        for filename in (
+            "segoeui.ttf",
+            "segoeuib.ttf",
+            "msyh.ttc",
+            "msyhbd.ttc",
+            "tahoma.ttf",
+            "tahomabd.ttf",
+            "Nirmala.ttf",
+            "NirmalaB.ttf",
+            "ebrima.ttf",
+            "ebrimabd.ttf",
+            "LeelawUI.ttf",
+            "LeelaUIb.ttf",
+            "malgun.ttf",
+            "malgunbd.ttf",
+        ):
+            path = Path("C:/Windows/Fonts") / filename
+            if path.exists():
+                QFontDatabase.addApplicationFont(str(path))
+
+
+def until(predicate: Callable[[], bool], timeout_ms: int = 5000) -> None:
+    """Pump Qt while boundedly waiting; polling is a test assertion aid only."""
+    if predicate():
+        return
+    loop = QEventLoop()
+    poll = QTimer()
+    deadline = QTimer()
+    deadline.setSingleShot(True)
+    deadline.timeout.connect(loop.quit)
+
+    def check() -> None:
+        if predicate():
+            loop.quit()
+
+    poll.timeout.connect(check)
+    poll.start(5)
+    deadline.start(timeout_ms)
+    loop.exec()
+    poll.stop()
+    deadline.stop()
+    assert predicate(), "Qt condition timed out"
+
+
+def assert_full_caption(button: QPushButton, caption: str) -> None:
+    """Check both the retained caption and the native style's actual text budget."""
+    from math import ceil
+
+    from PySide6.QtGui import QFontMetricsF
+    from PySide6.QtWidgets import QStyle, QStyleOptionButton
+
+    assert button.text() == caption, (button.text(), caption, button.accessibleName())
+    option = QStyleOptionButton()
+    button.initStyleOption(option)
+    available = (
+        button.style()
+        .subElementRect(QStyle.SubElement.SE_PushButtonContents, option, button)
+        .width()
+    )
+    if not button.icon().isNull():
+        available -= button.iconSize().width() + 4
+    required = ceil(QFontMetricsF(button.font()).horizontalAdvance(caption))
+    assert required <= available, (caption, required, available)
+
+
+def close_window(window: MainWindow) -> None:
+    """Settle owners and await Qt deletion before the next test's native work."""
+    destroyed = Event()
+    window.destroyed.connect(destroyed.set)
+    window.close()
+    until(lambda: window.bridge.closed and window.communication.closed)
+    assert window.bridge.application.join(1)
+    window.deleteLater()
+    until(destroyed.is_set)
+
+
+@pytest.fixture
+def screen(
+    qapp: QApplication, tmp_path: Path
+) -> Iterator[tuple[MainWindow, FakeSession]]:
+    # Keep application/widget imports local for low-level Qt helper consumers.
+    from dataclasses import replace
+
+    from capsule_vision.application import ProductionApplication
+    from capsule_vision.display import LatestDisplayFrameStore
+    from capsule_vision.ui.main_window import MainWindow
+    from capsule_vision.ui.production_bridge import QtProductionBridge
+    from tests.support.application import FakeSession, prepared
+
+    # Windows' offscreen plugin exposes no system fonts in this environment.
+    # Read existing OS fonts for realistic metrics/Chinese glyphs; install nothing.
+    ensure_test_fonts()
+    candidate = prepared(tmp_path)
+    candidate = replace(
+        candidate,
+        configuration=replace(candidate.configuration, display_name="Recipe A"),
+    )
+    session = FakeSession(automatic_start=False)
+    app = ProductionApplication(lambda _p, _g: session)
+    app.configure(candidate)
+    store = LatestDisplayFrameStore(candidate.configuration.layout.camera_ids)
+    bridge = QtProductionBridge(app, store, poll_ms=10, close_timeout_ms=1000)
+    window = MainWindow(bridge)
+    window.resize(1080, 1920)
+    window.show()
+    yield window, session
+    if not session.ready.done():
+        session.ready.set_result(None)
+    if session.join_gate is not None:
+        session.join_gate.set()
+    session.cleanup_safe = True
+    window.close()
+    until(lambda: window.bridge.closed)
+    assert app.join(0)
+    window.deleteLater()

@@ -1,0 +1,50 @@
+# Local environment and input assets
+.venv/
+/models/
+/images/
+/outputs/
+/data/
+
+# Local secrets and private key material; public templates remain visible
+.env
+.env.*
+!.env.example
+/credentials.json
+/secrets.json
+/secrets/
+credentials.local.*
+secrets.local.*
+/private.key
+/private.pem
+*.private.key
+*.private.pem
+id_rsa
+id_ed25519
+*.pfx
+*.p12
+
+# Proprietary vendor packages and model artifacts
+/vendor/
+smartmore*.whl
+*.vimosln
+
+# Python/build/tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Local editor/OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+build/
+dist/
