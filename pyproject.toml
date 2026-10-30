@@ -31,9 +31,6 @@ where = ["src"]
 [tool.setuptools.package-data]
 capsule_vision = ["py.typed", "web/static/*"]
 
-[tool.uv]
-cache-dir = "outputs/uv-cache"
-
 [tool.ruff]
 target-version = "py314"
 src = ["src"]

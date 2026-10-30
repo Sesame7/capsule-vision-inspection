@@ -60,12 +60,24 @@ These assets are ignored by Git and are not supplied by a clone. Preserve saved
 Recipes, mappings, ROIs, models, images and licenses. See
 [configuration](docs/configuration.md) for schemas, relative paths and recovery.
 
+`uv` uses its normal user-level cache by default. `outputs/` remains available
+for optional engineering tools, diagnostics and generated artifacts, including
+test files and caches owned by those tools. Normal Production startup does not
+require `outputs/` merely to locate the `uv` cache.
+
 ## Run and use
 
 ```powershell
 uv run --no-sync python app.py
 uv run --no-sync capsule-vision
 ```
+
+`python app.py` resolves application data relative to the directory containing
+`app.py`. The installed `capsule-vision` command resolves application data from
+the process current working directory. Windows shortcuts must therefore set
+their Working directory appropriately for the selected launch method; a shortcut
+for the installed command should normally start in the installation's intended
+configuration root.
 
 The native Windows window opens maximized within the available work area, stopped.
 The shared navigation offers dark/light themes (dark on launch) and a native-name
