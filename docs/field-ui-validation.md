@@ -8,37 +8,21 @@ and [configuration](configuration.md) for application ownership and saved settin
 
 ## Evidence and site profile
 
-**Verified on yy30lane1, 2026-10-24:** SSH identity/revision checks, shortcut inspection,
-an Interactive/Limited scheduled task launching the normal desktop shortcut,
-native Qt screen capture, and operator-assisted five-page navigation/theme/Close.
-Retained process handles established real Python process exit, independently of
-window disappearance. Earlier isolated UI checks used the same task mechanism;
-they do not establish a real `app.py` lifecycle pass. Record launch, navigation,
-process-exit results and task cleanup separately for each smoke run.
+Record a concise, installation-specific profile before each smoke run. Capture
+the approved revision, shortcut, repository root, OS/runtime versions, display
+geometry and active Windows session without publishing hostnames, user names,
+internal paths or credentials. SSH uses an isolated Session 0 and does not prove
+that a GUI is visible on the interactive desktop.
 
-| Observation | Verified example; rediscover on another machine |
-| --- | --- |
-| SSH alias / Windows host | `yy30lane1` / `DESKTOP-L4O6HDH` |
-| Repository | `C:\Users\YY\Projects\capsule-vision-inspection` |
-| Expected revision | `5fb2ddc52c946f705a0c02548079ed5a926317ad` |
-| User / interactive session | `DESKTOP-L4O6HDH\YY`, active console Session 1 |
-| SSH PowerShell session | Session 0; not the interactive desktop |
-| OS / provisioned runtime | Windows 10 IoT Enterprise LTSC 19044; Python 3.14.8, Qt/PySide6 6.11.2 |
-| Display | HDMI, 1080×1920, inverted portrait, 96 logical DPI, DPR 1.0; work area 1080×1880 |
-| Desktop shortcut | `多通道胶囊检测.lnk`; target is the user's `WindowsApps\wt.exe` |
-| Shortcut arguments / working directory | `pwsh.exe -Command "uv run --no-sync python app.py"`; repository above |
-| Python resolved in repository | `.venv\Scripts\python.exe`, prefix is the existing repository `.venv` |
-
-The alias is a client-local convenience, not a project configuration setting.
-This field Python version differs from the development target; preserve it as found.
-Keep run artifacts under a fresh `outputs/` directory on development and a uniquely
-named temporary directory on the field PC. Do not commit screenshots, host inventories
-or operational configuration. Do not include credentials in logs or this document.
+Keep run artifacts under a fresh `outputs/` directory on development and a
+uniquely named temporary directory on the field PC. Do not commit screenshots,
+host inventories or operational configuration. Do not include credentials in
+logs or this document.
 
 ## Human prerequisites and installation
 
 The following is **general Windows guidance**, not a claim that installation or
-permission changes were performed on yy30lane1.
+permission changes were performed during any particular smoke run.
 
 1. Identify the machine owner, authorized Windows account, repository location and
    expected revision. Arrange a stopped application and an engineer who can unlock
@@ -100,15 +84,15 @@ An owner can display the server's public host-key fingerprint with
 `ssh-keygen -lf C:\ProgramData\ssh\ssh_host_ed25519_key.pub`. Unexpected key changes
 need investigation, not automatic deletion of `known_hosts` entries.
 
-**Verified read-only checks** (replace the alias on other installations):
+**Read-only checks** (replace the alias and repository path on other installations):
 
 ```powershell
-$FieldHost = 'yy30lane1'
+$FieldHost = '<approved-host-alias>'
 ssh -G $FieldHost | Select-String '^(hostname|user|port|identityfile) '
 ssh -o BatchMode=yes -o ConnectTimeout=10 $FieldHost whoami
 ssh $FieldHost quser
-ssh $FieldHost git -C C:/Users/YY/Projects/capsule-vision-inspection rev-parse HEAD
-ssh $FieldHost git -C C:/Users/YY/Projects/capsule-vision-inspection status --short
+ssh $FieldHost git -C '<installed-repository-path>' rev-parse HEAD
+ssh $FieldHost git -C '<installed-repository-path>' status --short
 ```
 
 On the field host, `Get-Service sshd`, `tailscale status --json` and `tailscale ip -4`
@@ -144,7 +128,7 @@ above, using the installation's actual `$repo`. Check its deployed revision firs
 the current configuration hash check includes the TSV MachineLayout:
 
 ```powershell
-$repo = 'C:\Users\YY\Projects\capsule-vision-inspection'
+$repo = '<installed-repository-path>'
 git -C $repo rev-parse HEAD
 git -C $repo status --short
 quser
@@ -201,7 +185,7 @@ actually be logged in; confirm the helper's PID is in the expected active sessio
 Do not assume that every workstation uses Session 1, or that multiple logins for
 the same user are interchangeable.
 
-The following pattern was verified for a native capture helper. Run it on the
+The following pattern is suitable for a native capture helper. Run it on the
 field host after setting the installation-specific variables and copying the helper:
 
 ```powershell
@@ -231,9 +215,10 @@ must remain unchanged. A launcher script may monitor process handles and record
 exits, but must not send Production commands or silently relaunch after failure.
 Validate this normal-entry path with a real window/process observation; the
 isolated task mechanism alone is not evidence that the normal application launched.
-The temporary task/shortcut path was verified on yy30lane1; the `wt.exe` shortcut
-resolved to the provisioned `.venv` redirector and its existing Python child in
-Session 1. Both were monitored; two parent/child PIDs were one visible application.
+Where applicable, verify that a Windows Terminal or shortcut helper resolves to
+the provisioned `.venv` redirector and its existing Python child. Monitor both
+parent/child PIDs and require one visible application rather than assuming that
+launcher wrapper details imply a duplicate instance.
 
 Use Parsec for human input or the existing approved computer-use tool when it can
 observe the viewer reliably. Target the returned Parsec window, inspect a fresh
@@ -246,8 +231,7 @@ Do not guess remote control coordinates from a remembered viewport.
 
 Capture in the active field session using its existing PySide6/native Windows
 backend. An observer can read the desktop without creating another application instance
-or importing the inference/camera adapters. The core of the **verified native
-capture method** is:
+or importing the inference/camera adapters. The core of the native capture method is:
 
 ```python
 import json
@@ -291,8 +275,7 @@ Use a fresh output name/directory per observation and bounded helper lifetime.
 Record `ProcessIdToSessionId`, `QApplication.platformName()` and scaling environment
 variables as well. The observer's Qt geometry describes the desktop, not the
 operational application's internal widgets. For the real application, match the
-visible application HWND to its Python PID. The verified field baseline used
-`ViMo · Production`; current builds use `Capsule Vision Inspection · Production`.
+visible application HWND to its Python PID. Record the actual application title rather than assuming a historical title.
 Read `GetWindowRect`, `GetClientRect`, `GetDpiForWindow` and `IsZoomed`, and retain
 the native desktop image.
 These are read-only observations, not message/input injection.
@@ -347,7 +330,7 @@ outside the operational installation, with engine creation and real network/devi
 operations forbidden. Capture the preview in the logged-in desktop, label its
 evidence as isolated, and never count it as a real operational launch/Close pass.
 
-Prefer the [README developer workflow](../README.md#developer-tools-and-checks).
+Prefer the [README development workflow](../README.md#development-and-validation).
 On development, a small relevant check can be:
 
 ```powershell
@@ -373,7 +356,7 @@ requires the appropriate human; do not store credentials in task arguments.
 | SSH refused, wrong host or key mismatch | Check owner-confirmed identity, tailnet reachability, `sshd` and authorized-key setup. Do not disable verification or repair permissions blindly. |
 | SSH works but GUI is invisible/black | Check PID session, actual unlocked desktop and task principal. Session 0/offscreen success is not field acceptance. Ask the logged-in operator if blocked. |
 | Parsec app is listed but capture/input fails | A title bar/accessibility root is not proof of usable remote video. Re-select/reobserve once under the tool's recovery rules; do not guess clicks or invent a new automation system. Request minimal operator input. |
-| `FrameArrived timed out`, `window capture timed out`, or `coordinate input geometry is unavailable` | These failures were observed with the local Parsec automation path. Native Session 1 capture can still work. Record the failed path separately from human-assisted or isolated observations. |
+| `FrameArrived timed out`, `window capture timed out`, or `coordinate input geometry is unavailable` | These failures can occur with remote desktop automation. Native session capture can still work. Record the failed path separately from human-assisted or isolated observations. |
 | Duplicate `app.py` processes/window | Identify the launcher/redirector parent chain and owner. Do not start another app or terminate unrelated Python processes. |
 | UNCONFIGURED, FAULT, startup or navigation exception | Preserve native image, console/log evidence, revision and JSON hashes. Report a reproducible defect; do not broaden the smoke phase into recovery/refactoring. |
 | Close remains pending | Keep the actual owner, inspect remaining processes/threads and request operator assistance. A timeout is not cleanup; never force-cancel native SDK work. |
