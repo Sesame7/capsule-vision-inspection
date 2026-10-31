@@ -275,6 +275,48 @@ class RecipeEditorSession:
         self.resolve(saved)
         return saved
 
+    def production_preparation(self) -> RecipeEditorSession:
+        """Capture saved dependencies without sharing the editor's working copies."""
+        return RecipeEditorSession(
+            self.catalog,
+            self.machine_editor.saved_definition,
+            self.registry,
+            self.base_directory,
+            machine_path=self.machine_path,
+            camera_sources=(
+                CameraSourceDraft(self.camera_sources.saved, self.camera_sources.path)
+                if self.camera_sources is not None
+                else None
+            ),
+            require_saved_sources=self.require_saved_sources,
+            model_catalog=self.model_catalog,
+            managed_models=self.managed_models,
+        )
+
+    def prepare_saved(self, recipe_id: str) -> PreparedConfiguration:
+        """Resolve the current saved identity off dispatch; never read an editor draft."""
+        entry = next(
+            (
+                e
+                for e in self.catalog.discover().entries
+                if e.recipe.recipe_id == recipe_id
+            ),
+            None,
+        )
+        if entry is None:
+            raise ConfigurationError(
+                "Saved Recipe is unavailable or ambiguous; refresh"
+            )
+        if self.machine_path is not None:
+            self.machine_editor.load_saved(load_machine_layout(self.machine_path))
+        self.reload_models()
+        prepared = self.prepare(entry.recipe)
+        if entry not in self.catalog.discover().entries:
+            raise ConfigurationError(
+                "Saved Recipe changed during preparation; select again"
+            )
+        return prepared
+
     def prepare(self, recipe: RecipeDefinition) -> PreparedConfiguration:
         """Background preparation only; immutable inputs, no draft/application access."""
         configuration = self.resolve(recipe)

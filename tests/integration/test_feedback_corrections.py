@@ -7,7 +7,7 @@ import pytest
 from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT, ControlledEngine
 from tests.support.qt import close_window, ensure_test_fonts, until
-from tests.support.recipe_ui import Screen, edit
+from tests.support.recipe_ui import Screen, edit, select_production_recipe
 from tests.support.recipe_ui import camera_screen as camera_screen
 from tests.support.recipe_ui import configured_screen as configured_screen
 from tests.support.startup import saved_data
@@ -69,12 +69,15 @@ def test_folder_warning_survives_apply_until_verified_source_save(
     show(window, language)
     try:
         window.navigate(1)
-        window.recipe_page.save_and_apply()
+        select_production_recipe(window)
         until(lambda: not window.recipe_page.busy)
         assert text("startup_source_unavailable", language) in window.event_label.text()
         assert missing in window.event_label.toolTip()
         assert missing in window.recipe_page.status.toolTip()
-        assert text("roi_applied", language) in window.recipe_page.status.text()
+        assert (
+            text("startup_source_unavailable", language)
+            in window.recipe_page.status.text()
+        )
         assert not engine.calls
         assert startup.application.snapshot().state is ApplicationState.READY
         assert startup.application.snapshot().counters == ProductionCounters()
@@ -128,7 +131,7 @@ def test_successful_start_clears_source_warning_but_not_manifest_recovery(
     window = create_window(startup, delivery)
     window.show()
     try:
-        window.recipe_page.save_and_apply()
+        select_production_recipe(window)
         until(lambda: not window.recipe_page.busy)
         assert "startup_source_unavailable" in window.configuration_messages
         with pytest.raises(ApplicationError) as failure:
@@ -191,7 +194,7 @@ def test_invalid_language_apply_preserves_both_outcomes_and_recovery(
         window.recipe_page.recipes.activated.emit(
             window.recipe_page.recipes.findText("Second")
         )
-        window.recipe_page.save_and_apply()
+        select_production_recipe(window)
         until(lambda: not window.recipe_page.busy)
         snapshot = startup.application.snapshot()
         assert (
@@ -199,7 +202,7 @@ def test_invalid_language_apply_preserves_both_outcomes_and_recovery(
         )
         assert snapshot.active is None and snapshot.state is ApplicationState.READY
         assert snapshot.counters == ProductionCounters() and not snapshot.runtime_owned
-        assert text("roi_applied", language) in window.recipe_page.status.text()
+        assert text("startup_language", language) in window.recipe_page.status.text()
         assert text("startup_language", language) in window.recipe_page.status.text()
         assert_preferences_feedback(language)
         assert "app.json" in window.event_label.toolTip()
@@ -236,7 +239,7 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
     original = session.entry.path.read_bytes()
     snapshot = window.bridge.application.snapshot()
     edit(page.metadata["display_name"], "")
-    page.save_and_apply()
+    page.save()
     assert page.status.text() == text("recipe_validation_error", language)
     assert "display_name" in page.status.toolTip()
     assert session.dirty and session.entry.path.read_bytes() == original
@@ -255,7 +258,7 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
     with monkeypatch.context() as patch:
         patch.setattr(session, "save", fail_save)
         edit(page.metadata["display_name"], "Unsaved")
-        page.save_and_apply()
+        page.save()
     assert page.status.text() == text("recipe_save_error", language)
     assert page.status.toolTip() == detail and detail not in page.status.text()
     assert session.dirty and session.entry.path.read_bytes() == original
@@ -267,20 +270,20 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
     contents = artifact.read_bytes()
     try:
         artifact.write_bytes(b"mismatched isolated fake model")
-        page.save_and_apply()
+        page.save()
+        select_production_recipe(window)
         until(lambda: not page.busy)
-        assert page.status.text() == text("model_prepare_error", language)
-        assert str(artifact) in page.status.toolTip()
-        assert (
-            "SHA-256" in page.status.toolTip() and "observed" in page.status.toolTip()
-        )
+        feedback = window.production_recipes.feedback
+        assert feedback is not None and feedback[0] == "recipe_prepare_error"
+        assert str(artifact) in feedback[1]
+        assert "SHA-256" in feedback[1] and "observed" in feedback[1]
         assert window.bridge.application.snapshot() == snapshot and not runtimes
         QApplication.processEvents()
     finally:
         artifact.write_bytes(contents)
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
-    assert page.status.text() == text("roi_applied", language)
+    assert page.status.text() == text("saved", language)
     assert not page.status.toolTip()
 
 

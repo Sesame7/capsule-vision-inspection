@@ -453,7 +453,7 @@ class RecipePage(QWidget):
         primary.setObjectName("start")
         primary.setProperty("compactAction", True)
         primary.setMinimumHeight(Style.touch)
-        self.buttons["save_apply"] = primary
+        self.buttons["save"] = primary
         actions.addWidget(primary)
         root.addLayout(actions)
 
@@ -468,7 +468,7 @@ class RecipePage(QWidget):
         self.buttons["reload"].clicked.connect(lambda: self.guard_dirty(self.reload))
         self.buttons["delete_recipe"].clicked.connect(self.request_delete)
         self.buttons["recipe_discard"].clicked.connect(self.request_discard)
-        primary.clicked.connect(lambda: self.save_and_apply())
+        primary.clicked.connect(lambda: self.save())
         editing.changed.connect(self.refresh_state)
         editing.failed.connect(self._operation_failed)
         editing.applied.connect(self._configuration_applied)
@@ -530,14 +530,14 @@ class RecipePage(QWidget):
         self.recipes.setAccessibleName(text("recipe", language))
         self.model.setAccessibleName(text("inspection_model", language))
         for key, button in self.buttons.items():
-            button.setText(text(key, language) if key == "save_apply" else "")
+            button.setText(text(key, language) if key == "save" else "")
             button.setToolTip(text(key, language))
             button.setAccessibleName(text(key, language))
-        primary = self.buttons["save_apply"]
+        primary = self.buttons["save"]
         set_button_caption(
             primary,
-            text("save_apply", language),
-            button_width(primary, ("save_apply",), padding=2),
+            text("save", language),
+            button_width(primary, ("save",), padding=2),
         )
         for key, label in self.labels.items():
             label.setText(
@@ -829,10 +829,6 @@ class RecipePage(QWidget):
                 enabled = (
                     allowed and session is not None and bool(session.draft.display_name)
                 )
-            elif key == "save_apply":
-                enabled = (
-                    allowed and session is not None and not session.machine_editor.dirty
-                )
             elif key == "cache_prepare":
                 enabled = (
                     allowed
@@ -869,11 +865,6 @@ class RecipePage(QWidget):
             )
             or (text("recipe_error", language) if self._catalog_error else "")
             or (text(self._feedback, language) if self._feedback else "")
-            or (
-                text("save_machine_first", language)
-                if session and session.machine_editor.dirty
-                else ""
-            )
             or (text("recipe_labels_error", language) if self._labels_error else "")
         )
         self.status.setToolTip(
@@ -1271,23 +1262,14 @@ class RecipePage(QWidget):
         self.preview_changed.emit()
         self.show_draft()
 
-    def save_and_apply(self, after: Callable[[], None] | None = None) -> None:
+    def save(self, after: Callable[[], None] | None = None) -> None:
         if not self.editable() or self.session is None:
-            return
-        if self.session.machine_editor.dirty or (
-            self.session.camera_sources is not None
-            and self.session.camera_sources.dirty
-        ):
-            self._report_error(
-                text("save_machine_first", self.language), "save_machine_first"
-            )
-            self.refresh_state()
             return
         try:
             if self.session.dirty or self.session.entry is None:
                 self.session.save()
                 self.reload()
-            # A clean draft is re-read by apply_recipe; never overwrite external edits.
+            # A clean Save never overwrites an externally changed definition.
         except (ConfigurationError, ValueError) as exc:
             self._report_error(
                 exc,
@@ -1298,13 +1280,11 @@ class RecipePage(QWidget):
             self.refresh_state()
             return
 
-        def completed(error: BaseException | None) -> None:
-            self._feedback = "" if error else "roi_applied"
-            self.refresh_state()
-            if not error and after is not None:
-                after()
-
-        self.editing.apply(completed)
+        self._error = ""
+        self._feedback = "saved"
+        self.refresh_state()
+        if after is not None:
+            after()
 
     def _select(self, index: int) -> None:
         if index < 0 or self.busy:
@@ -1331,7 +1311,7 @@ class RecipePage(QWidget):
 
         def decided(decision: DirtyDecision) -> None:
             if decision == "save":
-                self.save_and_apply(action)
+                self.save(action)
             elif decision == "discard":
                 try:
                     session.discard()
@@ -1351,9 +1331,9 @@ class RecipePage(QWidget):
             return
         dialog = QMessageBox(self)
         dialog.setWindowTitle(text("page_recipe", self.language))
-        dialog.setText(text("dirty_question", self.language))
+        dialog.setText(text("recipe_dirty_question", self.language))
         save = dialog.addButton(
-            text("save_apply", self.language), QMessageBox.ButtonRole.AcceptRole
+            text("save", self.language), QMessageBox.ButtonRole.AcceptRole
         )
         discard = dialog.addButton(
             text("discard", self.language), QMessageBox.ButtonRole.DestructiveRole

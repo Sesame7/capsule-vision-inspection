@@ -60,7 +60,8 @@ text or null) and `language`; there is no global/default Model. Startup never
 chooses the first Recipe/Model. A selected Recipe resolves its own exact `model_id`.
 Missing preferences do not block the shell or available configuration editors;
 other required data still governs editor availability and Production readiness.
-Only explicit language changes or successful Recipe Apply write preferences.
+Only explicit language changes or successful candidate installation (Production
+selection or Vision Apply) write preferences.
 Malformed files remain unchanged, and unknown fields are errors. An unsupported
 language retains the existing visible, in-memory `zh` fallback with writes blocked
 until repair; it is never silently persisted.
@@ -337,10 +338,9 @@ A managed Model's directory name is its sole persistent ID. `model.json` require
 exactly `display_name`, `expected_sha256` (64 hexadecimal digits) and `module_id`.
 There are no persisted `model_id` or `model_path` fields. Loading constructs the
 existing typed Model identity and absolute artifact path to the owning directory's
-`model.vimosln`; missing artifacts/SHA mismatches still fail preparation. Normal
-Recipe preparation re-reads its selected Model metadata; external changes require
-explicit Recipe catalog Refresh while stopped, rather than silently replacing
-the registry. Refresh discovers Model/Recipe metadata without choosing a first
+`model.vimosln`; missing artifacts/SHA mismatches still fail preparation. Production
+preparation reads current saved Model metadata independently of the editor registry. Vision Apply retains its explicit editor refresh/validation rules.
+Recipe catalog Refresh discovers Model/Recipe metadata without choosing a first
 entry. Discovery never initializes an engine, copies an artifact or creates a cache. Explicit-path
 tools accept any `<model_id>/model.json` using this same contract, without requiring
 the normal application's `data/` root. They do not accept the old JSON schema.
@@ -396,8 +396,8 @@ Model, inheritance or first-Model fallback. Save validates the Recipe's structur
 and persistence identity, so a missing or unresolved Model reference can remain
 saved. Prepare/Apply explicitly rejects it without replacing the current candidate
 or active session. Referenced artifacts must still pass path/SHA/module validation.
-The combined Qt Save/apply action can save successfully and then report an Apply
-failure; the saved definition remains available for completion.
+Recipe Save persists only the definition. Production selection separately prepares
+it; preparation failure keeps the saved definition available for completion.
 `camera_overrides` and `channel_overrides` are unknown fields and are rejected,
 including empty arrays. They are never ignored or migrated.
 Renaming changes only `display_name`, never the ID/path. Save writes the unchanged
@@ -460,7 +460,7 @@ switches share one row with the directory/actions whenever the card's available
 width fits their requirements; otherwise they sit above the directory/actions.
 Label/padding clicks toggle the whole condition control. Browse selects a
 directory and Open Folder opens an existing directory without creating it.
-Save/apply, Discard and lifecycle editing locks use the ordinary Recipe workflow.
+Save, Discard and lifecycle editing locks use the ordinary Recipe workflow.
 Only the immutable successfully started Basler session records images; Folder
 Replay, warm-up, tuning and snapshots never record Production archives.
 See [archive ownership and output](architecture.md#image-archiving).
@@ -508,8 +508,8 @@ Switching mode preserves both folders and serials. Disconnect before changing
 source mapping/mode; Recipe/Batch/page changes do not disconnect cameras.
 Live source keys are `basler:<serial>`; Folder keys are lexical normalized paths.
 
-Loading, browsing and Recipe Apply do not rewrite source files. Explicit Vision
-Save writes the versionless definition atomically. This is source configuration,
+Loading, browsing and Production Recipe selection do not rewrite source files.
+Explicit Vision Save writes the versionless definition atomically. This is source configuration,
 not Recipe/ROI data.
 
 ## Editing and persistence
@@ -528,7 +528,7 @@ verification claim. The second row shows compact default defect-label checkboxes
 wrapping at the available width. There is no filter popup, technical-details or
 policy-summary panel. The summary cards use their content's natural height;
 one enclosing scroll area updates on wrapping/content/language changes and scrolls
-only when needed, leaving Save/apply accessible.
+only when needed, leaving Save accessible.
 Opening Recipe reads the selected segmentation module's complete
 `ModuleInfo.features` catalog through the inference adapter, off Qt dispatch. One
 bounded metadata job and one current catalog are owned by the page; stale results
@@ -545,11 +545,11 @@ the read without a polling/retry loop. Labels retain exact
 case-sensitive identities. Recipe `defaults.vimo` supplies one shared `enabled`,
 `required` and `disabled_labels` policy for all configured cameras and channels;
 MachineLayout remains the sole authority for their identities and ROI geometry.
-Save/apply, Discard and runtime editing locks govern this edit like other Recipe
+Save, Discard and runtime editing locks govern this edit like other Recipe
 changes.
 
 The Model selector row also offers **Prepare TensorRT cache**, independent of
-Recipe Save/apply. It submits the selected immutable Model identity to the
+Recipe Save. It submits the selected immutable Model identity to the
 [application owner](architecture.md#inference); the UI requests initialization only,
 so neither connected cameras nor Folder inputs are needed. The adjacent icon shows
 unknown, preparing, succeeded or failed with localized accessible names. Preparation can
@@ -620,7 +620,7 @@ and tolerance reasons; exact evidence remains in the existing preview results. M
 pending measurement, technical ERROR and disabled checks remain distinct; a valid
 image without usable measurement evidence keeps its existing NG and `—` values.
 
-Recipe Discard beside Save/apply confirms reloading the selected Recipe from its
+Recipe Discard beside Save confirms reloading the selected Recipe from its
 actual saved file. Read/identity/validation failure preserves the current draft;
 MachineLayout and sources are independent. Delete requires a confirmation naming
 the saved Recipe and ID, refuses active/candidate references and the normal app's
@@ -710,10 +710,10 @@ changed saved files require explicit reload/repair and are not silently replaced
 Save never prepares/applies a candidate or changes the connected source.
 
 After valid MachineLayout/source Saves, Recipe editing, explicit catalog Refresh
-and Prepare/Apply are available in the same window/process. No Application, bridge
-or frame store is replaced. The selected Recipe must still resolve its Model and
-pass artifact/source validation. Only Apply installs a candidate; a successful
-Start activates it. Saved-but-incomplete setup remains UNCONFIGURED. Folder input
+and Production selection are available in the same window/process. No Application,
+bridge or frame store is replaced. The selected Recipe must still resolve its Model and
+pass artifact/source validation. Only successful preparation installs a candidate;
+a successful Start activates it. Saved-but-incomplete setup remains UNCONFIGURED. Folder input
 availability is checked at Start, before engine creation. Drawing needs an
 actual image; synthetic warm-up images are never published. Images are temporary
 canvas content, not independent persisted
@@ -736,13 +736,39 @@ frame are still image evidence: enabled Size/Color can report missing-body/unusa
 color NG with unavailable numeric measurements. Tune has no Occupancy fusion and
 does not reinterpret that result as Production EMPTY or consume historical NG.
 
-**Save and apply** separates three outcomes: atomic file persistence; clean saved
-candidate preparation/installation; activation on a later successful Start. Failure
-after a file save must not be described as a complete rollback or successful
-activation. Recipe saves its Recipe file; Vision saves MachineLayout/source files
-appropriate to its draft; the manifest records successfully applied selection and
-language preferences. Model binaries and source images are never edited by these UIs.
-Dirty navigation/close asks to save/discard/cancel; runtime lifecycle locks editing.
+Recipe **Save** persists only its definition, including incomplete Model references.
+It does not require saved/complete MachineLayout or source drafts, prepare a
+candidate, change `last_applied_recipe_id`, or alter an already prepared candidate.
+Dirty Recipe navigation/close offers Save, Discard or Cancel with these same semantics.
+
+Production's compact saved-Recipe selector prepares the explicitly selected ID
+using its current saved Recipe, MachineLayout, Model and source definitions, off Qt
+dispatch. Its catalog refreshes on page entry and through Refresh. Refresh lists
+incomplete Recipes and reports invalid/ambiguous files without selecting anything
+or replacing the candidate. The selector reflects the installed candidate without
+preparation, including startup restoration and a candidate whose saved file is no
+longer available. Such an unavailable catalog entry cannot be newly selected.
+Refreshing a renamed saved definition does not relabel the prepared candidate.
+The state and optional active/requested identity share the first header row;
+the selector and Refresh occupy the second. Pending preparation identifies the
+request separately while the selector retains the installed candidate. Failure
+keeps that candidate selected and names the failed request in feedback details.
+Recipe editor selection and unsaved drafts remain independent. Reselecting the same ID prepares the latest saved version. While
+preparation is pending, conflicting selections and Start are unavailable. Closing,
+a changed Production generation/candidate or a failed preparation prevents late
+installation; the previous candidate and active configuration remain intact.
+
+Successful candidate installation updates `app.json`'s `last_applied_recipe_id`;
+preference write failures remain visible and do not undo candidate installation.
+Startup can restore the latest saved version of that ID as a stopped candidate,
+with no automatic fallback or Start. Candidate, active and persisted applied IDs
+remain protected from Recipe deletion.
+
+Vision retains **Save and apply**: independent file persistence, clean saved
+candidate preparation/installation, then activation on a later successful Start.
+A failure after file persistence is not a full rollback. Vision saves its
+MachineLayout/source files; Model binaries and source images remain unchanged.
+Runtime lifecycle locks continue to govern editing.
 
 Vision's restore icon beside Save/apply confirms discarding all unsaved source,
 Loop/FPS and machine geometry edits together. It reloads and validates the current

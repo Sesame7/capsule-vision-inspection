@@ -50,7 +50,6 @@ from capsule_vision.ui.style import (
     Style,
     camera_icon,
     indicator_icon,
-    navigation_icon,
     production_icon,
 )
 
@@ -138,7 +137,9 @@ def test_nonblocking_start_polling_commands_and_deferred_close(
         and not window.buttons["operation"].isEnabled()
     )
     page = window.pages.widget(0)
-    assert page is not None and not page.findChildren(QComboBox)
+    assert page is not None
+    assert page.findChildren(QComboBox) == [window.production_recipes.recipes]
+    assert not window.production_recipes.recipes.isEnabled()
     tick = Event()
     QTimer.singleShot(0, tick.set)
     until(tick.is_set)
@@ -362,7 +363,7 @@ def test_current_snapshot_clears_pending_when_running_was_not_observed(
         bridge.timer.stop()
         QApplication.processEvents()
         # Even a new observer needs no historical choices to explain pending content.
-        assert window.pending_label.isVisible()
+        assert window.identity_label.isVisible()
         assert window.snapshot.active_prepared is first
         assert window.snapshot.candidate_prepared is candidate
         states: list[ApplicationState] = []
@@ -375,7 +376,7 @@ def test_current_snapshot_clears_pending_when_running_was_not_observed(
         window.editing.applied.connect(applied.append)
         finish_generation()
         assert (
-            window.pending_label.isVisible()
+            window.identity_label.isVisible()
         )  # The bridge has not observed promotion.
         bridge.refresh()
         assert ApplicationState.RUNNING not in states and states == [
@@ -386,7 +387,7 @@ def test_current_snapshot_clears_pending_when_running_was_not_observed(
             is window.snapshot.candidate_prepared
             is candidate
         )
-        assert not window.pending_label.isVisible() and not applied
+        assert not window.identity_label.isVisible() and not applied
         assert window.snapshot.counters == ProductionCounters()
     finally:
         if window is not None:
@@ -415,7 +416,9 @@ def test_fault_controls_and_operator_message_redaction(
         "reset", window.language
     )
     page = window.pages.widget(0)
-    assert page is not None and not page.findChildren(QComboBox)
+    assert page is not None
+    assert page.findChildren(QComboBox) == [window.production_recipes.recipes]
+    assert not window.production_recipes.recipes.isEnabled()
     assert "private" not in window.event_label.text()
     assert "SDK" not in window.event_label.text()
     window.buttons["secondary"].click()
@@ -532,8 +535,11 @@ def test_demo_uses_real_application_runtime_and_exits(
         assert window.snapshot.counters == ProductionCounters()
         assert window.metrics["cycles"][0].text() == "0"
         assert window.metrics["channel_ng"][0].text() == "0"
-        assert window.identity_label.text() == first.configuration.display_name
-        assert not window.pending_label.isVisible()
+        assert (
+            window.production_recipes.recipes.currentText()
+            == first.configuration.display_name
+        )
+        assert not window.identity_label.isVisible()
         assert (
             window.batch_label.text()
             == f"{text('batch_id', window.language)} LOT-20261009-001"
@@ -572,8 +578,11 @@ def test_demo_uses_real_application_runtime_and_exits(
         )
         snapshot = window.snapshot
         assert snapshot.active == snapshot.candidate == active_a
-        assert window.identity_label.text() == first.configuration.display_name
-        assert not window.pending_label.isVisible()
+        assert (
+            window.production_recipes.recipes.currentText()
+            == first.configuration.display_name
+        )
+        assert not window.identity_label.isVisible()
         if scenario == "fault":
             assert snapshot.state is ApplicationState.FAULT
         else:
@@ -607,11 +616,17 @@ def test_demo_uses_real_application_runtime_and_exits(
                 assert window.snapshot.candidate == candidate_b
                 assert composition.application.snapshot().active == active_a
                 assert window.snapshot.counters == counters
-                assert window.identity_label.text() == first.configuration.display_name
-                assert window.pending_label.isVisible()
                 assert (
-                    window.pending_label.text()
-                    == f"{text('pending_recipe', language)}: {next_recipe.configuration.display_name}"
+                    window.production_recipes.recipes.currentText()
+                    == next_recipe.configuration.display_name
+                )
+                assert window.identity_label.isVisible()
+                assert (
+                    window.identity_label.text().startswith(
+                        text("active_recipe", language)
+                    )
+                    and window.production_recipes.recipes.currentText()
+                    == next_recipe.configuration.display_name
                 )
             bridge.start()
             until(warm_entered.is_set)
@@ -627,10 +642,10 @@ def test_demo_uses_real_application_runtime_and_exits(
                 window.set_language(language)
                 qapp.processEvents()
                 assert (
-                    window.identity_label.text()
+                    window.production_recipes.recipes.currentText()
                     == next_recipe.configuration.display_name
                 )
-                assert not window.pending_label.isVisible()
+                assert not window.identity_label.isVisible()
                 assert window.snapshot.counters == replace(
                     counters, cycles_started=counters.cycles_started + 1
                 )
@@ -813,11 +828,10 @@ def test_active_recipe_name_and_unactivated_replacement(
 ) -> None:
     window, session = screen
     assert window.snapshot.active is None
-    assert (
-        window.identity_label.toolTip()
-        == f"{text('page_recipe', window.language)}: Recipe A"
+    assert window.production_recipes.recipes.toolTip().startswith(
+        f"{text('page_recipe', window.language)}: Recipe A"
     )
-    assert not window.pending_label.isVisible()
+    assert not window.identity_label.isVisible()
     assert window.snapshot.counters == ProductionCounters()
     assert window.snapshot.latest_production_result is None
     session.ready.set_result(None)
@@ -889,20 +903,10 @@ def test_activated_display_name_uses_application_and_available_header_width(
     QApplication.processEvents()
     assert window.snapshot.active_prepared is configured
     window.grab()
-    assert window.identity_label.text() == name, (
-        window.width(),
-        window.identity_group.width(),
-        window.recipe_identity.width(),
-        window.recipe_identity.sizeHint().width(),
-        window.identity_label.width(),
-        window.identity_label.fontMetrics().horizontalAdvance(name),
-        window.operation_group.width(),
-    )
-    assert name in window.identity_label.toolTip()
-    assert (
-        window.identity_label.fontMetrics().horizontalAdvance(name)
-        <= window.identity_label.width()
-    )
+    selector = window.production_recipes.recipes
+    assert selector.currentText() == name
+    assert name in selector.toolTip()
+    assert not window.identity_label.isVisible()
     assert "LOT-20261020-003" in window.batch_label.text()
     assert window.snapshot.counters == ProductionCounters()
     assert window.snapshot.latest_production_result is None
@@ -917,8 +921,9 @@ def test_activated_display_name_uses_application_and_available_header_width(
     window.bridge.application.configure(next_config)
     window.bridge.refresh()
     QApplication.processEvents()
-    assert window.identity_label.text() == name
-    assert "下次启动的新名称" in window.pending_label.toolTip()
+    assert text("active_recipe", language) in window.identity_label.toolTip()
+    assert window.production_recipes.recipes.currentText() == "下次启动的新名称"
+    assert "下次启动的新名称" in window.identity_label.toolTip()
     assert window.snapshot.active_prepared is configured
     assert window.snapshot.candidate_prepared is next_config
     assert window.snapshot.counters == ProductionCounters()
@@ -1114,9 +1119,9 @@ def test_long_recipe_and_batch_keep_pending_activation_visible(
         )
     )
     QApplication.processEvents()
-    assert window.pending_label.isVisible()
-    assert text("pending_recipe", language) in window.pending_label.text()
-    assert "Long Recipe" in window.pending_label.toolTip()
+    assert window.identity_label.isVisible()
+    assert text("active_recipe", language) in window.identity_label.text()
+    assert "Long Recipe" in window.identity_label.toolTip()
     assert window.batch_label.toolTip().endswith("long-batch-id-" * 12)
     assert "Recipe A" in window.identity_label.toolTip()
     assert not window.buttons["batch"].text()
@@ -1191,6 +1196,7 @@ def test_recipe_summary_candidate_active_and_unconfigured(
         (None, a, "Recipe A", False),
         (a, a, "Recipe A", False),
         (a, b, "Recipe A", True),
+        (a, None, "Recipe A", True),
         (None, None, "--", False),
     ):
         window.bridge.snapshot_changed.emit(
@@ -1205,21 +1211,23 @@ def test_recipe_summary_candidate_active_and_unconfigured(
             )
         )
         QApplication.processEvents()
-        assert window.identity_label.text() == name
-        assert window.identity_label.accessibleName().startswith(
-            f"{text('page_recipe', language)}: {name}"
+        selector = window.production_recipes.recipes
+        assert selector.currentText() == (
+            candidate.configuration.display_name if candidate else ""
         )
         assert (
-            window.recipe_icon.pixmap().toImage()
-            == navigation_icon(1).pixmap(Style.icon, Style.icon).toImage()
+            name in selector.toolTip()
+            if active or candidate
+            else selector.currentIndex() == -1
         )
-        assert window.recipe_icon.toolTip() == window.identity_label.toolTip()
-        assert window.pending_label.isVisible() == pending
+        assert selector.accessibleName().startswith(
+            text("select_saved_recipe", language)
+        )
+        assert window.identity_label.isVisible() == pending
         if pending:
-            assert (
-                window.pending_label.text()
-                == f"{text('pending_recipe', language)}: Recipe B"
-            )
+            assert window.identity_label.text().startswith(
+                text("active_recipe", language)
+            ) and selector.currentText() == ("Recipe B" if candidate else "")
         else:
             assert (
                 text("pending_recipe", language) not in window.identity_label.toolTip()
@@ -1252,7 +1260,6 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
     for label in (
         window.state_label,
         window.identity_label,
-        window.pending_label,
         window.batch_label,
     ):
         label.setStyleSheet(f"font-size: {font_pixels}px;")
@@ -1310,8 +1317,8 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
                         < identity.geometry().left()
                     )
                     assert identity.geometry().right() < operation.geometry().left()
-                assert not window.pending_label.isVisible()
-                assert window.identity_label.toolTip() == (
+                assert not window.identity_label.isVisible()
+                assert window.production_recipes.recipes.toolTip().startswith(
                     f"{text('page_recipe', language)}: {current_name}"
                 )
                 assert (
@@ -1332,28 +1339,28 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
         operation_left = window.buttons["operation"].mapTo(window.summary, QPoint()).x()
         assert batch_right + Style.space <= identity_left
         assert identity_right + Style.space <= operation_left
-        assert window.pending_label.text().startswith(text("pending_recipe", language))
+        assert window.identity_label.text().startswith(text("active_recipe", language))
         assert window.buttons["batch"].size() == QSize(Style.touch, Style.touch)
         for widget in (
             window.state_label,
-            window.recipe_icon,
             window.identity_label,
-            window.pending_label,
+            window.production_recipes,
         ):
-            assert window.identity_group.rect().contains(widget.geometry()), (
-                widget.geometry(),
-                window.identity_group.rect(),
+            start = widget.mapTo(window.identity_group, QPoint())
+            assert window.identity_group.rect().contains(start)
+            assert window.identity_group.rect().contains(
+                start + QPoint(widget.width() - 1, widget.height() - 1)
             )
         assert (
-            window.recipe_identity.geometry().bottom()
-            < window.pending_label.geometry().top()
+            window.identity_heading.geometry().bottom()
+            < window.production_recipes.geometry().top()
         )
         assert window.batch_group.rect().contains(window.batch_label.geometry())
         assert (
             window.buttons["batch"].x()
             == window.batch_label.x() + window.batch_label.width() + Style.small
         )
-        for label in (window.identity_label, window.pending_label, window.batch_label):
+        for label in (window.identity_label, window.batch_label):
             assert (
                 label.fontMetrics().horizontalAdvance(label.text()) <= label.width()
             ), (label.text(), label.width())
@@ -1501,7 +1508,7 @@ def test_concise_lifecycle_text_and_center_identity_fit_summary(
                 not child.pixmap().isNull()
                 for child in window.identity_group.findChildren(QLabel)
             )
-            == 1
+            == 0
         )
         for widget in (
             label,

@@ -54,6 +54,7 @@ from .production_presentation import (
     grid_columns,
     production_actions,
 )
+from .production_recipes import ProductionRecipes
 from .recipe_page import ModelLabelReader, RecipePage
 from .shell import PAGES, NavigationBar, StatusBar
 from .style import (
@@ -63,7 +64,6 @@ from .style import (
     button_width,
     camera_icon,
     indicator_icon,
-    navigation_icon,
     production_icon,
     set_button_caption,
     shell_icon,
@@ -174,36 +174,24 @@ class MainWindow(QMainWindow):
         identity_row.setContentsMargins(0, 0, 0, 0)
         identity_row.setSpacing(2)
         self.identity_group.setMinimumHeight(60)
-        header.addWidget(self.identity_group, 0, 1)
+        header.addWidget(self.identity_group, 0, 1, Qt.AlignmentFlag.AlignHCenter)
         self.state_label = QLabel()
         self.state_label.setObjectName("productionState")
         self.state_label.setStyleSheet("font-weight: 600;")
         self.state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        identity_row.addWidget(self.state_label)
-        self.recipe_identity = QWidget()
-        recipe_row = QHBoxLayout(self.recipe_identity)
-        recipe_row.setContentsMargins(0, 0, 0, 0)
-        recipe_row.setSpacing(Style.small)
-        identity_row.addWidget(self.recipe_identity, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.recipe_icon = QLabel()
-        self.recipe_icon.setFixedSize(Style.icon, Style.icon)
-        self.recipe_icon.setPixmap(navigation_icon(1).pixmap(Style.icon, Style.icon))
-        recipe_row.addWidget(self.recipe_icon)
+        self.identity_heading = QWidget()
+        heading_row = QHBoxLayout(self.identity_heading)
+        heading_row.setContentsMargins(0, 0, 0, 0)
+        heading_row.setSpacing(Style.small)
+        heading_row.addWidget(self.state_label)
         self.identity_label = QLabel()
         self.identity_label.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
-        )
-        self.identity_label.setMinimumWidth(2 * Style.touch)
-        self.identity_label.setTextFormat(Qt.TextFormat.PlainText)
-        recipe_row.addWidget(self.identity_label, 1)
-        self.pending_label = QLabel()
-        self.pending_label.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
-        self.pending_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.pending_label.setProperty("role", "secondary")
-        self.pending_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        identity_row.addWidget(self.pending_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.identity_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.identity_label.setProperty("role", "secondary")
+        heading_row.addWidget(self.identity_label, 1)
+        identity_row.addWidget(self.identity_heading)
         self.batch_group = QFrame()
         self.batch_group.setObjectName("batchBadge")
         batch_row = QHBoxLayout(self.batch_group)
@@ -318,6 +306,11 @@ class MainWindow(QMainWindow):
             configuration_messages=configuration_messages,
             configuration_details=configuration_issue,
         )
+        self.production_recipes = ProductionRecipes(self.editing)
+        identity_row.addWidget(
+            self.production_recipes, 0, Qt.AlignmentFlag.AlignHCenter
+        )
+        self.production_recipes.feedback_changed.connect(self._render)
         self.editing.applied.connect(self._recipe_applied)
         self.recipe_page.setup_changed.connect(self._render)
         self.editing.changed.connect(self._refresh_vision)
@@ -479,6 +472,8 @@ class MainWindow(QMainWindow):
             self.open_vision()
         if index == 3:
             self.history.activate()
+        if index == 0:
+            self.production_recipes.reload()
         self.pages.setCurrentIndex(index)
         self.navigation[index].setFocus(Qt.FocusReason.OtherFocusReason)
         self._refresh_theme_icons()
@@ -540,6 +535,8 @@ class MainWindow(QMainWindow):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        self.production_recipes.language = language
+        self.production_recipes.refresh_state()
         self.recipe_page.set_language(language)
         if self.vision_workspace is not None:
             self.vision_workspace.set_language(language)
@@ -912,6 +909,7 @@ class MainWindow(QMainWindow):
             )
 
     def _render(self) -> None:
+        self.production_recipes.refresh_state()
         colors = theme_colors(self)
         self.navbar.present(self.language, self.theme, self.pages.currentIndex())
         snapshot, language = self.snapshot, self.language
@@ -1038,6 +1036,11 @@ class MainWindow(QMainWindow):
             and snapshot.state is ApplicationState.UNCONFIGURED
             else ""
         )
+        production_feedback = (
+            self.production_recipes.feedback if self.pages.currentIndex() == 0 else None
+        )
+        if production_feedback and not (warning or fault or self._closing):
+            message = text(production_feedback[0], language)
         if self._source_issue and event_key == "command_error":
             camera, exception_type = self._source_issue
             message = " · ".join(
@@ -1045,7 +1048,9 @@ class MainWindow(QMainWindow):
                 for part in (camera, text("source_error", language), exception_type)
                 if part
             )
-        if self.configuration_issue and not (warning or fault or self._closing):
+        if self.configuration_issue and not (
+            warning or fault or self._closing or production_feedback
+        ):
             message = (
                 " · ".join(text(key, language) for key in self.configuration_messages)
                 if self.configuration_messages
@@ -1068,6 +1073,8 @@ class MainWindow(QMainWindow):
             if self.configuration_messages and not (warning or fault or self._closing)
             else ""
         )
+        if production_feedback and not (warning or fault or self._closing):
+            detail = production_feedback[1]
         if (
             archive is not None
             and archive.last_issue
@@ -1345,22 +1352,10 @@ class MainWindow(QMainWindow):
 
     def _update_identity(self) -> None:
         snapshot, language = self.snapshot, self.language
-        active, candidate = snapshot.active_prepared, snapshot.candidate_prepared
-        active_name = active.configuration.display_name if active else "--"
-        candidate_name = candidate.configuration.display_name if candidate else "--"
-        display_name = active_name if active else candidate_name
-        recipe_label = f"{text('page_recipe', language)}: {display_name}"
-        label = recipe_label
-        pending = snapshot.has_pending_configuration
-        pending_text = f"{text('pending_recipe', language)}: {candidate_name}"
-        if pending:
-            label += f" · {pending_text}"
-        self.pending_label.setVisible(pending)
-        self.pending_label.setMinimumWidth(
-            self.pending_label.fontMetrics().horizontalAdvance(
-                f"{text('pending_recipe', language)}: …"
-            )
-        )
+        inline, details = self.production_recipes.present(snapshot)
+        self.identity_label.setVisible(bool(inline))
+        self.identity_label.setToolTip(details)
+        self.identity_label.setAccessibleName(details)
         batch = f"{text('batch_id', language)} {snapshot.batch_id or '—'}"
         self.batch_label.ensurePolished()
         batch_padding = 16 + 2 * self.batch_group.frameWidth()
@@ -1387,6 +1382,15 @@ class MainWindow(QMainWindow):
             for lang in ("zh", "en", self.language)
         )
         self.state_label.setMinimumWidth(state_width)
+        # Reserve one line across fallback fonts, keeping the player vertically stable.
+        self.identity_heading.setFixedHeight(
+            max(
+                Style.icon + Style.small,
+                self.state_label.fontMetrics().height(),
+                self.identity_label.fontMetrics().height(),
+            )
+            + 2
+        )
         side_width = self.operation_group.width()
         self.summary_header.setColumnMinimumWidth(2, side_width)
         batch_fixed = (
@@ -1394,19 +1398,6 @@ class MainWindow(QMainWindow):
             + self.batch_icon.width()
             + batch_padding
             + 2 * Style.small
-        )
-        main_width = max(
-            self.identity_label.minimumWidth(),
-            ceil(
-                QFontMetricsF(self.identity_label.font()).horizontalAdvance(
-                    display_name
-                )
-            )
-            + 2,
-        )
-        self.identity_label.setMaximumWidth(main_width)
-        self.recipe_identity.setMaximumWidth(
-            self.recipe_icon.width() + Style.small + main_width
         )
         # Balance the outer columns when space permits, with a preferred spacer
         # that can shrink instead of retaining a wide window's minimum width.
@@ -1417,12 +1408,26 @@ class MainWindow(QMainWindow):
             - margins.right()
             - 2 * self.summary_header.horizontalSpacing()
         )
+        natural_batch_width = max(
+            ceil(
+                QFontMetricsF(self.batch_label.font()).horizontalAdvance(
+                    f"{text('batch_id', lang)} {snapshot.batch_id or '—'}"
+                )
+            )
+            for lang in ("zh", "en", self.language)
+        )
+        batch_reservation = min(side_width, batch_fixed + natural_batch_width)
         identity_width = max(
-            state_width,
-            self.recipe_identity.maximumWidth(),
-            self.pending_label.fontMetrics().horizontalAdvance(pending_text)
-            if pending
-            else 0,
+            state_width
+            + Style.small
+            + self.identity_label.fontMetrics().horizontalAdvance(
+                f"{text('active_recipe', language)}: …"
+            ),
+            self.production_recipes.minimumSizeHint().width(),
+            min(
+                self.production_recipes.sizeHint().width(),
+                header_width - side_width - batch_reservation,
+            ),
         )
         # Borrow unused Batch reservation before shortening the active/pending name.
         # Arbitrary Batch IDs retain their full identity in the existing tooltip.
@@ -1451,19 +1456,10 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Minimum,
         )
         self.summary_header.invalidate()
-        self.pending_label.setMaximumWidth(
-            max(
-                self.pending_label.minimumWidth(),
-                self.pending_label.fontMetrics().horizontalAdvance(pending_text),
-            )
-        )
-        # Let the center column shrink without retaining widths from a larger window.
-        self.identity_label.setText(display_name)
-        self.pending_label.setText(pending_text)
-        self.recipe_identity.updateGeometry()
         self.identity_group.updateGeometry()
         self.summary_header.activate()
-        for group in (self.batch_group, self.identity_group, self.recipe_identity):
+        self.identity_group.setMaximumWidth(max(290, state_width))
+        for group in (self.batch_group, self.identity_group, self.identity_heading):
             layout = group.layout()
             if layout is not None:
                 layout.activate()
@@ -1478,21 +1474,7 @@ class MainWindow(QMainWindow):
         self.setMinimumWidth(max(Style.minimum[0], self.minimumSizeHint().width()))
         self.identity_label.setText(
             self.identity_label.fontMetrics().elidedText(
-                display_name, Qt.TextElideMode.ElideRight, self.identity_label.width()
-            )
-        )
-        self.pending_label.setText(
-            self.pending_label.fontMetrics().elidedText(
-                pending_text, Qt.TextElideMode.ElideRight, self.pending_label.width()
-            )
-        )
-        self.pending_label.setToolTip(label)
-        self.pending_label.setAccessibleName(label)
-        self.identity_label.setToolTip(label)
-        self.identity_label.setAccessibleName(label)
-        self.recipe_icon.setPixmap(
-            navigation_icon(1, theme_colors(self).secondary).pixmap(
-                Style.icon, Style.icon
+                inline, Qt.TextElideMode.ElideRight, self.identity_label.width()
             )
         )
         self.buttons["batch"].setIcon(
@@ -1503,8 +1485,6 @@ class MainWindow(QMainWindow):
                 Style.icon, Style.icon
             )
         )
-        self.recipe_icon.setToolTip(label)
-        self.recipe_icon.setAccessibleName(text("page_recipe", language))
         self.batch_label.setText(
             self.batch_label.fontMetrics().elidedText(
                 batch, Qt.TextElideMode.ElideRight, self.batch_label.width()
@@ -1523,7 +1503,7 @@ class MainWindow(QMainWindow):
         if event.type() is QEvent.Type.Resize and watched in (
             self.summary,
             self.identity_label,
-            self.pending_label,
+            self.production_recipes,
             self.batch_label,
         ):
             self._render_identity()

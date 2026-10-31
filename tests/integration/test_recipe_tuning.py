@@ -554,12 +554,12 @@ def test_cached_judgment_and_isolation_and_save(
     expected = session.draft.capsule
     collapse(preview, configured_screen)
     assert window.recipe_page.preview is None
-    window.recipe_page.save_and_apply()
+    window.recipe_page.save()
     until(lambda: not window.recipe_page.busy)
     assert session.entry and load_recipe(session.entry.path).capsule == expected
     candidate = window.bridge.application.snapshot().candidate_prepared
     assert candidate is not None
-    assert candidate.configuration.capsule == expected
+    assert candidate == before.candidate_prepared
     assert not runtimes and window.bridge.application.snapshot().active is before.active
 
 

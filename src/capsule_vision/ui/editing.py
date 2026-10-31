@@ -149,6 +149,44 @@ class EditingCoordinator(QObject):
 
         self.run_io(lambda: session.prepare(recipe), prepared, name="RecipePreparation")
 
+    def select_saved(
+        self, recipe_id: str, completed: Callable[[BaseException | None], None]
+    ) -> None:
+        """Production selection is independent of Recipe selection and dirty drafts."""
+        if not self.editable() or self.session is None:
+            completed(ConfigurationError("Production selection is unavailable"))
+            return
+        preparation = self.session.production_preparation()
+        before = self.bridge.application.snapshot()
+
+        def prepared(value: object, error: BaseException | None) -> None:
+            try:
+                if error is not None:
+                    raise ConfigurationError(str(error)) from error
+                current = self.bridge.application.snapshot()
+                if (
+                    self.closing
+                    or current.state
+                    not in (ApplicationState.UNCONFIGURED, ApplicationState.READY)
+                    or current.generation != before.generation
+                    or current.candidate_prepared is not before.candidate_prepared
+                ):
+                    raise ConfigurationError("Production changed during preparation")
+                if not isinstance(value, PreparedConfiguration):
+                    raise ConfigurationError("Missing prepared configuration")
+                self.bridge.application.configure(value)
+                self.applied.emit(value)
+                self.bridge.refresh()
+            except Exception as exc:
+                completed(exc)
+            else:
+                completed(None)
+
+        if not self.run_model_io(
+            lambda: preparation.prepare_saved(recipe_id), prepared
+        ):
+            completed(ConfigurationError("Production selection is unavailable"))
+
     @Slot(str, object, object)
     def _delivered(self, token: str, value: object, error: object) -> None:
         if self.busy and token == str(self._request):

@@ -34,6 +34,16 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
+from capsule_vision.ui.main_window import MainWindow
+
+
+def select_saved(window: MainWindow) -> None:
+    session = window.editing.session
+    assert session is not None and session.entry is not None
+    window.production_recipes.reload()
+    window.production_recipes.select(
+        window.production_recipes.recipes.findData(session.entry.recipe.recipe_id)
+    )
 
 
 def test_absent_data_opens_five_page_unconfigured_shell(
@@ -124,7 +134,7 @@ def test_saved_apply_language_restart_and_no_production_side_effects(
         assert startup.editor is not None
         startup.editor.save()  # Save alone must not change restored selection.
         assert load_preferences(data.preferences).last_applied_recipe_id == "local"
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(
             lambda: (
                 load_preferences(data.preferences).last_applied_recipe_id == "second"
@@ -179,7 +189,7 @@ def test_unchanged_apply_still_notifies_and_persists_preferences(
         window.editing.applied.connect(applied.append)
         window.bridge.snapshot_changed.connect(snapshots.append)
         monkeypatch.setattr("capsule_vision.ui.bootstrap.save_preferences", persist)
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(lambda: bool(applied) and not window.editing.busy)
         assert startup.application.snapshot() == before
         assert not snapshots
@@ -210,10 +220,11 @@ def test_failed_preparation_never_updates_last_recipe(
         (data.models / "general" / "model.vimosln").write_bytes(
             b"changed after startup"
         )
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(
             lambda: (
-                not window.recipe_page.busy and bool(window.recipe_page.status.text())
+                not window.recipe_page.busy
+                and window.production_recipes.feedback is not None
             )
         )
         assert load_preferences(data.preferences).last_applied_recipe_id == "local"
@@ -243,7 +254,7 @@ def test_no_recipe_fallback_in_widget_and_explicit_selection_can_apply(
         assert window.recipe_page.recipes.currentIndex() == -1
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
         window.recipe_page.recipes.activated.emit(0)
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(
             lambda: load_preferences(data.preferences).last_applied_recipe_id == "local"
         )
@@ -282,7 +293,7 @@ def test_unavailable_folder_is_ready_but_start_preflight_prevents_inference(
         assert window.vision_workspace is not None
         until(lambda: not window.recipe_page.busy)
         assert window.recipe_page.editable()
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(lambda: not window.recipe_page.busy)
         with pytest.raises(ApplicationError, match="missing") as failure:
             startup.application.start().result(WAIT)
@@ -329,12 +340,12 @@ def test_unreliable_preferences_are_never_overwritten_by_ui(
         assert data.preferences.read_bytes() == original
         assert "ConfigurationError" in window.event_label.toolTip()
         if kind in ("invalid_language", "external_change"):
-            window.recipe_page.save_and_apply()
+            select_saved(window)
             until(lambda: not window.recipe_page.busy)
             assert startup.application.snapshot().state is ApplicationState.READY
             assert data.preferences.read_bytes() == original
         else:
-            assert not window.recipe_page.buttons["save_apply"].isEnabled()
+            assert not window.recipe_page.buttons["save"].isEnabled()
             assert not window.buttons["operation"].isEnabled()
             assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
     finally:
@@ -366,10 +377,11 @@ def test_startup_feedback_is_localized_with_details_only_in_tooltip(
         assert window.vision_workspace is not None
         assert startup.editor is not None and startup.editor.camera_sources is not None
         assert not startup.editor.camera_sources.persisted
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(lambda: not window.recipe_page.busy)
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
-        assert "Unknown fields" in window.recipe_page.status.toolTip()
+        assert window.production_recipes.feedback is not None
+        assert "Unknown fields" in window.production_recipes.feedback[1]
         assert data.sources.read_text(encoding="utf-8") == '{"cameras":{}}'
     finally:
         close_window(window)
@@ -386,7 +398,7 @@ def test_bad_unrelated_recipe_is_visible_without_blocking_valid_apply(
     window = create_window(startup, delivery)
     try:
         assert startup.editor is not None and startup.editor.entry is not None
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(lambda: not window.recipe_page.busy)
         assert startup.application.snapshot().state is ApplicationState.READY
         assert "broken.json" in window.recipe_page.status.toolTip()
@@ -472,7 +484,7 @@ def test_source_browsing_and_recipe_apply_do_not_rewrite(
         until(lambda: not window.recipe_page.busy)
         assert data.sources.read_bytes() == original
         window.navigate(1)
-        window.recipe_page.save_and_apply()
+        select_saved(window)
         until(lambda: not window.recipe_page.busy)
         assert data.sources.read_bytes() == original
         assert startup.application.snapshot().counters == ProductionCounters()

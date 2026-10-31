@@ -2098,7 +2098,10 @@ def test_vision_feedback_is_page_scoped_and_cannot_hide_application_fault(
     try:
         window.pages.setCurrentIndex(0)
         window.recipe_page.setup_changed.emit()
-        assert not window.event_label.text()
+        assert window.event_label.accessibleName() != text(
+            "roi_geometry_error", window.language
+        )
+        assert "rejected" not in window.event_label.toolTip()
         window.pages.setCurrentIndex(4)
         window.snapshot = replace(original, state=ApplicationState.FAULT)
         window.recipe_page.setup_changed.emit()

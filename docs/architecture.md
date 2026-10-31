@@ -8,8 +8,8 @@ describe responsibilities, not a framework that must be expanded for future work
 An unconfigured normal window retains the same deferred session factory,
 Application, Qt bridge and display store as a configured window. Vision can save
 source definitions independently and initialize new ROI drafts only from actual
-dimensions. A complete saved layout and explicit Recipe Prepare/Apply make that
-existing composition usable without restarting. No source or engine starts on
+dimensions. A complete saved layout and explicit Production Recipe selection
+make that existing composition usable without restarting. No source or engine starts on
 Save; display camera identities are installed on candidate configuration.
 
 ```text
@@ -57,6 +57,10 @@ rounding/bounds live in Configuration, while gestures and image transforms remai
 in Qt presentation. `application/editing.py` coordinates Recipe selection, Save,
 Delete, resolution and preparation without importing UI. Qt dispatches explicit
 actions and queued completions; candidate installation and Start remain separate.
+Recipe Save only persists the editor definition. Production selects a saved Recipe
+independently, resolving current saved dependencies on the existing bounded IO
+worker. It never reads or replaces the editor draft. The saved definition, stopped
+candidate and active session are distinct; only successful Start promotes a candidate.
 
 Production composition is Qt-independent: `application/startup.py` owns entry-relative
 paths, persisted loading/validation and service assembly; `composition.py` builds
@@ -75,8 +79,9 @@ RUNNING cards use active configuration; other states use candidate where availab
 A saved startup layout remains the initial fallback when no Recipe is selected.
 Qt bootstrap creates windows and queued source/preference notifications, binds the
 observer, and retains the existing event-loop/Close wiring. Explicit successful
-Apply still delivers its prepared value for preference persistence and feedback,
-including when reapplying unchanged contents produces no snapshot change.
+candidate installation still delivers its prepared value for preference persistence
+and feedback,
+including when reselecting unchanged contents produces no snapshot change.
 
 The equipment-free UI demo seeds ordinary isolated definitions and fixed image
 files, then reuses this explicit-path composition. It supplies fake inference,
@@ -475,8 +480,17 @@ size constraints or the image canvas coordinate system.
 
 Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
 Each role reserves a shaped-text budget across the supported languages; switching
-languages or action states does not move its slot. Header space after Batch can
-shrink to retain the active/pending Recipe identity. Save/apply actions reserve
+languages or action states does not move its slot. The Production header has two
+rows: state with conditional inline active/requested identity, then the saved-Recipe
+selector and Refresh. The selector shows the installed candidate, including startup
+restoration; synchronization never prepares. During preparation it retains that
+candidate while the first row identifies the request. Divergent active identity
+and full candidate/request details remain available inline and in accessible
+names/tooltips. Refresh never relabels a prepared definition from newer saved data.
+The selector prefers 170 logical pixels; long names elide only in its closed label,
+with full text retained in the model, tooltips and accessibility.
+Header space after Batch and selector width can shrink while preserving the player
+slots and common Batch IDs. Save/apply actions reserve
 localized group budgets, borrowing flexible feedback/summary space. Conventional
 utilities use touch-sized icons with full localized tooltips/accessibility:
 History paging/refresh, Recipe color sampling, Vision numeric ROI Apply, and

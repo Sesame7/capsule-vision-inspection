@@ -256,7 +256,9 @@ def test_setup_apply_and_start_keep_the_same_owners(
     page.recipes.setCurrentIndex(0)
     page.recipes.activated.emit(0)
     until(lambda: not page.labels_loading)
-    page.buttons["save_apply"].click()
+    page.buttons["save"].click()
+    window.navigate(0)
+    window.production_recipes.select(0)
     until(lambda: not page.busy and app.snapshot().state is ApplicationState.READY)
     assert (
         bridge is window.bridge
@@ -437,7 +439,9 @@ def test_empty_gui_import_create_recipe_and_folder_start_without_json_edits(
     page.model.activated.emit(index)
     until(lambda: bool(page.label_checks) and not page.labels_loading)
     assert set(page.label_checks) == {"defect"}
-    page.buttons["save_apply"].click()
+    page.buttons["save"].click()
+    window.navigate(0)
+    window.production_recipes.select(0)
     until(
         lambda: (
             not page.busy

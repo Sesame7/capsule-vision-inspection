@@ -217,7 +217,7 @@ def test_archive_responsive_groups_label_hit_targets_and_locks(
     page.summary_scroll.ensureWidgetVisible(page.archive_directory)
     QApplication.processEvents()
     assert_inside(page.archive_directory, page)
-    assert_inside(page.buttons["save_apply"], page)
+    assert_inside(page.buttons["save"], page)
     page.summary_scroll.setMaximumHeight(previous_max)
     QApplication.processEvents()
     assert page.summary_scroll.verticalScrollBar().maximum() == 0
@@ -412,7 +412,7 @@ def test_compact_recipe_layout(
         "delete_recipe",
         "reload",
         "recipe_discard",
-        "save_apply",
+        "save",
         "cache_prepare",
         "archive_browse",
         "archive_open",
@@ -463,9 +463,7 @@ def test_compact_recipe_layout(
     name, product = page.metadata.values()
     assert abs(name.width() - product.width()) <= 1
     assert page.model.width() > page.width() // 2
-    assert (
-        page.buttons["save_apply"].geometry().right() >= page.width() - 2 * Style.space
-    )
+    assert page.buttons["save"].geometry().right() >= page.width() - 2 * Style.space
     before = window.bridge.application.snapshot()
     page.expand_tuning["size"].click()
     preview = page.preview
@@ -517,15 +515,13 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
     before = window.bridge.application.snapshot()
     draft = session.draft.to_recipe()
     fields = tuple(spin.geometry() for spin in preview.spins.values())
-    save = page.buttons["save_apply"]
+    save = page.buttons["save"]
     save_size = save.size()
     assert (
         save.width()
         <= ceil(
             max(
-                QFontMetricsF(save.font()).horizontalAdvance(
-                    text("save_apply", language)
-                )
+                QFontMetricsF(save.font()).horizontalAdvance(text("save", language))
                 for language in LANGUAGES
             )
         )
@@ -535,8 +531,8 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         window.set_language(language)
         QApplication.processEvents()
         assert save.size() == save_size
-        assert_full_caption(save, text("save_apply", language))
-        assert save.accessibleName() == save.toolTip() == text("save_apply", language)
+        assert_full_caption(save, text("save", language))
+        assert save.accessibleName() == save.toolTip() == text("save", language)
         for key, compact in (
             ("display_name", "short_name"),
             ("product_code", "short_code"),
@@ -630,21 +626,21 @@ def test_metadata_model_and_shared_policy_preserved(
     original = session.entry.recipe
     edit(page.metadata["display_name"], "新产品")
     edit(page.metadata["product_code"], "SKU-中文")
-    page.buttons["save_apply"].click()
+    page.buttons["save"].click()
     until(lambda: not page.busy)
     saved = load_recipe(session.entry.path)
     assert saved == replace(original, display_name="新产品", product_code="SKU-中文")
     assert window.bridge.application.snapshot().active is None
     candidate = window.bridge.application.snapshot().candidate_prepared
     assert candidate is not None
-    assert candidate.configuration.recipe_id == original.recipe_id
+    assert candidate.configuration.recipe_id == "product-a"
     # Model IDs survive unrelated edits; selection uses the exact registry identity.
     default_index = 1 + next(
         i for i, m in enumerate(session.registry.models) if m.model_id == "general"
     )
     page.model.setCurrentIndex(default_index)
     page.model.activated.emit(default_index)
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
     assert load_recipe(session.entry.path).model_id == "general"
     index = next(
@@ -739,7 +735,7 @@ def test_default_model_labels_edit_only_defaults_and_persist(
     assert resolved.checks.vimo == result.defaults.vimo
     assert resolved.checks.vimo.disabled_labels == expected
     assert resolved.checks.vimo.required is False
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
     saved = load_recipe(session.entry.path)
     assert saved == result
@@ -951,7 +947,7 @@ def test_inline_labels_wrap_and_cards_follow_content(
     window.navigate(1)
     until(lambda: not page.labels_loading)
     until(lambda: page.summary_scroll.verticalScrollBar().maximum() > 0)
-    assert_inside(page.buttons["save_apply"], page)
+    assert_inside(page.buttons["save"], page)
     for language in ("zh", "en"):
         window.set_language(language)
         QApplication.processEvents()
@@ -1016,12 +1012,16 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     assert session.entry is not None
     original = session.entry.recipe
     edit(page.metadata["display_name"], "Updated")
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
     assert load_recipe(session.entry.path).display_name == "Updated"
     assert app.snapshot().active is None
     assert "next successful Start" in text("roi_applied", "en")
-    assert page.status.text() == text("roi_applied", page.language)
+    assert page.status.text() == text("saved", page.language)
+    window.production_recipes.select(
+        window.production_recipes.recipes.findData(original.recipe_id)
+    )
+    until(lambda: not window.editing.busy)
     model_identity = page.model.toolTip()
     window.bridge.start()
     until(lambda: len(runtimes) == 1)
@@ -1034,10 +1034,10 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     assert all(not check.isEnabled() for check in page.label_checks.values())
     active = app.snapshot().active
     assert active is not None and active.recipe_id == original.recipe_id
-    assert not page.buttons["save_apply"].isEnabled()
+    assert not page.buttons["save"].isEnabled()
     assert page.recipes.isEnabled() and not page.metadata["display_name"].isEnabled()
     before = session.draft.to_recipe()
-    page.save_and_apply()
+    page.save()
     assert session.draft.to_recipe() == before
     window.bridge.stop()
     until(lambda: app.snapshot().state is ApplicationState.READY)
@@ -1239,7 +1239,7 @@ def test_new_duplicate_dialog_and_save(
     assert (
         len(session.catalog.discover().entries) == 2
     )  # Draft only until Save and apply.
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
     assert session.entry is not None and load_recipe(session.entry.path) == expected
     assert load_recipe(original.path) == original.recipe
@@ -1329,9 +1329,17 @@ def test_async_preparation_close_wait_and_no_late_apply(
         assert release.wait(5)
         return prepare(recipe)
 
-    monkeypatch.setattr(session, "prepare", held)
+    assert session.entry is not None
+    saved_recipe = session.entry.recipe
+
+    def held_saved(_self: object, _id: str) -> PreparedConfiguration:
+        return held(saved_recipe)
+
+    monkeypatch.setattr(type(session), "prepare_saved", held_saved)
     try:
-        page.save_and_apply()
+        window.production_recipes.select(
+            window.production_recipes.recipes.findData("product-a")
+        )
         until(entered.is_set)
         QTimer.singleShot(0, heartbeat.set)
         until(heartbeat.is_set)
@@ -1360,10 +1368,11 @@ def test_retired_policy_fields_do_not_replace_candidate_or_saved_recipe(
         )
         external = session.entry.path.read_bytes()
         page = window.recipe_page
-        page.save_and_apply()
+        page.save()
         until(lambda: not page.busy)
-        assert field in page.status.toolTip()
-        assert page.status.text() == text("recipe_error", page.language)
+        window.navigate(0)
+        assert field in window.event_label.toolTip()
+        assert window.production_recipes.feedback is not None
         assert session.entry.path.read_bytes() == external
         assert session.draft.to_recipe() == draft
         assert window.bridge.application.snapshot() == before and not runtimes
@@ -1380,10 +1389,15 @@ def test_prepare_failure_preserves_saved_edits_but_not_promoted(
     assert session.entry is not None
     Path(session.registry.get("general").model_path).write_bytes(b"wrong SHA")
     edit(page.metadata["display_name"], "Saved before preparation")
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
-    assert page.status.text() == text("model_prepare_error", page.language)
-    assert "SHA-256" in page.status.toolTip()
+    assert page.status.text() == text("saved", page.language)
+    window.production_recipes.select(
+        window.production_recipes.recipes.findData("product-a")
+    )
+    until(lambda: not window.editing.busy)
+    assert window.production_recipes.feedback is not None
+    assert "SHA-256" in window.production_recipes.feedback[1]
     assert window.bridge.application.snapshot() == before and not runtimes
     assert (
         not session.dirty
@@ -1416,7 +1430,7 @@ def test_locked_state_mapping(
         assert all(
             not page.buttons[k].isEnabled()
             for k in (
-                "save_apply",
+                "save",
                 "new_recipe",
                 "duplicate_recipe",
                 "recipe_discard",
@@ -1442,9 +1456,9 @@ def test_unknown_model_preserved_on_unrelated_edit(configured_screen: Screen) ->
     assert page.model.currentText() == text("unavailable_model", page.language)
     edit(page.metadata["display_name"], "名称")
     assert session.draft.model_id == "unknown-model"
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
-    assert "unknown-model" in page.status.toolTip() and not session.dirty
+    assert page.status.text() == text("saved", page.language) and not session.dirty
     assert load_recipe(session.entry.path).model_id == "unknown-model"
     assert load_recipe(session.entry.path).display_name == "名称"
     assert window.bridge.application.snapshot() == before
@@ -1461,7 +1475,7 @@ def test_actual_dirty_dialog(
     edit(page.metadata["display_name"], "未保存")
     page.buttons["reload"].click()
     dialog = page.findChildren(QMessageBox)[-1]
-    caption = text("save_apply" if decision == "save" else decision, page.language)
+    caption = text("save" if decision == "save" else decision, page.language)
     next(b for b in dialog.buttons() if b.text() == caption).click()
     until(lambda: not page.busy)
     assert not any(d.isVisible() for d in page.findChildren(QMessageBox))
@@ -1495,11 +1509,11 @@ def test_single_model_and_unrelated_edit_preserve_model_semantics(
     else:
         assert page.model.currentText() == text("unavailable_model", page.language)
     edit(page.metadata["product_code"], "new-code")
-    page.save_and_apply()
+    page.save()
     until(lambda: not page.busy)
     assert load_recipe(session.entry.path) == replace(baseline, product_code="new-code")
     if not explicit:
-        assert "model_id" in page.status.toolTip()
+        assert page.status.text() == text("saved", page.language)
         assert window.bridge.application.snapshot() == before
 
 
@@ -1517,14 +1531,14 @@ def test_save_failure_keeps_draft_file_and_application(
     monkeypatch.setattr(session, "save", fail)
     page = window.recipe_page
     edit(page.metadata["display_name"], "Keep draft")
-    page.save_and_apply()
+    page.save()
     assert page.status.text() == text("recipe_save_error", page.language)
     assert "read-only" in page.status.toolTip() and session.dirty and not page.busy
     assert session.entry.path.read_bytes() == original
     assert window.bridge.application.snapshot() == before
 
 
-def test_failed_preparation_blocks_dirty_switch(
+def test_dirty_save_switch_does_not_require_preparation(
     configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window, session, _ = configured_screen
@@ -1549,8 +1563,7 @@ def test_failed_preparation_blocks_dirty_switch(
     )
     page.recipes.activated.emit(target)
     until(lambda: not page.busy)
-    assert session.entry.path == original.path
+    assert session.entry is not None and session.entry.path != original.path
     assert load_recipe(original.path).display_name == "Persisted"
-    assert page.status.text() == text("recipe_prepare_error", page.language)
-    assert "unavailable" in page.status.toolTip()
+    assert page.status.text() != text("recipe_prepare_error", page.language)
     assert window.bridge.application.snapshot() == before

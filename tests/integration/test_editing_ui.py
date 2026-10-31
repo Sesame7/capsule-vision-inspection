@@ -43,7 +43,7 @@ def test_vision_uses_shared_drafts_and_dispatch_without_recipe_backend_callbacks
     def retired(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("Vision reached through Recipe for backend work")
 
-    monkeypatch.setattr(recipe, "save_and_apply", retired)
+    monkeypatch.setattr(recipe, "save", retired)
     monkeypatch.setattr(recipe, "reload", retired)
     before = window.bridge.application.snapshot()
     old = vision.draft.camera(vision.camera).slots[0].rect

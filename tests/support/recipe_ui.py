@@ -129,3 +129,12 @@ def camera_screen(
     until(lambda: bridge.closed)
     assert composition.application.join(0)
     window.deleteLater()
+
+
+def select_production_recipe(window: MainWindow) -> None:
+    session = window.editing.session
+    assert session is not None and session.entry is not None
+    window.production_recipes.reload()
+    window.production_recipes.select(
+        window.production_recipes.recipes.findData(session.entry.recipe.recipe_id)
+    )

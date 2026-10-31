@@ -4,6 +4,13 @@ from .languages import Language
 from .translations import EXTRA_STRINGS
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "recipe_preparing_short": ("准备", "Prep"),
+    "active_recipe": ("已激活", "Active"),
+    "recipe_dirty_question": (
+        "有未保存修改。保存、放弃修改或取消？",
+        "Unsaved draft. Save, discard changes, or cancel?",
+    ),
+    "select_saved_recipe": ("选择已保存配方", "Select saved Recipe"),
     "plc_modbus_base_required": ("必填", "Required"),
     "plc_modbus_base_hint": (
         "启用 Modbus 上报前必须填写零起始 HR 基址（0–65532）；不使用 FINS 默认值。",

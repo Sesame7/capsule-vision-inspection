@@ -23,8 +23,8 @@ accuracy remain separate commissioning responsibilities.
 
 | Workspace | Purpose |
 | --- | --- |
-| Production | Run inspection and review live results and counters |
-| Recipe | Select a model and configure inspection rules |
+| Production | Select and prepare saved Recipes, run inspection and review results |
+| Recipe | Edit and save Recipe definitions, models and inspection rules |
 | Vision | Configure sources, camera layouts and channel ROIs |
 | Communication | Configure PLC diagnostics, reporting and Web observer |
 | History | Browse terminal Production results and channel observations |
