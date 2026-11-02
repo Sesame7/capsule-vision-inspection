@@ -41,21 +41,28 @@ def assert_process_exited(pid: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "launcher,scenario,web_host",
+    "launcher,scenario,web_host,window_size",
     [
-        ("uv", s, None)
+        ("uv", s, None, None)
         for s in ("unused", "visit", "success", "timeout", "pending", "switch")
     ]
     + [
-        ("direct", "unused", None),
-        ("direct", "unused", "off"),
-        ("direct", "unused", "127.0.0.1"),
-        ("direct", "unused", "0.0.0.0"),
-        ("direct", "unused", "192.0.2.99"),
+        ("direct", "unused", None, None),
+        ("direct", "unused", "off", None),
+        ("direct", "unused", "127.0.0.1", None),
+        ("direct", "unused", "0.0.0.0", None),
+        ("direct", "unused", "192.0.2.99", None),
+        ("uv", "unused", "off", "1080x1920"),
+        ("uv", "unused", "off", "1600x900"),
+        ("installed", "unused", "off", "880x720"),
     ],
 )
 def test_normal_app_native_close_exits_process_tree(
-    tmp_path: Path, launcher: str, scenario: str, web_host: str | None
+    tmp_path: Path,
+    launcher: str,
+    scenario: str,
+    web_host: str | None,
+    window_size: str | None,
 ) -> None:
     (tmp_path / "sitecustomize.py").write_text(
         "from tests.support.app_close_probe import install\ninstall()\n",
@@ -73,8 +80,13 @@ def test_normal_app_native_close_exits_process_tree(
         uv = shutil.which("uv")
         assert uv is not None
         command = [uv, "run", "--no-sync", "python", "app.py"]
+    elif launcher == "installed":
+        command = [str(Path(sys.executable).with_name("capsule-vision.exe"))]
     else:
         command = [str(ROOT / ".venv/Scripts/python.exe"), "app.py"]
+    if window_size is not None:
+        env["APP_CLOSE_WINDOW_SIZE"] = window_size
+        command.extend(["--window-size", window_size])
     web_started = web_host in (None, "127.0.0.1")
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))

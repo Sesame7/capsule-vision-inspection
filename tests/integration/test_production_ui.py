@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QLabel, QWi
 from tests.support.application import WAIT, FakeSession, close, prepared, production
 from tests.support.business import channel, mixed_result
 from tests.support.production import source_frame
-from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
+from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.qt import screen as screen
 
 from capsule_vision.application import (
@@ -43,7 +43,7 @@ from capsule_vision.inspection.production import (
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.camera_card import CameraCard
-from capsule_vision.ui.main_window import MainWindow
+from capsule_vision.ui.main_window import MainWindow, PlayerButton
 from capsule_vision.ui.production_bridge import QtProductionBridge
 from capsule_vision.ui.production_presentation import Indicator
 from capsule_vision.ui.style import (
@@ -540,10 +540,8 @@ def test_demo_uses_real_application_runtime_and_exits(
             == first.configuration.display_name
         )
         assert not window.identity_label.isVisible()
-        assert (
-            window.batch_label.text()
-            == f"{text('batch_id', window.language)} LOT-20261009-001"
-        )
+        assert window.batch_label.text() == "LOT-20261009-001"
+        assert window.batch_caption.text() == text("batch_id", window.language)
         if scenario == "normal":
             settings = composition.editor.draft.capsule
             composition.editor.draft.capsule = replace(
@@ -714,6 +712,13 @@ def test_fixed_player_controls_follow_application_state(
     assert all(
         window.buttons[key].isVisible() for key in ("operation", "pause", "stop")
     )
+    player = tuple(window.buttons[key] for key in ("operation", "pause", "stop"))
+    QApplication.processEvents()
+    assert len({button.size().toTuple() for button in player}) == 1
+    assert player[0].height() == 60
+    assert len({button.y() for button in player}) == 1
+    assert window.buttons["secondary"].isVisible() == (state is ApplicationState.FAULT)
+    assert window.buttons["secondary"].text() == ""
     assert window.buttons["batch"].isEnabled() == (state is ApplicationState.READY)
     assert set(window.metrics) == {
         "cycles",
@@ -1873,10 +1878,19 @@ def _assert_batch_snapshots(
             )
         )
         if batch_id is None or len(batch_id) < 100:
-            assert window.batch_label.text() == full_text
+            assert window.batch_label.text() == (batch_id or "—")
         else:
-            assert window.batch_label.text() != full_text
+            assert window.batch_label.text() != batch_id
             assert "…" in window.batch_label.text()
+        assert window.batch_caption.text() == text("batch_id", language)
+        assert window.batch_caption.geometry().bottom() < window.batch_label.y()
+        assert window.batch_caption.x() == window.batch_label.x()
+        assert window.batch_caption.width() == window.batch_label.width() <= 180
+        assert window.batch_caption.accessibleName() == text("batch_id", language)
+        assert (
+            window.batch_caption.toolTip() == window.batch_group.toolTip() == full_text
+        )
+        assert window.batch_group.accessibleName() == full_text
         assert window.batch_label.toolTip() == full_text
         assert window.batch_label.accessibleName() == full_text
         assert window.batch_label.isEnabled()
@@ -2058,9 +2072,30 @@ def test_multilingual_player_captions_fit_without_moving_camera_layout(
             )
             assert tuple(card.geometry() for card in window.cards) == cameras, language
             for button, key in zip(buttons, keys, strict=True):
-                assert_full_caption(button, text(key, language))
+                assert isinstance(button, PlayerButton)
+                full = text(key, language)
+                assert button.text() == full or (
+                    button.text().endswith("…")
+                    and full.startswith(button.text().removesuffix("…"))
+                )
+                if language in ("zh", "en", "ja", "it"):
+                    assert button.text() == full
+                icon, caption = button.content_rects()
+                assert button.rect().contains(icon) and button.rect().contains(caption)
+                assert icon.bottom() < caption.top()
+                assert (
+                    button.fontMetrics().horizontalAdvance(button.text())
+                    <= caption.width()
+                )
+                assert (
+                    button.fontMetrics().boundingRect(button.text()).height()
+                    <= caption.height()
+                )
                 assert button.accessibleName() == text(key, language)
                 assert button.toolTip() and not button.icon().isNull()
                 assert window.operation_group.rect().contains(button.geometry())
+            assert len({button.size().toTuple() for button in buttons}) == 1
+            assert window.batch_caption.accessibleName() == text("batch_id", language)
+            assert window.batch_caption.geometry().bottom() < window.batch_label.y()
             assert window.summary.rect().contains(window.operation_group.geometry())
     assert window.bridge.application.snapshot() == before and not session.cycles

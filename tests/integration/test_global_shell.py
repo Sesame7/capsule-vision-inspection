@@ -252,7 +252,9 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
     assert ready.state is ApplicationState.READY and window.buttons["batch"].isEnabled()
     timers = set(window.findChildren(QTimer))
     width = window.language_selector.width()
-    navigation = tuple(button.geometry() for button in window.navigation)
+    navigation: dict[Language, tuple[QRect, ...]] = {
+        "zh": tuple(button.geometry() for button in window.navigation)
+    }
     row = window.navbar.layout()
     assert row is not None
     assert window.navigation[0].mapTo(window.navbar, QPoint()).x() == (
@@ -286,8 +288,10 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             assert window.language == language and window.navigation[4].isChecked()
             assert window.pages.currentWidget() is window.vision_page
             assert window.language_selector.width() == width
-            assert (
-                tuple(button.geometry() for button in window.navigation) == navigation
+            assert tuple(
+                button.geometry() for button in window.navigation
+            ) == navigation.setdefault(
+                language, tuple(button.geometry() for button in window.navigation)
             )
             palette = window.recipe_page.metadata["display_name"].palette()
             assert palette.color(
@@ -319,19 +323,11 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
     before = window.bridge.application.snapshot()
     assert before.generation == 1 and before.counters.cycles_completed == 1
     assert not window.buttons["batch"].isEnabled()
-    geometry = tuple(button.geometry() for button in window.navigation)
-    icon_strips = tuple(
-        button.grab()
-        .toImage()
-        .copy(
-            button.content_rects()[0]
-            if window.navbar.compact
-            else QRect(0, 0, Style.icon + Style.small, button.height())
-        )
-        for button in window.navigation
-    )
+    icon_keys = tuple(button.icon().cacheKey() for button in window.navigation)
+    # Language can change navigation mode/height; player roles stay fixed inside
+    # the unchanged Production header as that whole page moves below navigation.
     player_geometry = tuple(
-        QRect(button.mapTo(window, QPoint()), button.size())
+        QRect(button.mapTo(window.summary, QPoint()), button.size())
         for button in (window.buttons[key] for key in ("operation", "pause", "stop"))
     )
     painted: list[str] = []
@@ -356,24 +352,12 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         assert window.language_selector.currentText() == LANGUAGE_NAMES[language]
         assert LANGUAGE_NAMES[language] in window.language_selector.toolTip()
         assert window.width() == size[0], (language, window.minimumSizeHint())
-        widths = [button.width() for button in window.navigation]
-        assert max(widths) - min(widths) <= 1, language
-        assert tuple(button.geometry() for button in window.navigation) == geometry, (
-            language
-        )
+        assert all(button.width() >= Style.touch for button in window.navigation)
+        geometry = tuple(button.geometry() for button in window.navigation)
+        assert geometry == navigation.setdefault(language, geometry), language
         assert (
-            tuple(
-                button.grab()
-                .toImage()
-                .copy(
-                    button.content_rects()[0]
-                    if window.navbar.compact
-                    else QRect(0, 0, Style.icon + Style.small, button.height())
-                )
-                for button in window.navigation
-            )
-            == icon_strips
-        ), language
+            tuple(button.icon().cacheKey() for button in window.navigation) == icon_keys
+        )
         for key, button in zip(
             (
                 "page_production",
@@ -411,7 +395,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             a.geometry().right() < b.geometry().left()
             for a, b in zip(window.navigation[:-1], window.navigation[1:], strict=True)
         )
-        if window.navbar.compact:
+        if window.navbar.mode == "two_row":
             assert (
                 window.navbar.page_row.geometry().bottom() < window.navbar.utilities.y()
             )
@@ -449,7 +433,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             ), language
         assert (
             tuple(
-                QRect(button.mapTo(window, QPoint()), button.size())
+                QRect(button.mapTo(window.summary, QPoint()), button.size())
                 for button in (
                     window.buttons[key] for key in ("operation", "pause", "stop")
                 )
@@ -481,9 +465,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         window.resize(width, height)
         QApplication.processEvents()
         assert window.width() == width
-        widths = [button.width() for button in window.navigation]
-        assert max(widths) - min(widths) <= 1
-        assert window.navbar.compact == (width == 1080)
+        assert all(button.width() >= Style.touch for button in window.navigation)
         assert window.navbar.rect().contains(
             QRect(
                 window.language_selector.mapTo(window.navbar, QPoint()),

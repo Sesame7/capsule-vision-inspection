@@ -123,8 +123,43 @@ def install() -> None:
 
         def exercise() -> None:
             nonlocal peer, simulator
-            assert window.isMaximized()
-            record("window_shown", maximized=window.isMaximized())
+            size = os.environ.get("APP_CLOSE_WINDOW_SIZE")
+            native_client: tuple[int, int] | None = None
+            assert window.isMaximized() == (size is None)
+            if size is not None:
+                width, height = (int(part) for part in size.split("x"))
+                assert (window.width(), window.height()) == (width, height)
+                available = window.screen().availableGeometry()
+                frame = window.frameGeometry()
+                if (
+                    frame.width() <= available.width()
+                    and frame.height() <= available.height()
+                ):
+                    assert available.contains(frame)
+                user = ctypes.WinDLL("user32", use_last_error=True)
+                user.GetClientRect.argtypes = [
+                    wintypes.HWND,
+                    ctypes.POINTER(wintypes.RECT),
+                ]
+                user.GetClientRect.restype = wintypes.BOOL
+                client = wintypes.RECT()
+                assert user.GetClientRect(int(window.winId()), ctypes.byref(client))
+                native_client = (client.right - client.left, client.bottom - client.top)
+                dpr = window.devicePixelRatioF()
+                assert abs(native_client[0] - width * dpr) <= 1
+                assert abs(native_client[1] - height * dpr) <= 1
+                user.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+                user.GetWindowLongW.restype = wintypes.LONG
+                assert user.GetWindowLongW(int(window.winId()), -16) & 0x00010000
+            record(
+                "window_shown",
+                maximized=window.isMaximized(),
+                logical_size=(window.width(), window.height()),
+                frame=window.frameGeometry().getRect(),
+                available=window.screen().availableGeometry().getRect(),
+                dpr=window.devicePixelRatioF(),
+                native_client=native_client,
+            )
             if scenario != "unused":
                 window.navigate(2)
             if scenario in ("success", "timeout", "pending", "switch"):

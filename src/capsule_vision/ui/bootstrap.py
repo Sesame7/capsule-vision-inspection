@@ -1,6 +1,7 @@
 """Persistent real-inference entry composition; disk preparation precedes Qt."""
 
 import argparse
+import re
 import sys
 import traceback
 from collections.abc import Sequence
@@ -8,8 +9,8 @@ from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QLoggingCategory, QObject, Slot
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QLoggingCategory, QObject, QSize, Slot
+from PySide6.QtWidgets import QApplication, QWidget
 
 from capsule_vision.application import PreparedConfiguration
 from capsule_vision.application.startup import (
@@ -33,6 +34,67 @@ from .future_delivery import FutureDelivery
 from .main_window import MainWindow
 from .production_bridge import QtProductionBridge
 from .source_notifications import SourceNotifications
+from .style import Style
+
+
+class _Arguments(argparse.Namespace):
+    window_size: tuple[int, int] | None = None
+
+
+def parse_window_size(value: str) -> tuple[int, int]:
+    match = re.fullmatch(r"([0-9]{1,8})[xX]([0-9]{1,8})", value)
+    if match is None:
+        raise argparse.ArgumentTypeError("expected WIDTHxHEIGHT in Qt logical pixels")
+    width, height = int(match[1]), int(match[2])
+    # QWidget's maximum dimension; reject overflows before creating any owners.
+    if not (
+        Style.minimum[0] <= width <= 16_777_215
+        and Style.minimum[1] <= height <= 16_777_215
+    ):
+        raise argparse.ArgumentTypeError(
+            f"minimum window size is {Style.minimum[0]}x{Style.minimum[1]}; "
+            "each dimension must be at most 16777215 Qt logical pixels"
+        )
+    return width, height
+
+
+def show_sized_window(window: QWidget, size: tuple[int, int]) -> None:
+    requested = QSize(*size)
+    minimum = window.minimumSize()
+    if requested.width() < minimum.width() or requested.height() < minimum.height():
+        raise ValueError(
+            f"requested {size[0]}x{size[1]} is below the current window minimum "
+            f"{minimum.width()}x{minimum.height()} Qt logical pixels"
+        )
+    maximum = window.maximumSize()
+    if requested.width() > maximum.width() or requested.height() > maximum.height():
+        raise ValueError(
+            f"cannot apply requested {size[0]}x{size[1]} Qt logical pixels; "
+            f"current window maximum is {maximum.width()}x{maximum.height()}"
+        )
+    window.resize(requested)
+    window.show()
+    handle = window.windowHandle()
+    native_minimum = handle.minimumSize()
+    # Windows can clamp the native client to desktop limits while QWidget still
+    # reports the requested size. Supply native minimum bounds for this resize
+    # only, preserving QWidget constraints and the native maximize action.
+    try:
+        handle.setMinimumSize(requested)
+        window.resize(requested)
+        if window.size() != requested:
+            raise ValueError(
+                f"cannot apply requested {size[0]}x{size[1]} Qt logical pixels; "
+                f"current window constraints require {window.width()}x{window.height()}"
+            )
+        frame = window.frameGeometry()
+        available = window.screen().availableGeometry()
+        window.move(
+            available.left() + max(0, (available.width() - frame.width()) // 2),
+            available.top() + max(0, (available.height() - frame.height()) // 2),
+        )
+    finally:
+        handle.setMinimumSize(native_minimum)
 
 
 class PreferenceNotifications(QObject):
@@ -120,7 +182,13 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Capsule Vision Inspection with persisted configuration"
     )
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--window-size",
+        type=parse_window_size,
+        metavar="WIDTHxHEIGHT",
+        help="show a normal window with this logical client size (UI validation; not persisted)",
+    )
+    args = parser.parse_args(argv, namespace=_Arguments())
     delivery: FutureDelivery | None = None
 
     def source_finished(future: Future[None]) -> None:
@@ -158,7 +226,13 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                     print(observation.error, file=sys.stderr)
 
             runtime.start(web).add_done_callback(started)
-        window.showMaximized()
+        if args.window_size is None:
+            window.showMaximized()
+        else:
+            try:
+                show_sized_window(window, args.window_size)
+            except ValueError as exc:
+                parser.error(str(exc))
         return qt.exec()
     finally:
         try:

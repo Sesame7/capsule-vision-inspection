@@ -3,8 +3,26 @@
 from collections.abc import Callable
 from math import ceil
 
-from PySide6.QtCore import QEvent, QEventLoop, QObject, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QFont, QFontMetricsF, QResizeEvent
+from PySide6.QtCore import (
+    QEvent,
+    QEventLoop,
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import (
+    QCloseEvent,
+    QFont,
+    QFontMetricsF,
+    QIcon,
+    QPaintEvent,
+    QPalette,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -18,6 +36,9 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpacerItem,
     QStackedWidget,
+    QStyle,
+    QStyleOptionButton,
+    QStylePainter,
     QVBoxLayout,
     QWidget,
 )
@@ -40,7 +61,7 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language, is_language
+from capsule_vision.localization.languages import LANGUAGES, Language, is_language
 from capsule_vision.web.runtime import WebRuntime, WebState
 
 from .camera_card import CameraCard
@@ -62,15 +83,59 @@ from .style import (
     Style,
     Theme,
     apply_theme,
-    button_width,
     camera_icon,
     indicator_icon,
     production_icon,
-    set_button_caption,
     shell_icon,
     theme_colors,
 )
 from .vision_page import VisionPage
+
+
+class PlayerButton(QPushButton):
+    """The existing native action button, with a fixed icon-above-caption drawing."""
+
+    metrics_changed = Signal()
+
+    def content_rects(self) -> tuple[QRect, QRect]:
+        # Leave room for the native focus border in either focus state. Content
+        # stays stationary instead of following stylesheet focus-padding changes.
+        area = self.rect().adjusted(10, 5, -10, -5)
+        icon = QRect(QPoint(), self.iconSize())
+        icon.moveTop(area.top())
+        icon.moveCenter(QPoint(area.center().x(), icon.center().y()))
+        return icon, area.adjusted(0, self.iconSize().height() + 2, 0, 0)
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text, option.icon = "", QIcon()
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+        icon, caption = self.content_rects()
+        painter.drawItemPixmap(
+            icon,
+            Qt.AlignmentFlag.AlignCenter,
+            self.icon().pixmap(
+                self.iconSize(),
+                self.devicePixelRatioF(),
+                QIcon.Mode.Normal if self.isEnabled() else QIcon.Mode.Disabled,
+            ),
+        )
+        painter.drawItemText(
+            caption,
+            Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextSingleLine,
+            option.palette,
+            self.isEnabled(),
+            self.text(),
+            QPalette.ColorRole.ButtonText,
+        )
+        painter.end()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() is QEvent.Type.FontChange:
+            self.metrics_changed.emit()
 
 
 class MainWindow(QMainWindow):
@@ -206,13 +271,25 @@ class MainWindow(QMainWindow):
         self.batch_icon = QLabel()
         self.batch_icon.setFixedSize(Style.icon, Style.icon)
         batch_row.addWidget(self.batch_icon)
+        batch_text = QVBoxLayout()
+        batch_text.setSpacing(2)
+        batch_text.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.batch_caption = QLabel()
+        self.batch_caption.setTextFormat(Qt.TextFormat.PlainText)
+        self.batch_caption.setProperty("role", "secondary")
+        self.batch_caption.setStyleSheet("font-size: 13px;")
+        self.batch_caption.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        batch_text.addWidget(self.batch_caption)
         self.batch_label = QLabel()
         self.batch_label.setTextFormat(Qt.TextFormat.PlainText)
         self.batch_label.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
-        self.batch_label.setStyleSheet("font-size: 16px; font-weight: 600;")
-        batch_row.addWidget(self.batch_label, 1)
+        self.batch_label.setStyleSheet("font-size: 18px; font-weight: 600;")
+        batch_text.addWidget(self.batch_label)
+        batch_row.addLayout(batch_text, 1)
         batch = QPushButton()
         batch.setObjectName("productionBatch")
         batch.setFixedSize(Style.touch, Style.touch)
@@ -231,16 +308,21 @@ class MainWindow(QMainWindow):
         self._operation_buttons = QButtonGroup(self)
         self._operation_buttons.idClicked.connect(self._operate)
         for index, key in enumerate(("operation", "pause", "stop", "secondary")):
-            button = QPushButton()
-            button.setProperty("iconAlignment", "leading")
+            button = QPushButton() if key == "secondary" else PlayerButton()
             button.setIconSize(QSize(Style.icon, Style.icon))
             button.setFixedHeight(48)
             self._operation_buttons.addButton(button, index)
             self.buttons[key] = button
             if key == "secondary":
+                button.setProperty("iconAlignment", "leading")
                 button.setFixedWidth(Style.touch)
                 self.context_control.addWidget(button)
             else:
+                assert isinstance(button, PlayerButton)
+                button.setProperty("iconAlignment", "top")
+                button.metrics_changed.connect(
+                    self._render, Qt.ConnectionType.QueuedConnection
+                )
                 button.setObjectName(
                     "start" if key == "operation" else "productionAction"
                 )
@@ -648,7 +730,7 @@ class MainWindow(QMainWindow):
             self.theme,
             self._closing,
             draft_locked,
-            self.font().key(),
+            tuple(self.buttons[key].font().key() for key in actions),
         )
         if identity == self._operation_presentation:
             return
@@ -695,20 +777,46 @@ class MainWindow(QMainWindow):
                 )
             )
             button.ensurePolished()
-        widths = {
-            key: button_width(self.buttons[key], captions, padding=2)
-            for key, captions in (
-                ("operation", ("replay_start", "replay_continue")),
-                ("pause", ("replay_pause", "replay_step")),
-                ("stop", ("production_stop",)),
-            )
-        }
-        for key, width in widths.items():
-            button = self.buttons[key]
-            set_button_caption(button, button.accessibleName(), width)
-        self.operation_group.setFixedWidth(
-            Style.touch + sum(widths.values()) + 3 * Style.small
+        player = tuple(self.buttons[key] for key in ("operation", "pause", "stop"))
+        captions = (
+            "replay_start",
+            "replay_continue",
+            "replay_pause",
+            "replay_step",
+            "production_stop",
         )
+        # A comfortable font-scaled slot, independent of the longest translated
+        # caption. Actions/languages retain equal stationary roles; exceptional
+        # captions elide with their full identity in accessibility/tooltips.
+        width = max(
+            120,
+            min(
+                180,
+                ceil(
+                    6 * max(QFontMetricsF(button.font()).height() for button in player)
+                ),
+            ),
+        )
+        height = max(
+            60,
+            Style.icon
+            + 12
+            + max(
+                button.fontMetrics().boundingRect(text(key, language)).height()
+                for button in player
+                for key in captions
+                for language in LANGUAGES
+            ),
+        )
+        for key in ("operation", "pause", "stop"):
+            button = self.buttons[key]
+            button.setFixedSize(width, height)
+            button.setText(
+                QFontMetricsF(button.font()).elidedText(
+                    button.accessibleName(), Qt.TextElideMode.ElideRight, width - 20
+                )
+            )
+        self.operation_group.setFixedWidth(Style.touch + 3 * width + 3 * Style.small)
         self.context_control.setCurrentIndex(1 if actions["secondary"] else 0)
 
     @Slot(object)
@@ -1363,8 +1471,11 @@ class MainWindow(QMainWindow):
         self.identity_label.setVisible(bool(inline))
         self.identity_label.setToolTip(details)
         self.identity_label.setAccessibleName(details)
-        batch = f"{text('batch_id', language)} {snapshot.batch_id or '—'}"
+        batch_caption = text("batch_id", language)
+        batch_value = snapshot.batch_id or "—"
+        batch = f"{batch_caption} {batch_value}"
         self.batch_label.ensurePolished()
+        self.batch_caption.ensurePolished()
         batch_padding = 16 + 2 * self.batch_group.frameWidth()
         # Balance the outer columns when possible. On narrow windows the empty
         # space after Batch can serve the active name without moving controls.
@@ -1415,13 +1526,21 @@ class MainWindow(QMainWindow):
             - margins.right()
             - 2 * self.summary_header.horizontalSpacing()
         )
-        natural_batch_width = max(
-            ceil(
-                QFontMetricsF(self.batch_label.font()).horizontalAdvance(
-                    f"{text('batch_id', lang)} {snapshot.batch_id or '—'}"
-                )
-            )
-            for lang in ("zh", "en", self.language)
+        natural_batch_width = min(
+            180,
+            1
+            + max(
+                ceil(
+                    QFontMetricsF(self.batch_label.font()).horizontalAdvance(
+                        batch_value
+                    )
+                ),
+                ceil(
+                    QFontMetricsF(self.batch_caption.font()).horizontalAdvance(
+                        batch_caption
+                    )
+                ),
+            ),
         )
         batch_reservation = min(side_width, batch_fixed + natural_batch_width)
         identity_width = max(
@@ -1441,20 +1560,8 @@ class MainWindow(QMainWindow):
         batch_width = max(
             1, min(side_width, header_width - side_width - identity_width) - batch_fixed
         )
-        self.batch_label.setFixedWidth(
-            min(
-                batch_width,
-                max(
-                    # Integer metrics can round below the elision width at high DPI.
-                    ceil(
-                        QFontMetricsF(self.batch_label.font()).horizontalAdvance(
-                            f"{text('batch_id', lang)} {snapshot.batch_id or '—'}"
-                        )
-                    )
-                    for lang in ("zh", "en", self.language)
-                ),
-            )
-        )
+        self.batch_label.setFixedWidth(min(batch_width, natural_batch_width))
+        self.batch_caption.setFixedWidth(self.batch_label.width())
         self.batch_group.setFixedWidth(self.batch_label.width() + batch_fixed)
         self._batch_balance.changeSize(
             min(side_width, max(0, header_width - side_width - identity_width)),
@@ -1498,12 +1605,21 @@ class MainWindow(QMainWindow):
             )
         )
         self.batch_label.setText(
-            self.batch_label.fontMetrics().elidedText(
-                batch, Qt.TextElideMode.ElideRight, self.batch_label.width()
+            QFontMetricsF(self.batch_label.font()).elidedText(
+                batch_value, Qt.TextElideMode.ElideRight, self.batch_label.width()
             )
         )
+        self.batch_caption.setText(
+            QFontMetricsF(self.batch_caption.font()).elidedText(
+                batch_caption, Qt.TextElideMode.ElideRight, self.batch_caption.width()
+            )
+        )
+        self.batch_caption.setAccessibleName(batch_caption)
+        self.batch_caption.setToolTip(batch)
         self.batch_label.setToolTip(batch)
         self.batch_label.setAccessibleName(batch)
+        self.batch_group.setToolTip(batch)
+        self.batch_group.setAccessibleName(batch)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if (
@@ -1525,6 +1641,11 @@ class MainWindow(QMainWindow):
             self.summary,
             self.identity_label,
             self.production_recipes,
+            self.batch_label,
+        ):
+            self._render_identity()
+        if event.type() is QEvent.Type.FontChange and watched in (
+            self.batch_caption,
             self.batch_label,
         ):
             self._render_identity()

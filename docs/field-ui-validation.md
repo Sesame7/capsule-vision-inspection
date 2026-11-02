@@ -324,6 +324,46 @@ smoke preparation. No new Production cycles should be admitted by navigation.
 
 ## Focused UI checks and optional tools
 
+### Optional development window size
+
+The normal shared bootstrap accepts `--window-size WIDTHxHEIGHT` for repeatable
+development/UI validation, through both entry points:
+
+```powershell
+uv run --no-sync python app.py --window-size 1080x1920
+uv run --no-sync capsule-vision --window-size 1600x900
+```
+
+Without this option, startup still uses `showMaximized()`. An explicit size opens
+a normal, non-maximized window with that Qt logical **client** width and height;
+the native title bar/frame is additional. Dimensions must be whole numbers, at
+least `880x720` and no greater than `16777215` per dimension. Existing content/font
+minimum-size constraints still apply: requests below the current minimum fail
+visibly rather than silently changing size. The option does not save geometry or
+change configuration. `scripts/run_demo.py --size` remains a separate demo option.
+
+The framed window is centered in the current screen's available work area where
+it fits. A request larger than the work area retains its logical size and may
+extend off-screen; it does not change monitor settings. Record the actual
+`QWidget.size()`, window state, frame geometry, screen DPR and available work area
+alongside screenshots. Screenshot pixel dimensions alone do not establish the
+logical widget size.
+
+Qt logical pixels differ from physical screen pixels when the device pixel ratio
+(DPR) is not one. `QT_SCALE_FACTOR` is a Qt scaling override that can change the
+effective DPR; it does not change the requested logical client dimensions or the
+OS display mode, and is not a substitute for a physical portrait display.
+Scaling overrides remain prohibited for field acceptance. Keep native field
+launches maximized and preserve the normal shortcut arguments.
+
+These commands use the real application composition and its ordinary data access:
+`app.py` uses data beside that entry file, while `capsule-vision` uses data beneath
+the working directory. Use isolated temporary entry/data fixtures for automated
+checks, preserve operational assets, and do not perform Production or hardware
+actions merely to inspect geometry.
+
+### Isolated layout checks
+
 Real normal-entry smoke and isolated layout checks answer different questions.
 For layout/multilingual work, use a temporary source preview and synthetic data
 outside the operational installation, with engine creation and real network/device

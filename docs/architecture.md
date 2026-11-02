@@ -501,17 +501,31 @@ diagnostics omit no-request prose; watch success uses `OK` with its observation
 time, while read/write failures remain visible. The diagnostic target stays
 explicit and is not evidence that an edited preference was saved or applied.
 
-Top navigation uses one horizontal row when the available logical width fits five
-comfortable icon/caption slots and the current-user/theme/language controls. At 1080 logical
-pixels it uses two rows: five equal-width buttons with icons above captions,
-followed by right-aligned current-user/theme/language controls. At 1920 it retains one row.
-Mode selection uses content/font budgets, not screen orientation; long translations
-elide with full localized tooltips and accessible names. Each mode reserves a stable
-height across languages and selected pages. Resizing reuses the same buttons,
-selection group and native language popup.
+Top navigation measures each page's current localized caption and font, using
+natural, nonuniform widths and modest gaps. It first fits horizontal icon/caption
+buttons beside the right-aligned current-user/theme/language controls. If that
+does not fit, icons stack above captions while utilities remain on the same row.
+If the stacked buttons and utilities still cannot share a row, utilities move to
+a second, right-aligned row. Ordinary Chinese/English labels and short usernames
+fit one row at 1080 and 1920 Qt logical pixels; neither width mandates a mode.
+Larger fonts or translations can select a stacked row or two-row fallback.
+After choosing the mode from intrinsic content requirements, buttons share spare
+width toward bounded comfortable sizes. Longer captions retain more space;
+short captions do not stretch across the bar. Surplus remains between the page
+group and the right-aligned utilities. Width growth does not influence mode
+selection, so resizing does not oscillate between presentations.
+
+Mode selection uses actual available logical width and content/font budgets,
+not screen orientation or physical resolution. Long captions have a font-scaled
+width limit and elide, retaining complete localized tooltips and accessible names.
+Each mode reserves stable height across selected pages, themes and ordinary
+identity/status updates; language and font changes can affect the selected mode.
+Resizing reuses the same five buttons, selection group and native language popup.
+There is no sixth page in normal operation.
 The current-user control has a fixed width; long usernames elide while retaining
-the full username and role in its tooltip and accessible name. Account actions
-use a menu, without another navigation page or navigation selection state.
+the full username and role in its tooltip and accessible name. User/language
+controls reserve enough height for the current font while retaining touch targets.
+Account actions use a menu, without another navigation page or navigation selection state.
 Navigation's minimum width uses touch targets and utilities, independently of its
 last allocated row width. The shell reserves its content's minimum height when
 two navigation rows or larger text need more vertical space.
@@ -523,8 +537,20 @@ acceptance targets. This support boundary does not change Qt's existing minimum
 size constraints or the image canvas coordinate system.
 
 Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
-Each role reserves a shaped-text budget across the supported languages; switching
-languages or action states does not move its slot. The Production header has two
+Their icons always sit above their captions, independently of navigation's mode.
+The three native buttons have equal widths and a common height of about 60 logical
+pixels at ordinary fonts. Their shared width follows a comfortable font-metric
+budget, normally 120 logical pixels, rather than the longest translated action
+across all languages. Slots stay stationary across ordinary language, theme and
+action-state changes; exceptional captions elide with complete localized names
+and guidance retained in tooltips/accessibility. Actual larger fonts can increase
+width and height within the bounded horizontal allocation.
+Reset remains a separate icon control in its reserved, state-dependent slot.
+Batch has its localized label above a prominent value, with Edit to their right.
+Its text budget follows ordinary content and is capped for long values; elision
+never changes the underlying Batch identity or its full tooltip/accessibility text.
+The stacked player and Batch fit the existing ordinary-font header height, leaving
+the metrics row and camera grid geometry unchanged. The Production identity has two
 rows: state with conditional inline active/requested identity, then the saved-Recipe
 selector and Refresh. The selector shows the installed candidate, including startup
 restoration; synchronization never prepares. During preparation it retains that

@@ -1,7 +1,17 @@
 """Shared navigation and compact status presentation, without runtime ownership."""
 
+from math import ceil
+from typing import Literal
+
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QIcon, QPaintEvent, QPalette, QResizeEvent
+from PySide6.QtGui import (
+    QColor,
+    QFontMetricsF,
+    QIcon,
+    QPaintEvent,
+    QPalette,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -31,6 +41,8 @@ PAGES = (
     "page_history",
     "page_vision",
 )
+
+type NavigationMode = Literal["comfortable", "compact", "two_row"]
 
 
 class _StatusLabel(QLabel):
@@ -180,9 +192,14 @@ class NavigationBar(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self._presentation: tuple[language_identity.Language, Theme, int] | None = None
-        self.compact = False
+        self.mode: NavigationMode = "comfortable"
         self._arranging = False
-        self._metrics: tuple[tuple[str, ...], int, int] | None = None
+        self._metrics: (
+            tuple[
+                tuple[str, ...], tuple[str, ...], tuple[int, ...], tuple[int, ...], int
+            ]
+            | None
+        ) = None
         self._username: str | None = None
         self._user_detail = ""
         self.setObjectName("navigation")
@@ -302,6 +319,11 @@ class NavigationBar(QFrame):
         self.user.setAccessibleName(full)
         self.user.setIcon(shell_icon("user", theme_colors(self).primary))
 
+    @property
+    def compact(self) -> bool:
+        """Both compact presentations use the same stacked native buttons."""
+        return self.mode != "comfortable"
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if self._presentation is not None:
@@ -313,7 +335,8 @@ class NavigationBar(QFrame):
         margins = self._layout.contentsMargins()
         # Fixed row widths describe the current presentation, not the minimum
         # window width. A narrower resize can redistribute the same controls.
-        width = max(len(self.buttons) * Style.touch + 24, self.utilities.width())
+        gaps = (len(self.buttons) - 1) * self._row.spacing()
+        width = max(len(self.buttons) * Style.touch + gaps, self.utilities.width())
         return QSize(
             width + margins.left() + margins.right() + 2 * self.frameWidth(),
             self.height(),
@@ -342,32 +365,42 @@ class NavigationBar(QFrame):
     def _arrange(self) -> None:
         assert self._presentation is not None
         language = self._presentation[0]
-        for widget in (*self.buttons, self.language):
+        for widget in (*self.buttons, self.user, self.language):
             widget.ensurePolished()
         fonts = tuple(widget.font().key() for widget in (*self.buttons, self.language))
-        if self._metrics is None or self._metrics[0] != fonts:
-            # Comfortable horizontal slots for ordinary short labels; overflow
-            # translations elide rather than determine everyone's button width.
-            preferred = max(
-                4 * Style.touch,
-                max(
-                    button.fontMetrics().horizontalAdvance(
-                        "PLC / Web" if key == "page_communication" else text(key, lang)
-                    )
-                    for key, button in zip(PAGES, self.buttons, strict=True)
-                    for lang in ("zh", "en")
+        captions = tuple(
+            "PLC / Web" if key == "page_communication" else text(key, language)
+            for key in PAGES
+        )
+        if self._metrics is None or self._metrics[:2] != (fonts, captions):
+            # Measure this language, not the longest translation of every page.
+            # Bound unusually long labels to a font-scaled readable span; the
+            # complete localized name remains in the tooltip/accessibility name.
+            label_widths = tuple(
+                min(
+                    ceil(QFontMetricsF(button.font()).horizontalAdvance(caption)) + 1,
+                    8 * button.fontMetrics().height(),
                 )
-                + 48,
+                for button, caption in zip(self.buttons, captions, strict=True)
             )
+            horizontal = tuple(
+                max(Style.touch, width + button.iconSize().width() + 28)
+                for button, width in zip(self.buttons, label_widths, strict=True)
+            )
+            stacked = tuple(max(Style.touch, width + 24) for width in label_widths)
             # Reserve a single line across scripts, independently of selection
             # and language. Font changes may legitimately change both row sizes.
-            line = max(
-                button.fontMetrics().boundingRect(text(key, lang)).height()
-                for key, button in zip(PAGES, self.buttons, strict=True)
-                for lang in language_identity.LANGUAGES
+            line = (
+                self._metrics[4]
+                if self._metrics is not None and self._metrics[0] == fonts
+                else max(
+                    button.fontMetrics().boundingRect(text(key, lang)).height()
+                    for key, button in zip(PAGES, self.buttons, strict=True)
+                    for lang in language_identity.LANGUAGES
+                )
             )
-            self._metrics = fonts, preferred, line
-        _, preferred, line = self._metrics
+            self._metrics = fonts, captions, horizontal, stacked, line
+        _, _, horizontal, stacked, line = self._metrics
         self.language.setFixedWidth(
             max(
                 self.language.fontMetrics().horizontalAdvance(name)
@@ -378,52 +411,97 @@ class NavigationBar(QFrame):
         utility_width = (
             self.user.width() + self.theme.width() + 12 + self.language.width()
         )
-        self.utilities.setFixedSize(utility_width, Style.touch)
+        utility_height = max(
+            Style.touch,
+            line + 14,
+            self.user.fontMetrics().height() + 14,
+            self.language.fontMetrics().height() + 14,
+        )
+        self.user.setFixedHeight(utility_height)
+        self.language.setFixedHeight(utility_height)
+        self.utilities.setFixedSize(utility_width, utility_height)
         margins = self._layout.contentsMargins()
         available = self.contentsRect().width() - margins.left() - margins.right()
-        required = (
-            len(self.buttons) * preferred + 4 * self._row.spacing() + 6 + utility_width
+        gaps = (len(self.buttons) - 1) * self._row.spacing()
+        shared = gaps + self._layout.horizontalSpacing() + utility_width
+        mode: NavigationMode = (
+            "comfortable"
+            if sum(horizontal) + shared <= available
+            else "compact"
+            if sum(stacked) + shared <= available
+            else "two_row"
         )
-        compact = available < required
-        if compact != self.compact:
-            self.compact = compact
+        two_rows = mode == "two_row"
+        if two_rows != (self.mode == "two_row"):
             self._layout.removeWidget(self.page_row)
             self._layout.removeWidget(self.utilities)
-            self._layout.addWidget(self.page_row, 0, 0, 1, 2 if compact else 1)
+            self._layout.addWidget(self.page_row, 0, 0, 1, 2 if two_rows else 1)
             self._layout.addWidget(
-                self.utilities, int(compact), 1, Qt.AlignmentFlag.AlignRight
+                self.utilities, int(two_rows), 1, Qt.AlignmentFlag.AlignRight
             )
-        height = max(Style.touch, line + 12) + (24 if compact else 0)
+        self.mode = mode
+        widths = horizontal if mode == "comfortable" else stacked
+        if two_rows and sum(widths) + gaps > available:
+            # Keep natural proportions when even the stacked row needs elision.
+            # Each slot retains a touch target, including in the capacity fixture.
+            extra = max(0, available - gaps - len(widths) * Style.touch)
+            total_extra = sum(width - Style.touch for width in widths)
+            widths = tuple(
+                Style.touch + (width - Style.touch) * extra // max(1, total_extra)
+                for width in widths
+            )
+        else:
+            # Choose the mode from the intrinsic requirements above, then spend
+            # spare width on comfortable padding. Growth must not feed the next
+            # mode decision or stretch short captions across the entire bar.
+            minimum, limit, padding = (
+                (128, 200, 32) if mode == "comfortable" else (96, 176, 24)
+            )
+            headroom = tuple(
+                max(0, min(limit, max(minimum, width + padding)) - width)
+                for width in widths
+            )
+            page_budget = available - (gaps if two_rows else shared)
+            growth = min(
+                sum(headroom), max(0, page_budget - sum(widths) - 2 * Style.space)
+            )
+            if growth:
+                widths = tuple(
+                    width + room * growth // sum(headroom)
+                    for width, room in zip(widths, headroom, strict=True)
+                )
+        # Include the focused button's border as well as vertical padding.
+        height = max(Style.touch, line + 14) + (24 if self.compact else 0)
         self.page_row.setFixedHeight(height)
-        self.page_row.setFixedWidth(
-            max(0, available) if compact else len(self.buttons) * preferred + 24
-        )
+        self.page_row.setFixedWidth(sum(widths) + gaps)
         self.setFixedHeight(
-            height
-            + (Style.touch + 6 if compact else 0)
+            (
+                height + utility_height + self._layout.verticalSpacing()
+                if two_rows
+                else max(height, utility_height)
+            )
             + margins.top()
             + margins.bottom()
             + 2 * self.frameWidth()
         )
-        for index, button in enumerate(self.buttons):
-            button.stacked = compact
-            button.setFixedHeight(height)
-            button.setMinimumWidth(Style.touch if compact else preferred)
-            button.setMaximumWidth(16777215 if compact else preferred)
+        for button, width in zip(self.buttons, widths, strict=True):
+            button.stacked = self.compact
+            button.setFixedSize(width, height)
             button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-            self._row.setStretch(index, 1 if compact else 0)
         self._layout.activate()
         self._row.activate()
-        for key, button in zip(PAGES, self.buttons, strict=True):
-            caption = (
-                "PLC / Web" if key == "page_communication" else text(key, language)
-            )
+        for caption, button in zip(captions, self.buttons, strict=True):
             budget = (
-                button.content_rects()[1].width() if compact else button.width() - 48
+                button.content_rects()[1].width()
+                if self.compact
+                else button.width() - 48
             )
+            metrics = QFontMetricsF(button.font())
             button.setText(
-                button.fontMetrics().elidedText(
-                    caption, Qt.TextElideMode.ElideRight, max(0, budget)
+                caption
+                if metrics.horizontalAdvance(caption) <= budget
+                else metrics.elidedText(
+                    caption, Qt.TextElideMode.ElideRight, max(0, budget - 2)
                 )
             )
         self.present_user(self._username, self._user_detail)
