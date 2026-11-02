@@ -183,6 +183,8 @@ class NavigationBar(QFrame):
         self.compact = False
         self._arranging = False
         self._metrics: tuple[tuple[str, ...], int, int] | None = None
+        self._username: str | None = None
+        self._user_detail = ""
         self.setObjectName("navigation")
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._layout = QGridLayout(self)
@@ -215,6 +217,12 @@ class NavigationBar(QFrame):
         utilities.setContentsMargins(0, 0, 0, 0)
         utilities.setSpacing(6)
         self._layout.addWidget(self.utilities, 0, 1, Qt.AlignmentFlag.AlignRight)
+        self.user = QPushButton()
+        self.user.setObjectName("current_user")
+        self.user.setFixedSize(144, Style.touch)
+        self.user.setIconSize(QSize(20, 20))
+        self.user.installEventFilter(self)
+        utilities.addWidget(self.user)
         self.theme = QPushButton()
         self.theme.setFixedSize(Style.touch, Style.touch)
         self.theme.setIconSize(QSize(22, 22))
@@ -276,12 +284,40 @@ class NavigationBar(QFrame):
             f"{text('interface_language', language)} · {language_identity.LANGUAGE_NAMES[language]}"
         )
         self.language.setAccessibleName(text("interface_language", language))
+        self.present_user(self._username, self._user_detail)
         self._arrange_buttons()
+
+    def present_user(self, username: str | None, detail: str) -> None:
+        self._username, self._user_detail = username, detail
+        self.user.ensurePolished()
+        language = self._presentation[0] if self._presentation else "en"
+        caption = username if username is not None else text("identity_guest", language)
+        full = f"{caption} · {detail}" if detail else caption
+        self.user.setText(
+            self.user.fontMetrics().elidedText(
+                caption, Qt.TextElideMode.ElideRight, self.user.width() - 64
+            )
+        )
+        self.user.setToolTip(full)
+        self.user.setAccessibleName(full)
+        self.user.setIcon(shell_icon("user", theme_colors(self).primary))
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if self._presentation is not None:
             self._arrange_buttons()
+
+    def minimumSizeHint(self) -> QSize:
+        if not hasattr(self, "utilities"):
+            return super().minimumSizeHint()
+        margins = self._layout.contentsMargins()
+        # Fixed row widths describe the current presentation, not the minimum
+        # window width. A narrower resize can redistribute the same controls.
+        width = max(len(self.buttons) * Style.touch + 24, self.utilities.width())
+        return QSize(
+            width + margins.left() + margins.right() + 2 * self.frameWidth(),
+            self.height(),
+        )
 
     def changeEvent(self, event: QEvent) -> None:
         super().changeEvent(event)
@@ -339,7 +375,9 @@ class NavigationBar(QFrame):
             )
             + 70
         )
-        utility_width = self.theme.width() + 6 + self.language.width()
+        utility_width = (
+            self.user.width() + self.theme.width() + 12 + self.language.width()
+        )
         self.utilities.setFixedSize(utility_width, Style.touch)
         margins = self._layout.contentsMargins()
         available = self.contentsRect().width() - margins.left() - margins.right()
@@ -388,6 +426,7 @@ class NavigationBar(QFrame):
                     caption, Qt.TextElideMode.ElideRight, max(0, budget)
                 )
             )
+        self.present_user(self._username, self._user_detail)
 
 
 class StatusBar(QFrame):

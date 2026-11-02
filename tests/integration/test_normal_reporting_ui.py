@@ -172,7 +172,9 @@ def test_unconfigured_reporting_preferences_do_not_invent_assets(
             startup.data.history,
             Path(f"{startup.data.history}-wal"),
             Path(f"{startup.data.history}-shm"),
+            startup.data.security.with_suffix(".lock"),
         }
+        assert not startup.data.security.exists()
     finally:
         close_window(window)
         delivery.detach()

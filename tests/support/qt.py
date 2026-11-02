@@ -132,7 +132,4 @@ def screen(
     if session.join_gate is not None:
         session.join_gate.set()
     session.cleanup_safe = True
-    window.close()
-    until(lambda: window.bridge.closed)
-    assert app.join(0)
-    window.deleteLater()
+    close_window(window)

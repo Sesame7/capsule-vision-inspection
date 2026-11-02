@@ -38,7 +38,8 @@ def bounds(widget: QWidget, parent: QWidget) -> QRect:
 
 def assert_fit(bar: NavigationBar, compact: bool) -> None:
     assert bar.compact is compact
-    controls = (*bar.buttons, bar.theme, bar.language)
+    assert bar.minimumSizeHint().width() <= Style.minimum[0] - 24
+    controls = (*bar.buttons, bar.user, bar.theme, bar.language)
     rects = [bounds(control, bar) for control in controls]
     for index, rect in enumerate(rects):
         assert bar.rect().contains(rect)
@@ -47,6 +48,7 @@ def assert_fit(bar: NavigationBar, compact: bool) -> None:
     widths = [button.width() for button in bar.buttons]
     assert max(widths) - min(widths) <= 1
     for button in bar.buttons:
+        assert button.width() >= Style.touch
         assert button.height() >= Style.touch and button.stacked is compact
         if compact:
             icon, caption = button.content_rects()
@@ -71,7 +73,7 @@ def assert_fit(bar: NavigationBar, compact: bool) -> None:
 def test_languages_pages_themes_and_repeated_resizing_keep_two_stable_modes(
     bar: NavigationBar, qapp: QApplication
 ) -> None:
-    instances = (*bar.buttons, bar.theme, bar.language)
+    instances = (*bar.buttons, bar.user, bar.theme, bar.language)
     geometries: dict[bool, tuple[QRect, ...]] = {}
     heights: dict[bool, int] = {}
     for width in (1056, 1896, 1056, 1896):
@@ -96,8 +98,8 @@ def test_languages_pages_themes_and_repeated_resizing_keep_two_stable_modes(
                             == button.toolTip()
                             == text(key, language)
                         )
-        assert instances == (*bar.buttons, bar.theme, bar.language)
-        assert len(bar.findChildren(QPushButton)) == 6
+        assert instances == (*bar.buttons, bar.user, bar.theme, bar.language)
+        assert len(bar.findChildren(QPushButton)) == 7
     assert heights[True] > heights[False]
 
 
@@ -151,6 +153,8 @@ def test_short_labels_overflow_and_keyboard_controls(
     assert selected[-1] == 1
     bar.buttons[-1].setFocus()
     QTest.keyClick(bar.buttons[-1], Qt.Key.Key_Tab)
+    assert bar.user.hasFocus()
+    QTest.keyClick(bar.user, Qt.Key.Key_Tab)
     assert bar.theme.hasFocus()
     QTest.keyClick(bar.theme, Qt.Key.Key_Space)
     assert themes == [True]
@@ -160,6 +164,35 @@ def test_short_labels_overflow_and_keyboard_controls(
     bar.language.activated.emit(bar.language.currentIndex())
     assert languages == ["ti"]
     assert_fit(bar, width == 1056)
+
+
+def test_long_username_keeps_touch_targets_and_full_identity(
+    bar: NavigationBar, qapp: QApplication
+) -> None:
+    name = "Long account name " * 3
+    for width in (856, 1056, 1896, 856):
+        bar.resize(width, bar.height())
+        for language in LANGUAGES:
+            bar.present(language, "dark", 0)
+            before = tuple(
+                bounds(control, bar) for control in (*bar.buttons, bar.utilities)
+            )
+            bar.present_user(name, "Administrator")
+            qapp.processEvents()
+            assert name in bar.user.accessibleName() == bar.user.toolTip()
+            assert bar.user.text().endswith("…")
+            assert (
+                tuple(bounds(control, bar) for control in (*bar.buttons, bar.utilities))
+                == before
+            )
+            assert_fit(bar, width != 1896)
+    bar.setStyleSheet(bar.styleSheet() + "\nQWidget {font-size: 23px;}")
+    qapp.processEvents()
+    assert (
+        bar.user.fontMetrics().horizontalAdvance(bar.user.text())
+        <= bar.user.width() - 64
+    )
+    assert name in bar.user.accessibleName()
 
 
 def test_breakpoint_and_font_changes_do_not_oscillate(

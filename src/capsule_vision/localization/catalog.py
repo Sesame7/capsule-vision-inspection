@@ -4,6 +4,69 @@ from .languages import Language
 from .translations import EXTRA_STRINGS
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "identity_close": ("关闭", "Close"),
+    "identity_disabled": ("已停用", "Disabled"),
+    "identity_guest": ("访客", "Guest"),
+    "identity_login": ("登录", "Login"),
+    "identity_logout": ("退出登录", "Logout"),
+    "identity_switch": ("切换用户", "Switch User"),
+    "identity_change": ("修改密码", "Change Password"),
+    "identity_manage": ("管理用户", "Manage Users"),
+    "identity_username": ("用户名", "Username"),
+    "identity_password": ("密码", "Password"),
+    "identity_old_password": ("当前密码", "Current password"),
+    "identity_new_password": ("新密码", "New password"),
+    "identity_confirm": ("确认密码", "Confirm password"),
+    "identity_role": ("角色", "Role"),
+    "identity_enabled": ("已启用", "Enabled"),
+    "identity_operator": ("操作员", "Operator"),
+    "identity_engineer": ("工程师", "Engineer"),
+    "identity_administrator": ("管理员", "Administrator"),
+    "identity_create": ("新建用户", "Create User"),
+    "identity_reset": ("重置密码", "Reset Password"),
+    "identity_apply": ("应用角色", "Apply Role"),
+    "identity_enable": ("启用用户", "Enable User"),
+    "identity_disable": ("停用用户", "Disable User"),
+    "identity_working": ("处理中…", "Working…"),
+    "identity_invalid": (
+        "用户名或密码不正确，或账号已停用。",
+        "Incorrect username or password, or account disabled.",
+    ),
+    "identity_mismatch": ("两次输入的密码不一致。", "Passwords do not match."),
+    "identity_validation": (
+        "请检查用户名和密码；字段不能为空。",
+        "Check username and password; fields must not be empty.",
+    ),
+    "identity_conflict": ("用户名已存在。", "Username already exists."),
+    "identity_last_admin": (
+        "必须保留至少一位已启用的管理员。",
+        "At least one enabled Administrator must remain.",
+    ),
+    "identity_denied": (
+        "当前身份无权执行此账号操作。",
+        "This account operation requires authorization.",
+    ),
+    "identity_stale": (
+        "身份已改变，请重新操作。",
+        "Session changed; please try again.",
+    ),
+    "identity_storage": (
+        "账号存储不可用；请联系维护人员。",
+        "Account storage unavailable; contact maintenance.",
+    ),
+    "identity_missing": (
+        "尚未初始化账号；请先离线创建管理员。",
+        "Accounts are not initialized; initialize an Administrator offline.",
+    ),
+    "identity_error": (
+        "账号操作未完成，请重试。",
+        "Account operation incomplete; please try again.",
+    ),
+    "identity_done": ("已更新", "Updated"),
+    "identity_busy": (
+        "账号服务正忙，请稍后重试。",
+        "Account service busy; please try again shortly.",
+    ),
     "recipe_preparing_short": ("准备", "Prep"),
     "active_recipe": ("已激活", "Active"),
     "recipe_dirty_question": (

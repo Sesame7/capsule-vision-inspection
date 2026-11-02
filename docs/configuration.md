@@ -12,6 +12,8 @@ fallback, automatic repair of saved geometry or fake inference is used for recov
 | `data/app.json` | optional `last_applied_recipe_id`, `language` (codes below) |
 | `data/communication.json` | optional global Production reporting, diagnostic endpoint and Web preferences |
 | `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
+| `data/security.sqlite3` | optional local accounts and versioned password verifiers; independent of History |
+| `data/security.lock` | application/offline-maintenance ownership lock; file presence does not mean it is held |
 | `data/models/<model_id>/model.json` | Model definition: `display_name`, `expected_sha256`, `module_id` |
 | `data/models/<model_id>/model.vimosln` | Managed Model artifact, verified by SHA-256 |
 | `data/models/<model_id>/vimo_trt_cache/` | SDK-owned generated TensorRT artifacts |
@@ -126,6 +128,84 @@ Qt's native logging rules; candidate-font rejection messages do not establish
 missing glyphs. Warning/Critical/Fatal and other categories retain their normal
 behavior and logging destinations. Explicit `QT_LOGGING_CONF` and
 `QT_LOGGING_RULES` settings retain Qt's precedence over this application rule.
+
+## Local accounts
+
+Normal startup owns the Qt-independent `LocalIdentity` service for entry-relative
+`data/security.sqlite3`. Every process starts as anonymous Guest; no login is
+restored. Guest has no account row. A missing database remains missing and does not
+block Guest startup. The companion `security.lock` is acquired even when the
+database is absent and retained until the identity worker actually exits on Close.
+Other cooperating application/maintenance owners for the same canonical path are
+rejected. The lock file is retained; do not delete it to clear a live owner.
+
+Accounts have immutable UUID identities and usernames, an enabled flag and one of
+Operator, Engineer or Administrator. Roles form the fixed hierarchy Guest <
+Operator < Engineer < Administrator. Usernames are 1–64 printable characters without
+edge whitespace; uniqueness uses Unicode `casefold`, independently of SQLite's
+ASCII-only NOCASE. No username renaming or account deletion is provided.
+
+Schema version 1 stores PBKDF2-HMAC-SHA256 verifier version 1, a random 16-byte salt,
+32-byte digest and iteration count. New passwords use 600,000 iterations; supported
+stored counts are bounded to 100,000–2,000,000. Passwords are nonempty UTF-8 text,
+at most 1024 encoded bytes. Verification uses constant-time digest comparison.
+Plaintext passwords are not persisted, returned in observations or logged.
+
+Administrator authorization is enforced by the account service for account listing,
+creation, enable/disable, role changes and password resets. The last enabled
+Administrator cannot be disabled or demoted; this check and the update share one
+SQLite write transaction. Changes to the current account are published before the
+operation completes: role changes take effect, disabling or administrative password
+reset returns to Guest, and successful self-password change can retain login.
+All session observations are immutable and carry monotonically increasing
+revisions within that owner lifetime. A restart starts a new Guest revision sequence.
+A later login, logout or Close invalidates pending authentication and
+uncommitted account-management requests from an older session decision.
+
+Corrupt, unsupported and unwritable stores are never silently replaced. Normal
+startup exposes the unavailable storage observation and `Startup.security_error`,
+and the launcher prints the error to stderr; Guest has no account privileges.
+Failure to acquire the ownership lock rejects startup/maintenance explicitly.
+There is no automatic database repair, account creation or privileged fallback.
+SQLite account data has its own schema/application identity, no History retention
+and no audit/event storage. Local filesystem access and the maintenance environment
+remain OS-level trust boundaries.
+
+First Administrator initialization and credential recovery are explicit offline
+commands. Stop the application first, select the directory containing its entry
+file, and enter/confirm the secret interactively:
+
+```powershell
+uv run --no-sync python -m capsule_vision.application.account_maintenance --entry-directory '<entry-directory>' initialize-admin '<username>'
+uv run --no-sync python -m capsule_vision.application.account_maintenance --entry-directory '<entry-directory>' recover-admin '<username>'
+```
+
+Initialization requires an empty account store. Recovery resets and enables an
+existing Administrator, preserving its ID, username and all other accounts; it
+cannot promote an Operator/Engineer. Both operations acquire the same exclusive
+ownership lock before accessing storage. Password arguments, noninteractive secret
+input and echoing console fallbacks are rejected. Interrupted/failed initialization
+is reported for explicit review, not silently repaired.
+
+The navigation's current-user menu displays Guest or the logged-in username.
+Login and Switch User use masked credential forms; Switch User first logs out,
+so canceling it leaves Guest. Logout immediately invalidates pending authentication.
+Change Password verifies the current password and confirms the new one. The
+Administrator's Manage Users dialog lists accounts and supports creation, role
+changes, enable/disable and password resets through the account service's own
+authorization and validation. There is no delete or username rename action.
+Current-account role changes update the menu; disable/reset returns it to Guest.
+Account dialogs close when their actor loses the required identity/role. Close
+invalidates UI delivery and waits for the existing Application-owned worker cleanup.
+Missing/unavailable storage is visible in the current-user tooltip and login form;
+offline initialization/recovery remains required. Text is Chinese/English with
+the existing English fallback for other languages. Passwords are cleared from
+fields on submission/dismissal; feedback never echoes credentials or raw errors.
+
+Production/Recipe/Vision/Communication command authorization is not implemented.
+Guest and account session changes leave existing business command behavior and
+running inspection sessions unchanged; these account controls do not constitute
+completed role-based production authorization.
 
 ## History storage
 

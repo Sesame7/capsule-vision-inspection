@@ -11,6 +11,7 @@ from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
 
 from .history import HistoryContext, ProductionHistory
+from .identity import LocalIdentity
 from .model_preparation import (
     ModelPreparation,
     ModelPreparationFactory,
@@ -62,11 +63,13 @@ class ProductionApplication:
         max_pending_cycles: int = 8,
         preparation_factory: ModelPreparationFactory = real_preparation_engine,
         history: ProductionHistory | None = None,
+        identity: LocalIdentity | None = None,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
             raise ValueError("max_pending_cycles must be positive")
         self._factory = session_factory
         self.history = history
+        self.identity = identity
         self._batch_segment = uuid4().hex
         self._run_id: str | None = None
         self._preparation_factory = preparation_factory
@@ -438,6 +441,10 @@ class ProductionApplication:
             self.history.request_stop()
             if not self.history.join():
                 raise ApplicationError("History persistence owner remains alive")
+        if self.identity is not None:
+            self.identity.request_stop()
+            if not self.identity.join():
+                raise ApplicationError("Local identity owner remains alive")
 
     def _run(self) -> None:
         while True:

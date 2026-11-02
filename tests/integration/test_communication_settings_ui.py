@@ -29,7 +29,7 @@ from tests.support.qt import assert_full_caption, close_window, ensure_test_font
 from tests.support.startup import saved_data
 
 from capsule_vision.application import ApplicationState, ProductionCounters
-from capsule_vision.application.startup import Startup, load_startup
+from capsule_vision.application.startup import ApplicationData, Startup, load_startup
 from capsule_vision.communication import (
     FinsMemoryArea,
     FinsTcpEndpoint,
@@ -183,6 +183,7 @@ def available_port() -> int:
 def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     settings_window: tuple[Startup, MainWindow],
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     startup, window = settings_window
     page, panel = window.communication, window.communication.web_panel
@@ -263,7 +264,12 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
         saved, web=replace(saved.web, enabled=False, port=draft_port)
     )
     assert panel.host.text() == "0.0.0.0" and page.port.value() == 19602 and page.dirty
-    restored = load_startup(startup.data)
+    # This live power test continues using the first application. Restore the
+    # saved Communication profile in its own root, without copying live SQLite.
+    probe = ApplicationData.at_entry(tmp_path / "saved-communication-probe")
+    probe.root.mkdir(parents=True)
+    probe.communication.write_bytes(startup.data.communication.read_bytes())
+    restored = load_startup(probe)
     try:
         assert not restored.communication.web.enabled
     finally:
@@ -635,6 +641,8 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     monkeypatch.setattr(
         "capsule_vision.communication.endpoints.FinsUdpClient", forbidden
     )
+    window.close()
+    until(lambda: window.bridge.closed and window.communication.closed)
     restored = load_startup(startup.data)
     delivery = FutureDelivery()
     second = create_window(restored, delivery)
@@ -769,6 +777,8 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         assert not page.dirty and page.web_panel.saved_available
         assert page.preferences_status.text() == text("saved", window.language)
         assert not page.preferences_status.toolTip()
+        window.close()
+        until(lambda: window.bridge.closed and window.communication.closed)
         restored = load_startup(data)
         try:
             assert restored.communication == CommunicationPreferences()

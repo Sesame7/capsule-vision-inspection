@@ -15,6 +15,7 @@ from capsule_vision.application.folder_cache import (
     FolderReplayCache,
 )
 from capsule_vision.application.history import ProductionHistory
+from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.image_archive import ArchiveSnapshot, ImageArchive
 from capsule_vision.application.source_control import (
     FolderReplayControl,
@@ -64,6 +65,7 @@ class SourceProductionApplication(ProductionApplication):
         source_cameras: tuple[CameraId, ...] = (),
         source_camera_ids: Callable[[], tuple[CameraId, ...]] | None = None,
         history: ProductionHistory | None = None,
+        identity: LocalIdentity | None = None,
     ) -> None:
         self.replay_cache = cache
         self._display_store = store
@@ -87,7 +89,10 @@ class SourceProductionApplication(ProductionApplication):
         self._source_cameras = source_cameras
         self._source_camera_ids = source_camera_ids
         super().__init__(
-            factory, preparation_factory=preparation_factory, history=history
+            factory,
+            preparation_factory=preparation_factory,
+            history=history,
+            identity=identity,
         )
 
     def configure(self, candidate: PreparedConfiguration) -> None:

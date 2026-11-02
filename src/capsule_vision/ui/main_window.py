@@ -47,6 +47,7 @@ from .camera_card import CameraCard
 from .communication_page import CommunicationPage
 from .editing import EditingCoordinator
 from .history_page import HistoryPage
+from .identity_controls import IdentityControls
 from .production_bridge import QtProductionBridge
 from .production_presentation import (
     Indicator,
@@ -146,6 +147,10 @@ class MainWindow(QMainWindow):
         self.navbar.language_selected.connect(self._select_language)
         self.navbar.theme_requested.connect(self._switch_theme)
         root.addWidget(self.navbar)
+        self.identity_controls = IdentityControls(
+            self.navbar, bridge.application.identity, self
+        )
+        bridge.timer.timeout.connect(self.identity_controls.refresh)
         self.pages = QStackedWidget()
         root.addWidget(self.pages, 1)
         production = QWidget()
@@ -500,6 +505,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_theme_icons(self) -> None:
         self.navbar.present(self.language, self.theme, self.pages.currentIndex())
+        self.identity_controls.present(self.language)
         self.recipe_page.refresh_theme()
         workspace = self.vision_workspace
         if workspace is not None:
@@ -845,6 +851,7 @@ class MainWindow(QMainWindow):
             self._source_issue = (camera, type(source_error).__name__)
         if command == "close" and not self.bridge.closing:
             self._closing = False
+            self.identity_controls.resume()
             self.editing.resume()
             if not self.bridge.closed:
                 self.communication.resume()
@@ -1463,6 +1470,11 @@ class MainWindow(QMainWindow):
             layout = group.layout()
             if layout is not None:
                 layout.activate()
+        identity_layout = self.identity_group.layout()
+        if identity_layout is not None:
+            self.identity_group.setMinimumHeight(
+                max(60, identity_layout.minimumSize().height())
+            )
         # Respect the actual player/identity minimum instead of clipping controls
         # when a restored window or larger font requests too little width.
         # Refresh the stacked widget's cached layout-item hint after translated
@@ -1494,6 +1506,15 @@ class MainWindow(QMainWindow):
         self.batch_label.setAccessibleName(batch)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if (
+            watched is self.centralWidget()
+            and event.type() is QEvent.Type.LayoutRequest
+        ):
+            # The second navigation row must not squeeze existing page controls
+            # when a short window or larger text needs more vertical space.
+            self.setMinimumHeight(
+                max(Style.minimum[1], self.minimumSizeHint().height())
+            )
         if watched is self.metrics_frame and event.type() in (
             QEvent.Type.Resize,
             QEvent.Type.Show,
@@ -1529,6 +1550,7 @@ class MainWindow(QMainWindow):
             if application is not None:
                 application.removeEventFilter(self)
             self.bridge.detach()
+            self.identity_controls.dispose()
             self.communication.dispose()
             self.history.dispose()
             self.recipe_page.dispose()
@@ -1581,6 +1603,7 @@ class MainWindow(QMainWindow):
 
     def _begin_close(self) -> None:
         self._closing = True
+        self.identity_controls.begin_close()
         self.editing.closing = True
         self._render()
         self.communication.request_close(self._shutdown_finished)

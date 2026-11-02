@@ -22,6 +22,7 @@ from capsule_vision.application.folder_replay import (
     FolderSourceError,
 )
 from capsule_vision.application.history import ProductionHistory
+from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.session import EngineFactory, real_engine
 from capsule_vision.communication.reporting import (
     FirstStationReportingWorker,
@@ -160,6 +161,7 @@ def create_production_application(
     replay_controls: bool = False,
     reporting_editable: bool = False,
     history: ProductionHistory | None = None,
+    identity: LocalIdentity | None = None,
 ) -> tuple[SourceProductionApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != len(editor.machine.layout.cameras):
@@ -308,6 +310,7 @@ def create_production_application(
         reporting=reporting,
         reporting_editable=reporting_editable,
         history=history,
+        identity=identity,
         source_draft=source_draft if not paths else None,
         source_cameras=editor.machine_editor.camera_ids,
         source_camera_ids=lambda: (
@@ -321,6 +324,8 @@ def create_production_application(
 
 def unconfigured_application(
     history: ProductionHistory | None = None,
+    *,
+    identity: LocalIdentity | None = None,
 ) -> ProductionApplication:
     """Normal stopped shell can edit session preferences without inventing inputs."""
 
@@ -330,5 +335,9 @@ def unconfigured_application(
         raise ConfigurationError("Persistent configuration is unavailable")
 
     return SourceProductionApplication(
-        unavailable, FolderReplayCache(), reporting_editable=True, history=history
+        unavailable,
+        FolderReplayCache(),
+        reporting_editable=True,
+        history=history,
+        identity=identity,
     )

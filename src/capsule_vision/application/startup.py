@@ -8,6 +8,7 @@ from pathlib import Path
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.folder_replay import FolderReplay, FolderSourceError
 from capsule_vision.application.history import ProductionHistory
+from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.session import EngineFactory
 from capsule_vision.communication.reporting import ProductionReportingCommands
 from capsule_vision.configuration import (
@@ -68,6 +69,10 @@ class ApplicationData:
         return self.root / "history.sqlite3"
 
     @property
+    def security(self) -> Path:
+        return self.root / "security.sqlite3"
+
+    @property
     def machine(self) -> Path:
         return self.root / "machine.tsv"
 
@@ -104,6 +109,7 @@ class Startup:
     preferences_writable: bool
     communication: CommunicationPreferences = CommunicationPreferences()
     communication_error: str = ""
+    security_error: str = ""
 
 
 def load_startup(
@@ -111,6 +117,26 @@ def load_startup(
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
+) -> Startup:
+    """Acquire local identity ownership before any application resources exist."""
+    identity = LocalIdentity(data.security)
+    try:
+        identity.ready.result()  # Explicit blocking startup IO, before Qt exists.
+        return _load_startup(
+            data, identity, engine_factory=engine_factory, observe_source=observe_source
+        )
+    except BaseException:
+        identity.request_stop()
+        identity.join()
+        raise
+
+
+def _load_startup(
+    data: ApplicationData,
+    identity: LocalIdentity,
+    *,
+    engine_factory: EngineFactory,
+    observe_source: Callable[[Future[None]], None],
 ) -> Startup:
     """Blocking startup IO only, called before QApplication is constructed.
 
@@ -277,7 +303,9 @@ def load_startup(
             )
 
     if editor is None or editor.camera_sources is None:
-        application = unconfigured_application(ProductionHistory(data.history))
+        application = unconfigured_application(
+            ProductionHistory(data.history), identity=identity
+        )
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
         cameras = (
             machine.layout.camera_ids
@@ -292,6 +320,7 @@ def load_startup(
             observe_source=observe_source,
             reporting_editable=True,
             history=ProductionHistory(data.history),
+            identity=identity,
             replay_controls=True,
         )
     communication = CommunicationPreferences()
@@ -324,6 +353,7 @@ def load_startup(
         preferences_writable,
         communication,
         communication_error,
+        identity.storage_snapshot().issue,
     )
 
 

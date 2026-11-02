@@ -93,7 +93,7 @@ def at_qapplication(_arguments):
 
 from capsule_vision.application.composition import unconfigured_application
 owner = unconfigured_application()
-with patch.object(bootstrap, "load_startup", return_value=SimpleNamespace(issues=(), application=owner)):
+with patch.object(bootstrap, "load_startup", return_value=SimpleNamespace(issues=(), application=owner, security_error="")):
     with patch.object(bootstrap, "QApplication", side_effect=at_qapplication):
         with patch.object(QtCore, "qInstallMessageHandler", side_effect=AssertionError):
             bootstrap.main(Path.cwd(), [])
@@ -280,6 +280,7 @@ def test_missing_data_does_not_generate_configurations(tmp_path: Path) -> None:
             data.history,
             Path(f"{data.history}-wal"),
             Path(f"{data.history}-shm"),
+            data.security.with_suffix(".lock"),
         }
     finally:
         close(startup)
@@ -457,7 +458,9 @@ def test_discovery_is_nonrecursive_and_preserves_machine_sources(
     assert (
         model_catalog.issues and model_catalog.issues[0].path == nested / "model.json"
     )
-    first, second = load_startup(data), load_startup(data)
+    first = load_startup(data)
+    close(first)
+    second = load_startup(data)
     try:
         assert first.machine == second.machine
         assert first.editor is not None and second.editor is not None
@@ -470,7 +473,6 @@ def test_discovery_is_nonrecursive_and_preserves_machine_sources(
         assert not first.editor.camera_sources.saved.loop
         assert first.frames.cameras == tuple(f"CAM{i}" for i in range(1, 7))
     finally:
-        close(first)
         close(second)
 
 

@@ -277,6 +277,9 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
     QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
     QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
+    QTableWidget#accounts {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; }}
+    QTableWidget#accounts::item {{ min-height: 32px; }}
+    QTableWidget#accounts::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QTableWidget#historyCycles, QTableWidget#historyChannels {{ border-radius: {Style.radius}px; }}
     QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
@@ -603,6 +606,10 @@ def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
             p.drawLine(3, 12, 21, 12)
             p.drawLine(5, 7, 19, 7)
             p.drawLine(5, 17, 19, 17)
+        elif kind == "user":
+            p.drawEllipse(QRectF(8, 3, 8, 8))
+            p.drawArc(QRectF(4, 13, 16, 14), 0, 180 * 16)
+            p.drawLine(4, 20, 20, 20)
         elif kind == "folder":
             path = QPainterPath(QPointF(3, 8))
             for x, y in ((3, 5), (10, 5), (13, 8), (21, 8), (21, 19), (3, 19), (3, 8)):

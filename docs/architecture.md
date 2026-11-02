@@ -101,6 +101,35 @@ in Application editing, with independent Machine/Source outcomes. Request tokens
 current selection and closing state guard late results. Close drains setup/import
 cleanup and the independent label/Preview work before releasing presentation.
 
+## Local identity ownership
+
+`application/identity.py` owns an anonymous-by-default immutable session and one
+bounded serial account/credential worker (16 waiting requests plus one active).
+SQLite and PBKDF2 execute on that worker; normal consumers use Futures and cheap
+session/storage observations. Logout advances the session revision immediately.
+Admission revisions prevent late authentication or stale administrative work from
+replacing a newer decision. Password work stays outside the session lock; short
+authorized transactions and their session publication are serialized together.
+
+The private account store owns SQLite validation and transactions; the fixed-role
+service owns Administrator admission. Last-enabled-Administrator protection is
+transactional. Offline initialization/recovery is an explicit OS-trusted entry,
+with the same exclusive local file lease as normal application startup. See
+[local accounts](configuration.md#local-accounts) for storage and command contracts.
+
+Startup acquires identity ownership before creating application resources and
+passes that owner into the existing Application lifetime. Close drains it and
+joins the actual worker after the existing source/History cleanup. Missing account
+storage remains Guest without creating a database. Unavailable storage remains
+explicit. The window presents Login, Logout, Switch User, Change Password and
+Administrator account management through this same service. Masked, modeless
+forms clear secrets on submission/dismissal. Authentication and account IO use
+the service worker and queued, destruction-safe Qt delivery; superseded results
+cannot replace a later session decision. The existing shell refresh observes role
+changes and disables account UI on confirmed Close. Application retains worker
+stop/join ownership. Login/logout never controls an inspection session. Business
+command authorization and audit storage are not implemented.
+
 ## Inference
 
 Recipe Model management reuses this window-owned slot. A short Application
@@ -473,13 +502,19 @@ time, while read/write failures remain visible. The diagnostic target stays
 explicit and is not evidence that an edited preference was saved or applied.
 
 Top navigation uses one horizontal row when the available logical width fits five
-comfortable icon/caption slots and the theme/language controls. At 1080 logical
+comfortable icon/caption slots and the current-user/theme/language controls. At 1080 logical
 pixels it uses two rows: five equal-width buttons with icons above captions,
-followed by right-aligned theme/language controls. At 1920 it retains one row.
+followed by right-aligned current-user/theme/language controls. At 1920 it retains one row.
 Mode selection uses content/font budgets, not screen orientation; long translations
 elide with full localized tooltips and accessible names. Each mode reserves a stable
 height across languages and selected pages. Resizing reuses the same buttons,
 selection group and native language popup.
+The current-user control has a fixed width; long usernames elide while retaining
+the full username and role in its tooltip and accessible name. Account actions
+use a menu, without another navigation page or navigation selection state.
+Navigation's minimum width uses touch targets and utilities, independently of its
+last allocated row width. The shell reserves its content's minimum height when
+two navigation rows or larger text need more vertical space.
 
 The minimum supported window width is 1080 Qt logical pixels. UI validation uses
 1080-wide portrait at 100% Windows scaling and 1920-wide landscape; wider cases

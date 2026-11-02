@@ -43,6 +43,42 @@ ENGLISH_DETAIL_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "identity_close",
+    "identity_disabled",
+    "identity_guest",
+    "identity_login",
+    "identity_logout",
+    "identity_switch",
+    "identity_change",
+    "identity_manage",
+    "identity_username",
+    "identity_password",
+    "identity_old_password",
+    "identity_new_password",
+    "identity_confirm",
+    "identity_role",
+    "identity_enabled",
+    "identity_operator",
+    "identity_engineer",
+    "identity_administrator",
+    "identity_create",
+    "identity_reset",
+    "identity_apply",
+    "identity_enable",
+    "identity_disable",
+    "identity_working",
+    "identity_invalid",
+    "identity_mismatch",
+    "identity_validation",
+    "identity_conflict",
+    "identity_last_admin",
+    "identity_denied",
+    "identity_stale",
+    "identity_storage",
+    "identity_missing",
+    "identity_error",
+    "identity_done",
+    "identity_busy",
     "recipe_preparing_short",
     "active_recipe",
     "select_saved_recipe",
@@ -1136,7 +1172,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 423
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 459
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

@@ -137,6 +137,8 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
     try:
         for issue in startup.issues:
             print(issue.detail, file=sys.stderr)
+        if startup.security_error:
+            print(startup.security_error, file=sys.stderr)
         # Keep Qt's native handler and external logging-rule precedence unchanged.
         QLoggingCategory.setFilterRules("qt.text.font.db.info=false")
         qt = QApplication(sys.argv[:1])
