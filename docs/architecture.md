@@ -472,6 +472,15 @@ diagnostics omit no-request prose; watch success uses `OK` with its observation
 time, while read/write failures remain visible. The diagnostic target stays
 explicit and is not evidence that an edited preference was saved or applied.
 
+Top navigation uses one horizontal row when the available logical width fits five
+comfortable icon/caption slots and the theme/language controls. At 1080 logical
+pixels it uses two rows: five equal-width buttons with icons above captions,
+followed by right-aligned theme/language controls. At 1920 it retains one row.
+Mode selection uses content/font budgets, not screen orientation; long translations
+elide with full localized tooltips and accessible names. Each mode reserves a stable
+height across languages and selected pages. Resizing reuses the same buttons,
+selection group and native language popup.
+
 The minimum supported window width is 1080 Qt logical pixels. UI validation uses
 1080-wide portrait at 100% Windows scaling and 1920-wide landscape; wider cases
 are retained where they exercise responsive allocation. Sub-1080 windows are not

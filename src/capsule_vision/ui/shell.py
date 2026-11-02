@@ -1,16 +1,19 @@
 """Shared navigation and compact status presentation, without runtime ownership."""
 
-from PySide6.QtCore import QPoint, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QPaintEvent, QResizeEvent
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QIcon, QPaintEvent, QPalette, QResizeEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QSizePolicy,
     QStyle,
+    QStyleOptionButton,
     QStyleOptionComboBox,
     QStylePainter,
     QWidget,
@@ -121,6 +124,54 @@ class _LanguageSelector(QComboBox):
         painter.end()
 
 
+class _NavigationButton(QPushButton):
+    """Native button behavior/frame with a stacked icon and caption when compact."""
+
+    stacked = False
+
+    def content_rects(self) -> tuple[QRect, QRect]:
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        area = self.style().subElementRect(
+            QStyle.SubElement.SE_PushButtonContents, option, self
+        )
+        icon = QRect(0, area.top(), self.iconSize().width(), self.iconSize().height())
+        icon.moveCenter(QPoint(area.center().x(), icon.center().y()))
+        caption = area.adjusted(0, self.iconSize().height() + 4, 0, 0)
+        return icon, caption
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if not self.stacked:
+            super().paintEvent(event)
+            return
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text, option.icon = "", QIcon()
+        painter = QStylePainter(self)
+        # Keep native checked/hover/focus styling, including keyboard focus.
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+        icon, caption = self.content_rects()
+        painter.drawItemPixmap(
+            icon,
+            Qt.AlignmentFlag.AlignCenter,
+            self.icon().pixmap(self.iconSize(), self.devicePixelRatioF()),
+        )
+        colors = theme_colors(self)
+        option.palette.setColor(
+            QPalette.ColorRole.ButtonText,
+            QColor(colors.accent if self.isChecked() else colors.primary),
+        )
+        painter.drawItemText(
+            caption,
+            Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextSingleLine,
+            option.palette,
+            self.isEnabled(),
+            self.text(),
+            QPalette.ColorRole.ButtonText,
+        )
+        painter.end()
+
+
 class NavigationBar(QFrame):
     page_selected = Signal(int)
     language_selected = Signal(str)
@@ -129,30 +180,46 @@ class NavigationBar(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self._presentation: tuple[language_identity.Language, Theme, int] | None = None
+        self.compact = False
+        self._arranging = False
+        self._metrics: tuple[tuple[str, ...], int, int] | None = None
         self.setObjectName("navigation")
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        row = QHBoxLayout(self)
-        self._row = row
-        row.setContentsMargins(12, 8, 12, 8)
-        row.setSpacing(6)
+        self._layout = QGridLayout(self)
+        self._layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self._layout.setContentsMargins(12, 8, 12, 8)
+        self._layout.setSpacing(6)
+        self._layout.setColumnStretch(1, 1)
+        self.page_row = QWidget()
+        self.page_row.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed
+        )
+        self._row = QHBoxLayout(self.page_row)
+        self._row.setContentsMargins(0, 0, 0, 0)
+        self._row.setSpacing(6)
+        self._layout.addWidget(self.page_row, 0, 0)
         self._pages = QButtonGroup(self)
         self._pages.idClicked.connect(self._select_page)
-        self.buttons: list[QPushButton] = []
+        self.buttons: list[_NavigationButton] = []
         for index, _ in enumerate(PAGES):
-            button = QPushButton()
+            button = _NavigationButton()
             button.setCheckable(True)
             button.setProperty("iconAlignment", "leading")
-            button.setMinimumHeight(Style.touch)
             button.setIconSize(QSize(20, 20))
             self._pages.addButton(button, index)
-            row.addWidget(button)
+            self._row.addWidget(button)
+            button.installEventFilter(self)
             self.buttons.append(button)
-        row.addStretch(1)
+        self.utilities = QWidget()
+        utilities = QHBoxLayout(self.utilities)
+        utilities.setContentsMargins(0, 0, 0, 0)
+        utilities.setSpacing(6)
+        self._layout.addWidget(self.utilities, 0, 1, Qt.AlignmentFlag.AlignRight)
         self.theme = QPushButton()
         self.theme.setFixedSize(Style.touch, Style.touch)
         self.theme.setIconSize(QSize(22, 22))
         self.theme.clicked.connect(self._request_theme)
-        row.addWidget(self.theme)
+        utilities.addWidget(self.theme)
         self.language = _LanguageSelector()
         self.language.setObjectName("language")
         self.language.setFixedHeight(Style.touch)
@@ -162,7 +229,8 @@ class NavigationBar(QFrame):
         # Use the screen's available height before Qt falls back to scrolling.
         self.language.setMaxVisibleItems(len(language_identity.LANGUAGES))
         self.language.activated.connect(self._select_language)
-        row.addWidget(self.language)
+        utilities.addWidget(self.language)
+        self.language.installEventFilter(self)
 
     @Slot(int)
     def _select_page(self, index: int) -> None:
@@ -186,13 +254,6 @@ class NavigationBar(QFrame):
         colors = theme_colors(self)
         # Resolve the inherited stylesheet font before the first width calculation.
         self.ensurePolished()
-        self.language.setFixedWidth(
-            max(
-                self.fontMetrics().horizontalAdvance(name)
-                for name in language_identity.LANGUAGE_LABELS.values()
-            )
-            + 70  # Native edit field also reserves icon, padding and arrow space.
-        )
         for index, (key, button) in enumerate(zip(PAGES, self.buttons, strict=True)):
             button.setToolTip(text(key, language))
             button.setAccessibleName(text(key, language))
@@ -222,42 +283,109 @@ class NavigationBar(QFrame):
         if self._presentation is not None:
             self._arrange_buttons()
 
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            if hasattr(self, "_presentation") and self._presentation is not None:
+                self._arrange_buttons()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.FontChange and self._presentation is not None:
+            self._arrange_buttons()
+        return super().eventFilter(watched, event)
+
     def _arrange_buttons(self) -> None:
-        if self._presentation is None:
+        if self._presentation is None or self._arranging:
             return
+        self._arranging = True
+        try:
+            self._arrange()
+        finally:
+            self._arranging = False
+
+    def _arrange(self) -> None:
+        assert self._presentation is not None
         language = self._presentation[0]
-        margins = self._row.contentsMargins()
-        reserved = (
-            self.theme.width()
-            + self.language.width()
-            + (self._row.count() - 1) * self._row.spacing()
-            + margins.left()
-            + margins.right()
-        )
-        preferred = (
-            max(
-                self.fontMetrics().horizontalAdvance(
-                    "PLC / Web" if key == "page_communication" else text(key, lang)
+        for widget in (*self.buttons, self.language):
+            widget.ensurePolished()
+        fonts = tuple(widget.font().key() for widget in (*self.buttons, self.language))
+        if self._metrics is None or self._metrics[0] != fonts:
+            # Comfortable horizontal slots for ordinary short labels; overflow
+            # translations elide rather than determine everyone's button width.
+            preferred = max(
+                4 * Style.touch,
+                max(
+                    button.fontMetrics().horizontalAdvance(
+                        "PLC / Web" if key == "page_communication" else text(key, lang)
+                    )
+                    for key, button in zip(PAGES, self.buttons, strict=True)
+                    for lang in ("zh", "en")
                 )
-                for key in PAGES
+                + 48,
+            )
+            # Reserve a single line across scripts, independently of selection
+            # and language. Font changes may legitimately change both row sizes.
+            line = max(
+                button.fontMetrics().boundingRect(text(key, lang)).height()
+                for key, button in zip(PAGES, self.buttons, strict=True)
                 for lang in language_identity.LANGUAGES
             )
-            + 48
+            self._metrics = fonts, preferred, line
+        _, preferred, line = self._metrics
+        self.language.setFixedWidth(
+            max(
+                self.language.fontMetrics().horizontalAdvance(name)
+                for name in language_identity.LANGUAGE_LABELS.values()
+            )
+            + 70
         )
-        width = max(
-            Style.touch,
-            min(
-                preferred, (self.contentsRect().width() - reserved) // len(self.buttons)
-            ),
+        utility_width = self.theme.width() + 6 + self.language.width()
+        self.utilities.setFixedSize(utility_width, Style.touch)
+        margins = self._layout.contentsMargins()
+        available = self.contentsRect().width() - margins.left() - margins.right()
+        required = (
+            len(self.buttons) * preferred + 4 * self._row.spacing() + 6 + utility_width
         )
+        compact = available < required
+        if compact != self.compact:
+            self.compact = compact
+            self._layout.removeWidget(self.page_row)
+            self._layout.removeWidget(self.utilities)
+            self._layout.addWidget(self.page_row, 0, 0, 1, 2 if compact else 1)
+            self._layout.addWidget(
+                self.utilities, int(compact), 1, Qt.AlignmentFlag.AlignRight
+            )
+        height = max(Style.touch, line + 12) + (24 if compact else 0)
+        self.page_row.setFixedHeight(height)
+        self.page_row.setFixedWidth(
+            max(0, available) if compact else len(self.buttons) * preferred + 24
+        )
+        self.setFixedHeight(
+            height
+            + (Style.touch + 6 if compact else 0)
+            + margins.top()
+            + margins.bottom()
+            + 2 * self.frameWidth()
+        )
+        for index, button in enumerate(self.buttons):
+            button.stacked = compact
+            button.setFixedHeight(height)
+            button.setMinimumWidth(Style.touch if compact else preferred)
+            button.setMaximumWidth(16777215 if compact else preferred)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            self._row.setStretch(index, 1 if compact else 0)
+        self._layout.activate()
+        self._row.activate()
         for key, button in zip(PAGES, self.buttons, strict=True):
-            button.setFixedWidth(width)
             caption = (
                 "PLC / Web" if key == "page_communication" else text(key, language)
             )
+            budget = (
+                button.content_rects()[1].width() if compact else button.width() - 48
+            )
             button.setText(
                 button.fontMetrics().elidedText(
-                    caption, Qt.TextElideMode.ElideRight, max(0, width - 48)
+                    caption, Qt.TextElideMode.ElideRight, max(0, budget)
                 )
             )
 

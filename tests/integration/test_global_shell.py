@@ -255,7 +255,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
     navigation = tuple(button.geometry() for button in window.navigation)
     row = window.navbar.layout()
     assert row is not None
-    assert window.navigation[0].x() == (
+    assert window.navigation[0].mapTo(window.navbar, QPoint()).x() == (
         window.navbar.contentsRect().left() + row.contentsMargins().left()
     )
     # Check stopped navigation once; the active traversal owns all-language fit.
@@ -321,7 +321,13 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
     assert not window.buttons["batch"].isEnabled()
     geometry = tuple(button.geometry() for button in window.navigation)
     icon_strips = tuple(
-        button.grab().toImage().copy(0, 0, Style.icon + Style.small, button.height())
+        button.grab()
+        .toImage()
+        .copy(
+            button.content_rects()[0]
+            if window.navbar.compact
+            else QRect(0, 0, Style.icon + Style.small, button.height())
+        )
         for button in window.navigation
     )
     player_geometry = tuple(
@@ -350,7 +356,8 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         assert window.language_selector.currentText() == LANGUAGE_NAMES[language]
         assert LANGUAGE_NAMES[language] in window.language_selector.toolTip()
         assert window.width() == size[0], (language, window.minimumSizeHint())
-        assert len({button.width() for button in window.navigation}) == 1, language
+        widths = [button.width() for button in window.navigation]
+        assert max(widths) - min(widths) <= 1, language
         assert tuple(button.geometry() for button in window.navigation) == geometry, (
             language
         )
@@ -358,7 +365,11 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             tuple(
                 button.grab()
                 .toImage()
-                .copy(0, 0, Style.icon + Style.small, button.height())
+                .copy(
+                    button.content_rects()[0]
+                    if window.navbar.compact
+                    else QRect(0, 0, Style.icon + Style.small, button.height())
+                )
                 for button in window.navigation
             )
             == icon_strips
@@ -380,21 +391,34 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
                 visible.endswith("…") and full.startswith(visible.removesuffix("…"))
             ), language
             assert not button.icon().isNull() and button.height() >= Style.touch
-            assert window.navbar.rect().contains(button.geometry()), language
-            assert (
-                button.fontMetrics().horizontalAdvance(button.text()) + 40
-                <= button.width()
+            assert window.navbar.rect().contains(
+                QRect(button.mapTo(window.navbar, QPoint()), button.size())
+            ), language
+            assert button.fontMetrics().horizontalAdvance(button.text()) <= (
+                button.content_rects()[1].width()
+                if window.navbar.compact
+                else button.width() - 40
             ), language
             assert button.accessibleName() == button.toolTip() == text(key, language)
             assert button.property("iconAlignment") == "leading"
-        assert window.navbar.rect().contains(window.language_selector.geometry()), (
-            language
-        )
+        assert window.navbar.rect().contains(
+            QRect(
+                window.language_selector.mapTo(window.navbar, QPoint()),
+                window.language_selector.size(),
+            )
+        ), language
         assert all(
             a.geometry().right() < b.geometry().left()
             for a, b in zip(window.navigation[:-1], window.navigation[1:], strict=True)
         )
-        assert window.navigation[-1].geometry().right() < window.theme_button.x()
+        if window.navbar.compact:
+            assert (
+                window.navbar.page_row.geometry().bottom() < window.navbar.utilities.y()
+            )
+        else:
+            assert (
+                window.navbar.page_row.geometry().right() < window.navbar.utilities.x()
+            )
         assert window.theme_button.geometry().right() < window.language_selector.x()
         assert (
             window.language_selector.fontMetrics().horizontalAdvance(
@@ -457,16 +481,26 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         window.resize(width, height)
         QApplication.processEvents()
         assert window.width() == width
-        assert len({button.width() for button in window.navigation}) == 1
-        assert window.navigation[-1].geometry().right() < window.theme_button.x()
-        assert window.navbar.rect().contains(window.language_selector.geometry())
+        widths = [button.width() for button in window.navigation]
+        assert max(widths) - min(widths) <= 1
+        assert window.navbar.compact == (width == 1080)
+        assert window.navbar.rect().contains(
+            QRect(
+                window.language_selector.mapTo(window.navbar, QPoint()),
+                window.language_selector.size(),
+            )
+        )
         assert window.bridge.application.snapshot() == before
 
 
+@pytest.mark.parametrize("width", [1080, 1920])
 def test_language_popup_retains_all_native_names_within_available_screen(
     screen: tuple[MainWindow, FakeSession],
+    width: int,
 ) -> None:
     window, _ = screen
+    window.resize(width, 1017)
+    QApplication.processEvents()
     selector = window.language_selector
     selected = selector.currentData()
     application = window.bridge.application.snapshot()
