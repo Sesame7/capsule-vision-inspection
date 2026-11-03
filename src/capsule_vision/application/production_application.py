@@ -40,6 +40,7 @@ from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CameraId
 
 from .application import ProductionApplication
+from .identity_models import AuthorizationError, Role
 from .model_preparation import ModelPreparationFactory, real_preparation_engine
 from .models import (
     ApplicationState,
@@ -67,13 +68,15 @@ class SourceProductionApplication(ProductionApplication):
         source_camera_ids: Callable[[], tuple[CameraId, ...]] | None = None,
         history: ProductionHistory | None = None,
         identity: LocalIdentity | None = None,
+        initial_candidate: PreparedConfiguration | None = None,
+        initial_reporting: ReportingSelection | None = None,
     ) -> None:
         self.replay_cache = cache
         self._display_store = store
         self._reporting_lock = Lock()
         self._reporting_worker: FirstStationReportingWorker | None = None
         self._archive_owner: ImageArchive | None = None
-        self._reporting_selection = ReportingSelection(
+        self._reporting_selection = initial_reporting or ReportingSelection(
             reporting is not None,
             reporting or ReportingSettings(),
         )
@@ -81,6 +84,7 @@ class SourceProductionApplication(ProductionApplication):
         self._reporting_generation = 0
         self._session_reporting: ReportingSettings | None = None
         self._session_reporting_words = 4
+        self._guest_demo_generation: int | None = None
         self._replay_lock = Lock()
         self.replay_controls = replay_controls
         self._source_draft = source_draft
@@ -94,9 +98,10 @@ class SourceProductionApplication(ProductionApplication):
             preparation_factory=preparation_factory,
             history=history,
             identity=identity,
+            initial_candidate=initial_candidate,
         )
 
-    def configure(self, candidate: PreparedConfiguration) -> None:
+    def _install_candidate(self, candidate: PreparedConfiguration) -> None:
         with self._condition:
             cameras = candidate.configuration.layout.camera_ids
             changed = bool(self._source_cameras) and cameras != self._source_cameras
@@ -118,7 +123,7 @@ class SourceProductionApplication(ProductionApplication):
                 )
                 sources.validate_cameras(cameras, complete=sources.mode == "basler")
                 sources.validate_mapping()
-            super().configure(candidate)
+            super()._install_candidate(candidate)
             if changed:
                 self._source_cameras = cameras
             if (
@@ -143,7 +148,8 @@ class SourceProductionApplication(ProductionApplication):
         self, camera: CameraId, *, timeout: float = 10.0
     ) -> Future[CameraSnapshot]:
         with self._condition:
-            self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+            with self._admission(Role.OPERATOR):
+                self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
             if self._closing:
                 raise ApplicationStateError("Application is closing")
             return self.connection.capture_image(camera, timeout=timeout)
@@ -156,7 +162,8 @@ class SourceProductionApplication(ProductionApplication):
 
     def connect_source(self) -> None:
         with self._condition:
-            self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+            with self._admission(Role.OPERATOR):
+                self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
             draft = self._source_draft
             if draft is None or draft.dirty or draft.saved.mode != "basler":
                 raise ApplicationStateError("Save Basler mappings before Connect")
@@ -177,18 +184,44 @@ class SourceProductionApplication(ProductionApplication):
 
     def disconnect_source(self) -> None:
         with self._condition:
-            self._require(
-                ApplicationState.READY,
-                ApplicationState.UNCONFIGURED,
-                ApplicationState.FAULT,
-            )
+            with self._admission(Role.OPERATOR):
+                self._require(
+                    ApplicationState.READY,
+                    ApplicationState.UNCONFIGURED,
+                    ApplicationState.FAULT,
+                )
             self.connection.request_disconnect()
         self.connection.wait_disconnected()
 
     def start(self) -> Future[None]:
-        return self._start_replay(single_step=False)
+        with self._condition:
+            return self._start_replay(single_step=False)
 
     def _start_replay(self, *, single_step: bool) -> Future[None]:
+        self._require(ApplicationState.READY)
+        with self._admission(Role.GUEST) as actor:
+            demo = actor is not None and actor.role is Role.GUEST
+            if demo:
+                deps = self._candidate.vision_dependencies if self._candidate else None
+                if (
+                    deps is None
+                    or deps.sources_path is None
+                    or deps.sources is None
+                    or deps.sources.mode != "folder"
+                    or self._source_draft is None
+                    or self.reporting_selection().enabled
+                ):
+                    raise AuthorizationError(
+                        "Guest requires prepared Folder Replay with automatic reporting disabled"
+                    )
+            startup = self._admit_replay(single_step=single_step)
+            self._guest_demo_generation = self._generation if demo else None
+        # Cancelling an idle capture runs user callbacks synchronously. The
+        # generation is already admitted and the identity lock must be free.
+        self.connection.cancel_capture()
+        return startup
+
+    def _admit_replay(self, *, single_step: bool) -> Future[None]:
         if self.basler_available:
             if single_step:
                 raise ApplicationStateError("Start Basler before requesting Pause/Step")
@@ -227,8 +260,7 @@ class SourceProductionApplication(ProductionApplication):
 
     def _start_reporting_session(self) -> Future[None]:
         with self._condition:
-            startup = super().start()  # Same authoritative readiness/activation.
-            self.connection.cancel_capture()
+            startup = self._admit_start()  # Same authoritative readiness/activation.
             prepared = self._candidate or self._active
             assert prepared is not None
             with self._reporting_lock:
@@ -251,7 +283,7 @@ class SourceProductionApplication(ProductionApplication):
             return self._reporting_selection
 
     def set_reporting_selection(self, selection: ReportingSelection) -> None:
-        with self._condition:
+        with self._condition, self._admission(Role.ENGINEER):
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
             if not self.reporting_editable:
                 raise ApplicationStateError(
@@ -271,12 +303,15 @@ class SourceProductionApplication(ProductionApplication):
         with self._condition:
             changed = selection != self.reporting_selection()
             if changed:
-                self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
-                if not self.reporting_editable:
-                    raise ApplicationStateError(
-                        "Reporting settings are fixed by this launcher"
-                    )
-            persist()
+                with self._admission(Role.ENGINEER):
+                    self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+                    if not self.reporting_editable:
+                        raise ApplicationStateError(
+                            "Reporting settings are fixed by this launcher"
+                        )
+                    persist()
+            else:
+                persist()
             if changed:
                 with self._reporting_lock:
                     self._reporting_selection = selection
@@ -402,28 +437,33 @@ class SourceProductionApplication(ProductionApplication):
             raise ApplicationStateError("Basler operation requires its RUNNING session")
         return control
 
-    def pause_source(self) -> Future[None]:
-        control = (
-            self._running_basler_control()
-            if self.basler_available
-            else self._running_folder_control()
+    def _running_control(self) -> BaslerAdmissionControl | FolderReplayControl:
+        self._require(ApplicationState.RUNNING)
+        minimum = (
+            Role.GUEST
+            if self._guest_demo_generation == self._generation
+            else Role.OPERATOR
         )
-        return control.pause()
+        with self._admission(minimum):
+            return (
+                self._running_basler_control()
+                if self.basler_available
+                else self._running_folder_control()
+            )
+
+    def pause_source(self) -> Future[None]:
+        with self._condition:
+            return self._running_control().pause()
 
     def resume_source(self) -> Future[None]:
-        control = (
-            self._running_basler_control()
-            if self.basler_available
-            else self._running_folder_control()
-        )
-        return control.resume()
+        with self._condition:
+            return self._running_control().resume()
 
     def step_source(self) -> Future[None]:
-        if self.basler_available:
-            return self._running_basler_control().step()
-        if self.snapshot().state is ApplicationState.READY:
-            return self._start_replay(single_step=True)
-        return self._running_folder_control().step()
+        with self._condition:
+            if self._state is ApplicationState.READY:
+                return self._start_replay(single_step=True)
+            return self._running_control().step()
 
     @property
     def _folder_controls_available(self) -> bool:

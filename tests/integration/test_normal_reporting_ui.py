@@ -16,7 +16,7 @@ from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import close_window, until
 from tests.support.reporting import WAIT, readback, seed, server
 from tests.support.source_inputs import input_files
-from tests.support.startup import close, saved_data
+from tests.support.startup import authenticated_startup, close, saved_data
 
 from capsule_vision.application import (
     ApplicationError,
@@ -90,7 +90,7 @@ def normal_window(
     sources = load_camera_sources(data.sources)
     save_camera_sources(data.sources, replace(sources, loop=True))
     remaining = iter(engines)
-    startup = load_startup(data, engine_factory=lambda _: next(remaining))
+    startup = authenticated_startup(data, engine_factory=lambda _: next(remaining))
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     panel = window.communication.reporting_panel

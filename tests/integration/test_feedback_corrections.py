@@ -10,7 +10,7 @@ from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.recipe_ui import Screen, edit, select_production_recipe
 from tests.support.recipe_ui import camera_screen as camera_screen
 from tests.support.recipe_ui import configured_screen as configured_screen
-from tests.support.startup import saved_data
+from tests.support.startup import authenticated_startup, saved_data
 
 from capsule_vision.application import (
     ApplicationError,
@@ -18,7 +18,6 @@ from capsule_vision.application import (
     ProductionCounters,
 )
 from capsule_vision.application.folder_replay import FolderSourceError
-from capsule_vision.application.startup import load_startup
 from capsule_vision.configuration import (
     CameraFolder,
     CameraSources,
@@ -63,7 +62,7 @@ def test_folder_warning_survives_preparation_and_source_save_until_start(
         ),
     )
     engine = ControlledEngine()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     show(window, language)
@@ -130,7 +129,7 @@ def test_successful_start_clears_source_warning_but_not_manifest_recovery(
     engine = ControlledEngine()
     engine.release_warm.set()
     engine.release_active.set()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -172,7 +171,7 @@ def test_invalid_language_apply_preserves_both_outcomes_and_recovery(
         data.recipes / "second.json",
         RecipeDefinition("second", "Second", model_id="general"),
     )
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     show(window, language)
@@ -295,7 +294,7 @@ def test_preferences_retry_clears_its_own_error_without_clearing_recipe_error(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = saved_data(tmp_path)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:

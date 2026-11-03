@@ -26,6 +26,7 @@ from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.session import EngineFactory, real_engine
 from capsule_vision.communication.reporting import (
     FirstStationReportingWorker,
+    ReportingSelection,
     ReportingSettings,
 )
 from capsule_vision.configuration import (
@@ -185,6 +186,8 @@ def create_production_application(
     reporting_editable: bool = False,
     history: ProductionHistory | None = None,
     identity: LocalIdentity | None = None,
+    initial_reporting: ReportingSelection | None = None,
+    initial_candidate: PreparedConfiguration | None = None,
 ) -> tuple[SourceProductionApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != len(editor.machine.layout.cameras):
@@ -349,6 +352,8 @@ def create_production_application(
         reporting_editable=reporting_editable,
         history=history,
         identity=identity,
+        initial_reporting=initial_reporting,
+        initial_candidate=initial_candidate,
         source_draft=source_draft if not paths else None,
         source_cameras=editor.machine_editor.camera_ids,
         source_camera_ids=lambda: (
@@ -364,6 +369,7 @@ def unconfigured_application(
     history: ProductionHistory | None = None,
     *,
     identity: LocalIdentity | None = None,
+    initial_reporting: ReportingSelection | None = None,
 ) -> ProductionApplication:
     """Normal stopped shell can edit session preferences without inventing inputs."""
 
@@ -378,4 +384,5 @@ def unconfigured_application(
         reporting_editable=True,
         history=history,
         identity=identity,
+        initial_reporting=initial_reporting,
     )

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from tests.support.application import WAIT
-from tests.support.startup import close, saved_data
+from tests.support.startup import authenticated_startup, close, saved_data
 
 from capsule_vision.application import (
     ApplicationState,
@@ -343,7 +343,7 @@ def test_missing_camera_entries_can_be_edited_but_cannot_start_sources(
         calls.append(value)
         raise AssertionError("Incomplete source must fail before engine creation")
 
-    startup = load_startup(data, engine_factory=forbidden)
+    startup = authenticated_startup(data, engine_factory=forbidden)
     try:
         assert startup.editor is not None and startup.editor.camera_sources is not None
         draft = startup.editor.camera_sources
@@ -426,7 +426,7 @@ def test_saved_incomplete_basler_sources_cannot_prepare_connect_or_start(
         calls.append(value)
         raise AssertionError("No engine for incomplete mappings")
 
-    startup = load_startup(data, engine_factory=forbidden)
+    startup = authenticated_startup(data, engine_factory=forbidden)
     try:
         assert startup.editor is not None and startup.editor.camera_sources is not None
         assert startup.editor.camera_sources.saved == sources

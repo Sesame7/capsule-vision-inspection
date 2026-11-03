@@ -240,10 +240,14 @@ values or selected role identities. Unrelated optional UI entries retain their
 English fallback. Passwords are cleared from
 fields on submission/dismissal; feedback never echoes credentials or raw errors.
 
-Production/Recipe/Vision/Communication command authorization is not implemented.
-Guest and account session changes leave existing business command behavior and
-running inspection sessions unchanged; these account controls do not constitute
-completed role-based production authorization.
+Normal startup restores the saved Production candidate and reporting selection as
+Guest. Operator or higher can select or re-prepare a Recipe, set Batch, Start,
+Reset Fault and connect or disconnect configured Basler sources. Changing automatic
+PLC reporting requires Engineer or higher. Guest can Start or single-step from
+READY only with a current prepared Folder Replay candidate and reporting disabled.
+Only a generation admitted under that Guest exception permits Guest Pause, Resume
+or Step while running. All roles can observe, Stop and Close. Identity changes leave
+accepted operations running and invalidate pending interactive Recipe selections.
 
 ## History storage
 

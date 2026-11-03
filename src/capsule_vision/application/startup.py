@@ -10,7 +10,6 @@ from capsule_vision.application.folder_replay import FolderReplay, FolderSourceE
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.session import EngineFactory
-from capsule_vision.communication.reporting import ProductionReportingCommands
 from capsule_vision.configuration import (
     ConfigurationError,
     MachineLayoutDefinition,
@@ -308,9 +307,25 @@ def _load_startup(
                 StartupIssue("startup_source_unavailable", str(exc), blocking=False)
             )
 
+    communication = CommunicationPreferences()
+    communication_error = ""
+    try:
+        communication = load_communication_preferences(data.communication)
+    except ConfigurationError as exc:
+        if not isinstance(exc.__cause__, FileNotFoundError):
+            # Preserve the bad file; safe in-memory recovery is visible and only
+            # an explicit settings Save can replace it. Never open a wider bind.
+            communication_error = str(exc)
+            issues.append(
+                StartupIssue(
+                    "startup_communication", communication_error, blocking=False
+                )
+            )
     if editor is None or editor.camera_sources is None:
         application = unconfigured_application(
-            ProductionHistory(data.history), identity=identity
+            ProductionHistory(data.history),
+            identity=identity,
+            initial_reporting=communication.reporting,
         )
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
         cameras = (
@@ -328,25 +343,9 @@ def _load_startup(
             history=ProductionHistory(data.history),
             identity=identity,
             replay_controls=True,
+            initial_candidate=prepared,
+            initial_reporting=communication.reporting,
         )
-    communication = CommunicationPreferences()
-    communication_error = ""
-    try:
-        communication = load_communication_preferences(data.communication)
-    except ConfigurationError as exc:
-        if not isinstance(exc.__cause__, FileNotFoundError):
-            # Preserve the bad file; safe in-memory recovery is visible and only
-            # an explicit settings Save can replace it. Never open a wider bind.
-            communication_error = str(exc)
-            issues.append(
-                StartupIssue(
-                    "startup_communication", communication_error, blocking=False
-                )
-            )
-    if isinstance(application, ProductionReportingCommands):
-        application.set_reporting_selection(communication.reporting)
-    if prepared is not None:
-        application.configure(prepared)
     return Startup(
         data,
         preferences,

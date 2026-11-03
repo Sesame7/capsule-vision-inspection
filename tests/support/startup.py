@@ -1,13 +1,16 @@
 """Synthetic saved application data for Qt-aware bootstrap tests."""
 
 import shutil
-from collections.abc import Generator
+from collections.abc import Callable, Generator
+from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import enumerate as threads
 
 from capsule_vision.application import PreparedConfiguration
+from capsule_vision.application.account_maintenance import initialize_administrator
+from capsule_vision.application.session import EngineFactory, real_engine
 from capsule_vision.application.source_control import (
     SourceControlCommands,
     SourceControlState,
@@ -67,6 +70,31 @@ def saved_data(root: Path, *, camera_count: int = 6) -> ApplicationData:
     return data
 
 
+TEST_PASSWORD = "isolated production test password"
+
+
+def authenticated_startup(
+    data: ApplicationData,
+    *,
+    engine_factory: EngineFactory = real_engine,
+    observe_source: Callable[[Future[None]], None] = lambda _: None,
+) -> Startup:
+    """Run existing privileged workflows against a real disposable account."""
+    if not data.security.exists():
+        initialize_administrator(data.security, "TestAdmin", TEST_PASSWORD)
+    startup = load_startup(
+        data, engine_factory=engine_factory, observe_source=observe_source
+    )
+    try:
+        owner = startup.application.identity
+        assert owner is not None
+        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+    except BaseException:
+        close(startup)
+        raise
+    return startup
+
+
 def close(startup: Startup) -> None:
     startup.application.close().result(WAIT)
     assert startup.application.join(WAIT)
@@ -104,7 +132,7 @@ def normal_replay(
         return engine
 
     delivery = FutureDelivery()
-    startup = load_startup(
+    startup = authenticated_startup(
         data,
         engine_factory=factory,
         observe_source=lambda future: delivery.watch("folder_source", future),

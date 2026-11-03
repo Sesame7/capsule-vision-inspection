@@ -2,8 +2,9 @@
 
 import secrets
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from concurrent.futures import Future
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from queue import Full, Queue
@@ -72,6 +73,20 @@ class LocalIdentity:
     def snapshot(self) -> SessionSnapshot:
         with self._lock:
             return self._session
+
+    @contextmanager
+    def admission(
+        self, minimum: Role, revision: int | None = None
+    ) -> Generator[SessionSnapshot]:
+        """Linearize a command with logout, login and committed account changes."""
+        with self._lock:
+            if not self._accepting or (
+                revision is not None and self._session.revision != revision
+            ):
+                raise StaleSessionError("Session decision was superseded")
+            if self._session.role < minimum:
+                raise AuthorizationError(f"{minimum.name.title()} required")
+            yield self._session
 
     def storage_snapshot(self) -> SecurityStorageSnapshot:
         with self._lock:

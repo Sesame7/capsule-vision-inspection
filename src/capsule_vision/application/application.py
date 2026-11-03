@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Generator
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from threading import Condition, Thread, current_thread
 from uuid import uuid4
@@ -13,6 +13,7 @@ from capsule_vision.inspection.production import ProductionInspectionResult
 
 from .history import HistoryContext, ProductionHistory
 from .identity import LocalIdentity
+from .identity_models import Role, SessionSnapshot, StaleSessionError
 from .model_preparation import (
     ModelPreparation,
     ModelPreparationFactory,
@@ -51,6 +52,12 @@ class _Pending:
     admitted: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class RecipeSelection:
+    revision: int | None
+    generation: int
+
+
 class ProductionApplication:
     """Thread-safe commands/snapshots; Futures are noncancellable observations.
 
@@ -66,12 +73,14 @@ class ProductionApplication:
         preparation_factory: ModelPreparationFactory = real_preparation_engine,
         history: ProductionHistory | None = None,
         identity: LocalIdentity | None = None,
+        initial_candidate: PreparedConfiguration | None = None,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
             raise ValueError("max_pending_cycles must be positive")
         self._factory = session_factory
         self.history = history
-        self.identity = identity
+        self._identity = identity
+        self._selection: RecipeSelection | None = None
         self._batch_segment = uuid4().hex
         self._run_id: str | None = None
         self._preparation_factory = preparation_factory
@@ -100,7 +109,38 @@ class ProductionApplication:
         self._thread = Thread(
             target=self._run, name=f"ProductionApplication-{id(self):x}", daemon=False
         )
+        if initial_candidate is not None:
+            self._install_candidate(initial_candidate)
         self._thread.start()
+
+    @property
+    def identity(self) -> LocalIdentity | None:
+        return self._identity
+
+    def _admission(
+        self, minimum: Role, revision: int | None = None
+    ) -> AbstractContextManager[SessionSnapshot | None]:
+        if self._closing:
+            raise ApplicationStateError(f"Command unavailable in {self._state.name}")
+        if self.identity is None:  # Explicit identity-free engineering composition.
+            return nullcontext(None)
+        return self.identity.admission(minimum, revision)
+
+    def begin_recipe_selection(self) -> RecipeSelection:
+        with self._condition, self._admission(Role.OPERATOR) as actor:
+            self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+            self._selection = RecipeSelection(
+                actor.revision if actor else None, self._generation
+            )
+            return self._selection
+
+    def install_recipe_selection(
+        self, request: RecipeSelection, candidate: PreparedConfiguration
+    ) -> None:
+        with self._condition, self._admission(Role.OPERATOR, request.revision):
+            if self._selection is not request or self._generation != request.generation:
+                raise StaleSessionError("Production selection was superseded")
+            self._install_candidate(candidate)
 
     @property
     def thread_name(self) -> str:
@@ -128,6 +168,10 @@ class ProductionApplication:
             )
 
     def configure(self, candidate: PreparedConfiguration) -> None:
+        with self._condition, self._admission(Role.OPERATOR):
+            self._install_candidate(candidate)
+
+    def _install_candidate(self, candidate: PreparedConfiguration) -> None:
         """Cheap installation of an already resolved/artifact-checked candidate."""
         with self._condition:
             self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
@@ -137,6 +181,7 @@ class ProductionApplication:
                 and self._issue.exception_type == VisionPreparationRequired.__name__
             ):
                 self._issue = None
+            self._selection = None
             self._candidate = candidate
             self._candidate_requires_preparation = False
             self._state = ApplicationState.READY
@@ -165,7 +210,7 @@ class ProductionApplication:
                 self._candidate_requires_preparation = True
 
     def start_batch(self, batch_id: str | None) -> None:
-        with self._condition:
+        with self._condition, self._admission(Role.OPERATOR):
             self._require(ApplicationState.READY)
             if batch_id is not None and not batch_id.strip():
                 raise ApplicationError("batch_id must be nonempty or None")
@@ -179,6 +224,10 @@ class ProductionApplication:
             raise ApplicationStateError(f"Command unavailable in {self._state.name}")
 
     def start(self) -> Future[None]:
+        with self._condition, self._admission(Role.OPERATOR):
+            return self._admit_start()
+
+    def _admit_start(self) -> Future[None]:
         with self._condition:
             self._require(ApplicationState.READY)
             if self._candidate_requires_preparation:
@@ -340,7 +389,7 @@ class ProductionApplication:
         return not self._thread.is_alive()
 
     def reset_fault(self) -> None:
-        with self._condition:
+        with self._condition, self._admission(Role.OPERATOR):
             self._require(ApplicationState.FAULT)
             if (
                 self._session is not None

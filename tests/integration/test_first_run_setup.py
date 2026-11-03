@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 from tests.support.cycles import image_result
 from tests.support.qt import close_window, until
+from tests.support.startup import authenticated_startup
 
 from capsule_vision.application import (
     ApplicationError,
@@ -39,7 +40,7 @@ from capsule_vision.application.basler_connection import (
     ConnectedCamera,
     ConnectionState,
 )
-from capsule_vision.application.startup import ApplicationData, load_startup
+from capsule_vision.application.startup import ApplicationData
 from capsule_vision.configuration import (
     ModelDefinition,
     RecipeDefinition,
@@ -89,7 +90,7 @@ def first_run(
         engines.append(engine)
         return engine
 
-    startup = load_startup(data, engine_factory=factory)
+    startup = authenticated_startup(data, engine_factory=factory)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()

@@ -2,7 +2,7 @@
 
 import sys
 from collections import deque
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from threading import Condition, Event, Thread, get_ident
@@ -20,7 +20,7 @@ from tests.support.production import inferred
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import select_production_recipe
 from tests.support.reporting import seed, server
-from tests.support.startup import saved_data
+from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 
 from capsule_vision.application import (
     ApplicationError,
@@ -45,13 +45,16 @@ from capsule_vision.application.basler_connection import (
     SourceConnectionCommands,
 )
 from capsule_vision.application.basler_control import BaslerControlSnapshot
+from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.image_archive import (
     ArchiveImage,
     ImageArchive,
     ImageArchiveCommands,
 )
+from capsule_vision.application.production_application import (
+    SourceProductionApplication,
+)
 from capsule_vision.application.source_control import SourceControlState
-from capsule_vision.application.startup import load_startup
 from capsule_vision.communication import FinsUdpEndpoint
 from capsule_vision.communication.reporting import (
     ProductionReportingCommands,
@@ -99,7 +102,7 @@ def test_normal_folder_configuration_cycles_and_six_vision_positions(
     save_camera_sources(data.sources, replace(source, cameras=tuple(rows)))
     engine = Engine()
     engine.release_warm.set()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
@@ -168,7 +171,7 @@ def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
     saved = recipe_file.read_bytes()
     engine = Engine()
     engine.release_warm.set()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands) and isinstance(
         app, ImageArchiveCommands
@@ -239,7 +242,7 @@ def test_archive_zero_or_unfinished_frames_never_fabricate_images(
     engine.fail_warmup = scenario == "startup_failure"
     if scenario == "unfinished":
         engine.release_active.clear()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     assert isinstance(app, ImageArchiveCommands)
@@ -324,7 +327,7 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
 
     engine = DefectEngine()
     engine.release_warm.set()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     assert isinstance(app, ProductionReportingCommands)
@@ -479,7 +482,7 @@ def test_saved_source_switch_requires_explicit_production_preparation(
 ) -> None:
     data = saved_data(tmp_path)
     engine = Engine()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     assert isinstance(
         startup.application, production_application.SourceProductionApplication
     )
@@ -551,7 +554,7 @@ def test_normal_folder_runtime_needs_no_pypylon(
     data = saved_data(tmp_path)
     engine = Engine()
     engine.release_warm.set()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     assert isinstance(startup.application, SourceConnectionCommands)
     original = data.sources.read_bytes()
     try:
@@ -729,6 +732,85 @@ def passive(monkeypatch: pytest.MonkeyPatch) -> PassiveBackend:
     return backend
 
 
+@pytest.mark.parametrize("role", list(Role))
+def test_configured_basler_commands_require_operator(
+    tmp_path: Path, passive: PassiveBackend, role: Role
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    engine = Engine()
+    engine.release_warm.set()
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceProductionApplication)
+    owner = app.identity
+    assert owner is not None
+    try:
+        if role is Role.GUEST:
+            # Even a physically ready (fake) source cannot turn into a Guest demo.
+            app.connect_source()
+            owner.logout()
+            before, source = app.snapshot(), app.source_snapshot()
+            for command in (
+                app.connect_source,
+                app.disconnect_source,
+                app.start,
+                app.step_source,
+            ):
+                with pytest.raises(AuthorizationError):
+                    command()
+            assert app.snapshot() == before and app.source_snapshot() == source
+            assert not engine.calls and not passive.closed
+        else:
+            if role is not Role.ADMINISTRATOR:
+                owner.create_account("Actor", role, TEST_PASSWORD).result(WAIT)
+                owner.login("Actor", TEST_PASSWORD).result(WAIT)
+            app.connect_source()
+            assert app.source_snapshot().state is ConnectionState.CONNECTED
+            app.start().result(WAIT)
+            app.stop().result(WAIT)
+            app.disconnect_source()
+            assert passive.closed
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
+@pytest.mark.parametrize("operation", ["start", "disconnect"])
+def test_cancelled_capture_observers_can_read_identity_during_admitted_command(
+    tmp_path: Path, passive: PassiveBackend, operation: str
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    engine = Engine()
+    engine.release_warm.set()
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceProductionApplication)
+    owner = app.identity
+    assert owner is not None
+    try:
+        app.connect_source()
+        capture = app.capture_image(CameraId("CAM1"))
+        observed: list[Role] = []
+        with ThreadPoolExecutor(max_workers=1) as pool:
+
+            def cancelled(future: Future[CameraSnapshot]) -> None:
+                if future.cancelled():
+                    # Bounded observation detects a held identity lock without hanging.
+                    observed.append(pool.submit(owner.snapshot).result(WAIT).role)
+
+            capture.add_done_callback(cancelled)
+            if operation == "start":
+                app.start().result(WAIT)
+            else:
+                app.disconnect_source()
+        assert observed == [Role.ADMINISTRATOR]
+    finally:
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
 def without_folders(path: Path) -> None:
     source = load_camera_sources(path)
     save_camera_sources(
@@ -764,7 +846,7 @@ def test_idle_capture_is_one_shot_owned_and_never_enters_production(
         engines.append(engine)
         return engine
 
-    startup = load_startup(data, engine_factory=factory)
+    startup = authenticated_startup(data, engine_factory=factory)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     original = data.sources.read_bytes(), data.machine.read_bytes()
@@ -884,7 +966,7 @@ def test_vision_capture_cancellation_and_stale_delivery(
     now = [1.0]
     connection = BaslerConnection(clock=lambda: now[0])
     monkeypatch.setattr(production_application, "BaslerConnection", lambda: connection)
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     captures: list[Future[CameraSnapshot]] = []
@@ -1002,7 +1084,7 @@ def test_synthetic_warmup_uses_actual_distinct_shapes_on_single_engine_owner(
         engines.append(engine)
         return engine
 
-    startup = load_startup(data, engine_factory=factory)
+    startup = authenticated_startup(data, engine_factory=factory)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     try:
@@ -1044,7 +1126,7 @@ def test_source_lifetime_idle_discard_restart_recipe_and_batch(
         engines.append(engine)
         return engine
 
-    startup = load_startup(data, engine_factory=factory)
+    startup = authenticated_startup(data, engine_factory=factory)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     original = data.sources.read_bytes(), data.machine.read_bytes()
@@ -1165,7 +1247,7 @@ def test_failed_connect_is_explicit_and_never_creates_an_engine(
 
         monkeypatch.setattr(_basler_sdk, "PylonBackend", unavailable)
     engine = Engine()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     assert isinstance(startup.application, SourceConnectionCommands)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
@@ -1193,7 +1275,7 @@ def test_failed_cleanup_keeps_original_sdk_owner_until_explicit_retry(
 ) -> None:
     data = saved_data(tmp_path)
     save_basler(data.sources)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     assert isinstance(startup.application, SourceConnectionCommands)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
@@ -1236,7 +1318,7 @@ def test_start_failure_retains_connected_source_and_last_active_configuration(
         passive.dimensions[SERIALS[3]] = 57, 20
     engine = Engine()
     engine.fail_warmup = problem == "warmup"
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     assert isinstance(startup.application, SourceConnectionCommands)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
@@ -1278,7 +1360,7 @@ def test_source_loss_during_inspection_stops_session_without_reconnect(
     save_basler(data.sources)
     engine = Engine()
     engine.release_warm.set()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     assert isinstance(startup.application, SourceConnectionCommands)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
@@ -1302,7 +1384,7 @@ def test_stop_during_native_warmup_keeps_source_and_discards_arrivals(
     data = saved_data(tmp_path)
     save_basler(data.sources)
     engine = Engine()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     assert isinstance(startup.application, SourceConnectionCommands)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
@@ -1334,7 +1416,7 @@ def test_close_during_connect_cancels_before_arm_and_joins_actual_owner(
     data = saved_data(tmp_path)
     save_basler(data.sources)
     passive.release_prepare.clear()
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     connected: Future[None] = Future()
@@ -1378,7 +1460,7 @@ def test_disconnect_marks_unready_before_waiting_for_native_cleanup(
 ) -> None:
     data = saved_data(tmp_path)
     save_basler(data.sources)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     app.connect_source()
@@ -1410,7 +1492,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
     data = saved_data(tmp_path)
     save_basler(data.sources)
     without_folders(data.sources)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     assert isinstance(startup.application, SourceConnectionCommands)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
@@ -1523,7 +1605,7 @@ def test_persistent_source_stop_settles_admitted_results_and_reports(
     engine.release_warm.set()
     if kind == "native":
         engine.release_active.clear()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     assert isinstance(app, ProductionReportingCommands)
@@ -1612,7 +1694,7 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
 
     monkeypatch.setattr(_basler_sdk, "PylonBackend", backend)
     delivery = FutureDelivery()
-    startup = load_startup(data, engine_factory=factory)
+    startup = authenticated_startup(data, engine_factory=factory)
     window = create_window(startup, delivery)
     window.show()
     app = startup.application
@@ -1793,7 +1875,7 @@ def test_basler_partial_step_waits_for_late_native_return_before_paused(
         return backend
 
     monkeypatch.setattr(_basler_sdk, "PylonBackend", sdk)
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     assert isinstance(startup.application, SourceConnectionCommands)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
@@ -1881,7 +1963,7 @@ def test_vision_reentry_bilingual_metadata_without_discovery(
     without_folders(data.sources)
     saved = data.sources.read_bytes(), data.machine.read_bytes()
     engine = Engine()
-    startup = load_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
     delivery = FutureDelivery()

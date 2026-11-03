@@ -17,11 +17,11 @@ from PySide6.QtWidgets import (
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import Screen, assert_inside
 from tests.support.recipe_ui import configured_screen as configured_screen
-from tests.support.startup import saved_data
+from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 
 from capsule_vision.application import ApplicationState, PreparedConfiguration
 from capsule_vision.application.editing import RecipeEditorSession
-from capsule_vision.application.startup import load_startup
+from capsule_vision.application.identity_models import Role
 from capsule_vision.configuration import RecipeDefinition, load_recipe, save_recipe
 from capsule_vision.configuration.preferences import load_preferences
 from capsule_vision.localization.catalog import text
@@ -36,7 +36,7 @@ def test_startup_restores_latest_saved_same_id_without_start(
     data = saved_data(tmp_path)
     path = data.recipes / "local.json"
     save_recipe(path, replace(load_recipe(path), display_name="Latest saved"))
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     calls: list[str] = []
     prepare = RecipeEditorSession.prepare_saved
 
@@ -171,7 +171,7 @@ def test_save_and_selection_keep_editor_candidate_and_preferences_independent(
 ) -> None:
     data = saved_data(tmp_path)
     save_recipe(data.recipes / "other.json", RecipeDefinition("other", "Other"))
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:
@@ -373,3 +373,58 @@ def test_start_alone_activates_and_running_selection_is_rejected(
     assert session.entry is not None and session.entry.recipe.recipe_id == "product-a"
     window.bridge.stop()
     until(lambda: app.snapshot().state is ApplicationState.READY)
+
+
+@pytest.mark.parametrize("transition", ["logout", "switch", "demote", "disable"])
+def test_pending_selection_cannot_outlive_its_actor(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transition: str
+) -> None:
+    data = saved_data(tmp_path)
+    recipe = load_recipe(data.recipes / "local.json")
+    save_recipe(data.recipes / "other.json", replace(recipe, recipe_id="other"))
+    startup = authenticated_startup(data)
+    app = startup.application
+    owner = app.identity
+    assert owner is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    picker = window.production_recipes
+    entered, release = Event(), Event()
+    original = RecipeEditorSession.prepare_saved
+
+    def held(session: RecipeEditorSession, recipe_id: str) -> PreparedConfiguration:
+        entered.set()
+        assert release.wait(10)
+        return original(session, recipe_id)
+
+    monkeypatch.setattr(RecipeEditorSession, "prepare_saved", held)
+    try:
+        admin = owner.snapshot().account
+        assert admin is not None
+        owner.create_account("Backup", Role.ADMINISTRATOR, TEST_PASSWORD).result(5)
+        initial, preferences = app.snapshot(), data.preferences.read_bytes()
+        picker.select(picker.recipes.findData("other"))
+        until(entered.is_set)
+        if transition == "logout":
+            owner.logout()
+        elif transition == "switch":
+            owner.login("Backup", TEST_PASSWORD).result(5)
+        elif transition == "demote":
+            owner.set_role(admin.account_id, Role.OPERATOR).result(5)
+        else:
+            owner.set_enabled(admin.account_id, False).result(5)
+        release.set()
+        until(lambda: not window.editing.busy)
+        assert (
+            app.snapshot() == initial and data.preferences.read_bytes() == preferences
+        )
+        assert picker.recipes.currentData() == "local" and picker.feedback is not None
+        owner.logout()
+        entered.clear()
+        picker.select(picker.recipes.findData("local"))
+        assert not entered.is_set() and not window.editing.busy
+        assert picker.feedback is not None and "Operator" in picker.feedback[1]
+    finally:
+        release.set()
+        close_window(window)
+        delivery.detach()

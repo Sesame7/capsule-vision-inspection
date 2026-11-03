@@ -153,8 +153,16 @@ IDs in separate role and disable-confirmation dialogs. Dialog dismissal invalida
 its delivery token without cancelling accepted account work; the service remains
 the transaction and authorization owner. The shell disables account UI on confirmed
 Close. Application retains worker stop/join ownership. Login/logout never controls
-an inspection session. Business
-command authorization and audit storage are not implemented.
+an inspection session.
+
+Production checks the session at command admission under the Application lock.
+Start freezes automatic reporting and Guest demonstration provenance for the
+admitted generation. Saved Recipe installation additionally validates the
+initiating session revision and request identity. Startup supplies restored
+settings and candidate during construction. Normal startup always supplies a
+LocalIdentity, including when account storage is unavailable. Explicit identity-free
+engineering compositions remain trusted. Runtime delivery and shutdown keep their
+existing owners. See the [Production policy](configuration.md#local-accounts).
 
 ## Inference
 

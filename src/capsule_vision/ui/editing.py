@@ -110,25 +110,22 @@ class EditingCoordinator(QObject):
         if not self.editable() or self.session is None:
             completed(ConfigurationError("Production selection is unavailable"))
             return
+        try:
+            request = self.bridge.application.begin_recipe_selection()
+        except RuntimeError as exc:
+            completed(exc)
+            return
         preparation = self.session.production_preparation()
-        before = self.bridge.application.snapshot()
 
         def prepared(value: object, error: BaseException | None) -> None:
             try:
                 if error is not None:
                     raise ConfigurationError(str(error)) from error
-                current = self.bridge.application.snapshot()
-                if (
-                    self.closing
-                    or current.state
-                    not in (ApplicationState.UNCONFIGURED, ApplicationState.READY)
-                    or current.generation != before.generation
-                    or current.candidate_prepared is not before.candidate_prepared
-                ):
-                    raise ConfigurationError("Production changed during preparation")
+                if self.closing:
+                    raise ConfigurationError("Production selection is closing")
                 if not isinstance(value, PreparedConfiguration):
                     raise ConfigurationError("Missing prepared configuration")
-                self.bridge.application.configure(value)
+                self.bridge.application.install_recipe_selection(request, value)
                 self.applied.emit(value)
                 self.bridge.refresh()
             except Exception as exc:

@@ -186,8 +186,9 @@ def identity_screen(
     ensure_test_fonts()
     candidate = prepared(tmp_path)
     session = FakeSession()
-    application = ProductionApplication(lambda _p, _g: session, identity=owner)
-    application.configure(candidate)
+    application = ProductionApplication(
+        lambda _p, _g: session, identity=owner, initial_candidate=candidate
+    )
     window = MainWindow(
         QtProductionBridge(
             application,

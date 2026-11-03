@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtWidgets import QApplication, QWidget
 from tests.support.application import WAIT
 from tests.support.qt import close_window, ensure_test_fonts, until
-from tests.support.startup import close, saved_data
+from tests.support.startup import authenticated_startup, close, saved_data
 
 from capsule_vision.application import (
     ApplicationError,
@@ -120,7 +120,7 @@ def test_saved_apply_language_restart_and_no_production_side_effects(
         data.recipes / "second.json",
         RecipeDefinition("second", "Second", model_id="general"),
     )
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -168,7 +168,7 @@ def test_unchanged_apply_still_notifies_and_persists_preferences(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = saved_data(tmp_path)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -210,7 +210,7 @@ def test_failed_preparation_never_updates_last_recipe(
         data.recipes / "second.json",
         RecipeDefinition("second", "Second", model_id="general"),
     )
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:
@@ -240,7 +240,7 @@ def test_no_recipe_fallback_in_widget_and_explicit_selection_can_apply(
 ) -> None:
     data = saved_data(tmp_path)
     save_preferences(data.preferences, ApplicationPreferences(None, "zh"))
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:
@@ -323,7 +323,7 @@ def test_unreliable_preferences_are_never_overwritten_by_ui(
     }[kind]
     if kind != "external_change":
         data.preferences.write_text(contents, encoding="utf-8")
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     if kind == "external_change":
         data.preferences.write_text(contents, encoding="utf-8")
     original = data.preferences.read_bytes()
@@ -362,7 +362,7 @@ def test_startup_feedback_is_localized_with_details_only_in_tooltip(
     value["language"] = language
     data.preferences.write_text(json.dumps(value), encoding="utf-8")
     data.sources.write_text('{"cameras":{}}', encoding="utf-8")
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -393,7 +393,7 @@ def test_bad_unrelated_recipe_is_visible_without_blocking_valid_apply(
 ) -> None:
     data = saved_data(tmp_path)
     (data.recipes / "broken.json").write_text("{}", encoding="utf-8")
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:
@@ -444,7 +444,7 @@ def test_preferences_write_error_is_visible_and_retains_selection(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = saved_data(tmp_path)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     before = load_preferences(data.preferences)
@@ -471,7 +471,7 @@ def test_source_browsing_and_recipe_apply_do_not_rewrite(
     value = json.loads(data.sources.read_text(encoding="utf-8"))
     original = json.dumps(value, indent=3).encode()
     data.sources.write_bytes(original)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()

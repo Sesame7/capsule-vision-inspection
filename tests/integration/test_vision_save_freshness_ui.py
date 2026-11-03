@@ -10,11 +10,11 @@ from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import select_production_recipe
-from tests.support.startup import saved_data
+from tests.support.startup import authenticated_startup, saved_data
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.application.editing import RecipeEditorSession
-from capsule_vision.application.startup import ApplicationData, load_startup
+from capsule_vision.application.startup import ApplicationData
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
@@ -42,7 +42,7 @@ def saved_screen(
             "Vision Save/Production selection must not create an engine"
         )
 
-    startup = load_startup(data, engine_factory=forbidden)
+    startup = authenticated_startup(data, engine_factory=forbidden)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.set_language("en")

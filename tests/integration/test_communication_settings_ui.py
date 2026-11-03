@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
-from tests.support.startup import saved_data
+from tests.support.startup import authenticated_startup, saved_data
 
 from capsule_vision.application import ApplicationState, ProductionCounters
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
@@ -527,7 +527,7 @@ def settings_window(
     qapp: QApplication, tmp_path: Path
 ) -> Generator[tuple[Startup, MainWindow]]:
     ensure_test_fonts()
-    startup = load_startup(saved_data(tmp_path))
+    startup = authenticated_startup(saved_data(tmp_path))
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
