@@ -62,6 +62,24 @@ independently, resolving current saved dependencies on the existing bounded IO
 worker. It never reads or replaces the editor draft. The saved definition, stopped
 candidate and active session are distinct; only successful Start promotes a candidate.
 
+Prepared candidates retain immutable saved Vision definitions and their paths.
+Vision has one Save action with independent MachineLayout/CameraSources outcomes;
+it never enters Production preparation or emits a candidate-installation event.
+Successful Save/reload observations mark a differing candidate as requiring
+re-preparation without replacing its Recipe identity or an active session. Identical
+parsed definitions leave a current candidate valid. Production alone selects and
+prepares saved Recipes, including explicit re-selection of the same ID.
+The existing Application lifecycle worker verifies persisted Vision dependencies
+again before invoking the session factory. Changed or unreadable definitions reject
+Start before engine/session side effects and retain the previous candidate/active
+values. Session creation consumes the candidate's captured sources and layout.
+Snapshot presence is authoritative: missing captured CameraSources reject Start
+without a fallback disk read. Fixed-image launchers capture their own source mapping;
+its absent file path denotes launcher ownership, not missing captured values.
+No filesystem validation is added to Qt dispatch or the Application command lock;
+no watcher, automatic preparation or cross-file transaction is introduced.
+Fixed-image engineering/demo launchers retain their explicit source ownership.
+
 Production composition is Qt-independent: `application/startup.py` owns entry-relative
 paths, persisted loading/validation and service assembly; `composition.py` builds
 the normal/deferred and explicit-path applications without starting inspection.
@@ -258,7 +276,7 @@ PAUSED at the safe boundary, and Step produces one formal result. This is still
 application RUNNING, with editing locks retained. The Stop control requests actual
 shutdown.
 
-Vision's explicit Connect all opens/arms all five or six saved/applied Basler mappings on one
+Vision's explicit Connect all opens/arms all five or six saved Basler mappings on one
 application-owned SDK thread. Connection survives page/Recipe/Batch changes and
 Production Stop. CONNECTED/ARMED is independent of inspection RUNNING; there is no
 automatic connection/retry. Idle connected frames are retrieved, validated and
@@ -351,7 +369,7 @@ its own Model explicitly. Managed Model IDs come from immediate child directorie
 Discovery isolates invalid entries with diagnostics, and only the selected
 Recipe's dependency chain determines readiness. A missing catalog is empty,
 never a first-entry fallback. A missing preference file leaves selection empty.
-Recipe Save accepts incomplete definitions without activation; Prepare/Apply
+Recipe Save accepts incomplete definitions without activation; Production preparation
 requires resolved identities and verified artifacts before preparing a stopped candidate. Start creates a disposable session and warm-up with
 zero production results/counters. Only successful Start promotes the candidate;
 failed activation preserves last-known-good active identity and returns READY if
@@ -568,7 +586,7 @@ names/tooltips. Refresh never relabels a prepared definition from newer saved da
 The selector prefers 170 logical pixels; long names elide only in its closed label,
 with full text retained in the model, tooltips and accessibility.
 Header space after Batch and selector width can shrink while preserving the player
-slots and common Batch IDs. Save/apply actions reserve
+slots and common Batch IDs. Save actions reserve
 localized group budgets, borrowing flexible feedback/summary space. Conventional
 utilities use touch-sized icons with full localized tooltips/accessibility:
 History paging/refresh, Recipe color sampling, Vision numeric ROI Apply, and
@@ -577,7 +595,7 @@ Watch removal, single read and automatic refresh form equal compact icon/text
 slots budgeted across languages and refresh states; Add remains a separate square.
 Automatic refresh keeps its one-second interval visible, a loop icon, a checked state and an explicit
 Stop caption while active, distinct from Production Stop. Manual writing retains
-a localized verb. Save/apply and service power controls retain visible verbs.
+a localized verb. Save and service power controls retain visible verbs.
 These compact action groups use four-pixel horizontal style padding and a
 two-pixel focus allowance beyond their shaped caption/icon budget. Watch peers
 use three-pixel gaps; their surrounding selector/Add spacing remains unchanged.
@@ -663,7 +681,7 @@ its identity. Confirmed service-thread exit releases the publication/cache; an
 incomplete join retains ownership and cache. There is no disk cache or image history.
 Application/display snapshots are sampled separately, not atomic multi-camera capture.
 Publisher ID, revision and source identities prevent old bytes/new evidence aliasing.
-Applying a changed camera set clears retained display pixels and advances its
+Installing a candidate with a changed camera set clears retained display pixels and advances its
 revision; the existing publisher follows that configured set without another Web
 owner. History stores each cycle's own five/six-camera identities and order, so
 older 36-channel records remain unchanged beside new 30-channel records.

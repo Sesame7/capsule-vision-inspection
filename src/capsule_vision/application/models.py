@@ -15,6 +15,8 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 
+from .vision_dependencies import VisionDependencies
+
 
 class ApplicationError(RuntimeError):
     """Application command or lifecycle failure; causes remain chained."""
@@ -43,6 +45,7 @@ class PreparedConfiguration:
     configuration: ResolvedInspectionConfiguration
     model_path: Path
     managed_model: bool = False
+    vision_dependencies: VisionDependencies | None = None
 
 
 def prepare_configuration(
@@ -144,6 +147,7 @@ class ProductionApplicationSnapshot:
     last_issue: ApplicationIssue | None
     active_prepared: PreparedConfiguration | None = None
     candidate_prepared: PreparedConfiguration | None = None
+    candidate_requires_preparation: bool = False
 
     @property
     def has_pending_configuration(self) -> bool:

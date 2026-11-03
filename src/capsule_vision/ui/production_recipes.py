@@ -188,6 +188,12 @@ class ProductionRecipes(QWidget):
             details += f"\n{active_text} [{active.configuration.recipe_id}]"
             if candidate is not None:
                 details += f"\n{text('pending_recipe', self.language)}: {name}"
+        if snapshot.candidate_requires_preparation:
+            stale = text("recipe_reprepare", self.language)
+            inline = f"{inline} · {stale}" if inline else stale
+            details += f"\n{text('recipe_reprepare_hint', self.language)}"
+        if self.feedback is not None and self.feedback[0] == "recipe_prepare_error":
+            details += f"\n{text(self.feedback[0], self.language)}\n{self.feedback[1]}"
         if self._requested is not None:
             requested_id, requested_name = self._requested
             inline = (

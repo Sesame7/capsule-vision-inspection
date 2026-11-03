@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QMessageBox
 from tests.support.application import FakeSession
 from tests.support.qt import until
 from tests.support.recipe_ui import configured_screen as configured_screen
+from tests.support.recipe_ui import select_production_recipe
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.application.editing import RecipeEditorSession
@@ -141,7 +142,7 @@ def test_invalid_batch_is_atomic(
     dialog.request_back()
 
 
-def test_save_apply_start_and_no_running_edits(
+def test_save_then_production_selection_start_and_no_running_edits(
     roi_screen: tuple[Screen, VisionPage],
 ) -> None:
     (window, session, runtimes), dialog = roi_screen
@@ -149,11 +150,15 @@ def test_save_apply_start_and_no_running_edits(
     before = bridge.application.snapshot().candidate_prepared
     dialog.commit_geometry(BoundingRect(42, 0, 8, 10))
     assert bridge.application.snapshot().candidate_prepared is before
-    dialog.buttons["save_apply"].click()
+    dialog.buttons["save"].click()
     until(lambda: not page.busy)
     assert session.machine_path is not None
     assert load_machine_layout(session.machine_path) == session.machine
     assert not session.machine_editor.dirty
+    assert bridge.application.snapshot().candidate_prepared is before
+    assert bridge.application.snapshot().candidate_requires_preparation
+    select_production_recipe(window)
+    until(lambda: not page.busy)
     candidate = bridge.application.snapshot().candidate_prepared
     assert candidate is not None
     assert candidate.configuration.layout.cameras[2].slots[4].rect.x == 42
@@ -173,7 +178,7 @@ def test_save_apply_start_and_no_running_edits(
     assert all(
         line.isReadOnly() for line in (dialog.common_width, dialog.common_height)
     )
-    assert not dialog.buttons["save_apply"].isEnabled()
+    assert not dialog.buttons["save"].isEnabled()
     dialog.canvas.zoom(8)
     drag(dialog, QPoint(400, 200), QPoint(360, 180), Qt.MouseButton.MiddleButton)
     assert session.machine_editor.definition == before
@@ -281,7 +286,7 @@ def test_compact_tools_wheel_and_pan_preserve_geometry(
     assert session.machine_editor.definition == before
 
 
-def test_prepare_failure_keeps_saved_machine_and_workspace(
+def test_save_does_not_require_recipe_preparation_or_artifact(
     roi_screen: tuple[Screen, VisionPage], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (window, session, _), dialog = roi_screen
@@ -292,11 +297,12 @@ def test_prepare_failure_keeps_saved_machine_and_workspace(
 
     monkeypatch.setattr(session, "prepare", fail)
     dialog.commit_geometry(BoundingRect(42, 0, 8, 10))
-    dialog.save_and_apply()
+    dialog.save_setup()
     until(lambda: not window.recipe_page.busy)
-    assert "artifact unavailable" in window.event_label.toolTip()
+    assert not window.event_label.toolTip()
     assert not session.machine_editor.dirty
     assert window.bridge.application.snapshot().candidate == candidate
+    assert window.bridge.application.snapshot().candidate_requires_preparation
     assert window.vision_workspace is dialog
 
 
@@ -374,7 +380,7 @@ def test_machine_save_failure_does_not_prepare(
 
     monkeypatch.setattr(session.machine_editor, "save", fail)
     workspace.commit_geometry(BoundingRect(42, 0, 8, 10))
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert session.machine_editor.saved == saved and session.machine_editor.dirty
     assert "read-only" in window.event_label.toolTip()

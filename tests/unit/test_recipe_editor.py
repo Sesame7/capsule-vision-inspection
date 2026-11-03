@@ -123,8 +123,8 @@ def test_load_dirty_save_new_discard_and_identity(tmp_path: Path) -> None:
         session.load(original)
     with pytest.raises(ConfigurationError, match="unsaved"):
         session.new()
-    with pytest.raises(ConfigurationError, match="Save changes"):
-        session.apply_recipe()
+    ready = session.production_preparation().prepare_saved(original.recipe.recipe_id)
+    assert ready.configuration.display_name == original.recipe.display_name
     session.draft.display_name = original.recipe.display_name
     assert not session.dirty
     session.draft.display_name = "修改"
@@ -207,16 +207,19 @@ def test_model_prepare_and_external_changes(tmp_path: Path) -> None:
     assert session.resolve().layout == original.layout
     assert session.entry is not None
     before = session.entry.path.read_bytes()
-    saved = session.apply_recipe()
+    saved = session.entry.recipe
     ready = session.prepare(saved)
     assert ready.configuration.model.model_id == "general"
     assert session.entry.path.read_bytes() == before
+    artifact = ready.model_path.read_bytes()
     ready.model_path.write_bytes(b"wrong")
     with pytest.raises(ModelArtifactError):
         session.prepare(saved)
+    ready.model_path.write_bytes(artifact)
     save_recipe(session.entry.path, replace(saved, display_name="external"))
-    with pytest.raises(ConfigurationError, match="externally"):
-        session.apply_recipe()
+    current = session.production_preparation().prepare_saved(saved.recipe_id)
+    assert current.configuration.display_name == "external"
+    assert session.entry.recipe == saved
 
 
 @pytest.mark.parametrize("model_id", [None, "unregistered"])
@@ -233,7 +236,7 @@ def test_incomplete_recipe_save_reload_and_strict_preparation(
     session.discard()
     assert not session.dirty and session.draft.model_id == model_id
     with pytest.raises(ConfigurationError, match="model_id"):
-        session.apply_recipe()
+        session.production_preparation().prepare_saved(session.entry.recipe.recipe_id)
     with pytest.raises(ConfigurationError, match="model_id"):
         session.prepare(session.entry.recipe)
     assert session.entry.path.read_bytes() == saved

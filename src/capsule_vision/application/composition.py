@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import monotonic
 
@@ -55,6 +55,7 @@ from .models import (
 )
 from .production_application import SourceProductionApplication
 from .production_session import SourceRuntimeSession
+from .vision_dependencies import VisionDependencies
 
 
 def _cli_image(path: Path) -> NDArray[np.uint8]:
@@ -106,9 +107,10 @@ def compose(
     sources_file = (
         sources_file or machine_file.parent / "camera_sources.json"
     ).resolve()
+    sources_present = sources_file.exists()
     sources = (
         load_camera_sources(sources_file)
-        if sources_file.exists()
+        if sources_present
         else CameraSources(
             tuple(
                 CameraFolder(
@@ -120,6 +122,26 @@ def compose(
     )
     sources.validate_cameras(prepared.configuration.layout.camera_ids)
     sources.validate_mapping()
+    fixed_sources = (
+        CameraSources(
+            tuple(
+                CameraFolder(camera, str(path.resolve().parent))
+                for camera, path in zip(
+                    prepared.configuration.layout.camera_ids, paths, strict=True
+                )
+            )
+        )
+        if paths
+        else None
+    )
+    dependencies = VisionDependencies(
+        machine_file.resolve(),
+        machine,
+        sources_file if not paths else None,
+        fixed_sources if paths else sources if sources_present else None,
+    )
+    dependencies.validate_current()
+    prepared = replace(prepared, vision_dependencies=dependencies)
     editor = RecipeEditorSession(
         RecipeCatalog(recipe_file.resolve().parent),
         machine,
@@ -128,6 +150,7 @@ def compose(
         machine_path=machine_file.resolve(),
         camera_sources=CameraSourceDraft(sources, sources_file),
         cli_sources=bool(paths),
+        fixed_sources=fixed_sources,
     )
     app, store = create_production_application(
         editor,
@@ -196,18 +219,33 @@ def create_production_application(
 
     def factory(config: PreparedConfiguration, generation: int) -> SourceRuntimeSession:
         try:
-            saved_sources = load_camera_sources(sources_file) if not paths else sources
+            dependencies = config.vision_dependencies
+            if dependencies is not None:
+                if dependencies.sources is None:
+                    raise ConfigurationError(
+                        "Prepared configuration has no captured CameraSources; "
+                        "reselect the saved Recipe"
+                    )
+                saved_sources = dependencies.sources
+            else:
+                saved_sources = (
+                    load_camera_sources(sources_file) if not paths else sources
+                )
             saved_sources.validate_cameras(config.configuration.layout.camera_ids)
-            if not paths and saved_sources.mode != source_draft.saved.mode:
+            if (
+                dependencies is None
+                and not paths
+                and saved_sources.mode != source_draft.saved.mode
+            ):
                 raise ConfigurationError(
-                    "Source mode changed on disk; apply in Vision or restart"
+                    "Source mode changed on disk; reload saved sources in Vision"
                 )
         except ConfigurationError as exc:
             cache.clear()
             raise FolderSourceError(f"Camera sources {sources_file}: {exc}") from exc
         snapshot = (
             saved_sources
-            if not paths
+            if dependencies is not None or not paths
             else CameraSources(
                 tuple(
                     CameraFolder(camera, str(path.resolve().parent))

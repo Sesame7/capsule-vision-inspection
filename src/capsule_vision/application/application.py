@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from threading import Condition, Thread, current_thread
 from uuid import uuid4
 
+from capsule_vision.configuration import CameraSources, MachineLayoutDefinition
 from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
 
@@ -33,6 +34,7 @@ from .models import (
     ProductionCounters,
 )
 from .session import ProductionCycle, RuntimeSession, lifecycle_error
+from .vision_dependencies import VisionPreparationRequired
 
 
 def _promise[T](future: Future[T]) -> Future[T]:
@@ -82,6 +84,7 @@ class ProductionApplication:
         self._condition = Condition()
         self._state = ApplicationState.UNCONFIGURED
         self._candidate: PreparedConfiguration | None = None
+        self._candidate_requires_preparation = False
         self._active: PreparedConfiguration | None = None
         self._session: RuntimeSession | None = None
         self._generation = 0
@@ -121,14 +124,45 @@ class ProductionApplication:
                 self._issue,
                 self._active,
                 self._candidate,
+                self._candidate_requires_preparation,
             )
 
     def configure(self, candidate: PreparedConfiguration) -> None:
         """Cheap installation of an already resolved/artifact-checked candidate."""
         with self._condition:
             self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
+            if (
+                self._candidate_requires_preparation
+                and self._issue is not None
+                and self._issue.exception_type == VisionPreparationRequired.__name__
+            ):
+                self._issue = None
             self._candidate = candidate
+            self._candidate_requires_preparation = False
             self._state = ApplicationState.READY
+
+    def observe_saved_vision(
+        self,
+        machine: MachineLayoutDefinition | None,
+        sources: CameraSources | None,
+        *,
+        machine_known: bool = True,
+        sources_known: bool = True,
+    ) -> None:
+        """Observe successfully saved/read definitions, without IO or activation."""
+        with self._condition:
+            dependencies = (
+                self._candidate.vision_dependencies if self._candidate else None
+            )
+            if dependencies is not None and (
+                (machine_known and machine != dependencies.machine)
+                or (
+                    sources_known
+                    and dependencies.sources_path is not None
+                    and sources != dependencies.sources
+                )
+            ):
+                self._candidate_requires_preparation = True
 
     def start_batch(self, batch_id: str | None) -> None:
         with self._condition:
@@ -147,6 +181,10 @@ class ProductionApplication:
     def start(self) -> Future[None]:
         with self._condition:
             self._require(ApplicationState.READY)
+            if self._candidate_requires_preparation:
+                raise ApplicationStateError(
+                    "Vision requires re-preparation; reselect the saved Recipe"
+                )
             if self._preparation is not None:
                 raise ApplicationStateError("Model preparation still owns resources")
             self._generation += 1
@@ -474,6 +512,8 @@ class ProductionApplication:
             if starting:
                 try:
                     assert prepared is not None
+                    if prepared.vision_dependencies is not None:
+                        prepared.vision_dependencies.validate_current()
                     session = self._factory(prepared, generation)
                     with self._condition:
                         self._session = session
@@ -498,6 +538,8 @@ class ProductionApplication:
                 except BaseException as exc:
                     startup_error = exc
                     with self._condition:
+                        if isinstance(exc, VisionPreparationRequired):
+                            self._candidate_requires_preparation = True
                         self._issue = ApplicationIssue(
                             "startup", "startup_failed", type(exc).__name__, str(exc)
                         )

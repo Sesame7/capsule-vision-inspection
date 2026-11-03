@@ -576,28 +576,26 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
     workspace = window.vision_workspace
     assert workspace is not None
     QApplication.processEvents()
-    primary = workspace.buttons["save_apply"]
+    primary = workspace.buttons["save"]
     assert (
         primary.width()
         <= ceil(
             max(
-                QFontMetricsF(primary.font()).horizontalAdvance(
-                    text("save_apply", language)
-                )
+                QFontMetricsF(primary.font()).horizontalAdvance(text("save", language))
                 for language in LANGUAGES
             )
         )
         + Style.space
+        + primary.iconSize().width()
+        + Style.icon_text_gap
     )
     assert workspace.geometry_toolbar.height() == Style.touch
     assert all(line.width() == 72 for line in workspace.coordinates.values())
-    sizes = tuple(
-        workspace.buttons[key].size() for key in ("roi_set_rect", "save_apply")
-    )
+    sizes = tuple(workspace.buttons[key].size() for key in ("roi_set_rect", "save"))
     for language in LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
-        for key, expected in zip(("roi_set_rect", "save_apply"), sizes, strict=True):
+        for key, expected in zip(("roi_set_rect", "save"), sizes, strict=True):
             button = workspace.buttons[key]
             assert button.size() == expected
             if key == "roi_set_rect":

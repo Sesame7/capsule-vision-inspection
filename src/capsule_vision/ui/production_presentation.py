@@ -27,7 +27,7 @@ class Controls:
 def controls(snapshot: ProductionApplicationSnapshot) -> Controls:
     state = snapshot.state
     return Controls(
-        state is ApplicationState.READY,
+        state is ApplicationState.READY and not snapshot.candidate_requires_preparation,
         state in (ApplicationState.STARTING, ApplicationState.RUNNING),
         state is ApplicationState.FAULT and not snapshot.runtime_owned,
         state is ApplicationState.READY,

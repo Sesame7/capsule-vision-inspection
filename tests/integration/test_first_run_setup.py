@@ -140,7 +140,8 @@ def test_empty_vision_sources_save_independently_and_cam6_is_a_placeholder(
     assert not workspace.canvas.rois and workspace.canvas.model.size is None
     assert workspace.canvas.model.rect is None
     assert workspace.sources is not None and not workspace.sources.persisted
-    assert workspace.buttons["save"].text() == ""
+    assert workspace.buttons["save"].text() == text("save", window.language)
+    assert "save_apply" not in workspace.buttons
     assert workspace.buttons["save"].toolTip() == text("save", window.language)
     assert "camera_setup" in window.configuration_messages
     workspace.buttons["save"].click()

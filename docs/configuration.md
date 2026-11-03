@@ -62,8 +62,8 @@ text or null) and `language`; there is no global/default Model. Startup never
 chooses the first Recipe/Model. A selected Recipe resolves its own exact `model_id`.
 Missing preferences do not block the shell or available configuration editors;
 other required data still governs editor availability and Production readiness.
-Only explicit language changes or successful candidate installation (Production
-selection or Vision Apply) write preferences.
+Only explicit language changes or successful Production candidate installation
+write preferences. Vision Save never changes the last-applied Recipe preference.
 Malformed files remain unchanged, and unknown fields are errors. An unsupported
 language retains the existing visible, in-memory `zh` fallback with writes blocked
 until repair; it is never silently persisted.
@@ -434,8 +434,9 @@ not calibrated geometry; changing references never replaces initialized ROIs.
 
 Vision keeps six configuration positions. An unconfigured CAM6 is not an offline
 configured camera. While stopped and disconnected, its minus action confirms
-removing CAM6 geometry/source from the draft; ordinary Save/apply makes the edit
-effective. No automatic backup is created. On an existing saved machine, its plus
+removing CAM6 geometry/source from the draft; explicit Save persists the edit.
+Production re-selection prepares the changed camera set. No automatic backup is
+created. On an existing saved machine, its plus
 action copies only the current CAM5 draft's six ROI rectangles into independent
 CAM6 values, preserving slots 0–5
 and assigning CH31–CH36. CAM1–CAM5 are unchanged; CAM6's Folder path and Basler
@@ -445,7 +446,7 @@ persisted or activated by + alone. Before the first MachineLayout Save, restorin
 CAM6 instead leaves geometry uninitialized until its own dimensions are known.
 Incompatible channel numbering on removal fails instead of being remapped.
 MachineLayout count changes do not depend on unrelated Recipes or Model resolution.
-Prepare/Apply still resolves the selected Recipe's Model and verifies its artifact
+Production preparation still resolves the selected Recipe's Model and verifies its artifact
 before replacing the candidate.
 Discard reloads actual persisted files, including after partial multi-file saves;
 inconsistent saved MachineLayout/CameraSources fail without replacing the draft.
@@ -457,7 +458,7 @@ exactly `display_name`, `expected_sha256` (64 hexadecimal digits) and `module_id
 There are no persisted `model_id` or `model_path` fields. Loading constructs the
 existing typed Model identity and absolute artifact path to the owning directory's
 `model.vimosln`; missing artifacts/SHA mismatches still fail preparation. Production
-preparation reads current saved Model metadata independently of the editor registry. Vision Apply retains its explicit editor refresh/validation rules.
+preparation reads current saved Model metadata independently of the editor registry.
 Recipe catalog Refresh discovers Model/Recipe metadata without choosing a first
 entry. Discovery never initializes an engine, copies an artifact or creates a cache. Explicit-path
 tools accept any `<model_id>/model.json` using this same contract, without requiring
@@ -512,7 +513,7 @@ is not a JSON field. Only `display_name` is required. Optional fields are `model
 `image_archive`. A nonempty `model_id` selects that exact Model; there is no global
 Model, inheritance or first-Model fallback. Save validates the Recipe's structure
 and persistence identity, so a missing or unresolved Model reference can remain
-saved. Prepare/Apply explicitly rejects it without replacing the current candidate
+saved. Production preparation rejects it without replacing the current candidate
 or active session. Referenced artifacts must still pass path/SHA/module validation.
 Recipe Save persists only the definition. Production selection separately prepares
 it; preparation failure keeps the saved definition available for completion.
@@ -610,8 +611,8 @@ Basler preparation/connection/Start requires the complete configured camera set
 and distinct nonempty serials, resolved in MachineLayout order. Folder definitions
 with missing/unavailable inputs may remain READY with a warning; Start preflight
 rejects them before engine creation. Saving is not proof of source readiness.
-Vision Save/apply can persist an incomplete Basler mapping and then report failed
-Apply without replacing the previous candidate.
+Vision Save can persist an incomplete Basler mapping. Production preparation and
+Connect reject it independently; Save never replaces the previous candidate.
 
 Folder paths resolve relative to the new JSON's parent (`data/`); for example,
 `../images/cam1` selects entry-relative `images/cam1`. No old base-directory
@@ -620,7 +621,7 @@ when inactive. No automatic scanning, identity inference or mapping repair occur
 
 `loop` is boolean; FPS is finite/positive. They pace Folder Replay only. Stored
 Folder paths are retained across mode changes but are not shown or used as
-independent references in Basler mode. They may be empty. Connect all explicitly uses saved/applied mappings; Start requires
+independent references in Basler mode. They may be empty. Connect all explicitly uses saved mappings; Start requires
 the connected source, validates actual dimensions and warms ViMo with synthetic BGR.
 Switching mode preserves both folders and serials. Disconnect before changing
 source mapping/mode; Recipe/Batch/page changes do not disconnect cameras.
@@ -791,7 +792,7 @@ Folder is a source selection, not device connectivity or a continuously verified
 camera count. Camera counts come from actual connected CameraId/serial matches.
 Unsaved selections do not change that strip. Lifecycle transitions and errors keep
 precedence; source availability does not establish full inspection readiness.
-Independent Save sits beside Save/apply and Discard; a compact status symbol exposes
+One visible Save action sits beside Discard; a compact status symbol exposes
 clean, dirty, saving or failed state through its symbol and localized accessible
 name, without a runtime tooltip.
 The image selector and previous/next browse Folder inputs. Import loads a temporary
@@ -808,10 +809,10 @@ control states, successful pixels use the image selector, and failures/timeouts
 use the global feedback strip. The chooser list is separate from this caption;
 source changes and asynchronous image delivery cannot reuse an old schematic caption.
 The canvas does not repeat status text. ROI channel selection changes
-the displayed slot; numeric Apply edits only the machine draft until Save/apply.
-Mode selection edits the same CameraSources draft and requires explicit Save/apply;
+the displayed slot; numeric Apply edits only the machine draft until Save.
+Mode selection edits the same CameraSources draft and requires explicit Save;
 selecting a card never changes saved sources or geometry. Runtime editing locks remain.
-Save/apply permits structurally valid ROIs without canvas images; numeric
+Save permits structurally valid ROIs without canvas images; numeric
 editing does not require image pixels. Available connected dimensions supply bounds
 checks, always repeated before Start. Without pixels, known dimensions display a
 blank bounded canvas with the saved/draft ROIs. Without trustworthy dimensions,
@@ -871,6 +872,8 @@ The state and optional active/requested identity share the first header row;
 the selector and Refresh occupy the second. Pending preparation identifies the
 request separately while the selector retains the installed candidate. Failure
 keeps that candidate selected and names the failed request in feedback details.
+The selector's full tooltip/accessibility retains preparation-failure details even
+when an earlier Start warning has priority in the bottom strip.
 Recipe editor selection and unsaved drafts remain independent. Reselecting the same ID prepares the latest saved version. While
 preparation is pending, conflicting selections and Start are unavailable. Closing,
 a changed Production generation/candidate or a failed preparation prevents late
@@ -882,13 +885,34 @@ Startup can restore the latest saved version of that ID as a stopped candidate,
 with no automatic fallback or Start. Candidate, active and persisted applied IDs
 remain protected from Recipe deletion.
 
-Vision retains **Save and apply**: independent file persistence, clean saved
-candidate preparation/installation, then activation on a later successful Start.
-A failure after file persistence is not a full rollback. Vision saves its
-MachineLayout/source files; Model binaries and source images remain unchanged.
-Runtime lifecycle locks continue to govern editing.
+Vision is save-only. MachineLayout and CameraSources retain independent validation
+and atomic persistence; a partial save is not a cross-file rollback. Save never
+prepares/installs a candidate, changes its Recipe identity or `last_applied_recipe_id`,
+or activates a session. Model binaries and source images remain unchanged.
+Runtime lifecycle and source-connection locks continue to govern editing.
 
-Vision's restore icon beside Save/apply confirms discarding all unsaved source,
+A prepared candidate retains its saved MachineLayout and CameraSources definitions
+and their paths. Successfully saved or reloaded definitions are compared by parsed
+value, so unchanged saves do not invalidate it. A changed dependency requires
+explicit re-preparation while retaining the candidate, active identity and saved
+Recipe preference. Partial saves observe only the definitions actually persisted.
+Production disables Start when this state is known and shows re-selection guidance.
+Reselecting the same saved Recipe prepares current dependencies; failed preparation
+retains the old candidate and does not clear its re-preparation requirement.
+
+Every Start also parses and compares those files on the Application lifecycle worker
+before constructing a session or engine. External changes, missing or unreadable
+dependencies reject Start without activating the candidate. Re-preparation clears
+this requirement only on successful installation. Start uses the captured sources
+with the captured layout; it never combines newly read sources with an older layout.
+Already active sessions keep their immutable definitions. Explicit fixed-image
+launchers retain their own image/source ownership and do not adopt CameraSources.
+Their dependency snapshots capture the launcher-owned mapping without a source
+file path. Whenever a snapshot is present, missing captured sources reject Start;
+the factory never substitutes a later disk definition. Launch paths without a
+dependency snapshot retain their established source selection.
+
+Vision's restore icon beside Save confirms discarding all unsaved source,
 Loop/FPS and machine geometry edits together. It reloads and validates the current
 files off Qt dispatch before replacing either draft/baseline, including partially
 saved multi-file outcomes. Read/validation failure keeps both drafts and reports

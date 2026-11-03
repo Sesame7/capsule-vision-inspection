@@ -513,7 +513,6 @@ class MainWindow(QMainWindow):
             connection=self.bridge.source_connection,
         )
         self.vision_workspace = workspace
-        workspace.sources_verified.connect(self._sources_verified)
         workspace.setup_saved.connect(self._setup_saved)
         workspace.feedback_changed.connect(self._render)
         self._vision_layout.addWidget(workspace, 1)
@@ -730,6 +729,7 @@ class MainWindow(QMainWindow):
             self.theme,
             self._closing,
             draft_locked,
+            self.snapshot.candidate_requires_preparation,
             tuple(self.buttons[key].font().key() for key in actions),
         )
         if identity == self._operation_presentation:
@@ -758,6 +758,10 @@ class MainWindow(QMainWindow):
                 text("configure_first", self.language)
                 if key == "operation"
                 and self.snapshot.state is ApplicationState.UNCONFIGURED
+                else text("recipe_reprepare_hint", self.language)
+                if key == "operation"
+                and self.snapshot.state is ApplicationState.READY
+                and self.snapshot.candidate_requires_preparation
                 else text("pause_unsupported", self.language)
                 if key == "pause" and not self.bridge.controls_enabled
                 else text("software_stop", self.language)
@@ -849,23 +853,22 @@ class MainWindow(QMainWindow):
         self.recipe_page.configuration_details = self.configuration_issue
         self.recipe_page.refresh_state()
 
-    @Slot()
-    def _sources_verified(self) -> None:
-        self._retain_configuration_feedback(
-            tuple(
-                k
-                for k in self.configuration_messages
-                if k != "startup_source_unavailable"
-            )
-        )
-        self._render()
-
     @Slot(bool, bool)
     def _setup_saved(self, machine: bool, sources: bool) -> None:
         cleared: set[str] = {"startup_machine"} if machine else set()
         if sources:
             cleared.add("startup_sources")
         session = self.editing.session
+        if session is not None:
+            self.bridge.application.observe_saved_vision(
+                session.machine_editor.saved_definition if machine else None,
+                session.camera_sources.saved
+                if sources and session.camera_sources is not None
+                else None,
+                machine_known=machine,
+                sources_known=sources,
+            )
+            self.bridge.refresh()
         if (
             session is not None
             and session.machine_editor.persisted
@@ -898,7 +901,11 @@ class MainWindow(QMainWindow):
     def _snapshot_changed(self, snapshot: object) -> None:
         if isinstance(snapshot, ProductionApplicationSnapshot):
             recovered = (
-                self.snapshot.state is ApplicationState.FAULT
+                (
+                    self.snapshot.state is ApplicationState.FAULT
+                    or self.snapshot.candidate_requires_preparation
+                    and not snapshot.candidate_requires_preparation
+                )
                 and snapshot.state
                 in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
                 and snapshot.last_issue is None
@@ -1156,6 +1163,12 @@ class MainWindow(QMainWindow):
         )
         if production_feedback and not (warning or fault or self._closing):
             message = text(production_feedback[0], language)
+        elif (
+            snapshot.candidate_requires_preparation
+            and self.pages.currentIndex() == 0
+            and not (warning or fault or self._closing)
+        ):
+            message = text("recipe_reprepare", language)
         if self._source_issue and event_key == "command_error":
             camera, exception_type = self._source_issue
             message = " · ".join(

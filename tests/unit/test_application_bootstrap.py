@@ -765,8 +765,9 @@ def test_unrelated_catalog_errors_are_visible_and_do_not_block_saved_dependencie
         editor = startup.editor
         editor.draft.display_name = "Saved despite unrelated errors"
         editor.save()
-        saved = editor.apply_recipe()
-        ready = editor.prepare(saved)
+        assert editor.entry is not None
+        saved = editor.entry.recipe
+        ready = editor.production_preparation().prepare_saved(saved.recipe_id)
         assert ready.configuration.display_name == saved.display_name
         assert startup.application.snapshot().active is None
         assert startup.application.snapshot().counters == ProductionCounters()

@@ -89,6 +89,8 @@ IDENTITY_UI_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "recipe_reprepare",
+    "recipe_reprepare_hint",
     "recipe_preparing_short",
     "active_recipe",
     "select_saved_recipe",
@@ -1256,7 +1258,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 466
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 468
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

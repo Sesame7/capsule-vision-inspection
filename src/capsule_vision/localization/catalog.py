@@ -84,6 +84,14 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Unsaved draft. Save, discard changes, or cancel?",
     ),
     "select_saved_recipe": ("选择已保存配方", "Select saved Recipe"),
+    "recipe_reprepare": (
+        "需重新准备",
+        "Re-prepare",
+    ),
+    "recipe_reprepare_hint": (
+        "已保存的视觉配置已更改或无法读取；请在生产页重新选择该配方。",
+        "Saved Vision changed or is unreadable; reselect this Recipe in Production.",
+    ),
     "plc_modbus_base_required": ("必填", "Required"),
     "plc_modbus_base_hint": (
         "启用 Modbus 上报前必须填写零起始 HR 基址（0–65532）；不使用 FINS 默认值。",

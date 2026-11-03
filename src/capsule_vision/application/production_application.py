@@ -32,6 +32,7 @@ from capsule_vision.communication.reporting import (
     ReportingWriteProtectedError,
 )
 from capsule_vision.configuration import (
+    CameraSources,
     load_camera_sources,
 )
 from capsule_vision.configuration.drafts import CameraSourceDraft
@@ -109,10 +110,14 @@ class SourceProductionApplication(ProductionApplication):
                     raise ApplicationStateError(
                         "Fixed image inputs cannot change camera identities"
                     )
-                self._source_draft.saved.validate_cameras(
-                    cameras, complete=self._source_draft.saved.mode == "basler"
+                sources = (
+                    candidate.vision_dependencies.sources
+                    if candidate.vision_dependencies is not None
+                    and candidate.vision_dependencies.sources is not None
+                    else self._source_draft.saved
                 )
-                self._source_draft.saved.validate_mapping()
+                sources.validate_cameras(cameras, complete=sources.mode == "basler")
+                sources.validate_mapping()
             super().configure(candidate)
             if changed:
                 self._source_cameras = cameras
@@ -154,10 +159,10 @@ class SourceProductionApplication(ProductionApplication):
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
             draft = self._source_draft
             if draft is None or draft.dirty or draft.saved.mode != "basler":
-                raise ApplicationStateError("Save/apply Basler mappings before Connect")
+                raise ApplicationStateError("Save Basler mappings before Connect")
             saved = load_camera_sources(draft.path)
             if saved != draft.saved:
-                raise ApplicationStateError("Sources changed on disk; apply or restart")
+                raise ApplicationStateError("Sources changed on disk; reload in Vision")
             cameras = (
                 self._source_camera_ids()
                 if self._source_camera_ids
@@ -351,9 +356,26 @@ class SourceProductionApplication(ProductionApplication):
 
     @property
     def basler_available(self) -> bool:
-        return (
-            self._source_draft is not None and self._source_draft.saved.mode == "basler"
-        )
+        sources = self._production_sources()
+        return sources is not None and sources.mode == "basler"
+
+    def _production_sources(self) -> CameraSources | None:
+        with self._condition:
+            prepared = (
+                self._active
+                if self._active is not None
+                and self._state
+                in (
+                    ApplicationState.RUNNING,
+                    ApplicationState.STOPPING,
+                    ApplicationState.FAULT,
+                )
+                else self._candidate
+            )
+            if prepared is not None and prepared.vision_dependencies is not None:
+                if prepared.vision_dependencies.sources is not None:
+                    return prepared.vision_dependencies.sources
+            return self._source_draft.saved if self._source_draft is not None else None
 
     @property
     def control_available(self) -> bool:
@@ -405,9 +427,8 @@ class SourceProductionApplication(ProductionApplication):
 
     @property
     def _folder_controls_available(self) -> bool:
-        return self.replay_controls and (
-            self._source_draft is None or self._source_draft.saved.mode == "folder"
-        )
+        sources = self._production_sources()
+        return self.replay_controls and (sources is None or sources.mode == "folder")
 
     def _running_folder_control(self) -> FolderReplayControl:
         snapshot = self.snapshot()

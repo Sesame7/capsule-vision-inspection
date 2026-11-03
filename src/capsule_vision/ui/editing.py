@@ -8,7 +8,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 
 from capsule_vision.application import ApplicationState, PreparedConfiguration
 from capsule_vision.application.editing import RecipeEditorSession
-from capsule_vision.configuration import ConfigurationError, ModelArtifactError
+from capsule_vision.configuration import ConfigurationError
 
 from .future_delivery import FutureDelivery
 from .production_bridge import QtProductionBridge
@@ -17,7 +17,6 @@ from .production_bridge import QtProductionBridge
 class EditingCoordinator(QObject):
     changed = Signal()
     applied = Signal(object)
-    failed = Signal(object, str)
 
     def __init__(
         self,
@@ -103,51 +102,6 @@ class EditingCoordinator(QObject):
                 return work()
 
         return self.run_io(owned, completed)
-
-    def apply(self, completed: Callable[[BaseException | None], None]) -> None:
-        session = self.session
-        try:
-            if not self.editable() or session is None:
-                raise ConfigurationError(
-                    "Editing is unavailable in the current application state"
-                )
-            recipe = session.apply_recipe()
-            entry = session.entry
-        except ConfigurationError as exc:
-            self.failed.emit(exc, "recipe_error")
-            completed(exc)
-            return
-
-        def prepared(value: object, error: BaseException | None) -> None:
-            try:
-                if error is not None:
-                    raise ConfigurationError(str(error)) from error
-                if not isinstance(value, PreparedConfiguration):
-                    raise ConfigurationError("Missing prepared configuration")
-                if (
-                    session.entry is not entry
-                    or session.dirty
-                    or session.machine_editor.dirty
-                    or session.machine_editor.saved.layout != value.configuration.layout
-                ):
-                    raise ConfigurationError(
-                        "Recipe selection changed during preparation"
-                    )
-                self.bridge.application.configure(value)
-                self.applied.emit(value)
-                self.bridge.refresh()
-            except Exception as exc:
-                self.failed.emit(
-                    exc,
-                    "model_prepare_error"
-                    if isinstance(error, ModelArtifactError)
-                    else "recipe_prepare_error",
-                )
-                completed(exc)
-            else:
-                completed(None)
-
-        self.run_io(lambda: session.prepare(recipe), prepared, name="RecipePreparation")
 
     def select_saved(
         self, recipe_id: str, completed: Callable[[BaseException | None], None]

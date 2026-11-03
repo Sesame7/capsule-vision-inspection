@@ -51,7 +51,7 @@ def show(window: MainWindow, language: Language) -> None:
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_folder_warning_survives_apply_until_verified_source_save(
+def test_folder_warning_survives_preparation_and_source_save_until_start(
     qapp: QApplication, tmp_path: Path, language: Language
 ) -> None:
     data = saved_data(tmp_path)
@@ -96,11 +96,15 @@ def test_folder_warning_survives_apply_until_verified_source_save(
             until(lambda: not window.recipe_page.busy)
         # A single reference or a path edit is not proof that all saved sources work.
         assert missing in window.event_label.toolTip()
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
-        assert not window.configuration_issue and not window.event_label.text()
-        assert not window.recipe_page.configuration_messages
-        assert missing not in window.recipe_page.status.toolTip()
+        assert "startup_source_unavailable" in window.configuration_messages
+        assert missing in window.recipe_page.status.toolTip()
+        assert startup.application.snapshot().candidate_requires_preparation
+        select_production_recipe(window)
+        until(lambda: not window.recipe_page.busy)
+        assert not startup.application.snapshot().candidate_requires_preparation
+        assert "startup_source_unavailable" in window.configuration_messages
         assert startup.application.snapshot().state is ApplicationState.READY
         assert startup.application.snapshot().active is None and not engine.calls
     finally:
@@ -344,7 +348,7 @@ def test_vision_folder_unavailability_does_not_block_save_or_apply(
         "folder_reference_error", language
     )
     assert folder in window.event_label.toolTip()
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not window.event_label.text()
     assert workspace.status.accessibleName() == text("saved", language)
@@ -397,7 +401,7 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
 
     with monkeypatch.context() as patch:
         patch.setattr(workspace.draft, "save", fail)
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
     assert window.event_label.accessibleName() == text("vision_error", language)
     assert (
@@ -406,7 +410,7 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
     )
     with monkeypatch.context() as patch:
         patch.setattr(sources, "save", fail)
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
     assert window.event_label.accessibleName() == text("source_partial_save", language)
     assert (
@@ -414,6 +418,6 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
         == f"{text('source_partial_save', language)}\n{text('saved', language)}: MachineLayout\nCameraSources: ConfigurationIOError: {details}"
     )
     assert window.bridge.application.snapshot().candidate == candidate
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not window.event_label.text() and not window.event_label.toolTip()

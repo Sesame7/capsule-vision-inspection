@@ -18,6 +18,7 @@ from tests.support.application import WAIT
 from tests.support.cycles import image_result
 from tests.support.production import inferred
 from tests.support.qt import close_window, until
+from tests.support.recipe_ui import select_production_recipe
 from tests.support.reporting import seed, server
 from tests.support.startup import saved_data
 
@@ -473,13 +474,15 @@ def save_basler(path: Path) -> None:
     )
 
 
-def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
+def test_saved_source_switch_requires_explicit_production_preparation(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     data = saved_data(tmp_path)
     engine = Engine()
     startup = load_startup(data, engine_factory=lambda _: engine)
-    assert isinstance(startup.application, SourceConnectionCommands)
+    assert isinstance(
+        startup.application, production_application.SourceProductionApplication
+    )
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -495,20 +498,32 @@ def test_normal_saved_source_switch_updates_controls_only_after_save_apply(
         assert workspace.sources.saved.mode == "folder"  # Draft is not active.
         assert window.bridge.controls_enabled
         assert not window.buttons["operation"].isEnabled()
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
         window.bridge.refresh()
         assert workspace.sources.saved.mode == "basler"
+        assert not startup.application.basler_available
+        assert startup.application.snapshot().candidate_requires_preparation
+        select_production_recipe(window)
+        until(lambda: not window.recipe_page.busy)
+        assert startup.application.basler_available
+        assert not startup.application.snapshot().candidate_requires_preparation
         assert window.bridge.controls_enabled and window.buttons["secondary"].isHidden()
         assert (
             not engine.calls and not startup.application.source_snapshot().thread_alive
         )
         workspace.source_modes["folder"].click()
         until(lambda: not window.recipe_page.busy)
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
         window.bridge.refresh()
         assert workspace.sources.saved.mode == "folder"
+        assert startup.application.basler_available
+        assert startup.application.snapshot().candidate_requires_preparation
+        select_production_recipe(window)
+        until(lambda: not window.recipe_page.busy)
+        assert not startup.application.basler_available
+        assert not startup.application.snapshot().candidate_requires_preparation
         assert window.bridge.controls_enabled and window.buttons["secondary"].isHidden()
         assert (
             workspace.sources.saved.camera(CameraId("CAM5")).basler_serial == SERIALS[4]
@@ -1409,7 +1424,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         workspace.coordinates["X"].setText("1")
         workspace.apply_geometry()
         assert workspace.draft.dirty
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
         assert not workspace.draft.dirty and not window.event_label.text()
         workspace.connect_source.click()

@@ -9,11 +9,12 @@ import pytest
 from PySide6.QtWidgets import QApplication
 from tests.support.application import ControlledEngine
 from tests.support.qt import until
-from tests.support.recipe_ui import Screen
+from tests.support.recipe_ui import Screen, select_production_recipe
 from tests.support.recipe_ui import camera_screen as camera_screen
 from tests.support.recipe_ui import configured_screen as configured_screen
 
 from capsule_vision.application import PreparedConfiguration
+from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.configuration import (
     ConfigurationError,
     load_camera_sources,
@@ -55,10 +56,15 @@ def test_vision_uses_shared_drafts_and_dispatch_without_recipe_backend_callbacks
     assert not vision.vision_dirty and vision.draft.path is not None
     assert load_machine_layout(vision.draft.path) == vision.draft.definition
     assert load_camera_sources(vision.sources.path) == vision.sources.definition
-    assert window.bridge.application.snapshot() == before
+    saved = window.bridge.application.snapshot()
+    assert saved.candidate_prepared is before.candidate_prepared
+    assert saved.candidate_requires_preparation
     applied: list[object] = []
     editing.applied.connect(applied.append)
-    vision.buttons["save_apply"].click()
+    vision.buttons["save"].click()
+    until(lambda: not editing.busy)
+    assert not applied
+    select_production_recipe(window)
     until(lambda: bool(applied) and not editing.busy)
     assert isinstance(applied[0], PreparedConfiguration)
     assert applied[0].configuration.layout == vision.draft.definition.layout
@@ -132,7 +138,7 @@ def test_setup_future_delivery_waits_for_actual_thread_exit_and_ignores_old_toke
     editing.resume()
 
 
-def test_prepared_result_cannot_cross_recipe_selection_or_close(
+def test_production_preparation_ignores_editor_selection_but_fences_close(
     configured_screen: Screen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -143,25 +149,26 @@ def test_prepared_result_cannot_cross_recipe_selection_or_close(
     entered, release = Event(), Event()
     errors: list[BaseException | None] = []
 
-    def blocked(_recipe: object):
+    def blocked(_session: RecipeEditorSession, _recipe: str) -> PreparedConfiguration:
         entered.set()
         assert release.wait(5)
         return prepared
 
-    monkeypatch.setattr(session, "prepare", blocked)
-    window.editing.apply(errors.append)
+    monkeypatch.setattr(RecipeEditorSession, "prepare_saved", blocked)
+    window.editing.select_saved(session.entry.recipe.recipe_id, errors.append)
     try:
         until(entered.is_set)
         session.entry = replace(session.entry)
     finally:
         release.set()
     until(lambda: not window.editing.busy)
-    assert len(errors) == 1 and isinstance(errors[0], ConfigurationError)
-    assert window.bridge.application.snapshot() == before
+    assert errors == [None]
+    assert window.bridge.application.snapshot().candidate_prepared is prepared
+    before = window.bridge.application.snapshot()
     entered.clear()
     release.clear()
     errors.clear()
-    window.editing.apply(errors.append)
+    window.editing.select_saved(session.entry.recipe.recipe_id, errors.append)
     closed: list[bool] = []
     try:
         until(entered.is_set)

@@ -44,6 +44,7 @@ from .models import (
     prepare_configuration,
 )
 from .session import real_engine
+from .vision_dependencies import VisionDependencies
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,7 +286,12 @@ def _load_startup(
                     prepared.configuration.model
                 ),
                 managed_model=True,
+                vision_dependencies=VisionDependencies(
+                    data.machine, editor.machine, data.sources, sources
+                ),
             )
+            assert prepared.vision_dependencies is not None
+            prepared.vision_dependencies.validate_current()
         except ModelArtifactError as exc:
             issues.append(StartupIssue("startup_artifact", str(exc)))
         except ConfigurationError as exc:

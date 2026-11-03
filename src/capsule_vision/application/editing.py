@@ -29,6 +29,7 @@ from capsule_vision.configuration.preferences import load_preferences
 
 from .basler_connection import ConnectionState, SourceConnectionSnapshot
 from .models import PreparedConfiguration, prepare_configuration
+from .vision_dependencies import VisionDependencies, read_sources
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +63,11 @@ class RecipeEditorSession:
         model_catalog: Callable[[], tuple[ModelRegistry, tuple[str, ...]]]
         | None = None,
         managed_models: ManagedModels | None = None,
+        fixed_sources: CameraSources | None = None,
     ) -> None:
         self.camera_sources = camera_sources
         self.cli_sources = cli_sources
+        self.fixed_sources = fixed_sources
         self.auto_select_first = auto_select_first
         self.require_saved_sources = require_saved_sources
         self.preferences_path = preferences_path
@@ -261,20 +264,6 @@ class RecipeEditorSession:
                 errors.append(f"MachineLayout: {type(exc).__name__}: {exc}")
         return VisionSaveResult(machine_saved, sources_saved, tuple(errors))
 
-    def apply_recipe(self) -> RecipeDefinition:
-        """Capture immutable saved data before asynchronous hashing."""
-        if self.entry is None or self.dirty or self.machine_editor.dirty:
-            raise ConfigurationError("Save changes before Apply")
-        saved = load_recipe(self.entry.path)
-        if saved != self.entry.recipe:
-            raise ConfigurationError("Recipe changed externally; reload before Apply")
-        if self.entry not in self.catalog.discover().entries:
-            raise ConfigurationError(
-                "Selected Recipe is invalid or ambiguous; reload before Apply"
-            )
-        self.resolve(saved)
-        return saved
-
     def production_preparation(self) -> RecipeEditorSession:
         """Capture saved dependencies without sharing the editor's working copies."""
         return RecipeEditorSession(
@@ -288,6 +277,8 @@ class RecipeEditorSession:
                 if self.camera_sources is not None
                 else None
             ),
+            cli_sources=self.cli_sources,
+            fixed_sources=self.fixed_sources,
             require_saved_sources=self.require_saved_sources,
             model_catalog=self.model_catalog,
             managed_models=self.managed_models,
@@ -324,7 +315,7 @@ class RecipeEditorSession:
             metadata = Path(configuration.model.model_path).parent / "model.json"
             if load_model_definition(metadata) != configuration.model:
                 raise ConfigurationError(
-                    "Selected Model definition changed externally; reload before Apply"
+                    "Selected Model definition changed externally; select the Recipe again"
                 )
         prepared = prepare_configuration(
             configuration, base_directory=self.base_directory
@@ -339,21 +330,38 @@ class RecipeEditorSession:
             current = self.catalog.discover()
             if not any(e.recipe == recipe for e in current.entries):
                 raise ConfigurationError(
-                    "Selected Recipe is invalid or ambiguous; reload before Apply"
+                    "Selected Recipe is invalid or ambiguous; select the Recipe again"
                 )
             if self.camera_sources is None:
                 raise ConfigurationError("Saved camera sources are unavailable")
+        sources = None
+        sources_path = None
         if self.camera_sources is not None:
+            sources_path = None if self.cli_sources else self.camera_sources.path
             sources = (
-                load_camera_sources(self.camera_sources.path)
-                if self.require_saved_sources
+                self.fixed_sources
+                if self.cli_sources and self.fixed_sources is not None
+                else read_sources(sources_path)
+                if sources_path is not None
                 else self.camera_sources.saved
             )
-            sources.validate_cameras(
-                prepared.configuration.layout.camera_ids,
-                complete=sources.mode == "basler",
-            )
-            sources.validate_mapping()
+            if self.require_saved_sources and sources is None:
+                raise ConfigurationError("Saved camera sources are unavailable")
+            if sources is not None:
+                sources.validate_cameras(
+                    prepared.configuration.layout.camera_ids,
+                    complete=sources.mode == "basler",
+                )
+                sources.validate_mapping()
             # Folder availability is acquisition preflight, not candidate validity.
             # The unchanged local session factory checks it before engine creation.
+        if self.machine_path is not None:
+            dependencies = VisionDependencies(
+                self.machine_path,
+                self.machine,
+                sources_path,
+                sources,
+            )
+            dependencies.validate_current()
+            prepared = replace(prepared, vision_dependencies=dependencies)
         return prepared

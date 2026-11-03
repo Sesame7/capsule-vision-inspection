@@ -16,10 +16,11 @@ from run_demo import demo_images
 from tests.support.application import WAIT, ControlledEngine
 from tests.support.qt import until
 from tests.support.recipe_ui import camera_screen as camera_screen
-from tests.support.recipe_ui import folder_composition
+from tests.support.recipe_ui import folder_composition, select_production_recipe
 from tests.support.source_inputs import folders, input_files, write_image
 
 from capsule_vision.application import (
+    ApplicationError,
     ApplicationState,
     ApplicationStateError,
     ProductionCounters,
@@ -138,7 +139,7 @@ def test_source_change_invalidates_reference_no_geometry_repair(
     until(lambda: not window.recipe_page.busy)
     assert workspace.frame is not None and workspace.frame.image.shape == (8, 15, 3)
     assert workspace.draft.definition == saved and window.event_label.text()
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not sources.dirty and load_camera_sources(sources.path).camera(
         workspace.camera
@@ -194,9 +195,12 @@ def test_confirmed_camera_count_edit_save_discard_and_template_restoration(
     assert workspace.draft.definition == original and not sources.dirty
     workspace.change_camera_configuration()
     sources.set_serial(CameraId("CAM5"), "1005")
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not workspace.draft.dirty and not sources.dirty
+    assert len(window.cards) == 6
+    select_production_recipe(window)
+    until(lambda: not window.recipe_page.busy)
     assert len(window.cards) == len(window.bridge.frames.cameras) == 5
     assert (
         load_machine_layout(workspace.draft.path).layout.cameras
@@ -251,7 +255,9 @@ def test_confirmed_camera_count_edit_save_discard_and_template_restoration(
     button.click()
     assert workspace.draft.camera(CameraId("CAM6")).slots[0].rect.x == 0
     workspace.source_edited(sources.saved.cameras[0].folder, CameraId("CAM6"))
-    workspace.save_and_apply()
+    workspace.save_setup()
+    until(lambda: not window.recipe_page.busy)
+    select_production_recipe(window)
     until(lambda: not window.recipe_page.busy)
     assert len(window.cards) == len(window.bridge.frames.cameras) == 6
     assert not workspace.draft.dirty and not sources.dirty
@@ -282,19 +288,24 @@ def test_cam6_template_needs_its_own_source_and_valid_image_bounds(
         for index, row in enumerate(sources.definition.cameras, 1):
             sources.set_serial(row.camera_id, str(1000 + index))
         workspace.set_source_mode("basler")
-    workspace.save_and_apply()
+    workspace.save_setup()
+    until(lambda: not window.recipe_page.busy)
+    select_production_recipe(window)
     until(lambda: not window.recipe_page.busy)
     assert len(window.cards) == 5 and not sources.dirty
     before = window.bridge.application.snapshot()
     workspace.camera_cards[CameraId("CAM6")].configuration.click()
     assert sources.definition.camera(CameraId("CAM6")).folder == ""
     assert sources.definition.camera(CameraId("CAM6")).basler_serial == ""
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not workspace.vision_dirty
     assert len(load_machine_layout(workspace.draft.path).layout.cameras) == 6
+    select_production_recipe(window)
+    until(lambda: not window.recipe_page.busy)
     if mode == "basler":
-        assert window.event_label.text()
+        assert window.production_recipes.feedback is not None
+        assert window.production_recipes.feedback[0] == "recipe_prepare_error"
         assert (
             load_camera_sources(sources.path).camera(CameraId("CAM6")).basler_serial
             == ""
@@ -319,7 +330,7 @@ def test_cam6_template_needs_its_own_source_and_valid_image_bounds(
         geometry = workspace.draft.definition
         saved_machine = workspace.draft.path.read_bytes()
         candidate = window.bridge.application.snapshot().candidate
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
         assert (
             workspace.draft.definition == geometry
@@ -336,7 +347,9 @@ def test_cam6_template_needs_its_own_source_and_valid_image_bounds(
         assert workspace.camera == "CAM6" and not workspace.vision_dirty
     else:
         sources.set_serial(CameraId("CAM6"), "1006")
-        workspace.save_and_apply()
+        workspace.save_setup()
+        until(lambda: not window.recipe_page.busy)
+        select_production_recipe(window)
         until(lambda: not window.recipe_page.busy)
         assert len(window.cards) == 6 and not workspace.vision_dirty
         with pytest.raises(ApplicationStateError, match="Connect"):
@@ -368,11 +381,14 @@ def test_camera_reduction_accepts_compatible_incomplete_recipe(
     before = window.bridge.application.snapshot()
     geometry = workspace.draft.saved.layout.cameras[:5]
     workspace.change_camera_configuration()
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not workspace.vision_dirty
     assert load_machine_layout(workspace.draft.path).layout.cameras == geometry
     assert len(load_camera_sources(sources.path).cameras) == 5
+    assert len(window.cards) == len(window.bridge.frames.cameras) == 6
+    select_production_recipe(window)
+    until(lambda: not window.recipe_page.busy)
     assert len(window.cards) == len(window.bridge.frames.cameras) == 5
     assert path.read_bytes() == original
     assert invalid.read_text(encoding="utf-8") == "{"
@@ -433,16 +449,19 @@ def test_save_reload_partial_failure_and_running_guards(
         raise ConfigurationIOError("test source write failure")
 
     monkeypatch.setattr(source, "save", fail)
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert source.dirty and not workspace.draft.dirty
     assert text("source_partial_save", window.language) in window.event_label.text()
     assert window.bridge.application.snapshot().candidate == candidate
+    assert not window.bridge.application.snapshot().candidate_requires_preparation
     monkeypatch.setattr(source, "save", original)
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not source.dirty and load_camera_sources(source.path) == source.definition
     assert not workspace.session.dirty
+    select_production_recipe(window)
+    until(lambda: not window.recipe_page.busy)
     # Loop OFF only one replacement image: block its active call to inspect RUNNING.
     engine.release_active.clear()
     window.buttons["operation"].click()
@@ -468,7 +487,7 @@ def test_save_reload_partial_failure_and_running_guards(
     workspace.fps_changed()
     workspace.select_device(CameraId("CAM2"), 0)
     workspace.set_source_mode("basler")
-    workspace.save_and_apply()
+    workspace.save_setup()
     assert source.definition == before
     engine.release_active.set()
     until(lambda: window.bridge.application.snapshot().state is ApplicationState.READY)
@@ -600,6 +619,14 @@ def test_finite_replay_restart_snapshot_order_generation_and_cleanup(
             52,
         ]
         first_generation = app.snapshot().generation
+        with pytest.raises(ApplicationError):
+            app.start().result(WAIT)
+        assert app.snapshot().candidate_requires_preparation and len(engines) == 1
+        app.configure(
+            composition.editor.production_preparation().prepare_saved(
+                composition.prepared.configuration.recipe_id
+            )
+        )
         app.start().result(WAIT)
         until(lambda: app.snapshot().state is ApplicationState.READY)
         assert app.snapshot().counters.cycles_completed == 4
@@ -788,7 +815,7 @@ def test_startup_source_error_visible_before_engine_creation(
         window.deleteLater()
 
 
-def test_setup_save_waits_for_actual_prepare_and_reports_failure(
+def test_setup_save_waits_for_actual_validation_and_preserves_partial_failure(
     camera_screen: tuple[MainWindow, VisionPage, ControlledEngine],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -799,27 +826,29 @@ def test_setup_save_waits_for_actual_prepare_and_reports_failure(
     entered, release = Event(), Event()
     candidate = window.bridge.application.snapshot().candidate
 
-    def fail(_recipe: object) -> None:
+    def fail(_connection: object) -> None:
+        assert get_ident() != gui_thread
         entered.set()
         assert release.wait(WAIT)
-        raise ValueError("post-save preparation failed")
+        raise ValueError("MachineLayout validation failed")
 
-    monkeypatch.setattr(workspace.session, "prepare", fail)
+    gui_thread = get_ident()
+    monkeypatch.setattr(workspace.session, "validate_vision_save", fail)
     try:
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(entered.is_set)
         assert window.recipe_page.busy
         assert workspace.status.accessibleName() == text(
             "setup_saving", window.language
         )
         assert window.event_label.text() != text("roi_applied", window.language)
-        assert not workspace.buttons["save_apply"].isEnabled()
+        assert not workspace.buttons["save"].isEnabled()
     finally:
         release.set()
     until(lambda: not window.recipe_page.busy)
     assert not source.dirty and load_camera_sources(source.path) == source.definition
-    assert "post-save preparation failed" in window.event_label.toolTip()
-    assert workspace.status.accessibleName() == text("setup_failed", window.language)
+    assert "MachineLayout validation failed" in window.event_label.toolTip()
+    assert workspace.status.accessibleName() == text("vision_error", window.language)
     assert window.bridge.application.snapshot().candidate == candidate
 
 
@@ -1054,7 +1083,7 @@ def test_vision_discard_reload_is_bounded_and_preserves_draft_if_edit_lock_chang
             "vision_reloading", window.language
         )
         assert not workspace.buttons["vision_discard"].isEnabled()
-        assert not workspace.buttons["save_apply"].isEnabled()
+        assert not workspace.buttons["save"].isEnabled()
         workspace.request_discard()
         assert not any(box.isVisible() for box in workspace.findChildren(QMessageBox))
         monkeypatch.setattr(workspace, "_allowed", lambda: False)
@@ -1119,7 +1148,7 @@ def test_vision_discard_preserves_partial_persistence_and_respects_locks(
 
     with monkeypatch.context() as patch:
         patch.setattr(source, "save", fail)
-        workspace.save_and_apply()
+        workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
     persisted = load_machine_layout(workspace.draft.path)
     assert persisted == workspace.draft.saved
@@ -1138,7 +1167,11 @@ def test_vision_discard_preserves_partial_persistence_and_respects_locks(
     until(lambda: not window.recipe_page.busy)
     assert workspace.draft.definition == persisted and not workspace.draft.dirty
     assert source.definition == load_camera_sources(source.path) and not source.dirty
-    assert window.bridge.application.snapshot() == snapshot and not engine.calls
+    assert (
+        window.bridge.application.snapshot()
+        == replace(snapshot, candidate_requires_preparation=True)
+        and not engine.calls
+    )
 
 
 def test_folder_navigation_refresh_and_camera_positions(
@@ -1360,7 +1393,7 @@ def test_compact_icon_states_and_loop_click_preserve_configuration(
         == numeric_apply.toolTip()
         == text("roi_set_rect", language)
     )
-    assert workspace.buttons["save_apply"].text() == text("save_apply", language)
+    assert workspace.buttons["save"].text() == text("save", language)
     assert workspace.draft.definition == geometry
     assert (
         not engine.calls
@@ -1474,9 +1507,13 @@ def test_scanned_mapping_prevents_duplicates_and_saves_existing_draft(
         other.model().flags(other.model().index(other.findData("1006"), 0))
         & Qt.ItemFlag.ItemIsEnabled
     )
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
-    assert "six distinct" in window.event_label.toolTip()
+    assert workspace.status.accessibleName() == text("saved", window.language)
+    select_production_recipe(window)
+    until(lambda: not window.recipe_page.busy)
+    assert window.production_recipes.feedback is not None
+    assert "six distinct" in window.production_recipes.feedback[1]
     assert not sources.dirty
     assert (
         load_camera_sources(sources.path).camera(CameraId("CAM6")).basler_serial == ""
@@ -1488,7 +1525,7 @@ def test_scanned_mapping_prevents_duplicates_and_saves_existing_draft(
     workspace.source_modes["folder"].click()
     until(lambda: not window.recipe_page.busy)
     workspace.source_modes["basler"].click()
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     loaded = load_camera_sources(sources.path)
     assert loaded.basler_serials(geometry.layout.camera_ids) == tuple(
@@ -1522,7 +1559,7 @@ def test_direct_loop_fps_preserves_saved_value_until_explicit_selection(
     window.set_theme("light")
     assert not sources.dirty and sources.path.read_bytes() == saved
     workspace.loop.click()
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert load_camera_sources(sources.path).target_fps == saved_fps
     assert not load_camera_sources(sources.path).loop
@@ -1542,7 +1579,7 @@ def test_direct_loop_fps_preserves_saved_value_until_explicit_selection(
     assert not workspace.fps.isVisible() and not workspace.fps.isEnabled()
     workspace.source_modes["folder"].click()
     until(lambda: not window.recipe_page.busy)
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert load_camera_sources(sources.path).target_fps == 10
     assert (
@@ -1660,7 +1697,7 @@ def test_roi_toolbar_wraps_without_shrinking_fields(
     bulk = workspace.buttons["roi_common"]
     widths = [field.width() for field in workspace.coordinates.values()]
     before = workspace.draft.definition
-    save = workspace.buttons["save_apply"]
+    save = workspace.buttons["save"]
     upper = workspace.reference_toolbar
     reference = workspace.buttons["vision_import"]
     assert numeric.mapTo(toolbar, QPoint()).y() == bulk.mapTo(toolbar, QPoint()).y()
@@ -1777,7 +1814,7 @@ def test_basler_mode_draft_reference_identity_and_explicit_save(
     workspace.source_modes["basler"].click()
     assert tuple(c.folder for c in source.definition.cameras) == folders_before
     assert source.path.read_bytes() == initial and source.dirty
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not source.dirty and load_camera_sources(source.path).mode == "basler"
     assert source.saved.basler_serials(
@@ -1824,15 +1861,19 @@ def test_incomplete_basler_mapping_save_persists_without_applying(
         for card in workspace.camera_cards.values()
     )
     workspace.refresh()
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert source.path.read_bytes() != initial_source
     assert load_camera_sources(source.path).mode == "basler"
     assert workspace.draft.path.read_bytes() == initial_machine
     assert not source.dirty and workspace.status.accessibleName() == text(
-        "setup_failed", window.language
+        "saved", window.language
     )
-    assert "six distinct" in window.event_label.toolTip()
+    assert not workspace.feedback
+    select_production_recipe(window)
+    until(lambda: not window.recipe_page.busy)
+    assert window.production_recipes.feedback is not None
+    assert "six distinct" in window.production_recipes.feedback[1]
     assert window.bridge.application.snapshot().candidate == candidate
     assert (
         not engine.calls
@@ -1869,7 +1910,7 @@ def test_inline_discovery_mapping_validation_and_explicit_save(
         card.device.activated.emit(index)
         assert source.definition.camera(camera).basler_serial == f"100{i}"
     assert workspace.camera == CameraId("CAM1") and source.path.read_bytes() == original
-    workspace.save_and_apply()
+    workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not source.dirty and source.saved.mode == "basler"
     assert source.saved.basler_serials(
@@ -2347,7 +2388,7 @@ def _assert_source_layout(
     assert not window.event_label.text()
     assert workspace.reference_toolbar.height() <= Style.touch + Style.small
     assert workspace.geometry_toolbar.height() == Style.touch
-    save = workspace.buttons["save_apply"]
+    save = workspace.buttons["save"]
     for toolbar, center_control, right_control in (
         (
             workspace.reference_toolbar,

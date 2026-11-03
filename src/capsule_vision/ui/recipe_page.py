@@ -470,7 +470,6 @@ class RecipePage(QWidget):
         self.buttons["recipe_discard"].clicked.connect(self.request_discard)
         primary.clicked.connect(lambda: self.save())
         editing.changed.connect(self.refresh_state)
-        editing.failed.connect(self._operation_failed)
         editing.applied.connect(self._configuration_applied)
         bridge.snapshot_changed.connect(self.refresh_state)
         bridge.source_connection_changed.connect(self.refresh_state)

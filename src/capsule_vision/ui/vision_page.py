@@ -256,7 +256,6 @@ class _SourceCards(QWidget):
 
 
 class VisionPage(QWidget):
-    sources_verified = Signal()
     feedback_changed = Signal()
     setup_saved = Signal(bool, bool)
 
@@ -276,11 +275,10 @@ class VisionPage(QWidget):
         assert session is not None
         self.editing = editing
         self.session, self.draft = session, session.machine_editor
-        self._frames, self._allowed, self._changed, self._apply = (
+        self._frames, self._allowed, self._changed = (
             frames,
             editing.editable,
             editing.changed.emit,
-            editing.apply,
         )
         self._leave, self._run_io = leave, editing.run_io
         self.sources = session.camera_sources
@@ -560,10 +558,9 @@ class VisionPage(QWidget):
         save_row.setSpacing(Style.small)
         save_row.addWidget(self.status)
         save_row.addWidget(self.icon_button("vision_discard", "refresh"))
-        primary = self.button("save_apply")
+        primary = self.button("save")
         primary.setObjectName("start")
         primary.setProperty("compactAction", True)
-        save_row.addWidget(self.icon_button("save", "save"))
         save_row.addWidget(primary)
         self.geometry_toolbar = ImageToolbar(numeric, actions, saving)
         roi.addWidget(self.geometry_toolbar)
@@ -580,7 +577,6 @@ class VisionPage(QWidget):
             lambda: self.operation(lambda: self.draft.distribute(self.camera))
         )
         self.buttons["save"].clicked.connect(lambda: self.save_setup())
-        self.buttons["save_apply"].clicked.connect(lambda: self.save_and_apply())
         self.buttons["vision_discard"].clicked.connect(self.request_discard)
         self._cameras.idToggled.connect(self._camera_selected)
         self.canvas.selected.connect(self.select_roi)
@@ -630,7 +626,7 @@ class VisionPage(QWidget):
         self.refresh()
 
     def change_camera_configuration(self, *, restore: bool = False) -> None:
-        """Confirmed stopped/disconnected draft edit; persistence remains Save/apply."""
+        """Confirmed stopped/disconnected draft edit; persistence remains explicit Save."""
         if (
             not self.source_editable()
             or self.sources is None
@@ -723,7 +719,9 @@ class VisionPage(QWidget):
             ("vision_discard", "refresh"),
             ("save", "save"),
         ):
-            self.buttons[key].setIcon(image_icon(tool, colors.primary))
+            self.buttons[key].setIcon(
+                image_icon(tool, "#ffffff" if key == "save" else colors.primary)
+            )
         self.loop.setIcon(image_icon("loop", colors.primary))
         self.fps_decrease.setIcon(image_icon("minus", colors.primary))
         self.fps_increase.setIcon(image_icon("plus", colors.primary))
@@ -778,15 +776,14 @@ class VisionPage(QWidget):
                 "vision_capture",
                 "cancel",
                 "vision_discard",
-                "save",
                 "roi_set_rect",
             ):
                 button.setText(text(key, language))
-        primary = self.buttons["save_apply"]
+        primary = self.buttons["save"]
         set_button_caption(
             primary,
-            text("save_apply", language),
-            button_width(primary, ("save_apply",), padding=2),
+            text("save", language),
+            button_width(primary, ("save",), padding=2),
         )
         for key, line in self.coordinates.items():
             line.setAccessibleName(text("roi_" + key.lower(), language))
@@ -1478,13 +1475,6 @@ class VisionPage(QWidget):
         self.buttons["roi_refresh"].setEnabled(
             viewing and self.reference_mode in ("folder", "runtime")
         )
-        self.buttons["save_apply"].setEnabled(
-            self._allowed()
-            and not self._preparing
-            and not self.session.dirty
-            and self.session.entry is not None
-            and self.draft.complete
-        )
         self.buttons["save"].setEnabled(self._allowed() and not self._preparing)
         self.buttons["vision_discard"].setEnabled(self._can_discard())
         source_editable = self.sources is not None and self.source_editable()
@@ -1531,7 +1521,7 @@ class VisionPage(QWidget):
             if self._reloading
             else "setup_saving"
             if self._preparing
-            else "setup_failed"
+            else "vision_error"
             if self._save_failed
             else "unsaved"
             if self.draft.dirty or (self.sources is not None and self.sources.dirty)
@@ -1553,7 +1543,7 @@ class VisionPage(QWidget):
             colors.warning
             if status_key == "unsaved"
             else colors.fault
-            if status_key == "setup_failed"
+            if status_key == "vision_error"
             else colors.ok
             if status_key == "saved"
             else colors.secondary
@@ -1566,7 +1556,7 @@ class VisionPage(QWidget):
                     "READY"
                     if status_key == "saved"
                     else "FAULT"
-                    if status_key == "setup_failed"
+                    if status_key == "vision_error"
                     else "STARTING",
                     status_color,
                 )
@@ -1757,6 +1747,10 @@ class VisionPage(QWidget):
                 self.refresh()
                 return
             old = self.sources.definition if self.sources is not None else None
+            self.editing.bridge.application.observe_saved_vision(
+                value.machine, value.sources
+            )
+            self.editing.bridge.refresh()
             try:
                 self.session.accept_vision(
                     value,
@@ -2074,41 +2068,6 @@ class VisionPage(QWidget):
             self._preparing = False
             self._report_error(text("preparing", self.language), "preparing")
             self.refresh()
-
-    def save_and_apply(self, after: Callable[[], None] | None = None) -> None:
-        if not self._allowed() or self._preparing:
-            return
-        if self.session.dirty or self.session.entry is None:
-            self._report_error(
-                text("roi_recipe_save", self.language), "roi_recipe_save"
-            )
-            self.refresh()
-            return
-
-        def apply_saved() -> None:
-            if not self.draft.persisted:
-                self._report_error(
-                    text("save_machine_first", self.language), "save_machine_first"
-                )
-                self.refresh()
-                return
-            self._preparing = True
-            self.refresh()
-
-            def prepared(error: BaseException | None) -> None:
-                self._preparing = False
-                self._report_error(str(error) if error else "", "recipe_prepare_error")
-                self._save_failed = bool(error)
-                self._feedback = "" if error else "roi_applied"
-                self.refresh()
-                if not error and self.sources is not None:
-                    self.sources_verified.emit()
-                if not error and after is not None:
-                    after()
-
-            self._apply(prepared)
-
-        self.save_setup(apply_saved)
 
     def request_back(self, after: Callable[[], None] | None = None) -> None:
         self.cancel_capture()
