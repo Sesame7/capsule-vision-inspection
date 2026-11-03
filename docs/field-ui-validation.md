@@ -247,17 +247,20 @@ sys.stdout = sys.stderr = (out / "observer.log").open(
 )
 qt = QApplication(["field-desktop-observer", "-platform", "windows"])
 
+
 def capture():
     try:
         rows = []
         for index, screen in enumerate(qt.screens()):
-            rows.append({
-                "geometry": screen.geometry().getRect(),
-                "workarea": screen.availableGeometry().getRect(),
-                "dpr": screen.devicePixelRatio(),
-                "logical_dpi": screen.logicalDotsPerInch(),
-                "orientation": screen.orientation().name,
-            })
+            rows.append(
+                {
+                    "geometry": screen.geometry().getRect(),
+                    "workarea": screen.availableGeometry().getRect(),
+                    "dpr": screen.devicePixelRatio(),
+                    "logical_dpi": screen.logicalDotsPerInch(),
+                    "orientation": screen.orientation().name,
+                }
+            )
             pixmap = screen.grabWindow(0)
             assert not pixmap.isNull()
             assert pixmap.save(str(out / f"desktop-{index}.png"))
@@ -266,6 +269,7 @@ def capture():
     except Exception:
         traceback.print_exc()
         qt.exit(1)
+
 
 QTimer.singleShot(600, capture)
 raise SystemExit(qt.exec())
