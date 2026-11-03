@@ -27,6 +27,13 @@ class EditingCoordinator(QObject):
     ) -> None:
         super().__init__(parent)
         self.bridge, self.session = bridge, session
+        if session is not None and bridge.application.identity is not None:
+            if (
+                session.identity is not None
+                and session.identity is not bridge.application.identity
+            ):
+                raise ValueError("Recipe editor belongs to another identity owner")
+            session.identity = bridge.application.identity
         self.closing = False
         self._thread: Thread | None = None
         self._completion: tuple[object, object] | None = None
@@ -93,12 +100,15 @@ class EditingCoordinator(QObject):
         *,
         model_id: str | None = None,
         deleting: bool = False,
+        revision: int | None = None,
     ) -> bool:
         if not self.editable():
             return False
 
         def owned() -> object:
-            with self.bridge.application.model_management(model_id, deleting=deleting):
+            with self.bridge.application.model_management(
+                model_id, deleting=deleting, revision=revision
+            ):
                 return work()
 
         return self.run_io(owned, completed)
@@ -133,9 +143,11 @@ class EditingCoordinator(QObject):
             else:
                 completed(None)
 
-        if not self.run_model_io(
-            lambda: preparation.prepare_saved(recipe_id), prepared
-        ):
+        def prepare() -> PreparedConfiguration:
+            with self.bridge.application.recipe_preparation(request):
+                return preparation.prepare_saved(recipe_id)
+
+        if not self.run_io(prepare, prepared):
             completed(ConfigurationError("Production selection is unavailable"))
 
     @Slot(str, object, object)

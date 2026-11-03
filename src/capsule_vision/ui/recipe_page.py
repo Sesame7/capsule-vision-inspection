@@ -47,6 +47,7 @@ from capsule_vision.application import (
     ModelPreparationRequest,
     ModelPreparationState,
 )
+from capsule_vision.application.identity_models import IdentityError, Role
 from capsule_vision.configuration import (
     CheckConfiguration,
     ConfigurationError,
@@ -668,6 +669,8 @@ class RecipePage(QWidget):
             self._report_error(exc)
         self.recipes.clear()
         self.recipes.addItems([e.recipe.display_name for e in self._entries])
+        if self._labels_error:
+            self._labels_model = None  # Explicit reload retries a failed metadata read.
         self.show_draft()
 
     def show_draft(self) -> None:
@@ -956,16 +959,20 @@ class RecipePage(QWidget):
             self.refresh_state()
             return
 
+        revision = self.bridge.application.session_revision
+
         def delete() -> None:
             if not self.editable() or session.entry != entry:
                 return
             try:
-                session.delete(protected_ids=self._protected_recipes())
+                session.delete(
+                    protected_ids=self._protected_recipes(), revision=revision
+                )
                 self._entries = tuple(e for e in self._entries if e.path != entry.path)
                 self.recipes.clear()
                 self.recipes.addItems([e.recipe.display_name for e in self._entries])
                 self._error = self._feedback = ""
-            except ConfigurationError as exc:
+            except (IdentityError, ConfigurationError) as exc:
                 self._report_error(exc, "recipe_delete_error")
             self.show_draft()
 
@@ -1033,18 +1040,23 @@ class RecipePage(QWidget):
             if self.isVisible() and not self.closing:
                 QTimer.singleShot(0, self._ensure_model_labels)
         session = self.session
+        identity = self.bridge.application.identity
+        can_edit_labels = identity is None or identity.snapshot().role >= Role.ENGINEER
         disabled = session.draft.defaults.vimo.disabled_labels if session else ()
+        if not can_edit_labels and session is not None and session.entry is not None:
+            disabled = session.entry.recipe.defaults.vimo.disabled_labels
         retained = tuple(label for label in disabled if label not in self.label_checks)
         self.label_choices.setToolTip(
             text("recipe_labels_retained", self.language) + " " + ", ".join(retained)
             if retained
             else text("recipe_labels", self.language)
         )
+        editable = can_edit_labels and self.editable() and model == self._labels_model
         for label, check in self.label_checks.items():
             check.blockSignals(True)
             check.setChecked(label not in disabled)
             check.blockSignals(False)
-            check.setEnabled(self.editable() and model == self._labels_model)
+            check.setEnabled(editable)
             check.setToolTip(text("recipe_default_label", self.language) + " " + label)
 
     def _cache_request(self) -> ModelPreparationRequest | None:
@@ -1177,6 +1189,12 @@ class RecipePage(QWidget):
             and self._labels_model == self._selected_model()
             and label in self.label_checks
         ):
+            try:
+                self.bridge.application.authorize_engineering()
+            except IdentityError as exc:
+                self._report_error(exc)
+                self.refresh_state()
+                return
             defaults = session.draft.defaults
             disabled = tuple(
                 item for item in defaults.vimo.disabled_labels if item != label
@@ -1261,19 +1279,22 @@ class RecipePage(QWidget):
         self.preview_changed.emit()
         self.show_draft()
 
-    def save(self, after: Callable[[], None] | None = None) -> None:
+    def save(
+        self, after: Callable[[], None] | None = None, *, revision: int | None = None
+    ) -> None:
         if not self.editable() or self.session is None:
             return
         try:
+            revision = self.bridge.application.authorize_engineering(revision)
             if self.session.dirty or self.session.entry is None:
-                self.session.save()
+                self.session.save(revision)
                 self.reload()
             # A clean Save never overwrites an externally changed definition.
-        except (ConfigurationError, ValueError) as exc:
+        except (IdentityError, ConfigurationError, ValueError) as exc:
             self._report_error(
                 exc,
                 "recipe_save_error"
-                if isinstance(exc, ConfigurationIOError)
+                if isinstance(exc, (IdentityError, ConfigurationIOError))
                 else "recipe_validation_error",
             )
             self.refresh_state()
@@ -1308,9 +1329,11 @@ class RecipePage(QWidget):
             action()
             return
 
+        revision = self.bridge.application.session_revision
+
         def decided(decision: DirtyDecision) -> None:
             if decision == "save":
-                self.save(action)
+                self.save(action, revision=revision)
             elif decision == "discard":
                 try:
                     session.discard()

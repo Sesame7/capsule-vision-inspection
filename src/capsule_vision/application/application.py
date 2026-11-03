@@ -126,6 +126,14 @@ class ProductionApplication:
             return nullcontext(None)
         return self.identity.admission(minimum, revision)
 
+    def authorize_engineering(self, revision: int | None = None) -> int | None:
+        with self._condition, self._admission(Role.ENGINEER, revision) as actor:
+            return actor.revision if actor is not None else None
+
+    @property
+    def session_revision(self) -> int | None:
+        return self.identity.snapshot().revision if self.identity is not None else None
+
     def begin_recipe_selection(self) -> RecipeSelection:
         with self._condition, self._admission(Role.OPERATOR) as actor:
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
@@ -253,10 +261,39 @@ class ProductionApplication:
 
     @contextmanager
     def model_management(
-        self, model_id: str | None = None, *, deleting: bool = False
+        self,
+        model_id: str | None = None,
+        *,
+        deleting: bool = False,
+        revision: int | None = None,
+    ) -> Generator[None]:
+        with self._model_files(
+            Role.ENGINEER, revision, model_id=model_id, deleting=deleting
+        ):
+            yield
+
+    @contextmanager
+    def recipe_preparation(self, request: RecipeSelection) -> Generator[None]:
+        with self._model_files(Role.OPERATOR, request.revision, selection=request):
+            yield
+
+    @contextmanager
+    def _model_files(
+        self,
+        minimum: Role,
+        revision: int | None,
+        *,
+        model_id: str | None = None,
+        deleting: bool = False,
+        selection: RecipeSelection | None = None,
     ) -> Generator[None]:
         """Fence file/SDK metadata work against Start/Prepare/Close, without IO under lock."""
-        with self._condition:
+        with self._condition, self._admission(minimum, revision):
+            if selection is not None and (
+                selection is not self._selection
+                or self._generation != selection.generation
+            ):
+                raise StaleSessionError("Production selection was superseded")
             self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
             if self._session is not None or self._preparation is not None:
                 raise ApplicationStateError(
@@ -280,7 +317,7 @@ class ProductionApplication:
         self, request: ModelPreparationRequest
     ) -> Future[ModelPreparationResult]:
         """Admit one explicit model identity, without sources/Recipe activation."""
-        with self._condition:
+        with self._condition, self._admission(Role.ENGINEER):
             self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
             if self._preparation is not None or self._session is not None:
                 raise ApplicationStateError("An engine owner is already admitted")

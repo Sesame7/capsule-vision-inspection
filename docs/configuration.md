@@ -249,6 +249,18 @@ Only a generation admitted under that Guest exception permits Guest Pause, Resum
 or Step while running. All roles can observe, Stop and Close. Identity changes leave
 accepted operations running and invalidate pending interactive Recipe selections.
 
+Engineer or Administrator can save or delete Recipes, save MachineLayout and
+CameraSources, inspect and publish Model imports, rename or delete Models, and
+prepare their caches. Reading saved definitions and viewing existing status is
+available to every role, including the selected Model's complete label catalog.
+Device enumeration and new tuning measurements require Engineer. Passive
+capture on an existing connection keeps its Operator admission.
+
+Vision checks each file publication separately. If the session changes between
+saves, the first successful file remains saved and the other draft remains
+available for review. A staged Model belongs to its initiating session revision.
+Cancelling the import can remove its staging directory after logout.
+
 ## History storage
 
 Normal startup creates the history owner independently of configuration readiness.
@@ -659,12 +671,14 @@ cannot populate another model. Metadata IO does not occupy preparation or gate
 Start; Close observes actual job termination before detaching delivery. It
 hash-checks a memory snapshot before SDK metadata loading; no inference module,
 pipeline or cache is created. Missing/invalid metadata reports an error without
-offering an inferred catalog. Checked labels participate; unchecked labels update
-only draft `defaults.vimo.disabled_labels`. Checking all catalog labels leaves no
-filter when no other exclusions exist. Previously saved out-of-catalog exclusions
+offering an inferred catalog. Guest and Operator see the saved label selections
+for the current Recipe. Engineer and Administrator can edit the checkboxes in the
+draft and persist them with Recipe Save. Checked labels participate, and unchecked
+labels update only draft `defaults.vimo.disabled_labels`. Checking all catalog
+labels leaves no filter when no other exclusions exist. Previously saved out-of-catalog exclusions
 remain preserved with a tooltip, not offered as catalog choices. Metadata failure
-leaves saved/draft exclusions unchanged and uses existing feedback; re-entry retries
-the read without a polling/retry loop. Labels retain exact
+leaves saved/draft exclusions unchanged. Reload or reopening Recipe retries a
+failed read. Labels retain exact
 case-sensitive identities. Recipe `defaults.vimo` supplies one shared `enabled`,
 `required` and `disabled_labels` policy for all configured cameras and channels;
 MachineLayout remains the sole authority for their identities and ROI geometry.

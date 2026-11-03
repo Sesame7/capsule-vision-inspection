@@ -41,6 +41,16 @@ def _storage_issue(error: BaseException) -> str:
     return f"Security storage unavailable: {detail}"
 
 
+def admit_engineering(
+    identity: LocalIdentity | None, revision: int | None = None
+) -> int | None:
+    """Admit one operation. Its IO or native work runs after releasing the session lock."""
+    if identity is None:
+        return None
+    with identity.admission(Role.ENGINEER, revision) as actor:
+        return actor.revision
+
+
 class LocalIdentity:
     """Qt-independent service. Accepted Futures are observations, not cancellation.
 

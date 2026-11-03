@@ -393,6 +393,7 @@ class MainWindow(QMainWindow):
             configuration_messages=configuration_messages,
             configuration_details=configuration_issue,
         )
+        self.identity_controls.role_changed.connect(self.recipe_page.refresh_state)
         self.production_recipes = ProductionRecipes(self.editing)
         identity_row.addWidget(
             self.production_recipes, 0, Qt.AlignmentFlag.AlignHCenter
@@ -406,7 +407,7 @@ class MainWindow(QMainWindow):
         bridge.source_connection_changed.connect(self._refresh_vision)
         bridge.model_preparation_changed.connect(self._refresh_vision)
         bridge.frames_changed.connect(self._refresh_vision)
-        self.communication = CommunicationPage(reporting=bridge.reporting)
+        self.communication = CommunicationPage(application=bridge.application)
         self.history = HistoryPage(bridge.application.history)
         if self.communication.reporting_panel is not None:
             self.communication.reporting_panel.update_state(self.snapshot.state)

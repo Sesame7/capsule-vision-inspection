@@ -255,7 +255,7 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
 
     detail = f"Save {session.entry.path}: [WinError 5] Access is denied"
 
-    def fail_save(*, new_identity: tuple[str, str] | None = None) -> None:
+    def fail_save(revision: int | None = None) -> None:
         raise ConfigurationIOError(detail)
 
     with monkeypatch.context() as patch:

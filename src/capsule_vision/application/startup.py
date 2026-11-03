@@ -8,7 +8,7 @@ from pathlib import Path
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.folder_replay import FolderReplay, FolderSourceError
 from capsule_vision.application.history import ProductionHistory
-from capsule_vision.application.identity import LocalIdentity
+from capsule_vision.application.identity import LocalIdentity, admit_engineering
 from capsule_vision.application.session import EngineFactory
 from capsule_vision.configuration import (
     ConfigurationError,
@@ -237,7 +237,11 @@ def _load_startup(
             require_saved_sources=True,
             preferences_path=data.preferences,
             model_catalog=model_catalog,
-            managed_models=ManagedModels(data.models),
+            managed_models=ManagedModels(
+                data.models,
+                authorize=lambda revision: admit_engineering(identity, revision),
+            ),
+            identity=identity,
         )
         selected_id = preferences.last_applied_recipe_id if preferences else None
         entry = next(
@@ -362,8 +366,8 @@ def _load_startup(
     )
 
 
-def create_web_runtime(startup: Startup) -> WebRuntime:
-    """Construct the existing observer owner; starting/binding stays explicit."""
+def create_web_runtime(startup: Startup, *, restore_saved: bool = False) -> WebRuntime:
+    """Only startup composition can request restoration of saved enablement."""
 
     def factory(settings: WebPreferences) -> ProductionSnapshotService:
         return ProductionSnapshotService(
@@ -374,4 +378,8 @@ def create_web_runtime(startup: Startup) -> WebRuntime:
             interval=settings.interval_ms / 1000,
         )
 
-    return WebRuntime(factory)
+    return WebRuntime(
+        factory,
+        authorize=startup.application.authorize_engineering,
+        initial_settings=startup.communication.web if restore_saved else None,
+    )

@@ -15,6 +15,7 @@ from tests.support.startup import normal_replay, replay_state, saved_data
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.application import startup as startup_module
+from capsule_vision.application.identity_models import AuthorizationError
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.application.startup import ApplicationData, load_startup
 from capsule_vision.communication.reporting import ReportStage
@@ -232,6 +233,8 @@ def test_normal_startup_restores_saved_web_enablement_and_interval(
     monkeypatch.setattr(startup_module, "ProductionSnapshotService", ObservedService)
 
     def observe(runtime: WebRuntime) -> None:
+        with pytest.raises(AuthorizationError):
+            runtime.stop()
         assert runtime.snapshot().state is (
             WebState.RUNNING if enabled else WebState.STOPPED
         )

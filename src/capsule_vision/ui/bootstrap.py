@@ -211,12 +211,10 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
         QLoggingCategory.setFilterRules("qt.text.font.db.info=false")
         qt = QApplication(sys.argv[:1])
         delivery = FutureDelivery()
-        web = startup.communication.web
-
-        runtime = create_web_runtime(startup)
         window = create_window(startup, delivery)
+        runtime = create_web_runtime(startup, restore_saved=True)
         window.bind_web_runtime(runtime)
-        if web.enabled:
+        if runtime.restoration is not None:
 
             def started(_future: Future[WebRuntimeSnapshot]) -> None:
                 # This callback runs on the control thread, never mutates widgets.
@@ -225,7 +223,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                 if observation.error:
                     print(observation.error, file=sys.stderr)
 
-            runtime.start(web).add_done_callback(started)
+            runtime.restoration.add_done_callback(started)
         if args.window_size is None:
             window.showMaximized()
         else:

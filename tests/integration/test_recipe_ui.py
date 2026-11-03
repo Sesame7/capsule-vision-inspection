@@ -1075,7 +1075,9 @@ def test_recipe_delete_confirmation_identity_and_live_protection(
         window.bridge.application.configure(session.prepare(entry.recipe))
     if outcome == "failure":
 
-        def denied(*, protected_ids: frozenset[str]) -> None:
+        def denied(
+            *, protected_ids: frozenset[str], revision: int | None = None
+        ) -> None:
             raise ConfigurationIOError("Delete denied")
 
         monkeypatch.setattr(session, "delete", denied)
@@ -1523,7 +1525,7 @@ def test_save_failure_keeps_draft_file_and_application(
     original = session.entry.path.read_bytes()
     before = window.bridge.application.snapshot()
 
-    def fail(*, new_identity: tuple[str, str] | None = None) -> None:
+    def fail(revision: int | None = None) -> None:
         raise ConfigurationIOError("Recipe file is read-only")
 
     monkeypatch.setattr(session, "save", fail)

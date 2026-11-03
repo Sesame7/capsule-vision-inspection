@@ -4,7 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Literal, cast
 
-from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QTimer, Slot
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -601,11 +601,14 @@ class DisableDialog(QMessageBox):
 class IdentityControls(QObject):
     """One bounded UI request, queued delivery and service-owned session truth."""
 
+    role_changed = Signal()
+
     def __init__(
         self, navbar: NavigationBar, owner: LocalIdentity | None, parent: QWidget
     ) -> None:
         super().__init__(parent)
         self.navbar, self.owner, self.window = navbar, owner, parent
+        self._presented_role: Role | None = None
         self.language: Language = "en"
         self.form: CredentialDialog | None = None
         self.users: UsersDialog | None = None
@@ -650,6 +653,9 @@ class IdentityControls(QObject):
     @Slot()
     def refresh(self) -> None:
         snapshot = self.owner.snapshot() if self.owner else SessionSnapshot()
+        if snapshot.role != self._presented_role:
+            self._presented_role = snapshot.role
+            self.role_changed.emit()
         account = snapshot.account
         detail = text(_ROLES[snapshot.role], self.language)
         state = (

@@ -702,7 +702,7 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
     data = saved_data(tmp_path)
     data.communication.write_text('{"schema_version":99}', encoding="utf-8")
     before = data.communication.read_bytes()
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:
@@ -744,7 +744,7 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
             ),
         ),
     )
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:

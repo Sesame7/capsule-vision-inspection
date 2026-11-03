@@ -28,6 +28,8 @@ from capsule_vision.configuration.managed_models import ManagedModels
 from capsule_vision.configuration.preferences import load_preferences
 
 from .basler_connection import ConnectionState, SourceConnectionSnapshot
+from .identity import LocalIdentity, admit_engineering
+from .identity_models import IdentityError
 from .models import PreparedConfiguration, prepare_configuration
 from .vision_dependencies import VisionDependencies, read_sources
 
@@ -64,7 +66,9 @@ class RecipeEditorSession:
         | None = None,
         managed_models: ManagedModels | None = None,
         fixed_sources: CameraSources | None = None,
+        identity: LocalIdentity | None = None,
     ) -> None:
+        self.identity = identity
         self.camera_sources = camera_sources
         self.cli_sources = cli_sources
         self.fixed_sources = fixed_sources
@@ -123,7 +127,10 @@ class RecipeEditorSession:
         else:
             self.draft = RecipeDraft("", "")
 
-    def delete(self, *, protected_ids: frozenset[str]) -> None:
+    def delete(
+        self, *, protected_ids: frozenset[str], revision: int | None = None
+    ) -> None:
+        admit_engineering(self.identity, revision)
         if self.entry is None:
             raise ConfigurationError("Select a saved Recipe before Delete")
         if self.preferences_path is not None:
@@ -145,7 +152,8 @@ class RecipeEditorSession:
             self.registry,
         )
 
-    def save(self) -> None:
+    def save(self, revision: int | None = None) -> None:
+        admit_engineering(self.identity, revision)
         recipe = self.draft.to_recipe()
         entry = (
             self.catalog.save_generated(recipe)
@@ -234,8 +242,10 @@ class RecipeEditorSession:
         self,
         connection: SourceConnectionSnapshot | None,
         validation_error: BaseException | None,
+        revision: int | None = None,
     ) -> VisionSaveResult:
         """Independent file outcomes; failed validation never discards unsaved drafts."""
+        revision = admit_engineering(self.identity, revision)
         errors: list[str] = []
         machine_saved = sources_saved = False
         if self.camera_sources is not None:
@@ -258,9 +268,10 @@ class RecipeEditorSession:
             )
         elif self.machine_editor.complete:
             try:
+                admit_engineering(self.identity, revision)
                 self.machine_editor.save()
                 machine_saved = True
-            except (ValueError, OSError) as exc:
+            except (IdentityError, ValueError, OSError) as exc:
                 errors.append(f"MachineLayout: {type(exc).__name__}: {exc}")
         return VisionSaveResult(machine_saved, sources_saved, tuple(errors))
 
@@ -279,6 +290,7 @@ class RecipeEditorSession:
             ),
             cli_sources=self.cli_sources,
             fixed_sources=self.fixed_sources,
+            identity=self.identity,
             require_saved_sources=self.require_saved_sources,
             model_catalog=self.model_catalog,
             managed_models=self.managed_models,

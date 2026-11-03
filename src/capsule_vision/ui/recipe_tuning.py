@@ -42,6 +42,7 @@ from capsule_vision.application.folder_replay import (
     decode_image,
     folder_images,
 )
+from capsule_vision.application.identity import admit_engineering
 from capsule_vision.display import DisplayFrame, LatestDisplayFrameStore
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection import CameraId, CycleId, FrameId
@@ -1012,7 +1013,14 @@ class RecipeTuning(QWidget):
         )  # Immutable capability snapshot for this job.
         self._job_revision = self._revision
         self._job_load = None
-        self._start_job(lambda: measure_reference(frame, camera, settings))
+        identity = self.session.identity
+        revision = identity.snapshot().revision if identity is not None else None
+
+        def measure() -> tuple[PreviewMeasurement, ...]:
+            admit_engineering(identity, revision)
+            return measure_reference(frame, camera, settings)
+
+        self._start_job(measure)
 
     def _start_job(
         self, work: Callable[[], tuple[PreviewMeasurement, ...] | _Reference]

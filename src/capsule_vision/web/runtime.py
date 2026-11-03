@@ -41,9 +41,14 @@ class WebRuntime:
     """
 
     def __init__(
-        self, factory: Callable[[WebPreferences], ProductionSnapshotService]
+        self,
+        factory: Callable[[WebPreferences], ProductionSnapshotService],
+        *,
+        authorize: Callable[[int | None], int | None] | None = None,
+        initial_settings: WebPreferences | None = None,
     ) -> None:
         self._factory = factory
+        self._authorize = authorize
         self._condition = Condition()
         self._snapshot = WebRuntimeSnapshot()
         self._service: ProductionSnapshotService | None = None
@@ -58,6 +63,19 @@ class WebRuntime:
             target=self._run, name="ProductionWebControl", daemon=False
         )
         self._thread.start()
+        with self._condition:
+            self.restoration = (
+                self._enqueue("start", initial_settings)
+                if initial_settings is not None and initial_settings.enabled
+                else None
+            )
+
+    def bind_authorization(self, authorize: Callable[[int | None], int | None]) -> None:
+        """Bind an injected service to its owning shell before exposing commands."""
+        with self._condition:
+            if self._authorize is not None and self._authorize != authorize:
+                raise RuntimeError("Web runtime already has an authorization owner")
+            self._authorize = authorize
 
     def snapshot(self) -> WebRuntimeSnapshot:
         with self._condition:
@@ -82,49 +100,61 @@ class WebRuntime:
         self._thread.join(timeout)
         return self.closed
 
-    def start(self, settings: WebPreferences) -> Future[WebRuntimeSnapshot]:
+    def start(
+        self, settings: WebPreferences, *, revision: int | None = None
+    ) -> Future[WebRuntimeSnapshot]:
         if not settings.enabled:
             raise ValueError("Save enabled Web settings before Start")
-        return self._submit("start", settings)
+        return self._submit("start", settings, revision)
 
-    def apply(self, settings: WebPreferences) -> Future[WebRuntimeSnapshot]:
-        return self._submit("apply", settings)
+    def apply(
+        self, settings: WebPreferences, *, revision: int | None = None
+    ) -> Future[WebRuntimeSnapshot]:
+        return self._submit("apply", settings, revision)
 
-    def stop(self) -> Future[WebRuntimeSnapshot]:
-        return self._submit("stop", None)
+    def stop(self, *, revision: int | None = None) -> Future[WebRuntimeSnapshot]:
+        return self._submit("stop", None, revision)
 
     def _submit(
-        self, action: str, settings: WebPreferences | None
+        self, action: str, settings: WebPreferences | None, revision: int | None
     ) -> Future[WebRuntimeSnapshot]:
         with self._condition:
-            if self._snapshot.closing or self.closed:
-                raise RuntimeError("Web runtime is closing")
-            if self._snapshot.busy:
-                raise RuntimeError("A Web operation is already in progress")
-            if action == "start" and self._service is not None:
-                raise RuntimeError("Stop or Apply/Restart the existing Web owner")
-            future: Future[WebRuntimeSnapshot] = Future()
-            future.set_running_or_notify_cancel()  # Accepted operations cannot be cancelled.
-            previous = self.snapshot()
-            restore = (
-                previous.configuration
-                if action == "apply" and previous.state is WebState.RUNNING
-                else None
-            )
-            self._pending = (settings, restore, future)
-            self._snapshot = replace(
-                self._snapshot,
-                state=WebState.STOPPING
-                if self._service is not None
-                or action == "stop"
-                or (settings is not None and not settings.enabled)
-                else WebState.STARTING,
-                busy=True,
-                error="",
-                restored=False,
-            )
-            self._condition.notify()
-            return future
+            if self._authorize is not None:
+                self._authorize(revision)
+            return self._enqueue(action, settings)
+
+    def _enqueue(
+        self, action: str, settings: WebPreferences | None
+    ) -> Future[WebRuntimeSnapshot]:
+        """Caller owns the condition. Construction may restore saved settings once."""
+        if self._snapshot.closing or self.closed:
+            raise RuntimeError("Web runtime is closing")
+        if self._snapshot.busy:
+            raise RuntimeError("A Web operation is already in progress")
+        if action == "start" and self._service is not None:
+            raise RuntimeError("Stop or Apply/Restart the existing Web owner")
+        future: Future[WebRuntimeSnapshot] = Future()
+        future.set_running_or_notify_cancel()  # Accepted operations cannot be cancelled.
+        previous = self.snapshot()
+        restore = (
+            previous.configuration
+            if action == "apply" and previous.state is WebState.RUNNING
+            else None
+        )
+        self._pending = (settings, restore, future)
+        self._snapshot = replace(
+            self._snapshot,
+            state=WebState.STOPPING
+            if self._service is not None
+            or action == "stop"
+            or (settings is not None and not settings.enabled)
+            else WebState.STARTING,
+            busy=True,
+            error="",
+            restored=False,
+        )
+        self._condition.notify()
+        return future
 
     def request_close(self) -> None:
         with self._condition:

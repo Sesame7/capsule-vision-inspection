@@ -63,8 +63,14 @@ def test_production_role_boundaries(
             app.persist_reporting_selection(enabled, lambda: saved.append(True))
             assert app.reporting_selection() == enabled and saved == [True]
             app.set_reporting_selection(original)
-        # Independent diagnostic/Web Save with identical reporting remains available.
-        app.persist_reporting_selection(original, lambda: saved.append(False))
+        # Saving independent preferences also publishes communication configuration.
+        if role < Role.ENGINEER:
+            with pytest.raises(AuthorizationError):
+                app.persist_reporting_selection(original, lambda: saved.append(False))
+            assert not saved
+        else:
+            app.persist_reporting_selection(original, lambda: saved.append(False))
+            assert saved == [True, False]
 
         if role is Role.GUEST:
             for command in (
@@ -220,6 +226,9 @@ def test_unavailable_accounts_restore_as_guest(tmp_path: Path, corrupt: bool) ->
         assert app.snapshot().candidate_prepared is startup.prepared is not None
         with pytest.raises(AuthorizationError):
             app.begin_recipe_selection()
+        assert startup.editor is not None
+        with pytest.raises(AuthorizationError):
+            startup.editor.save()
         app.stop().result(WAIT)
     finally:
         close(startup)

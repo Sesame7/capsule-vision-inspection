@@ -389,7 +389,7 @@ def test_optional_preferences_leave_selection_empty_and_allow_recipe_save(
     else:
         data.preferences.write_text("{}", encoding="utf-8")
     assert read_preferences(data.preferences).preferences == ApplicationPreferences()
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     try:
         assert startup.preferences == ApplicationPreferences()
         assert startup.preferences_writable
@@ -754,7 +754,7 @@ def test_unrelated_catalog_errors_are_visible_and_do_not_block_saved_dependencie
             return original_open(path, mode, buffering, encoding, errors, newline)
 
         monkeypatch.setattr(Path, "open", denied)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     try:
         assert startup.prepared is not None and startup.editor is not None
         assert startup.application.snapshot().state is ApplicationState.READY

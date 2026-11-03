@@ -164,6 +164,14 @@ LocalIdentity, including when account storage is unavailable. Explicit identity-
 engineering compositions remain trusted. Runtime delivery and shutdown keep their
 existing owners. See the [Production policy](configuration.md#local-accounts).
 
+Engineering commands use the same LocalIdentity and revision as Production.
+A pending confirmation, staged Model import or Vision validation retains its
+initiating revision. Each subsequent publication checks that revision. The
+Model file and cache owners release the identity lock before SDK work. The
+Operator Recipe selection path shares the file ownership fence and retains its
+own selection ticket. Import cancellation and actual worker shutdown are
+independent of the current account.
+
 ## Inference
 
 Recipe Model management reuses this window-owned slot. A short Application

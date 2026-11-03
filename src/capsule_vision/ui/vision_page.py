@@ -45,6 +45,7 @@ from capsule_vision.application.folder_replay import (
     decode_image,
     folder_images,
 )
+from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import (
     CameraFolder,
     ConfigurationError,
@@ -997,7 +998,14 @@ class VisionPage(QWidget):
             self._populate_devices()
             self.refresh()
 
-        if not self._run_io(discover_basler_devices, completed):
+        app = self.editing.bridge.application
+        revision = app.session_revision
+
+        def discover() -> tuple[BaslerDevice, ...]:
+            app.authorize_engineering(revision)
+            return discover_basler_devices()
+
+        if not self._run_io(discover, completed):
             completed(None, RuntimeError(text("preparing", self.language)))
         self.refresh()
 
@@ -2013,9 +2021,17 @@ class VisionPage(QWidget):
             )
         )
 
-    def save_setup(self, after: Callable[[], None] | None = None) -> None:
+    def save_setup(
+        self, after: Callable[[], None] | None = None, *, revision: int | None = None
+    ) -> None:
         """Persist independent definitions; no source IO, model work or activation."""
         if not self._allowed() or self._preparing:
+            return
+        try:
+            revision = self.editing.bridge.application.authorize_engineering(revision)
+        except IdentityError as exc:
+            self._report_error(exc, "vision_error")
+            self.refresh()
             return
         self._preparing = True
         self._save_failed = False
@@ -2029,7 +2045,13 @@ class VisionPage(QWidget):
                 self._report_error(text("read_only", self.language), "read_only")
                 self.refresh()
                 return
-            result = self.session.save_vision(connection, error)
+            try:
+                result = self.session.save_vision(connection, error, revision)
+            except IdentityError as exc:
+                self._save_failed = True
+                self._report_error(exc, "vision_error")
+                self.refresh()
+                return
             errors, machine_saved, source_saved = (
                 result.errors,
                 result.machine_saved,
@@ -2102,13 +2124,14 @@ class VisionPage(QWidget):
         )
         save.setEnabled(self._allowed())
         self._decision = dialog
+        revision = self.editing.bridge.application.session_revision
 
         def finished() -> None:
             self._decision = None
             chosen = dialog.clickedButton()
             dialog.deleteLater()
             if chosen is save:
-                self.save_setup(leave)
+                self.save_setup(leave, revision=revision)
             elif chosen is discard:
                 self._reload_vision(leave)
             else:

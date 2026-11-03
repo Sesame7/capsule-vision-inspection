@@ -96,6 +96,7 @@ class ModelControls(QWidget):
         *,
         model: ModelDefinition | None = None,
         deleting: bool = False,
+        revision: int | None,
     ) -> bool:
         page = self.page
         if not self.editing.editable() or page.labels_loading:
@@ -106,6 +107,7 @@ class ModelControls(QWidget):
             completed,
             model_id=model.model_id if model else None,
             deleting=deleting,
+            revision=revision,
         )
 
     def _finished(self, value: object, error: BaseException | None) -> None:
@@ -131,6 +133,7 @@ class ModelControls(QWidget):
             or self.page.labels_loading
         ):
             return
+        revision = self.editing.bridge.application.session_revision
         path, _ = QFileDialog.getOpenFileName(
             self, text("model_import", self.page.language), "", "ViMo (*.vimosln)"
         )
@@ -146,18 +149,22 @@ class ModelControls(QWidget):
             if error is not None or self._closing:
                 self._cancel()
             elif len(value.modules) == 1:
-                self._publish(value.modules[0].module_id, value.display_name)
+                self._publish(value.modules[0].module_id, value.display_name, revision)
             else:
                 self._form(
                     "model_import",
                     value.display_name,
                     modules=tuple((m.module_id, m.name) for m in value.modules),
-                    accept=self._publish,
+                    accept=lambda module, name: self._publish(module, name, revision),
                 )
 
-        self._run(lambda: catalog.inspect_import(Path(path)), inspected)
+        self._run(
+            lambda: catalog.inspect_import(Path(path), revision=revision),
+            inspected,
+            revision=revision,
+        )
 
-    def _publish(self, module: str, name: str) -> None:
+    def _publish(self, module: str, name: str, revision: int | None) -> None:
         pending, session = self.pending, self.editing.session
         if pending is None or session is None or session.managed_models is None:
             return
@@ -171,7 +178,9 @@ class ModelControls(QWidget):
                 self._finished(value, None)
 
         if not self._run(
-            lambda: catalog.publish_import(pending, module, name), finished
+            lambda: catalog.publish_import(pending, module, name),
+            finished,
+            revision=revision,
         ):
             self._cancel(
                 RuntimeError("Model publication unavailable; import cancelled")
@@ -283,14 +292,17 @@ class ModelControls(QWidget):
         if model is None:
             return
 
+        revision = self.editing.bridge.application.session_revision
+
         def rename(_module: str, name: str) -> None:
             session = self.editing.session
             if session and session.managed_models:
                 catalog = session.managed_models
                 self._run(
-                    lambda: catalog.rename(model, name),
+                    lambda: catalog.rename(model, name, revision=revision),
                     self._finished,
                     model=model,
+                    revision=revision,
                 )
 
         self._form("model_rename", model.display_name, accept=rename)
@@ -329,13 +341,17 @@ class ModelControls(QWidget):
         if model is None or session is None or session.managed_models is None:
             return
         catalog = session.managed_models
+        revision = self.editing.bridge.application.session_revision
         self._confirm(
             "model_delete",
             model,
             lambda: self._run(
-                lambda: catalog.delete(model, session.catalog.directory),
+                lambda: catalog.delete(
+                    model, session.catalog.directory, revision=revision
+                ),
                 self._finished,
                 model=model,
                 deleting=True,
+                revision=revision,
             ),
         )

@@ -296,7 +296,7 @@ def test_async_selection_is_bounded_and_stale_results_cannot_install(
 
     monkeypatch.setattr(RecipeEditorSession, "prepare_saved", held)
     if completion == "obsolete":
-        run = window.editing.run_model_io
+        run = window.editing.run_io
 
         def change_before_delivery(
             work: Callable[[], object],
@@ -309,7 +309,7 @@ def test_async_selection_is_bounded_and_stale_results_cannot_install(
 
             return run(work, delivered)
 
-        monkeypatch.setattr(window.editing, "run_model_io", change_before_delivery)
+        monkeypatch.setattr(window.editing, "run_io", change_before_delivery)
     target = picker.recipes.findData("product-b")
     requested_name = picker.recipes.itemText(target)
     picker.recipes.setCurrentIndex(target)

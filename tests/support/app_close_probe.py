@@ -25,6 +25,7 @@ from capsule_vision.communication.simulator import FinsUdpSimulator
 from capsule_vision.ui import bootstrap
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
+from tests.support.startup import authenticated_startup
 
 
 def install() -> None:
@@ -65,7 +66,12 @@ def install() -> None:
         observe_source: Callable[[Future[None]], None] = lambda _: None,
     ) -> Startup:
         # Missing test data gives the real stopped UNCONFIGURED shell, no GPU.
-        return original_load(
+        load_for_scenario = (
+            authenticated_startup
+            if scenario in ("success", "timeout", "pending", "switch")
+            else original_load
+        )
+        return load_for_scenario(
             ApplicationData.at_entry(root),
             engine_factory=engine_factory,
             observe_source=observe_source,

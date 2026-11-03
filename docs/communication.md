@@ -30,8 +30,8 @@ change PLC mode, implement safety interlocks or infer photo/reject semantics.
 FINS endpoints independently select UDP/TCP and a
 numeric target. UDP/localhost are neutral editing defaults; normal Production
 reporting uses an explicitly saved selection, never a camera-source-derived PLC
-endpoint. There is no localhost-only write authorization gate. Operators are responsible for choosing
-the intended commissioned endpoint and operation.
+endpoint. Engineer authorization applies to manual writes on both local and
+remote endpoints. Confirm the commissioned endpoint and intended operation.
 
 ## Modbus TCP
 
@@ -171,6 +171,19 @@ The guard prevents competing writers; it is not PLC-side locking or
 access control.
 
 ## Communication workspace
+
+Engineer or Administrator can issue manual PLC reads and writes, read register
+watches, save CommunicationPreferences and control the Web observer. Saving
+requires this role even when automatic reporting is unchanged. A watch retains
+its initiating session revision and checks it on each pass and before each
+group reaches the transport. An admitted request may finish after logout.
+Later requests stop on authorization failure. Any role can stop monitoring,
+observe results and close the application.
+
+Web power checks admission separately for the saved enable flag and the
+service operation. Start, Stop and Apply/Restart also check authorization at
+the Web owner. Normal startup can restore saved enablement while anonymous,
+and Close drains the existing service regardless of role.
 
 The page has three content-driven sections: **Production reporting**, **Web
 observer**, and **Diagnostics**. Production protocol, endpoint, timeout, base and enabled

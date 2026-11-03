@@ -302,15 +302,13 @@ class SourceProductionApplication(ProductionApplication):
         """
         with self._condition:
             changed = selection != self.reporting_selection()
-            if changed:
-                with self._admission(Role.ENGINEER):
+            with self._admission(Role.ENGINEER):
+                if changed:
                     self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
                     if not self.reporting_editable:
                         raise ApplicationStateError(
                             "Reporting settings are fixed by this launcher"
                         )
-                    persist()
-            else:
                 persist()
             if changed:
                 with self._reporting_lock:
@@ -325,6 +323,7 @@ class SourceProductionApplication(ProductionApplication):
             )
 
     def validate_manual_request(self, request: CommunicationRequest) -> None:
+        self.authorize_engineering()
         if request.kind is not RequestKind.WRITE:
             return
         with self._condition:

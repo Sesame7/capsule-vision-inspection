@@ -13,6 +13,7 @@ from tests.support.recipe_ui import select_production_recipe
 from tests.support.startup import authenticated_startup, saved_data
 
 from capsule_vision.application import ApplicationState
+from capsule_vision.application.basler_connection import SourceConnectionSnapshot
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.startup import ApplicationData
 from capsule_vision.configuration import (
@@ -252,3 +253,40 @@ def test_external_start_preflight_failure_and_reselection_clear_recovery_feedbac
     assert window.snapshot.last_issue is None and window.snapshot.active is None
     assert window.buttons["operation"].isEnabled()
     assert window.event_label.accessibleName() != text("command_error", window.language)
+
+
+@pytest.mark.parametrize("during", ["validation", "after_sources"])
+def test_vision_save_revalidates_each_independent_publication(
+    saved_screen: tuple[MainWindow, VisionPage, ApplicationData],
+    monkeypatch: pytest.MonkeyPatch,
+    during: str,
+) -> None:
+    window, workspace, data = saved_screen
+    app = window.bridge.application
+    owner = app.identity
+    assert owner is not None and workspace.sources is not None
+    edit_geometry(workspace)
+    workspace.sources.set_loop(not workspace.sources.saved.loop)
+    before = data.machine.read_bytes(), data.sources.read_bytes()
+    if during == "validation":
+        original = workspace.session.validate_vision_save
+
+        def validate(connection: SourceConnectionSnapshot | None) -> None:
+            original(connection)
+            owner.logout()
+
+        monkeypatch.setattr(workspace.session, "validate_vision_save", validate)
+    else:
+        save = workspace.sources.save
+
+        def save_and_logout() -> None:
+            save()
+            owner.logout()
+
+        monkeypatch.setattr(workspace.sources, "save", save_and_logout)
+    workspace.save_setup()
+    until(lambda: not window.editing.busy)
+    assert data.machine.read_bytes() == before[0] and workspace.draft.dirty
+    assert (data.sources.read_bytes() != before[1]) == (during == "after_sources")
+    assert app.snapshot().candidate_requires_preparation == (during == "after_sources")
+    assert workspace.feedback is not None and "superseded" in workspace.feedback[1]

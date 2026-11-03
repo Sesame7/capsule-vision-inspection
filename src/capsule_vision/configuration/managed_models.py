@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NoReturn
@@ -68,9 +69,15 @@ class PendingModelImport:
 
 
 class ManagedModels:
-    def __init__(self, directory: Path) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        authorize: Callable[[int | None], int | None] = lambda _: None,
+    ) -> None:
         self.directory = directory.absolute()
-        self._imports: set[Path] = set()
+        self._authorize = authorize
+        self._imports: dict[Path, int | None] = {}
 
     def _paths(self) -> tuple[Path, ...]:
         _safe(self.directory)
@@ -101,7 +108,10 @@ class ManagedModels:
                     f"Duplicate model bytes: {path.name} ({digest})"
                 )
 
-    def inspect_import(self, source: Path) -> PendingModelImport:
+    def inspect_import(
+        self, source: Path, *, revision: int | None = None
+    ) -> PendingModelImport:
+        revision = self._authorize(revision)
         if self._imports:
             raise ConfigurationError(
                 "A pending import still owns its staging directory"
@@ -110,12 +120,13 @@ class ManagedModels:
             raise ConfigurationError("Select an existing .vimosln file")
         digest = _digest(source)
         self._check_duplicate(digest)
+        self._authorize(revision)
         _safe(self.directory.parent)
         self.directory.parent.mkdir(parents=True, exist_ok=True)
         work = Path(
             tempfile.mkdtemp(prefix=".model-import-", dir=self.directory.parent)
         )
-        self._imports.add(work)
+        self._imports[work] = revision
         try:
             target = work / "model.vimosln"
             with source.open("rb") as original, target.open("xb") as copied:
@@ -126,6 +137,7 @@ class ManagedModels:
                 raise ConfigurationError(
                     "Model changed while copying; import cancelled"
                 )
+            self._authorize(revision)
             modules = read_model_modules(target, expected_sha256=digest)
             if not modules or len({m.module_id for m in modules}) != len(modules):
                 raise ConfigurationError("No uniquely identified segmentation modules")
@@ -133,7 +145,7 @@ class ManagedModels:
         except BaseException as exc:
             try:
                 _remove_tree(work)
-                self._imports.discard(work)
+                self._imports.pop(work, None)
             except (OSError, ConfigurationError) as cleanup:
                 raise ConfigurationError(
                     f"Import failed: {exc}; cleanup failed at {work}: {cleanup}"
@@ -148,11 +160,12 @@ class ManagedModels:
         ):
             raise ConfigurationError("Import directory is outside its owner")
         _remove_tree(pending.directory)
-        self._imports.discard(pending.directory)
+        self._imports.pop(pending.directory)
 
     def publish_import(
         self, pending: PendingModelImport, module_id: str, name: str
     ) -> ModelDefinition:
+        revision = self._authorize(self._imports.get(pending.directory))
         if pending.directory not in self._imports:
             raise ConfigurationError("Import staging is not owned by this catalog")
         if module_id not in {m.module_id for m in pending.modules}:
@@ -177,6 +190,7 @@ class ManagedModels:
         if _digest(source) != pending.digest:
             raise ConfigurationError("Copied model checksum changed before publication")
         # Build a complete owning directory outside discovery, then publish once.
+        self._authorize(revision)
         prepared = pending.directory / identity
         prepared.mkdir()
         source.rename(prepared / "model.vimosln")
@@ -185,6 +199,7 @@ class ManagedModels:
         )
         save_model_definition(prepared / "model.json", model)
         load_model_definition(prepared / "model.json")
+        self._authorize(revision)
         self.directory.mkdir(parents=True, exist_ok=True)
         _safe(self.directory)
         target = self.directory / identity
@@ -193,7 +208,7 @@ class ManagedModels:
         # Windows rename fails on an existing destination; never replace it.
         os.rename(prepared, target)
         pending.directory.rmdir()
-        self._imports.discard(pending.directory)
+        self._imports.pop(pending.directory)
         return load_model_definition(target / "model.json")
 
     def current(self, model: ModelDefinition) -> Path:
@@ -215,13 +230,20 @@ class ManagedModels:
             raise ConfigurationError("Model artifact is outside its managed owner")
         return directory / "model.vimosln"
 
-    def rename(self, model: ModelDefinition, name: str) -> ModelDefinition:
+    def rename(
+        self, model: ModelDefinition, name: str, *, revision: int | None = None
+    ) -> ModelDefinition:
+        revision = self._authorize(revision)
         directory = self.current(model)
         updated = replace(model, display_name=name)
+        self._authorize(revision)
         save_model_definition(directory / "model.json", updated)
         return updated
 
-    def delete(self, model: ModelDefinition, recipes: Path) -> None:
+    def delete(
+        self, model: ModelDefinition, recipes: Path, *, revision: int | None = None
+    ) -> None:
+        revision = self._authorize(revision)
         directory = self.current(model)
         try:
             paths = tuple(recipes.iterdir())
@@ -232,4 +254,5 @@ class ManagedModels:
                 continue
             if load_recipe_model_reference(path) == model.model_id:
                 raise ConfigurationError(f"Model is referenced by Recipe {path}")
+        self._authorize(revision)
         _remove_tree(directory)
