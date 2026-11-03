@@ -4,6 +4,7 @@ import secrets
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import Future
+from datetime import UTC, datetime
 from pathlib import Path
 from queue import Full, Queue
 from threading import Lock, Thread, current_thread
@@ -153,7 +154,10 @@ class LocalIdentity:
                         raise StaleSessionError("Authentication was superseded")
                     if record is None or not record[0].enabled or not valid:
                         raise AuthenticationError("Invalid username or password")
-                    return self._publish(record[0])
+                    account = self._available().record_login(
+                        record[0].account_id, datetime.now(UTC)
+                    )
+                    return self._publish(account)
 
             return self._enqueue(authenticate)
 

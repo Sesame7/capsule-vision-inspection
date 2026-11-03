@@ -308,8 +308,12 @@ class NavigationBar(QFrame):
         self._username, self._user_detail = username, detail
         self.user.ensurePolished()
         language = self._presentation[0] if self._presentation else "en"
-        caption = username if username is not None else text("identity_guest", language)
-        full = f"{caption} · {detail}" if detail else caption
+        if username is None:
+            caption = "Guest"
+            full = detail or text("identity_guest", language)
+        else:
+            caption = username
+            full = f"{caption} · {detail}" if detail else caption
         self.user.setText(
             self.user.fontMetrics().elidedText(
                 caption, Qt.TextElideMode.ElideRight, self.user.width() - 64

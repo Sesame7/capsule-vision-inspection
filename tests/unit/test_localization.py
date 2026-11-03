@@ -42,7 +42,14 @@ ENGLISH_DETAIL_KEYS = {
     "web_boundary",
 }
 
-OPTIONAL_UI_KEYS = {
+IDENTITY_UI_KEYS = {
+    "identity_new_user",
+    "identity_status",
+    "identity_last_login",
+    "identity_selected",
+    "identity_no_selection",
+    "identity_change_role",
+    "identity_confirm_disable",
     "identity_close",
     "identity_disabled",
     "identity_guest",
@@ -79,6 +86,9 @@ OPTIONAL_UI_KEYS = {
     "identity_error",
     "identity_done",
     "identity_busy",
+}
+
+OPTIONAL_UI_KEYS = {
     "recipe_preparing_short",
     "active_recipe",
     "select_saved_recipe",
@@ -100,6 +110,80 @@ OPTIONAL_UI_KEYS = {
     "model_name",
     "model_action_error",
 }
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_identity_ui_has_complete_native_coverage(language: Language) -> None:
+    assert IDENTITY_UI_KEYS == {key for key in STRINGS if key.startswith("identity_")}
+    assert not IDENTITY_UI_KEYS & OPTIONAL_UI_KEYS
+    values = (
+        {key: STRINGS[key][0 if language == "zh" else 1] for key in IDENTITY_UI_KEYS}
+        if language in ("zh", "en")
+        else EXTRA_STRINGS[language]
+    )
+    assert IDENTITY_UI_KEYS <= values.keys()
+    for key in IDENTITY_UI_KEYS:
+        value = values[key]
+        assert value and value == value.strip() and "\ufffd" not in value
+        expected = [
+            (field, spec, conversion)
+            for _, field, spec, conversion in Formatter().parse(STRINGS[key][1])
+            if field is not None
+        ]
+        actual = [
+            (field, spec, conversion)
+            for _, field, spec, conversion in Formatter().parse(value)
+            if field is not None
+        ]
+        assert actual == expected, (language, key)
+        if expected:
+            username = "QA_{CAM01}_用户"
+            assert username in value.format(username=username)
+    for keys in (
+        ("identity_login", "identity_logout", "identity_switch"),
+        ("identity_change", "identity_reset", "identity_change_role"),
+        ("identity_enable", "identity_disable"),
+        ("identity_enabled", "identity_disabled"),
+        (
+            "identity_guest",
+            "identity_operator",
+            "identity_engineer",
+            "identity_administrator",
+        ),
+    ):
+        assert len({values[key] for key in keys}) == len(keys), (language, keys)
+    if language not in ("zh", "en"):
+        for key in (
+            "identity_login",
+            "identity_logout",
+            "identity_manage",
+            "identity_invalid",
+            "identity_storage",
+        ):
+            assert values[key] != STRINGS[key][1], (language, key)
+
+
+def test_identity_regional_catalogs_preserve_independent_terms_and_scripts() -> None:
+    assert text("identity_username", "pt-BR") == "Nome de usuário"
+    assert text("identity_username", "pt-PT") == "Nome de utilizador"
+    assert text("identity_password", "pt-BR") == "Senha"
+    assert text("identity_password", "pt-PT") == "Palavra-passe"
+    assert text("identity_login", "zh-TW") == "登入"
+    assert text("identity_password", "zh-TW") == "密碼"
+    for key in (
+        "identity_guest",
+        "identity_login",
+        "identity_password",
+        "identity_administrator",
+    ):
+        assert text(key, "am") != text(key, "ti")
+    for language in ("sr-Latn", "az-Latn", "uz"):
+        assert not any(
+            "\u0400" <= c <= "\u04ff"
+            for key in IDENTITY_UI_KEYS
+            for c in text(key, language)
+        )
+
 
 # These tokens may inherit canonical English; native overrides remain explicit.
 TECHNICAL_TOKEN_KEYS = {
@@ -1172,7 +1256,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 459
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 466
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

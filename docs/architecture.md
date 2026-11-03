@@ -116,6 +116,10 @@ service owns Administrator admission. Last-enabled-Administrator protection is
 transactional. Offline initialization/recovery is an explicit OS-trusted entry,
 with the same exclusive local file lease as normal application startup. See
 [local accounts](configuration.md#local-accounts) for storage and command contracts.
+Valid v1 stores migrate transactionally to v2, preserving existing account and
+verifier fields. A successful, still-current authentication commits UTC Last Login
+metadata before publishing the session; a failed write cannot report login success.
+Other account/session operations preserve this metadata.
 
 Startup acquires identity ownership before creating application resources and
 passes that owner into the existing Application lifetime. Close drains it and
@@ -126,8 +130,12 @@ Administrator account management through this same service. Masked, modeless
 forms clear secrets on submission/dismissal. Authentication and account IO use
 the service worker and queued, destruction-safe Qt delivery; superseded results
 cannot replace a later session decision. The existing shell refresh observes role
-changes and disables account UI on confirmed Close. Application retains worker
-stop/join ownership. Login/logout never controls an inspection session. Business
+changes. Manage Users presents a read-only four-column table and captures account
+IDs in separate role and disable-confirmation dialogs. Dialog dismissal invalidates
+its delivery token without cancelling accepted account work; the service remains
+the transaction and authorization owner. The shell disables account UI on confirmed
+Close. Application retains worker stop/join ownership. Login/logout never controls
+an inspection session. Business
 command authorization and audit storage are not implemented.
 
 ## Inference

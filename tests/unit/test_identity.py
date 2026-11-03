@@ -7,7 +7,7 @@ import subprocess
 import sys
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from threading import Event
 
@@ -113,12 +113,14 @@ def test_guest_missing_store_and_restart_never_restore_login(tmp_path: Path) -> 
     with opened(path) as owner:
         assert owner.snapshot().role is Role.GUEST
         session = owner.login("aDmIn", SECRET).result(WAIT)
-        assert session.account == admin and session.revision > 0
+        assert session.account is not None and session.revision > 0
+        assert replace(session.account, last_login_utc=None) == admin
         with pytest.raises(FrozenInstanceError):
             session.__setattr__("revision", -1)
     with opened(path) as owner:
         assert owner.snapshot().role is Role.GUEST
-        assert owner.login("ADMIN", SECRET).result(WAIT).account == admin
+        current = owner.login("ADMIN", SECRET).result(WAIT).account
+        assert current is not None and replace(current, last_login_utc=None) == admin
 
 
 def test_accounts_persist_casefold_id_role_and_enabled_state(database: Path) -> None:
@@ -196,10 +198,13 @@ def test_management_boundary_and_self_password_change(database: Path) -> None:
             owner.change_password("wrong", "new-secret").result(WAIT)
         assert owner.snapshot() == session
         changed = owner.change_password(SECRET, "new-secret").result(WAIT)
-        assert changed.account == operator and changed.revision > session.revision
+        assert (
+            changed.account == session.account and changed.revision > session.revision
+        )
         with pytest.raises(AuthenticationError):
             owner.login("Worker", SECRET).result(WAIT)
-        assert owner.login("Worker", "new-secret").result(WAIT).account == operator
+        current = owner.login("Worker", "new-secret").result(WAIT).account
+        assert current is not None and replace(current, last_login_utc=None) == operator
 
 
 def test_last_admin_rollback_and_immediate_session_reconciliation(
@@ -434,8 +439,10 @@ def test_offline_recovery_preserves_records_and_does_not_promote_operators(
     recovered = recover_administrator(database, "ADMIN", "new-secret")
     assert admin is not None and recovered.account_id == admin.account_id
     with opened(database) as owner:
-        owner.login("Admin", "new-secret").result(WAIT)
-        assert owner.list_accounts().result(WAIT) == (recovered, operator)
+        current = owner.login("Admin", "new-secret").result(WAIT).account
+        assert current is not None
+        assert replace(current, last_login_utc=recovered.last_login_utc) == recovered
+        assert owner.list_accounts().result(WAIT) == (current, operator)
 
 
 def test_maintenance_is_rejected_cross_process_even_when_database_missing(
@@ -488,5 +495,7 @@ def test_offline_recovery_can_enable_an_existing_disabled_administrator(
     restored = recover_administrator(database, "Admin", "recovered-secret")
     assert restored.account_id == admin.account_id and restored.enabled
     with opened(database) as owner:
-        assert owner.login("Admin", "recovered-secret").result(WAIT).account == restored
-        assert owner.list_accounts().result(WAIT) == (restored, second)
+        current = owner.login("Admin", "recovered-secret").result(WAIT).account
+        assert current is not None
+        assert replace(current, last_login_utc=restored.last_login_utc) == restored
+        assert owner.list_accounts().result(WAIT) == (current, second)

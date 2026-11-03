@@ -145,11 +145,22 @@ Operator < Engineer < Administrator. Usernames are 1–64 printable characters w
 edge whitespace; uniqueness uses Unicode `casefold`, independently of SQLite's
 ASCII-only NOCASE. No username renaming or account deletion is provided.
 
-Schema version 1 stores PBKDF2-HMAC-SHA256 verifier version 1, a random 16-byte salt,
+Schema version 2 adds nullable `last_login_utc` account metadata. Opening a valid
+version 1 store validates its schema and records before migrating it in one SQLite
+write transaction; failed migration rolls back. IDs, usernames, roles, enabled
+flags and password verifiers are preserved. New stores use version 2 directly.
+The verifier remains PBKDF2-HMAC-SHA256 version 1, with a random 16-byte salt,
 32-byte digest and iteration count. New passwords use 600,000 iterations; supported
 stored counts are bounded to 100,000–2,000,000. Passwords are nonempty UTF-8 text,
 at most 1024 encoded bytes. Verification uses constant-time digest comparison.
 Plaintext passwords are not persisted, returned in observations or logged.
+
+Successful authentication rechecks its session revision, commits Last Login as
+UTC ISO 8601 text, and then publishes the immutable account/session observation.
+A timestamp write failure cannot produce a successful login. Failed or superseded
+authentication, Guest, logout, password changes/resets and account management do
+not update this value. The UI displays device-local `YYYY-MM-DD HH:mm`, or an em
+dash for an account that has never logged in. This metadata is not an audit trail.
 
 Administrator authorization is enforced by the account service for account listing,
 creation, enable/disable, role changes and password resets. The last enabled
@@ -187,19 +198,46 @@ ownership lock before accessing storage. Password arguments, noninteractive secr
 input and echoing console fallbacks are rejected. Interrupted/failed initialization
 is reported for explicit review, not silently repaired.
 
-The navigation's current-user menu displays Guest or the logged-in username.
+The navigation's current-user button uses the exact caption `Guest` for anonymous
+sessions in every language, or the account's original username when logged in.
+Its tooltip and accessible name retain the localized role and any storage status,
+without repeating the anonymous identity. Role names elsewhere remain localized.
 Login and Switch User use masked credential forms; Switch User first logs out,
 so canceling it leaves Guest. Logout immediately invalidates pending authentication.
 Change Password verifies the current password and confirms the new one. The
-Administrator's Manage Users dialog lists accounts and supports creation, role
-changes, enable/disable and password resets through the account service's own
-authorization and validation. There is no delete or username rename action.
+Administrator's resizable Manage Users dialog prefers 850×500 Qt logical pixels,
+bounded by the available screen work area on first display. Its read-only,
+single-selection table allocates its viewport width to Username / Role / Status /
+Last Login in 30% / 22% / 16% / 32% proportions. Shared column edges round to logical
+pixels and use the entire viewport, including after scrollbar changes. Widths
+respond to viewport, language and font changes, independently of account text and
+selection. Headers and cells align left; long text elides. Account count changes
+do not resize the dialog. Disabled accounts remain visible,
+additional accounts scroll, and refresh preserves selection by account ID. Full
+cell values remain available through tooltips and accessibility.
+All actions sit below the table: New User and icon-only Refresh on the left;
+Change Role, Enable/Disable User and Reset Password on the right. Ordinary fonts
+use one row; constrained widths or enlarged fonts wrap the groups without
+overlapping controls. There is no separate selected-account summary or Close button.
+Change Role opens a separate role selector with Save/Cancel; unchanged roles
+cannot be saved. Disabling requires a confirmation naming the target; enabling
+does not. Demotion/disable controls for the last enabled Administrator are disabled
+as a UI convenience, alongside the authoritative transactional service guard.
+Account creation and password reset retain the existing masked forms. Every action
+uses the account service's own authorization and validation; there is no delete or
+username rename action. Native Close and Esc dismiss the dialog. Dismissal fences
+late UI delivery without cancelling already accepted service work or redirecting
+it to another selection. Application Close retains its session-revision and actual
+worker cleanup rules.
 Current-account role changes update the menu; disable/reset returns it to Guest.
 Account dialogs close when their actor loses the required identity/role. Close
 invalidates UI delivery and waits for the existing Application-owned worker cleanup.
 Missing/unavailable storage is visible in the current-user tooltip and login form;
-offline initialization/recovery remains required. Text is Chinese/English with
-the existing English fallback for other languages. Passwords are cleared from
+offline initialization/recovery remains required. Identity menus, roles, forms,
+account management and feedback have native catalog entries in all 64 supported
+languages. Open identity dialogs refresh their captions without losing entered
+values or selected role identities. Unrelated optional UI entries retain their
+English fallback. Passwords are cleared from
 fields on submission/dismissal; feedback never echoes credentials or raw errors.
 
 Production/Recipe/Vision/Communication command authorization is not implemented.

@@ -3,6 +3,7 @@
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -19,8 +20,9 @@ from .identity_models import (
 from .passwords import PasswordVerifier
 
 APPLICATION_ID = 0x43564953
-_COLUMNS = "account_id, username, username_key, role, enabled, password_version, iterations, salt, digest"
-_SCHEMA = """
+_COLUMNS_V1 = "account_id, username, username_key, role, enabled, password_version, iterations, salt, digest"
+_COLUMNS = _COLUMNS_V1 + ", last_login_utc"
+_SCHEMA_V1 = """
 CREATE TABLE accounts (
     account_id TEXT PRIMARY KEY NOT NULL,
     username TEXT NOT NULL,
@@ -33,6 +35,32 @@ CREATE TABLE accounts (
     digest BLOB NOT NULL
 );
 """
+_SCHEMA = _SCHEMA_V1.replace(
+    "digest BLOB NOT NULL", "digest BLOB NOT NULL,\n    last_login_utc TEXT"
+)
+
+
+def _schema_text(sql: str) -> str:
+    # ALTER TABLE changes whitespace around the appended column's punctuation.
+    return (
+        " ".join(sql.strip().rstrip(";").split()).replace(" ,", ",").replace(" )", ")")
+    )
+
+
+def _login_time(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            stamp = datetime.fromisoformat(value)
+            if (
+                stamp.tzinfo is UTC
+                and stamp.isoformat(timespec="microseconds") == value
+            ):
+                return stamp
+        except ValueError:
+            pass
+    raise SecurityStorageError("Malformed account login timestamp")
 
 
 class AccountStore:
@@ -55,7 +83,7 @@ class AccountStore:
                 with self.transaction():
                     self.connection.execute(_SCHEMA)
                     self.connection.execute(f"PRAGMA application_id={APPLICATION_ID}")
-                    self.connection.execute("PRAGMA user_version=1")
+                    self.connection.execute("PRAGMA user_version=2")
             self.validate()
         except BaseException:
             self.connection.close()
@@ -76,17 +104,39 @@ class AccountStore:
             raise
 
     def validate(self) -> None:
-        if (
-            self.connection.execute("PRAGMA application_id").fetchone()[0]
-            != APPLICATION_ID
-            or self.connection.execute("PRAGMA user_version").fetchone()[0] != 1
-            or self.connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]
-        ):
+        # Validation and migration share one write transaction, including rollback
+        # of DDL. No invalid v1 database is upgraded, repaired or replaced.
+        with self.transaction():
+            version: object = self.connection.execute("PRAGMA user_version").fetchone()[
+                0
+            ]
+            if version not in (1, 2):
+                raise SecurityStorageError("Corrupt or unsupported security database")
+            self._validate_schema(version)
+            if version == 1:
+                self.connection.execute(
+                    "ALTER TABLE accounts ADD COLUMN last_login_utc TEXT"
+                )
+                self.connection.execute("PRAGMA user_version=2")
+                self._validate_schema(2)
+            # BEGIN IMMEDIATE alone can succeed on a read-only connection.
+            # This requires write access while changing no rows or metadata.
+            self.connection.execute(
+                "UPDATE accounts SET last_login_utc=last_login_utc WHERE 0"
+            )
+
+    def _validate_schema(self, version: int) -> None:
+        if self.connection.execute("PRAGMA application_id").fetchone()[
+            0
+        ] != APPLICATION_ID or self.connection.execute(
+            "PRAGMA quick_check"
+        ).fetchall() != [("ok",)]:
             raise SecurityStorageError("Corrupt or unsupported security database")
         columns: list[tuple[object, ...]] = self.connection.execute(
             "PRAGMA table_info(accounts)"
         ).fetchall()
-        if [row[1] for row in columns] != _COLUMNS.split(", "):
+        names = _COLUMNS_V1 if version == 1 else _COLUMNS
+        if [row[1] for row in columns] != names.split(", "):
             raise SecurityStorageError("Unsupported account schema")
         schema: list[tuple[object, ...]] = self.connection.execute(
             "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','view','trigger')"
@@ -95,23 +145,23 @@ class AccountStore:
             len(schema) != 1
             or schema[0][:2] != ("table", "accounts")
             or not isinstance(schema[0][2], str)
-            or " ".join(schema[0][2].rstrip(";").split())
-            != " ".join(_SCHEMA.strip().rstrip(";").split())
+            or _schema_text(schema[0][2])
+            != _schema_text(_SCHEMA_V1 if version == 1 else _SCHEMA)
         ):
             raise SecurityStorageError("Unsupported account schema")
         rows: list[tuple[object, ...]] = self.connection.execute(
-            f"SELECT {_COLUMNS} FROM accounts"
+            f"SELECT {names} FROM accounts"
         ).fetchall()
         for row in rows:
-            self.decode(row)
-        with self.transaction():
-            pass  # Detect a read-only database without modifying any account.
+            self.decode((*row, None) if version == 1 else row)
 
     @staticmethod
     def decode(row: tuple[object, ...]) -> tuple[Account, PasswordVerifier]:
-        if len(row) != 9:
+        if len(row) != 10:
             raise SecurityStorageError("Malformed account record")
-        identity, name, key, role, enabled, version, iterations, salt, digest = row
+        identity, name, key, role, enabled, version, iterations, salt, digest, login = (
+            row
+        )
         if not isinstance(identity, str) or not isinstance(name, str):
             raise SecurityStorageError("Malformed account identity")
         try:
@@ -132,9 +182,9 @@ class AccountStore:
             or not isinstance(digest, bytes)
         ):
             raise SecurityStorageError("Malformed account record")
-        return Account(identity, name, Role(role), bool(enabled)), PasswordVerifier(
-            version, iterations, salt, digest
-        )
+        return Account(
+            identity, name, Role(role), bool(enabled), _login_time(login)
+        ), PasswordVerifier(version, iterations, salt, digest)
 
     def by_name(self, username: str) -> tuple[Account, PasswordVerifier] | None:
         row: tuple[object, ...] | None = self.connection.execute(
@@ -180,7 +230,7 @@ class AccountStore:
             if self.by_name(username) is not None:
                 raise AccountConflictError("Username already exists")
             self.connection.execute(
-                "INSERT INTO accounts VALUES (?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     account.account_id,
                     username,
@@ -191,6 +241,7 @@ class AccountStore:
                     verifier.iterations,
                     verifier.salt,
                     verifier.digest,
+                    None,
                 ),
             )
         return account
@@ -214,6 +265,7 @@ class AccountStore:
                 previous.username,
                 role if role is not None else previous.role,
                 enabled if enabled is not None else previous.enabled,
+                previous.last_login_utc,
             )
             password = verifier or password
             self.connection.execute(
@@ -234,4 +286,14 @@ class AccountStore:
                 raise LastAdministratorError(
                     "At least one enabled Administrator must remain"
                 )
+        return account
+
+    def record_login(self, account_id: str, timestamp: datetime) -> Account:
+        value = timestamp.astimezone(UTC).isoformat(timespec="microseconds")
+        with self.transaction():
+            self.connection.execute(
+                "UPDATE accounts SET last_login_utc=? WHERE account_id=?",
+                (value, account_id),
+            )
+            account, _ = self.by_id(account_id)
         return account

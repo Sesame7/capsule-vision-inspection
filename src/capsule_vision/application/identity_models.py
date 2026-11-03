@@ -1,6 +1,7 @@
 """Local account observations and fixed roles; no Qt or production permissions."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum, IntEnum
 
 
@@ -74,6 +75,7 @@ class Account:
     username: str
     role: Role
     enabled: bool
+    last_login_utc: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
