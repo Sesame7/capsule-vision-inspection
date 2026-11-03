@@ -432,6 +432,10 @@ class RecipeTuning(QWidget):
         self.mode_changed.emit()
 
     @property
+    def closing(self) -> bool:
+        return self._close is not None
+
+    @property
     def busy(self) -> bool:
         return self._thread is not None
 

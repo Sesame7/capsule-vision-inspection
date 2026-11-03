@@ -158,11 +158,11 @@ def test_unconfigured_reporting_preferences_do_not_invent_assets(
     window = create_window(startup, delivery)
     try:
         panel = window.communication.reporting_panel
-        assert panel is not None and panel.enabled.isEnabled()
-        panel.enabled.setChecked(True)
-        panel.port.setValue(19600)
+        assert panel is not None and not panel.enabled.isEnabled()
+        panel.enabled.click()
+        assert not panel.port.isEnabled()
         assert not panel.controller.reporting_selection().enabled
-        assert panel.selection().enabled
+        assert not panel.selection().enabled
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
         assert panel.controller.reporting_snapshot() is None
         assert startup.application.history is not None

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import ModelDefinition
 from capsule_vision.configuration.managed_models import PendingModelImport
 from capsule_vision.localization.catalog import text
@@ -146,8 +147,14 @@ class ModelControls(QWidget):
                 self._finished(value, error)
                 return
             self.pending = value
+            if error is None and not self._closing:
+                try:
+                    self.editing.bridge.application.authorize_engineering(revision)
+                except IdentityError as exc:
+                    self._cancel(exc)
+                    return
             if error is not None or self._closing:
-                self._cancel()
+                self._cancel(error)
             elif len(value.modules) == 1:
                 self._publish(value.modules[0].module_id, value.display_name, revision)
             else:

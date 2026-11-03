@@ -47,13 +47,18 @@ from capsule_vision.application import (
     ModelPreparationRequest,
     ModelPreparationState,
 )
-from capsule_vision.application.identity_models import IdentityError, Role
+from capsule_vision.application.identity_models import (
+    IdentityError,
+    Role,
+    StaleSessionError,
+)
 from capsule_vision.configuration import (
     CheckConfiguration,
     ConfigurationError,
     ConfigurationIOError,
     ModelDefinition,
     RecipeDefinition,
+    load_recipe,
 )
 from capsule_vision.configuration.catalog import RecipeEntry
 from capsule_vision.configuration.drafts import RecipeDraft
@@ -65,6 +70,7 @@ from .editing import EditingCoordinator
 from .future_delivery import FutureDelivery
 from .image_tools import image_icon
 from .model_controls import ModelControls
+from .permissions import failure_key, permits
 from .production_bridge import QtProductionBridge
 from .recipe_tuning import PreviewMode, RecipeTuning
 from .style import (
@@ -87,6 +93,17 @@ class ModelLabelReader(Protocol):
 
 class _ArchiveCheckBox(QCheckBox):
     """The full labeled touch target toggles, including its styled padding."""
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        # Include the native indicator and both styled insets at the actual font.
+        hint.setWidth(
+            max(
+                hint.width(),
+                self.fontMetrics().horizontalAdvance(self.text()) + Style.touch,
+            )
+        )
+        return hint
 
     def hitButton(self, position: QPoint) -> bool:
         return self.rect().contains(position)
@@ -196,6 +213,7 @@ class RecipePage(QWidget):
         self.language: Language = "zh"
         self._loading = False
         self._entries: tuple[RecipeEntry, ...] = ()
+        self._browse_entry: RecipeEntry | None = None
         self._model_ids: tuple[str | None, ...] = ()
         self._catalog_error = ""
         self._error = ""
@@ -466,7 +484,9 @@ class RecipePage(QWidget):
         self.buttons["duplicate_recipe"].clicked.connect(
             lambda: self.guard_dirty(lambda: self.create_dialog(True))
         )
-        self.buttons["reload"].clicked.connect(lambda: self.guard_dirty(self.reload))
+        self.buttons["reload"].clicked.connect(
+            lambda: self.reload() if self.browsing else self.guard_dirty(self.reload)
+        )
         self.buttons["delete_recipe"].clicked.connect(self.request_delete)
         self.buttons["recipe_discard"].clicked.connect(self.request_discard)
         primary.clicked.connect(lambda: self.save())
@@ -501,8 +521,34 @@ class RecipePage(QWidget):
         self._report_error(error, "model_action_error")
         self.refresh_state()
 
+    @property
+    def browsing(self) -> bool:
+        return not permits(self.bridge.application, Role.ENGINEER)
+
+    def _displayed_recipe(self) -> RecipeDefinition | RecipeDraft:
+        if self.browsing:
+            return (
+                self._browse_entry.recipe if self._browse_entry else RecipeDraft("", "")
+            )
+        return self.session.draft if self.session else RecipeDraft("", "")
+
     def editable(self) -> bool:
-        return self.editing.editable() and not self.closing
+        return not self.browsing and self.editing.editable() and not self.closing
+
+    def identity_changed(self) -> None:
+        if self._dialog is not None:
+            self._dialog.reject()
+        if self.model_controls.dialog is not None:
+            self.model_controls.dialog.reject()
+        if self.browsing:
+            if self.preview is not None:
+                self.tuning_section.hide()
+                if not self.preview.closing and not self.editing.closing:
+                    self.leave_preview(lambda: None)
+            self.reload()
+        else:
+            self._browse_entry = None
+            self.show_draft()
 
     @Slot(object)
     def _configuration_applied(self, _prepared: object) -> None:
@@ -511,7 +557,9 @@ class RecipePage(QWidget):
 
     @Slot(object, str)
     def _operation_failed(self, error: object, key: str) -> None:
-        self._report_error(str(error), key)
+        self._report_error(
+            error if isinstance(error, BaseException) else str(error), key
+        )
         self.refresh_state()
 
     def set_language(self, language: Language) -> None:
@@ -633,8 +681,10 @@ class RecipePage(QWidget):
         if self.session is None:
             self.refresh_state()
             return
+        browsing = self.browsing
+        revision = self.bridge.application.session_revision
         try:
-            if self.editable():
+            if self.editable() or browsing:
                 self.session.reload_models()
             snapshot = self.session.catalog.discover()
             self._entries = snapshot.entries
@@ -644,12 +694,16 @@ class RecipePage(QWidget):
                     *(f"{e.path.name}: {e.message}" for e in snapshot.issues),
                 )
             )
-            current = self.session.entry
+            current = (
+                self._browse_entry
+                if browsing and self._browse_entry
+                else self.session.entry
+            )
             candidate = self.bridge.application.snapshot().candidate
             target = next(
                 (e for e in self._entries if current and e.path == current.path), None
             )
-            if target is None:
+            if target is None and (not browsing or current is None):
                 target = next(
                     (
                         e
@@ -658,14 +712,23 @@ class RecipePage(QWidget):
                     ),
                     None,
                 )
-            if target is None and self._entries and self.session.auto_select_first:
+            if (
+                target is None
+                and (not browsing or current is None)
+                and self._entries
+                and self.session.auto_select_first
+            ):
                 target = self._entries[0]
-            if target is not None:
+            if browsing:
+                self._browse_entry = target
+            elif revision != self.bridge.application.session_revision:
+                raise StaleSessionError("Session changed during Recipe reload")
+            elif target is not None:
                 self.session.load(target)
             else:
                 self.session.new()
             self._error = self._feedback = ""
-        except ConfigurationError as exc:
+        except (ConfigurationError, IdentityError) as exc:
             self._report_error(exc)
         self.recipes.clear()
         self.recipes.addItems([e.recipe.display_name for e in self._entries])
@@ -678,7 +741,10 @@ class RecipePage(QWidget):
             self.refresh_state()
             return
         self._loading = True
-        session, draft = self.session, self.session.draft
+        session, draft = self.session, self._displayed_recipe()
+        if not self.browsing:
+            self._browse_entry = session.entry
+        entry = self._browse_entry if self.browsing else session.entry
         self.metadata["display_name"].setText(draft.display_name)
         self.metadata["product_code"].setText(draft.product_code or "")
         self.archive_directory.setText(draft.image_archive.root_directory)
@@ -703,13 +769,13 @@ class RecipePage(QWidget):
                 (
                     i
                     for i, e in enumerate(self._entries)
-                    if session.entry and e.path == session.entry.path
+                    if entry and e.path == entry.path
                 ),
                 -1,
             )
         )
         self._loading = False
-        if self.preview is not None:
+        if self.preview is not None and not self.browsing:
             self.preview.show_settings()
         self.refresh_state()
 
@@ -770,7 +836,8 @@ class RecipePage(QWidget):
         self.refresh_theme()
         session, language = self.session, self.language
         allowed = self.editable()
-        self.archive_directory.setEnabled(allowed)
+        self.archive_directory.setEnabled(allowed or self.browsing)
+        self.archive_directory.setReadOnly(not allowed)
         self.archive_directory.setToolTip(
             self.archive_directory.text() or text("archive_directory", language)
         )
@@ -786,7 +853,7 @@ class RecipePage(QWidget):
             check.setToolTip(check.accessibleName())
             check.setEnabled(allowed)
             if session is not None:
-                settings = session.draft.capsule
+                settings = self._displayed_recipe().capsule
                 check.blockSignals(True)
                 check.setChecked(
                     settings.size.enabled if mode == "size" else settings.color.enabled
@@ -801,6 +868,7 @@ class RecipePage(QWidget):
         for mode, button in self.expand_tuning.items():
             button.setEnabled(
                 session is not None
+                and not self.browsing
                 and not self.busy
                 and not self.closing
                 and not session.machine_editor.dirty
@@ -809,13 +877,16 @@ class RecipePage(QWidget):
             button.setChecked(self.preview is not None and self.preview.mode == mode)
         self._present_model()
         for line in self.metadata.values():
-            line.setEnabled(allowed)
+            line.setEnabled(allowed or self.browsing)
+            line.setReadOnly(not allowed)
         self.model.setEnabled(allowed and self.model.count() > 1)
         self.recipes.setEnabled(
             session is not None and not self.busy and not self.closing
         )
         for key, button in self.buttons.items():
             enabled = allowed
+            if key == "archive_open" and self.browsing:
+                enabled = bool(self.archive_directory.text())
             if key == "reload":
                 enabled = session is not None and not self.busy and not self.closing
             elif key == "recipe_discard":
@@ -839,12 +910,20 @@ class RecipePage(QWidget):
                     and not self.bridge.application.preparation_snapshot().owns_resources
                 )
             button.setEnabled(enabled)
+            if key not in ("reload", "archive_open"):
+                button.setToolTip(
+                    text("permission_engineer" if self.browsing else key, language)
+                )
         self.model_controls.refresh()
         state = (
             "preparing"
             if self.busy
             else "no_catalog"
             if session is None
+            else "saved"
+            if self.browsing and self._browse_entry is not None
+            else "select_saved_recipe"
+            if self.browsing
             else "unsaved"
             if session.dirty
             else "saved"
@@ -886,7 +965,7 @@ class RecipePage(QWidget):
         self, error: BaseException | str, key: str = "recipe_error"
     ) -> None:
         # Keep the original details for diagnostics and existing completion callbacks.
-        self._error, self._error_key = str(error), key
+        self._error, self._error_key = str(error), failure_key(error, key)
 
     def _protected_recipes(self) -> frozenset[str]:
         snapshot = self.bridge.application.snapshot()
@@ -919,12 +998,16 @@ class RecipePage(QWidget):
         )
         dialog.setDefaultButton(cancel)
         self._dialog = dialog
+        revision = self.bridge.application.session_revision
 
         def finished() -> None:
             chosen = dialog.clickedButton() is accept
             self._dialog = None
             dialog.deleteLater()
-            if chosen and self.editable():
+            if chosen and revision != self.bridge.application.session_revision:
+                self._report_error(StaleSessionError("Session decision was superseded"))
+                self.refresh_state()
+            elif chosen and self.editable():
                 action()
 
         dialog.finished.connect(finished)
@@ -979,10 +1062,11 @@ class RecipePage(QWidget):
         self._confirm_recipe_action("delete_recipe", lambda: self.leave_preview(delete))
 
     def _selected_model(self) -> ModelDefinition | None:
-        if self.session is None or self.session.draft.model_id is None:
+        model_id = self._displayed_recipe().model_id
+        if self.session is None or model_id is None:
             return None
         try:
-            return self.session.registry.get(self.session.draft.model_id)
+            return self.session.registry.get(model_id)
         except ConfigurationError:
             return None
 
@@ -1039,19 +1123,14 @@ class RecipePage(QWidget):
             self._labels_error = ""
             if self.isVisible() and not self.closing:
                 QTimer.singleShot(0, self._ensure_model_labels)
-        session = self.session
-        identity = self.bridge.application.identity
-        can_edit_labels = identity is None or identity.snapshot().role >= Role.ENGINEER
-        disabled = session.draft.defaults.vimo.disabled_labels if session else ()
-        if not can_edit_labels and session is not None and session.entry is not None:
-            disabled = session.entry.recipe.defaults.vimo.disabled_labels
+        disabled = self._displayed_recipe().defaults.vimo.disabled_labels
         retained = tuple(label for label in disabled if label not in self.label_checks)
         self.label_choices.setToolTip(
             text("recipe_labels_retained", self.language) + " " + ", ".join(retained)
             if retained
             else text("recipe_labels", self.language)
         )
-        editable = can_edit_labels and self.editable() and model == self._labels_model
+        editable = self.editable() and model == self._labels_model
         for label, check in self.label_checks.items():
             check.blockSignals(True)
             check.setChecked(label not in disabled)
@@ -1221,6 +1300,8 @@ class RecipePage(QWidget):
             self.preview.show_settings()
 
     def open_preview(self, mode: PreviewMode | None = None) -> None:
+        if self.browsing:
+            return
         if (
             self.session is None
             or self.busy
@@ -1307,9 +1388,23 @@ class RecipePage(QWidget):
             after()
 
     def _select(self, index: int) -> None:
-        if index < 0 or self.busy:
+        if not 0 <= index < len(self._entries) or self.busy:
             return
         entry = self._entries[index]
+        if self.browsing:
+            try:
+                recipe = load_recipe(entry.path)
+                if recipe.recipe_id != entry.recipe.recipe_id:
+                    raise ConfigurationError(
+                        "Recipe identity changed; reload the catalog"
+                    )
+                self._browse_entry = RecipeEntry(entry.path, recipe)
+                self._error = self._feedback = ""
+            except ConfigurationError as exc:
+                self._browse_entry = None
+                self._report_error(exc)
+            self.show_draft()
+            return
 
         def select() -> None:
             assert self.session is not None
@@ -1332,6 +1427,13 @@ class RecipePage(QWidget):
         revision = self.bridge.application.session_revision
 
         def decided(decision: DirtyDecision) -> None:
+            if (
+                decision != "cancel"
+                and revision != self.bridge.application.session_revision
+            ):
+                self._report_error(StaleSessionError("Session decision was superseded"))
+                self.refresh_state()
+                return
             if decision == "save":
                 self.save(action, revision=revision)
             elif decision == "discard":
@@ -1409,7 +1511,16 @@ class RecipePage(QWidget):
         )
         form.addRow(buttons)
 
+        revision = self.bridge.application.session_revision
+
         def create() -> None:
+            if revision != self.bridge.application.session_revision:
+                dialog.reject()
+                self._report_error(
+                    StaleSessionError("Session changed during Recipe creation")
+                )
+                self.refresh_state()
+                return
             if not self.editable():
                 return
             try:

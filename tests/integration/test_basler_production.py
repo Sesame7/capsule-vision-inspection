@@ -811,6 +811,40 @@ def test_cancelled_capture_observers_can_read_identity_during_admitted_command(
         assert app.join(WAIT)
 
 
+def test_operator_can_use_connected_source_while_engineering_settings_are_read_only(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    startup = authenticated_startup(data)
+    app, owner = startup.application, startup.application.identity
+    assert isinstance(app, SourceProductionApplication) and owner is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    try:
+        owner.create_account("Actor", Role.OPERATOR, TEST_PASSWORD).result(WAIT)
+        owner.login("Actor", TEST_PASSWORD).result(WAIT)
+        window.identity_controls.refresh()
+        window.navigate(4)
+        vision = window.vision_workspace
+        assert vision is not None
+        assert vision.connect_source.isEnabled() and not vision.discover.isEnabled()
+        vision.connect_source.click()
+        until(lambda: not window.editing.busy)
+        assert vision.disconnect_source.isEnabled() and vision.capture.isEnabled()
+        window.identity_controls.logout()
+        assert (
+            not vision.disconnect_source.isEnabled() and not vision.capture.isEnabled()
+        )
+        assert app.source_snapshot().state is ConnectionState.CONNECTED
+        window.navigate(0)
+        assert not window.buttons["operation"].isEnabled()
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
 def without_folders(path: Path) -> None:
     source = load_camera_sources(path)
     save_camera_sources(
@@ -1718,7 +1752,9 @@ def test_normal_basler_player_drains_paused_frames_and_settles_reports(
             )
         )
         try:
+            assert not window.buttons["operation"].isEnabled()
             app.connect_source()
+            until(window.buttons["operation"].isEnabled)
             window.buttons["operation"].click()
             until(
                 lambda: (
@@ -1889,7 +1925,9 @@ def test_basler_partial_step_waits_for_late_native_return_before_paused(
         return value.state
 
     try:
+        assert not window.buttons["operation"].isEnabled()
         app.connect_source()
+        until(window.buttons["operation"].isEnabled)
         window.buttons["operation"].click()
         until(
             lambda: (

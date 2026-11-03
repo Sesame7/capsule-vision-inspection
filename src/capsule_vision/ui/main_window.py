@@ -51,6 +51,10 @@ from capsule_vision.application import (
 from capsule_vision.application.basler_connection import ConnectionState
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.folder_replay import FolderSourceError
+from capsule_vision.application.identity_models import Role, StaleSessionError
+from capsule_vision.application.production_application import (
+    SourceProductionApplication,
+)
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.communication.reporting import ReportOutcome
 from capsule_vision.display import DisplayFrame, DisplaySnapshot
@@ -69,6 +73,7 @@ from .communication_page import CommunicationPage
 from .editing import EditingCoordinator
 from .history_page import HistoryPage
 from .identity_controls import IdentityControls
+from .permissions import failure_key, permits
 from .production_bridge import QtProductionBridge
 from .production_presentation import (
     Indicator,
@@ -393,7 +398,6 @@ class MainWindow(QMainWindow):
             configuration_messages=configuration_messages,
             configuration_details=configuration_issue,
         )
-        self.identity_controls.role_changed.connect(self.recipe_page.refresh_state)
         self.production_recipes = ProductionRecipes(self.editing)
         identity_row.addWidget(
             self.production_recipes, 0, Qt.AlignmentFlag.AlignHCenter
@@ -408,6 +412,7 @@ class MainWindow(QMainWindow):
         bridge.model_preparation_changed.connect(self._refresh_vision)
         bridge.frames_changed.connect(self._refresh_vision)
         self.communication = CommunicationPage(application=bridge.application)
+        self.identity_controls.session_changed.connect(self._session_changed)
         self.history = HistoryPage(bridge.application.history)
         if self.communication.reporting_panel is not None:
             self.communication.reporting_panel.update_state(self.snapshot.state)
@@ -433,6 +438,7 @@ class MainWindow(QMainWindow):
         bridge.model_preparation_changed.connect(self._controls_changed)
         bridge.archive_changed.connect(self._controls_changed)
         bridge.control_changed.connect(self._controls_changed)
+        bridge.source_connection_changed.connect(self._source_ready_changed)
         bridge.frames_changed.connect(self._frames_changed)
         bridge.presentation_ready.connect(self._render_cards)
         bridge.command_failed.connect(self._command_failed)
@@ -524,17 +530,27 @@ class MainWindow(QMainWindow):
             self._vision_layout.removeWidget(workspace)
             workspace.deleteLater()
 
+    def _session_changed(self) -> None:
+        if self._closing or self.bridge.closed:
+            return
+        self.bridge.refresh()
+        self.recipe_page.identity_changed()
+        if self.vision_workspace is not None:
+            self.vision_workspace.identity_changed()
+        self.communication.identity_changed()
+        self._render()
+
     def _refresh_vision(self) -> None:
         if self.vision_workspace is not None:
             self.vision_workspace.refresh()
 
-    def leave_vision(self, after: Callable[[], None]) -> None:
+    def leave_vision(self, after: Callable[[], None], *, closing: bool = False) -> None:
         if self.editing.busy:
-            self.editing.when_idle(lambda: self.leave_vision(after))
+            self.editing.when_idle(lambda: self.leave_vision(after, closing=closing))
         elif self.vision_workspace is None:
             after()
         else:
-            self.vision_workspace.request_back(after)
+            self.vision_workspace.request_back(after, closing=closing)
 
     def navigate(self, index: int) -> None:
         if self.editing.closing:
@@ -723,7 +739,27 @@ class MainWindow(QMainWindow):
                 and self.editing.session.camera_sources.dirty
             )
         )
+        app = self.bridge.application
+        operator = permits(app, Role.OPERATOR)
+        demo_start = (
+            not operator
+            and isinstance(app, SourceProductionApplication)
+            and app.guest_replay_available
+        )
+        demo_controls = isinstance(
+            app, SourceProductionApplication
+        ) and app.is_guest_demo(self.snapshot.generation)
+        source_ready = (
+            self.snapshot.state is not ApplicationState.READY
+            or not isinstance(app, SourceProductionApplication)
+            or not app.basler_available
+            or app.source_snapshot().state is ConnectionState.CONNECTED
+        )
         identity = (
+            source_ready,
+            operator,
+            demo_start,
+            demo_controls,
             tuple(actions.items()),
             middle_step,
             self.language,
@@ -740,8 +776,15 @@ class MainWindow(QMainWindow):
             button = self.buttons[key]
             enabled = action is not None and not self._closing
             if action == "start":
-                enabled = enabled and not draft_locked
-            button.setEnabled(bool(enabled))
+                enabled = enabled and source_ready and not draft_locked
+            permitted = (
+                operator
+                or action is None
+                or action == "stop"
+                or (action == "start" and demo_start)
+                or (action.startswith("replay_") and demo_controls)
+            )
+            button.setEnabled(bool(enabled and permitted))
             label = text(
                 "replay_continue"
                 if key == "operation" and action == "replay_continue"
@@ -756,7 +799,11 @@ class MainWindow(QMainWindow):
             button.setText("" if key == "secondary" else label)
             button.setAccessibleName(label)
             button.setToolTip(
-                text("configure_first", self.language)
+                text("permission_operator", self.language)
+                if not permitted
+                else text("source_connect", self.language)
+                if action == "start" and not source_ready
+                else text("configure_first", self.language)
                 if key == "operation"
                 and self.snapshot.state is ApplicationState.UNCONFIGURED
                 else text("recipe_reprepare_hint", self.language)
@@ -825,6 +872,11 @@ class MainWindow(QMainWindow):
         self.context_control.setCurrentIndex(1 if actions["secondary"] else 0)
 
     @Slot(object)
+    def _source_ready_changed(self, _source: object) -> None:
+        if self.snapshot.state is ApplicationState.READY:
+            self._render_operations()
+
+    @Slot(object)
     def _controls_changed(self, _snapshot: object) -> None:
         self._render()
 
@@ -886,16 +938,20 @@ class MainWindow(QMainWindow):
     def _batch_dialog(self) -> None:
         if (
             self._closing
+            or not permits(self.bridge.application, Role.OPERATOR)
             or self.bridge.application.snapshot().state is not ApplicationState.READY
         ):
             return
+        revision = self.bridge.application.session_revision
         value, accepted = QInputDialog.getText(
             self,
             text("batch", self.language),
             text("batch_prompt", self.language),
             text=self.snapshot.batch_id or "",
         )
-        if accepted:
+        if accepted and revision != self.bridge.application.session_revision:
+            self._command_failed("batch", StaleSessionError())
+        elif accepted:
             self.bridge.start_batch(value.strip() or None)
 
     @Slot(object)
@@ -973,7 +1029,7 @@ class MainWindow(QMainWindow):
                 self.communication.resume()
         # One bounded command/type summary; never retain the exception or raw SDK text.
         self._command_issue = (
-            command,
+            failure_key(error, command, "permission_operator"),
             type(error).__name__ if isinstance(error, BaseException) else None,
         )
         # Preferences are configuration diagnostics, never raw native/SDK errors.
@@ -1046,7 +1102,13 @@ class MainWindow(QMainWindow):
         self.configuration_placeholder.setText(text("configure_first", language))
         availability = controls(snapshot)
         self._render_operations()
-        self.buttons["batch"].setEnabled(availability.batch and not self._closing)
+        operator = permits(self.bridge.application, Role.OPERATOR)
+        self.buttons["batch"].setEnabled(
+            operator and availability.batch and not self._closing
+        )
+        self.buttons["batch"].setToolTip(
+            text("batch" if operator else "permission_operator", language)
+        )
         state = "closing" if self._closing else snapshot.state.name
         if (
             not self._closing
@@ -1170,7 +1232,11 @@ class MainWindow(QMainWindow):
             and not (warning or fault or self._closing)
         ):
             message = text("recipe_reprepare", language)
-        if self._source_issue and event_key == "command_error":
+        if (
+            self._source_issue
+            and event_key == "command_error"
+            and command not in ("permission_operator", "identity_stale")
+        ):
             camera, exception_type = self._source_issue
             message = " · ".join(
                 part
@@ -1405,6 +1471,8 @@ class MainWindow(QMainWindow):
             summary = text("operation_error", language)
             if self._command_issue is not None:
                 command, exception_type = self._command_issue
+                if command in ("permission_operator", "identity_stale"):
+                    return text(command, language)
                 if command == "preferences":
                     return text("preferences_error", language) + (
                         f" · {exception_type}" if exception_type else ""
@@ -1733,7 +1801,8 @@ class MainWindow(QMainWindow):
         self.leave_vision(
             lambda: self.recipe_page.guard_dirty(
                 lambda: self.editing.drain(lambda: self.recipe_page.settle(final))
-            )
+            ),
+            closing=True,
         )
 
     def _begin_close(self) -> None:

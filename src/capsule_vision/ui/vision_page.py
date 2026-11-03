@@ -45,7 +45,11 @@ from capsule_vision.application.folder_replay import (
     decode_image,
     folder_images,
 )
-from capsule_vision.application.identity_models import IdentityError
+from capsule_vision.application.identity_models import (
+    IdentityError,
+    Role,
+    StaleSessionError,
+)
 from capsule_vision.configuration import (
     CameraFolder,
     ConfigurationError,
@@ -59,6 +63,7 @@ from capsule_vision.localization.languages import Language
 from .editing import EditingCoordinator
 from .future_delivery import FutureDelivery
 from .image_tools import ImageToolbar, image_icon
+from .permissions import failure_key, permits
 from .production_presentation import Indicator
 from .roi_canvas import RoiCanvas
 from .style import (
@@ -612,12 +617,20 @@ class VisionPage(QWidget):
             )
             dialog.setDefaultButton(cancel)
             self._decision = dialog
+            revision = self.editing.bridge.application.session_revision
 
             def decided(_result: int) -> None:
                 chosen = dialog.clickedButton()
                 self._decision = None
                 dialog.deleteLater()
-                if chosen is remove and self.source_editable():
+                if (
+                    chosen is remove
+                    and revision != self.editing.bridge.application.session_revision
+                ):
+                    self._report_error(
+                        StaleSessionError("Session changed during confirmation")
+                    )
+                elif chosen is remove and self.source_editable():
                     self.change_camera_configuration()
 
             dialog.finished.connect(decided)
@@ -791,20 +804,30 @@ class VisionPage(QWidget):
             line.setToolTip(text("roi_" + key.lower(), language))
         self.refresh()
 
+    def identity_changed(self) -> None:
+        if self._decision is not None:
+            self._decision.reject()
+        self.refresh()
+
     def editable(self) -> bool:
-        return self._allowed() and not self._preparing
+        return (
+            permits(self.editing.bridge.application, Role.ENGINEER)
+            and self._allowed()
+            and not self._preparing
+        )
 
     def source_editable(self) -> bool:
-        return (
-            self._allowed()
-            and not self._preparing
-            and not (
-                self.connection is not None and self.connection.source_snapshot().locked
-            )
+        return self.editable() and not (
+            self.connection is not None and self.connection.source_snapshot().locked
         )
 
     def connection_operation(self, *, connect: bool) -> None:
-        if self.connection is None or not self._allowed() or self._preparing:
+        if (
+            self.connection is None
+            or not permits(self.editing.bridge.application, Role.OPERATOR)
+            or not self._allowed()
+            or self._preparing
+        ):
             return
         self.cancel_capture()
         if connect and (self.sources is None or self.sources.dirty):
@@ -1090,7 +1113,8 @@ class VisionPage(QWidget):
 
     def _can_capture(self) -> bool:
         return (
-            self._allowed()
+            permits(self.editing.bridge.application, Role.OPERATOR)
+            and self._allowed()
             and not self._preparing
             and not self._reading
             and self._capture_future is None
@@ -1473,7 +1497,14 @@ class VisionPage(QWidget):
         self.capture.setVisible(not folder_mode and self.connection is not None)
         self.capture.setEnabled(self._can_capture())
         self.cancel_capture_button.setVisible(self._capture_future is not None)
-        self.capture.setToolTip(text("vision_capture", self.language))
+        self.capture.setToolTip(
+            text(
+                "vision_capture"
+                if permits(self.editing.bridge.application, Role.OPERATOR)
+                else "permission_operator",
+                self.language,
+            )
+        )
         self.buttons["reference_previous"].setEnabled(
             viewing and folder_mode and index > 0
         )
@@ -1483,7 +1514,15 @@ class VisionPage(QWidget):
         self.buttons["roi_refresh"].setEnabled(
             viewing and self.reference_mode in ("folder", "runtime")
         )
-        self.buttons["save"].setEnabled(self._allowed() and not self._preparing)
+        self.buttons["save"].setEnabled(self.editable())
+        self.buttons["save"].setToolTip(
+            text(
+                "save"
+                if permits(self.editing.bridge.application, Role.ENGINEER)
+                else "permission_engineer",
+                self.language,
+            )
+        )
         self.buttons["vision_discard"].setEnabled(self._can_discard())
         source_editable = self.sources is not None and self.source_editable()
         for key in ("reference_previous", "reference_next"):
@@ -1493,7 +1532,12 @@ class VisionPage(QWidget):
         self.discover.setToolTip(
             text("source_discovering", self.language)
             if self._discovering
-            else text("source_discover", self.language)
+            else text(
+                "source_discover"
+                if permits(self.editing.bridge.application, Role.ENGINEER)
+                else "permission_engineer",
+                self.language,
+            )
         )
         self.playback_options.setVisible(self.sources is not None and folder_mode)
         folder_options = (
@@ -1715,12 +1759,21 @@ class VisionPage(QWidget):
         )
         dialog.setDefaultButton(cancel)
         self._decision = dialog
+        revision = self.editing.bridge.application.session_revision
 
         def finished() -> None:
             self._decision = None
             chosen = dialog.clickedButton()
             dialog.deleteLater()
-            if chosen is discard:
+            if (
+                chosen is discard
+                and revision != self.editing.bridge.application.session_revision
+            ):
+                self._report_error(
+                    StaleSessionError("Session changed during confirmation")
+                )
+                self.refresh()
+            elif chosen is discard:
                 self._reload_vision()
             else:
                 self.refresh()
@@ -1740,8 +1793,15 @@ class VisionPage(QWidget):
             self.refresh()
             return
 
+        revision = self.editing.bridge.application.session_revision
+
         def completed(value: object, error: BaseException | None) -> None:
             self._preparing = self._reloading = False
+            if (
+                error is None
+                and revision != self.editing.bridge.application.session_revision
+            ):
+                error = StaleSessionError("Session changed during Vision reload")
             if (
                 error is not None
                 or not isinstance(value, SavedVision)
@@ -1840,8 +1900,22 @@ class VisionPage(QWidget):
             self.connection_status.setAccessibleName(
                 state_text + f" · {count}/{len(self.draft.camera_ids)}"
             )
+            operator = permits(self.editing.bridge.application, Role.OPERATOR)
+            self.connect_source.setToolTip(
+                text(
+                    "source_connect" if operator else "permission_operator",
+                    self.language,
+                )
+            )
+            self.disconnect_source.setToolTip(
+                text(
+                    "source_disconnect" if operator else "permission_operator",
+                    self.language,
+                )
+            )
             self.connect_source.setEnabled(
-                self._allowed()
+                permits(self.editing.bridge.application, Role.OPERATOR)
+                and self._allowed()
                 and not self._preparing
                 and not connection.locked
                 and self.sources is not None
@@ -1849,7 +1923,10 @@ class VisionPage(QWidget):
                 and not self.sources.dirty
             )
             self.disconnect_source.setEnabled(
-                self._allowed() and not self._preparing and connection.locked
+                permits(self.editing.bridge.application, Role.OPERATOR)
+                and self._allowed()
+                and not self._preparing
+                and connection.locked
             )
         self._populate_devices()
         for camera, card in self.camera_cards.items():
@@ -1918,7 +1995,10 @@ class VisionPage(QWidget):
                 card.serial_row.setVisible(basler)
                 card.folder_row.setVisible(not basler)
             allowed = self.sources is not None and self.source_editable()
-            card.folder.setEnabled(allowed)
+            card.folder.setEnabled(
+                allowed or not permits(self.editing.bridge.application, Role.ENGINEER)
+            )
+            card.folder.setReadOnly(not allowed)
             card.device.setEnabled(allowed)
             card.browse.setEnabled(allowed)
             card.folder.setPlaceholderText(text("source_folder_status", self.language))
@@ -1991,7 +2071,13 @@ class VisionPage(QWidget):
             f"{type(error).__name__}: {error}"
             if isinstance(error, BaseException)
             else error,
-            key,
+            failure_key(
+                error,
+                key,
+                "permission_operator"
+                if key in ("source_connection_error", "vision_capture_failed")
+                else "permission_engineer",
+            ),
         )
 
     def set_rect(self, rect: BoundingRect) -> None:
@@ -2072,9 +2158,12 @@ class VisionPage(QWidget):
                         ([f"{text('saved', self.language)}: {saved}"] if saved else [])
                         + list(errors)
                     ),
-                    "source_partial_save"
-                    if machine_saved and not source_saved
-                    else "vision_error",
+                    failure_key(
+                        result.permission_error,
+                        "source_partial_save"
+                        if machine_saved and not source_saved
+                        else "vision_error",
+                    ),
                 )
             else:
                 self._feedback = "saved"
@@ -2091,7 +2180,9 @@ class VisionPage(QWidget):
             self._report_error(text("preparing", self.language), "preparing")
             self.refresh()
 
-    def request_back(self, after: Callable[[], None] | None = None) -> None:
+    def request_back(
+        self, after: Callable[[], None] | None = None, *, closing: bool = False
+    ) -> None:
         self.cancel_capture()
         if self._preparing or self._decision is not None:
             return
@@ -2105,9 +2196,8 @@ class VisionPage(QWidget):
             if after is not None:
                 after()
 
-        if not self.draft.dirty and not (
-            self.sources is not None and self.sources.dirty
-        ):
+        engineer = permits(self.editing.bridge.application, Role.ENGINEER)
+        if not self.vision_dirty or (not engineer and not closing):
             leave()
             return
         dialog = QMessageBox(self)
@@ -2122,7 +2212,7 @@ class VisionPage(QWidget):
         dialog.addButton(
             text("cancel", self.language), QMessageBox.ButtonRole.RejectRole
         )
-        save.setEnabled(self._allowed())
+        save.setEnabled(self.editable())
         self._decision = dialog
         revision = self.editing.bridge.application.session_revision
 
@@ -2130,8 +2220,18 @@ class VisionPage(QWidget):
             self._decision = None
             chosen = dialog.clickedButton()
             dialog.deleteLater()
-            if chosen is save:
+            if (
+                chosen in (save, discard)
+                and revision != self.editing.bridge.application.session_revision
+            ):
+                self._report_error(
+                    StaleSessionError("Session changed during confirmation")
+                )
+                self.refresh()
+            elif chosen is save:
                 self.save_setup(leave, revision=revision)
+            elif chosen is discard and closing and not engineer:
+                leave()
             elif chosen is discard:
                 self._reload_vision(leave)
             else:

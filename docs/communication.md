@@ -180,6 +180,12 @@ group reaches the transport. An admitted request may finish after logout.
 Later requests stop on authorization failure. Any role can stop monitoring,
 observe results and close the application.
 
+The workspace keeps settings, diagnostic observations and service status visible
+to Guest and Operator. Saving settings, issuing PLC requests and operating the
+Web service require Engineer access. An active watch retains its Stop action.
+The existing feedback areas distinguish a changed session or insufficient role
+from file, transport, protocol and service failures.
+
 Web power checks admission separately for the saved enable flag and the
 service operation. Start, Stop and Apply/Restart also check authorization at
 the Web owner. Normal startup can restore saved enablement while anonymous,

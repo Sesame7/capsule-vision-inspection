@@ -164,6 +164,13 @@ LocalIdentity, including when account storage is unavailable. Explicit identity-
 engineering compositions remain trusted. Runtime delivery and shutdown keep their
 existing owners. See the [Production policy](configuration.md#local-accounts).
 
+The Qt shell refreshes permission-sensitive controls when the observed session
+revision changes. The Recipe page can present an immutable catalog entry while
+the editing owner retains its working copy. Its existing metadata worker reads
+the displayed Model and checks that Model again before delivering labels.
+Production exposes its Guest replay eligibility and generation provenance for
+the player. Command owners still validate each operation at admission.
+
 Engineering commands use the same LocalIdentity and revision as Production.
 A pending confirmation, staged Model import or Vision validation retains its
 initiating revision. Each subsequent publication checks that revision. The

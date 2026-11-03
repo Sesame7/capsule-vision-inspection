@@ -256,6 +256,20 @@ available to every role, including the selected Model's complete label catalog.
 Device enumeration and new tuning measurements require Engineer. Passive
 capture on an existing connection keeps its Operator admission.
 
+All five pages remain available in every session. On the Recipe page, Guest
+and Operator browse saved definitions. The displayed metadata, inspection
+settings, Model and label selections follow the chosen saved Recipe. Refresh
+reads the catalog again. Browsing leaves the engineering entry, working draft,
+Production candidate and last-applied preference intact. Engineer and
+Administrator return to the working draft, including any unsaved edits.
+Production's saved-Recipe selector is a separate Operator command.
+
+Production and Vision combine the current role with lifecycle, source readiness
+and editing constraints. Guest player controls follow the admitted replay
+generation. Stop and application Close remain available under their normal
+lifecycle rules. Vision reference images and configuration remain viewable
+while engineering mutations are disabled.
+
 Vision checks each file publication separately. If the session changes between
 saves, the first successful file remains saved and the other draft remains
 available for review. A staged Model belongs to its initiating session revision.

@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 
 from capsule_vision.application import ApplicationState, PreparedConfiguration
 from capsule_vision.application.editing import RecipeEditorSession
+from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import ConfigurationError
 
 from .future_delivery import FutureDelivery
@@ -129,6 +130,8 @@ class EditingCoordinator(QObject):
 
         def prepared(value: object, error: BaseException | None) -> None:
             try:
+                if isinstance(error, IdentityError):
+                    raise error
                 if error is not None:
                     raise ConfigurationError(str(error)) from error
                 if self.closing:

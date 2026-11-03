@@ -197,23 +197,32 @@ class SourceProductionApplication(ProductionApplication):
         with self._condition:
             return self._start_replay(single_step=False)
 
+    @property
+    def guest_replay_available(self) -> bool:
+        """Guest source/reporting eligibility; Start also requires normal readiness."""
+        with self._condition:
+            deps = self._candidate.vision_dependencies if self._candidate else None
+            return (
+                deps is not None
+                and deps.sources_path is not None
+                and deps.sources is not None
+                and deps.sources.mode == "folder"
+                and self._source_draft is not None
+                and not self.reporting_selection().enabled
+            )
+
+    def is_guest_demo(self, generation: int) -> bool:
+        with self._condition:
+            return self._guest_demo_generation == generation
+
     def _start_replay(self, *, single_step: bool) -> Future[None]:
         self._require(ApplicationState.READY)
         with self._admission(Role.GUEST) as actor:
             demo = actor is not None and actor.role is Role.GUEST
-            if demo:
-                deps = self._candidate.vision_dependencies if self._candidate else None
-                if (
-                    deps is None
-                    or deps.sources_path is None
-                    or deps.sources is None
-                    or deps.sources.mode != "folder"
-                    or self._source_draft is None
-                    or self.reporting_selection().enabled
-                ):
-                    raise AuthorizationError(
-                        "Guest requires prepared Folder Replay with automatic reporting disabled"
-                    )
+            if demo and not self.guest_replay_available:
+                raise AuthorizationError(
+                    "Guest requires prepared Folder Replay with automatic reporting disabled"
+                )
             startup = self._admit_replay(single_step=single_step)
             self._guest_demo_generation = self._generation if demo else None
         # Cancelling an idle capture runs user callbacks synchronously. The

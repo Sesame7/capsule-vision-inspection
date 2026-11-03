@@ -67,6 +67,7 @@ class WebSettingsPanel(QFrame):
         self.saved = WebPreferences()
         self.dirty = False
         self.editable = True
+        self.can_manage = True
         self.saved_available = False
         self._address_error = ""
         self.operation_error = ""
@@ -246,6 +247,7 @@ class WebSettingsPanel(QFrame):
             self.saved,
             self.dirty,
             self.editable,
+            self.can_manage,
             self.saved_available,
             bool(self.operation_error),
             self._address_error,
@@ -271,7 +273,11 @@ class WebSettingsPanel(QFrame):
             f"color: {colors.warning if self.operation_error or (observed is not None and (observed.state is WebState.FAILED or observed.error)) else colors.accent if self.available else colors.secondary};"
         )
         blocked = (
-            not self.editable or observed is None or observed.busy or observed.closing
+            not self.can_manage
+            or not self.editable
+            or observed is None
+            or observed.busy
+            or observed.closing
         )
         self.power.setIcon(production_icon("power", colors.primary))
         action = text(
@@ -289,8 +295,17 @@ class WebSettingsPanel(QFrame):
                 padding=2,
             ),
         )
+        for field in (self.addresses, self.port, self.interval, self.address_refresh):
+            field.setEnabled(self.can_manage and self.editable)
         self.power.setEnabled(not blocked)
-        self.power.setToolTip(action + "\n" + text("web_power_tip", self.language))
+        self.power.setToolTip(
+            action
+            + "\n"
+            + text(
+                "web_power_tip" if self.can_manage else "permission_engineer",
+                self.language,
+            )
+        )
         changed = (
             observed is not None
             and observed.state is WebState.RUNNING
@@ -307,7 +322,14 @@ class WebSettingsPanel(QFrame):
             not blocked and not self.dirty and self.saved_available
         )
         self.apply_changes.setToolTip(
-            text("web_save_first" if self.dirty else "web_apply_changes", self.language)
+            text(
+                "permission_engineer"
+                if not self.can_manage
+                else "web_save_first"
+                if self.dirty
+                else "web_apply_changes",
+                self.language,
+            )
         )
         self.address_refresh.setIcon(
             production_icon(

@@ -35,7 +35,11 @@ from PySide6.QtWidgets import (
 )
 
 from capsule_vision.application import ProductionApplication
-from capsule_vision.application.identity_models import IdentityError
+from capsule_vision.application.identity_models import (
+    IdentityError,
+    Role,
+    StaleSessionError,
+)
 from capsule_vision.communication import (
     FinsAddress,
     FinsMemoryArea,
@@ -83,6 +87,7 @@ from capsule_vision.web.runtime import WebRuntime, WebState
 
 from .future_delivery import FutureDelivery
 from .image_tools import image_icon
+from .permissions import failure_key, permits
 from .reporting_panel import ReportingPanel
 from .style import (
     Style,
@@ -798,6 +803,11 @@ class CommunicationPage(QWidget):
             self.reporting_panel.edited.connect(self._settings_edited)
         self._render_preferences()
 
+    def identity_changed(self) -> None:
+        if self._discard_dialog is not None:
+            self._discard_dialog.reject()
+        self._refresh()
+
     def _render_preferences(self) -> None:
         dirty = self.dirty
         self.web_panel.saved = self._preferences.web
@@ -805,6 +815,12 @@ class CommunicationPage(QWidget):
             self.web_panel.dirty = self.web_panel.preferences() != self._preferences.web
         except ValueError:
             self.web_panel.dirty = True
+        engineer = permits(self._application, Role.ENGINEER)
+        if self.reporting_panel is not None:
+            if self.reporting_panel.can_manage != engineer:
+                self.reporting_panel.can_manage = engineer
+                self.reporting_panel.refresh()
+        self.web_panel.can_manage = engineer
         self.web_panel.editable = not (self._closing or self._disposed)
         self.web_panel.refresh()
         key = self._settings_message or (
@@ -826,6 +842,8 @@ class CommunicationPage(QWidget):
             "comm_settings_failed",
             "comm_reload_failed",
             "web_power_failed",
+            "permission_engineer",
+            "identity_stale",
         )
         self.preferences_status.setToolTip(self._settings_detail if failed else "")
         self.preferences_status.setAccessibleDescription("")
@@ -836,9 +854,15 @@ class CommunicationPage(QWidget):
             self.busy or self._auto_refresh or self._closing or self._disposed
         )
         self.save_settings.setEnabled(
-            editable and (dirty or failed or self._settings_missing)
+            engineer and editable and (dirty or failed or self._settings_missing)
         )
-        self.discard_settings.setEnabled(editable and dirty)
+        self.discard_settings.setEnabled(engineer and editable and dirty)
+        self.save_settings.setToolTip(
+            text(
+                "comm_save_settings" if engineer else "permission_engineer",
+                self.language,
+            )
+        )
 
     @Slot()
     def _settings_edited(self) -> None:
@@ -890,7 +914,7 @@ class CommunicationPage(QWidget):
             )
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self._settings_message, self._settings_detail = (
-                "comm_settings_failed",
+                failure_key(exc, "comm_settings_failed"),
                 str(exc),
             )
         else:
@@ -945,11 +969,17 @@ class CommunicationPage(QWidget):
         ):
             return
         try:
+            if (
+                revision is not None
+                and self._application is not None
+                and revision != self._application.session_revision
+            ):
+                raise StaleSessionError("Session changed during confirmation")
             value = load_communication_preferences(self._preferences_path)
             self._commit_preferences(value, None, revision)
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self._settings_message, self._settings_detail = (
-                "comm_reload_failed",
+                failure_key(exc, "comm_reload_failed"),
                 str(exc),
             )
         else:
@@ -1057,7 +1087,7 @@ class CommunicationPage(QWidget):
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self.web_panel.operation_error = f"{type(exc).__name__}: {exc}"[:2000]
             self._settings_message, self._settings_detail = (
-                "web_power_failed",
+                failure_key(exc, "web_power_failed"),
                 self.web_panel.operation_error,
             )
         self._render_preferences()
@@ -1142,10 +1172,6 @@ class CommunicationPage(QWidget):
                 self._watch_action_width,
             )
             button.setAccessibleName(text(key, language))
-            button.setToolTip(
-                text("comm_watch", language) + " · " + text(key, language)
-            )
-            button.setAccessibleDescription(button.toolTip())
         for button in (self.watch_remove, self.watch_once, self.watch_auto):
             button.setFixedHeight(Style.touch)
         for key, widget in (
@@ -1645,7 +1671,9 @@ class CommunicationPage(QWidget):
     ) -> None:
         if isinstance(error, ReportingWriteProtectedError):
             key = "plc_reporting_write_protected"
-        elif isinstance(error, (IdentityError, PermissionError)):
+        elif isinstance(error, IdentityError):
+            key = failure_key(error, "permission_engineer")
+        elif isinstance(error, PermissionError):
             key = "comm_permission"
         elif isinstance(error, (FinsTimeoutError, ModbusTimeoutError)):
             key = (
@@ -1697,11 +1725,16 @@ class CommunicationPage(QWidget):
 
     @Slot()
     def _refresh(self) -> None:
-        editable = not (
+        engineer = permits(self._application, Role.ENGINEER)
+        editable = engineer and not (
             self.busy or self._auto_refresh or self._closing or self._disposed
         )
         for widget in self._inputs:
-            widget.setEnabled(editable)
+            if isinstance(widget, QLineEdit):
+                widget.setReadOnly(not engineer)
+                widget.setEnabled(editable or not engineer)
+            else:
+                widget.setEnabled(editable)
         for button in self._buttons.values():
             button.setEnabled(editable)
         udp = self.protocol.currentIndex() == 0
@@ -1709,7 +1742,7 @@ class CommunicationPage(QWidget):
         self.advanced.setEnabled(editable and udp)
         self.modbus_advanced.setEnabled(editable and modbus)
         self.modbus_advanced.setVisible(modbus and self.advanced_button.isChecked())
-        self.advanced_button.setEnabled(editable and (udp or modbus))
+        self.advanced_button.setEnabled((editable or not engineer) and (udp or modbus))
         self.advanced_button.setVisible(udp or modbus)
         self.advanced.setVisible(udp and self.advanced_button.isChecked())
         self.unit_id.setToolTip(text("comm_modbus_hint", self.language))
@@ -1736,7 +1769,10 @@ class CommunicationPage(QWidget):
         self.watch_once.setEnabled(editable and bool(self._watch_groups))
         self.watch_auto.setEnabled(
             not (self._closing or self._disposed)
-            and (self._auto_refresh or (not self.busy and bool(self._watch_groups)))
+            and (
+                self._auto_refresh
+                or (engineer and not self.busy and bool(self._watch_groups))
+            )
         )
         self.watch_auto.setChecked(self._auto_refresh)
         action_key = "comm_watch_stop" if self._auto_refresh else "comm_watch_auto"
@@ -1747,8 +1783,12 @@ class CommunicationPage(QWidget):
             self._watch_action_width,
         )
         self.watch_auto.setAccessibleName(action)
-        self.watch_auto.setToolTip(text("comm_watch", self.language) + " · " + action)
-        self.watch_auto.setAccessibleDescription(self.watch_auto.toolTip())
+        for button in (self.watch_remove, self.watch_once, self.watch_auto):
+            tip = text("comm_watch", self.language) + " · " + button.accessibleName()
+            if not engineer and not (button is self.watch_auto and self._auto_refresh):
+                tip += "\n" + text("permission_engineer", self.language)
+            button.setToolTip(tip)
+            button.setAccessibleDescription(tip)
         self.watch_selector.setToolTip(self.watch_selector.currentText())
         self.watch_selector.setAccessibleDescription(self.watch_selector.currentText())
         self.write_button.setEnabled(editable)
@@ -1757,6 +1797,8 @@ class CommunicationPage(QWidget):
             + "\n"
             + text("comm_local_write", self.language)
         )
+        if not engineer:
+            self.write_button.setToolTip(text("permission_engineer", self.language))
         self.write_button.setAccessibleDescription(self.write_button.toolTip())
         key = "comm_closing" if self._closing else self._write_state
         self.status.setText(text(key, self.language))
@@ -1783,6 +1825,11 @@ class CommunicationPage(QWidget):
             if self._watch_state == "comm_watch_busy"
             else text(self._watch_state, self.language)
         )
+        if self._watch_state == "comm_watch_failed" and self._state_key in (
+            "permission_engineer",
+            "identity_stale",
+        ):
+            watch_text = text(self._state_key, self.language)
         self.watch_status.setText(
             watch_text
             + (

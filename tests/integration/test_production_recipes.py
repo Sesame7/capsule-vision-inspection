@@ -420,10 +420,12 @@ def test_pending_selection_cannot_outlive_its_actor(
         )
         assert picker.recipes.currentData() == "local" and picker.feedback is not None
         owner.logout()
+        window.identity_controls.refresh()
+        assert not picker.recipes.isEnabled()
         entered.clear()
         picker.select(picker.recipes.findData("local"))
         assert not entered.is_set() and not window.editing.busy
-        assert picker.feedback is not None and "Operator" in picker.feedback[1]
+        assert picker.feedback is not None and picker.feedback[0] == "identity_stale"
     finally:
         release.set()
         close_window(window)

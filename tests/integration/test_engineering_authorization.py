@@ -41,6 +41,7 @@ from capsule_vision.configuration.communication_preferences import (
     save_communication_preferences,
 )
 from capsule_vision.inference import SegmentationModuleInfo, read_model_labels
+from capsule_vision.localization.catalog import text
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.communication_page import CommunicationPage
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -229,8 +230,15 @@ def test_communication_and_injected_web_commands(
     page.bind_web_runtime(runtime)
     page.show()
     try:
+        engineer = role >= Role.ENGINEER
+        assert page.web_panel.power.isEnabled() == engineer
+        assert page.write_button.isEnabled() == engineer
         page.write_values.setText("123")
         page.persist_settings()
+        if not engineer:
+            assert page.preferences_status.text() == text(
+                "permission_engineer", page.language
+            )
         assert engineering.data.communication.exists() == (role >= Role.ENGINEER)
         assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 0))
         for dispatch in (
@@ -294,6 +302,9 @@ def test_monitoring_rechecks_between_reads_and_timer_passes(
         if between_groups:
             assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 10))
         assert page.start_monitoring() and entered.wait(WAIT)
+        owner.logout()
+        page.identity_changed()
+        assert page.watch_auto.isEnabled() and not page.write_button.isEnabled()
         owner.login("OtherEngineer", TEST_PASSWORD).result(WAIT)
         release.set()
         until(lambda: not page.auto_refresh and not page.busy)
@@ -412,12 +423,15 @@ def test_engineering_readers_check_before_native_calls(
         editor.draft.capsule = SETTINGS
         page.open_preview("size")
         preview = page.preview
-        assert preview is not None
-        until(lambda: not preview.busy)
-        preview.load_image(
-            next((engineering.data.root.parent / "frames").glob("*.png"))
-        )
-        until(lambda: not preview.busy)
+        if role >= Role.ENGINEER:
+            assert preview is not None
+            until(lambda: not preview.busy)
+            preview.load_image(
+                next((engineering.data.root.parent / "frames").glob("*.png"))
+            )
+            until(lambda: not preview.busy)
+        else:
+            assert preview is None and not page.expand_tuning["size"].isEnabled()
         editor.discard()
         window.navigate(4)
         vision = window.vision_workspace

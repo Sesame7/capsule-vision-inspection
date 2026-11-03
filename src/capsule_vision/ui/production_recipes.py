@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (
 )
 
 from capsule_vision.application import ProductionApplicationSnapshot
+from capsule_vision.application.identity_models import Role
 from capsule_vision.configuration.catalog import RecipeEntry
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 from .editing import EditingCoordinator
 from .image_tools import image_icon
+from .permissions import failure_key, permits
 from .style import Style, theme_colors
 
 
@@ -131,7 +133,7 @@ class ProductionRecipes(QWidget):
             self._requested = None
             if error is not None:
                 self.feedback = (
-                    "recipe_prepare_error",
+                    failure_key(error, "recipe_prepare_error", "permission_operator"),
                     f"{requested_name} [{identity}]\n{error}",
                 )
             else:
@@ -192,7 +194,11 @@ class ProductionRecipes(QWidget):
             stale = text("recipe_reprepare", self.language)
             inline = f"{inline} · {stale}" if inline else stale
             details += f"\n{text('recipe_reprepare_hint', self.language)}"
-        if self.feedback is not None and self.feedback[0] == "recipe_prepare_error":
+        if self.feedback is not None and self.feedback[0] in (
+            "recipe_prepare_error",
+            "permission_operator",
+            "identity_stale",
+        ):
             details += f"\n{text(self.feedback[0], self.language)}\n{self.feedback[1]}"
         if self._requested is not None:
             requested_id, requested_name = self._requested
@@ -201,6 +207,8 @@ class ProductionRecipes(QWidget):
             )
             details += f"\n{text('preparing', self.language)}: {requested_name} [{requested_id}]"
             self.feedback = ("preparing", details)
+        if not permits(self.editing.bridge.application, Role.OPERATOR):
+            details += "\n" + text("permission_operator", self.language)
         self.recipes.setToolTip(details)
         self.recipes.setAccessibleName(
             f"{text('select_saved_recipe', self.language)} · {details}"
@@ -209,7 +217,8 @@ class ProductionRecipes(QWidget):
 
     def refresh_state(self, _snapshot: object = None) -> None:
         allowed = (
-            self.editing.editable()
+            permits(self.editing.bridge.application, Role.OPERATOR)
+            and self.editing.editable()
             and self._requested is None
             and not self.editing.bridge.application.preparation_snapshot().owns_resources
         )

@@ -52,6 +52,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "必须保留至少一位已启用的管理员。",
         "At least one enabled Administrator must remain.",
     ),
+    "permission_operator": ("需要操作员或更高权限", "Operator access required"),
+    "permission_engineer": ("需要工程师或更高权限", "Engineer access required"),
     "identity_denied": (
         "当前身份无权执行此账号操作。",
         "This account operation requires authorization.",

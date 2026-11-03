@@ -51,6 +51,7 @@ class ReportingPanel(QFrame):
         self.controller = controller
         self.language: Language = "zh"
         self.state = ApplicationState.UNCONFIGURED
+        self.can_manage = True
         self._syncing = False
         self._modbus = False
         self._port_automatic = True
@@ -374,7 +375,10 @@ class ReportingPanel(QFrame):
 
     @Slot()
     def refresh(self) -> None:
-        editable = self.state in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
+        editable = self.can_manage and self.state in (
+            ApplicationState.READY,
+            ApplicationState.UNCONFIGURED,
+        )
         for widget in (
             self.enabled,
             self.host,
@@ -392,14 +396,23 @@ class ReportingPanel(QFrame):
             action,
             self._power_width,
         )
-        self.enabled.setToolTip(action + "\n" + text("plc_next_start", self.language))
+        self.enabled.setToolTip(
+            action
+            + "\n"
+            + text(
+                "plc_next_start" if self.can_manage else "permission_engineer",
+                self.language,
+            )
+        )
         selected = self.controller.reporting_selection()
         udp = self.protocol.currentIndex() == 0
         modbus = self.protocol.currentIndex() == 2
         self.advanced.setEnabled(editable and udp)
         self.modbus_advanced.setEnabled(editable and modbus)
         self.modbus_advanced.setVisible(modbus and self.advanced_button.isChecked())
-        self.advanced_button.setEnabled(editable and (udp or modbus))
+        self.advanced_button.setEnabled(
+            (editable or not self.can_manage) and (udp or modbus)
+        )
         self.advanced_button.setVisible(udp or modbus)
         self.advanced.setVisible(udp and self.advanced_button.isChecked())
         self.advanced_button.setAccessibleName(

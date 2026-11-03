@@ -502,7 +502,7 @@ def test_unconfigured_shell_communication_has_no_production_dependency(
         window.show()
         window.navigate(2)
         assert window.snapshot.state is ApplicationState.UNCONFIGURED
-        assert window.communication.write_button.isEnabled()
+        assert not window.communication.write_button.isEnabled()
         assert window.communication.last_response is None
         assert not window.snapshot.runtime_owned
     finally:

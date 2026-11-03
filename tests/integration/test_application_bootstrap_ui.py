@@ -80,7 +80,7 @@ def test_sparse_source_file_opens_vision_without_implicit_repair(
     data = saved_data(tmp_path)
     data.sources.write_text("{}", encoding="utf-8")
     original = data.sources.read_bytes()
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -281,7 +281,7 @@ def test_unavailable_folder_is_ready_but_start_preflight_prevents_inference(
         calls.append(config)
         raise AssertionError("Unavailable acquisition must not create an engine")
 
-    startup = load_startup(data, engine_factory=forbidden)
+    startup = authenticated_startup(data, engine_factory=forbidden)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:

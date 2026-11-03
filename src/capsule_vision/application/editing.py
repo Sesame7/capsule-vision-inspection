@@ -45,6 +45,7 @@ class VisionSaveResult:
     machine_saved: bool
     sources_saved: bool
     errors: tuple[str, ...]
+    permission_error: IdentityError | None = None
 
 
 class RecipeEditorSession:
@@ -247,6 +248,7 @@ class RecipeEditorSession:
         """Independent file outcomes; failed validation never discards unsaved drafts."""
         revision = admit_engineering(self.identity, revision)
         errors: list[str] = []
+        permission_error = None
         machine_saved = sources_saved = False
         if self.camera_sources is not None:
             try:
@@ -272,8 +274,12 @@ class RecipeEditorSession:
                 self.machine_editor.save()
                 machine_saved = True
             except (IdentityError, ValueError, OSError) as exc:
+                if isinstance(exc, IdentityError):
+                    permission_error = exc
                 errors.append(f"MachineLayout: {type(exc).__name__}: {exc}")
-        return VisionSaveResult(machine_saved, sources_saved, tuple(errors))
+        return VisionSaveResult(
+            machine_saved, sources_saved, tuple(errors), permission_error
+        )
 
     def production_preparation(self) -> RecipeEditorSession:
         """Capture saved dependencies without sharing the editor's working copies."""
