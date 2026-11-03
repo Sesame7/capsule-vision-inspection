@@ -1132,17 +1132,36 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
                 # use keyboard navigation/Enter on the reopened popup.
                 model = view.model()
                 assert model is not None
-                day = next(
-                    model.index(row, col)
-                    for row in range(1, model.rowCount())
-                    for col in range(1, model.columnCount())
-                    if str(model.index(row, col).data()) == "15"
-                )
-                QTest.mouseClick(
-                    view.viewport(),
-                    Qt.MouseButton.LeftButton,
-                    pos=view.visualRect(day).center(),
-                )
+                target = QDate(original_date.year(), original_date.month(), 15)
+                for row in range(1, model.rowCount()):
+                    for column in range(model.columnCount()):
+                        day = model.index(row, column)
+                        rect = view.visualRect(day)
+                        if rect.isValid() and rect.width() > 0:
+                            QTest.mouseClick(
+                                view.viewport(),
+                                Qt.MouseButton.LeftButton,
+                                pos=rect.center(),
+                            )
+                            until(lambda current=calendar: not current.isVisible())
+                            if page.date.date().month() == target.month() and (
+                                page.date.date().day() == 15
+                            ):
+                                break
+                            page.date.setDate(original_date)
+                            QTest.mouseClick(
+                                page.date,
+                                Qt.MouseButton.LeftButton,
+                                pos=QPoint(
+                                    page.date.width() - 8, page.date.height() // 2
+                                ),
+                            )
+                            until(calendar.isVisible)
+                            qapp.processEvents()
+                    if page.date.date().month() == target.month() and (
+                        page.date.date().day() == 15
+                    ):
+                        break
                 until(
                     lambda current=calendar: not current.isVisible() and not page.busy
                 )
