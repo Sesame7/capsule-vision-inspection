@@ -11,7 +11,7 @@ from threading import Event
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QFontMetricsF
+from PySide6.QtGui import QColor, QDesktopServices, QFontMetricsF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -29,6 +29,7 @@ from tests.support.qt import assert_full_caption, close_window, ensure_test_font
 from tests.support.startup import authenticated_startup, saved_data
 
 from capsule_vision.application import ApplicationState, ProductionCounters
+from capsule_vision.application.identity_models import Role
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
 from capsule_vision.communication import (
     FinsMemoryArea,
@@ -45,6 +46,7 @@ from capsule_vision.communication.operations import (
 from capsule_vision.communication.reporting import (
     ReportIdentity,
     ReportingIssue,
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
     ReportingSnapshot,
@@ -127,6 +129,15 @@ def test_global_reporting_state_and_communication_details(
     )
     observed: list[ReportingSnapshot | None] = [None]
     monkeypatch.setattr(controller, "reporting_snapshot", lambda: observed[0])
+    QApplication.processEvents()
+    header_controls = (
+        panel.title,
+        panel.mode_control,
+        *panel.mode_buttons.values(),
+        panel.service_status,
+        panel.enabled,
+    )
+    header_geometry = tuple(widget.geometry() for widget in header_controls)
 
     def check(key: str, observation: ReportingSnapshot | None) -> None:
         observed[0] = observation
@@ -138,6 +149,8 @@ def test_global_reporting_state_and_communication_details(
         panel.summary.setToolTip("stale ACK and worker telemetry")
         panel.summary.setAccessibleDescription("stale detail")
         panel.refresh()
+        QApplication.processEvents()
+        assert tuple(widget.geometry() for widget in header_controls) == header_geometry
         assert not label.toolTip() and not panel.service_status.toolTip()
         assert not panel.summary.toolTip() and not panel.summary.accessibleDescription()
         assert panel.service_status.accessibleName()
@@ -539,6 +552,130 @@ def settings_window(
         delivery.detach()
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
+@pytest.mark.parametrize("width", [1080, 1920])
+def test_reporting_segments_keyboard_draft_save_discard_and_header_slots(
+    settings_window: tuple[Startup, MainWindow], language: Language, width: int
+) -> None:
+    startup, window = settings_window
+    page, panel = window.communication, window.communication.reporting_panel
+    assert panel is not None
+    window.resize(width, 1000)
+    window.set_language(language)
+    QApplication.processEvents()
+    per_cycle, four_cycle = (panel.mode_buttons[mode] for mode in ReportingMode)
+    assert (per_cycle.text(), four_cycle.text()) == (
+        ("逐次", "4次合并") if language == "zh" else ("Per cycle", "4-cycle")
+    )
+    assert four_cycle.isChecked() and not per_cycle.isChecked()
+    assert not panel.enabled.isChecked()
+    assert panel.summary.text() == panel.summary.accessibleName()
+    neighbors = (
+        panel.title,
+        panel.mode_control,
+        per_cycle,
+        four_cycle,
+        panel.service_status,
+        panel.enabled,
+    )
+    geometry = tuple(widget.geometry() for widget in neighbors)
+    assert panel.summary.geometry().right() < panel.mode_control.x()
+    assert panel.mode_control.geometry().right() < panel.service_status.x()
+    assert panel.service_status.geometry().right() < panel.enabled.x()
+    assert panel.mode_control.y() == panel.enabled.y()
+    assert panel.host.y() > panel.mode_control.geometry().bottom()
+    for button in (per_cycle, four_cycle):
+        assert_full_caption(button, button.text())
+        assert button.height() >= Style.touch
+        assert panel.mode_control.rect().contains(button.geometry())
+        assert button.accessibleName() in button.toolTip()
+    before = startup.application.snapshot()
+    selected = panel.controller.reporting_selection()
+    per_cycle.setFocus()
+    QTest.keyClick(per_cycle, Qt.Key.Key_Space)
+    assert per_cycle.hasFocus() and per_cycle.isChecked() and not four_cycle.isChecked()
+    assert page.dirty and panel.controller.reporting_selection() == selected
+    assert not panel.enabled.isChecked() and not startup.data.communication.exists()
+    QTest.keyClick(per_cycle, Qt.Key.Key_Right)
+    assert (
+        four_cycle.hasFocus() and four_cycle.isChecked() and not per_cycle.isChecked()
+    )
+    QTest.keyClick(four_cycle, Qt.Key.Key_Left)
+    assert per_cycle.hasFocus() and per_cycle.isChecked()
+    page.save_settings.click()
+    assert not page.dirty
+    assert (
+        load_communication_preferences(
+            startup.data.communication
+        ).reporting.settings.mode
+        is ReportingMode.PER_CYCLE
+    )
+    four_cycle.click()
+    assert page.dirty and not panel.enabled.isChecked()
+    page.request_discard()
+    dialog = page.findChild(QMessageBox)
+    assert dialog is not None
+    next(
+        button
+        for button in dialog.buttons()
+        if dialog.buttonRole(button) == QMessageBox.ButtonRole.AcceptRole
+    ).click()
+    assert not page.dirty and per_cycle.isChecked() and not four_cycle.isChecked()
+    for theme in ("light", "dark"):
+        window.set_theme(theme)
+        panel.refresh()
+        QApplication.processEvents()
+        assert tuple(widget.geometry() for widget in neighbors) == geometry
+    assert startup.application.snapshot() == before
+    assert panel.controller.reporting_snapshot() is None
+
+
+@pytest.mark.parametrize("role", list(Role))
+def test_reporting_segments_permissions_and_runtime_locks(
+    settings_window: tuple[Startup, MainWindow], role: Role
+) -> None:
+    startup, window = settings_window
+    identity = startup.application.identity
+    panel = window.communication.reporting_panel
+    assert identity is not None and panel is not None
+    if role is Role.GUEST:
+        identity.logout()
+    elif role is not Role.ADMINISTRATOR:
+        identity.create_account("ModeEditor", role, "isolated test password").result(5)
+        identity.login("ModeEditor", "isolated test password").result(5)
+    window.identity_controls.refresh()
+    per_cycle = panel.mode_buttons[ReportingMode.PER_CYCLE]
+    assert per_cycle.isEnabled() is (role >= Role.ENGINEER)
+    per_cycle.click()
+    assert per_cycle.isChecked() is (role >= Role.ENGINEER)
+    window.communication.persist_settings()
+    assert startup.data.communication.exists() is (role >= Role.ENGINEER)
+    for theme in ("light", "dark"):
+        window.set_theme(theme)
+        panel.update_state(ApplicationState.RUNNING)
+        colors: list[QColor] = []
+        for button in panel.mode_buttons.values():
+            image = button.grab().toImage()
+            dpr = image.devicePixelRatio()
+            colors.append(image.pixelColor(int(button.width() / 2 * dpr), int(6 * dpr)))
+        # Locked controls must still reveal which reporting mode is selected.
+        assert colors[0] != colors[1]
+    for state in (
+        ApplicationState.STARTING,
+        ApplicationState.RUNNING,
+        ApplicationState.STOPPING,
+        ApplicationState.FAULT,
+    ):
+        panel.update_state(state)
+        before = panel.selection()
+        for button in panel.mode_buttons.values():
+            assert not button.isEnabled()
+            button.click()
+        assert panel.selection() == before and not panel.enabled.isEnabled()
+    panel.update_state(ApplicationState.READY)
+    assert per_cycle.isEnabled() is (role >= Role.ENGINEER)
+
+
 def test_reporting_base_draft_save_discard_and_protocol_visibility(
     settings_window: tuple[Startup, MainWindow],
 ) -> None:
@@ -549,9 +686,12 @@ def test_reporting_base_draft_save_discard_and_protocol_visibility(
     # First-show default, without an extra resize.
     QApplication.processEvents()
     assert panel.base_address.value() == 49
-    assert panel.base_address.parentWidget() is panel
-    assert panel.rect().contains(panel.base_address.geometry())
+    assert panel.base_address.parentWidget() is panel.base_field
+    assert panel.rect().contains(panel.base_field.geometry())
     assert panel.protocol.count() == page.protocol.count() == 3
+    panel.mode_buttons[
+        ReportingMode.PER_CYCLE
+    ].click()  # Arbitrary bases belong to per-cycle reporting.
     panel.base_address.setValue(120)
     assert (
         page.dirty
@@ -788,7 +928,7 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         page.persist_settings()  # Explicitly establish neutral disabled settings.
         payload = data.communication.read_bytes()
         assert json.loads(payload) == {
-            "reporting": {"protocol": "fins_tcp"},
+            "reporting": {"protocol": "fins_tcp", "mode": "four_cycle"},
             "diagnostic": {"protocol": "fins_tcp"},
         }
         assert not page.dirty and page.web_panel.saved_available
@@ -1067,7 +1207,10 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         else:
             assert panel.width() == page.web_panel.width() == page.service_cards.width()
             assert panel.geometry().bottom() < page.web_panel.y()
-        assert panel.summary.text() == "ACK -- · Successful 0 · ERR 0"
+        # Offscreen maximization may expose only the minimum supported width;
+        # retain the full summary accessibly when the compact header elides it.
+        assert panel.summary.accessibleName() == "ACK -- · Successful 0 · ERR 0"
+        assert panel.summary.text().startswith("ACK --")
         if size[0] == 1300:
             # Expanded controls must fit the viewport after first navigation,
             # language changes and shrinking from a previously wide grid.
@@ -1571,6 +1714,9 @@ def test_modbus_reporting_required_base_save_discard_and_protocol_fields(
     page = window.communication
     panel = page.reporting_panel
     assert panel is not None and panel.protocol.count() == 3
+    panel.mode_buttons[
+        ReportingMode.PER_CYCLE
+    ].click()  # Modbus remains a per-cycle protocol.
     panel.protocol.setCurrentIndex(2)
     assert panel.port.value() == 502 and panel.base_address.value() == -1
     assert (

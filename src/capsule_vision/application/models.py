@@ -1,10 +1,10 @@
-"""Immutable occurrence facts and conditional W48 pilot channel-position totals."""
+"""Immutable occurrence facts and attributed four-cycle channel-position totals."""
 
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 from pathlib import Path
 
-from capsule_vision.communication.reporting import CompletedPilotBatch
+from capsule_vision.communication.reporting import CompletedReportingBatch
 from capsule_vision.configuration import (
     ResolvedInspectionConfiguration,
     validate_model_artifact,
@@ -137,7 +137,7 @@ class ProductionCounters:
 
 @dataclass(frozen=True, slots=True)
 class PilotCounters:
-    """Cumulative channel positions, conditional on the pilot's field assumptions."""
+    """Cumulative channel positions, conditional on the reporting field assumptions."""
 
     batches_completed: int = 0
     channel_ok: int = 0
@@ -145,7 +145,7 @@ class PilotCounters:
     channel_empty: int = 0
     channel_unknown: int = 0
 
-    def completed(self, batch: CompletedPilotBatch) -> PilotCounters:
+    def completed(self, batch: CompletedReportingBatch) -> PilotCounters:
         statuses = [dict(report.statuses) for report in batch.reports]
         counts = dict.fromkeys(ChannelBusinessStatus, 0)
         for channel in statuses[0]:

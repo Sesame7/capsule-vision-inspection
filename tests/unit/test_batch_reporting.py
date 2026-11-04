@@ -17,10 +17,10 @@ from capsule_vision.communication import (
     FinsUdpEndpoint,
     ModbusSettings,
 )
-from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
+from capsule_vision.communication.batch_reporting import FourCycleReportingWorker
 from capsule_vision.communication.endpoints import Endpoint
 from capsule_vision.communication.reporting import (
-    CompletedPilotBatch,
+    CompletedReportingBatch,
     FirstStationReport,
     ReportIdentity,
     ReportingCapacityError,
@@ -45,14 +45,16 @@ def wait(predicate: Callable[[], bool]) -> None:
 @contextmanager
 def owner(
     peer: TcpPeer,
-    mode: ReportingMode = ReportingMode.W48_ACTIVE,
+    mode: ReportingMode = ReportingMode.FOUR_CYCLE,
     attributable: Callable[[ReportIdentity], bool] = lambda _: True,
-    on_completed: Callable[[CompletedPilotBatch], None] = lambda _: None,
-) -> Generator[W48BatchReportingWorker]:
-    worker = W48BatchReportingWorker(
+    on_completed: Callable[[CompletedReportingBatch], None] = lambda _: None,
+) -> Generator[FourCycleReportingWorker]:
+    worker = FourCycleReportingWorker(
         7,
         ReportingSettings(
-            endpoint=FinsTcpEndpoint(port=peer.port, timeout=0.1), mode=mode
+            endpoint=FinsTcpEndpoint(port=peer.port, timeout=0.1),
+            base_address=peer.base_address,
+            mode=mode,
         ),
         attributable=attributable,
         on_completed=on_completed,
@@ -66,11 +68,11 @@ def owner(
         assert worker.join(3) and worker.cleanup_safe
 
 
-def admit(worker: W48BatchReportingWorker, first: int, count: int = 4) -> None:
+def admit(worker: FourCycleReportingWorker, first: int, count: int = 4) -> None:
     worker.admit_cycle(CycleId(first))
     wait(
         lambda: (
-            bool(worker.snapshot().pilot_batches[-1].reads)
+            bool(worker.snapshot().batch_observations[-1].reads)
             or worker.snapshot().phase_issue is not None
         )
     )
@@ -79,7 +81,7 @@ def admit(worker: W48BatchReportingWorker, first: int, count: int = 4) -> None:
 
 
 def submit(
-    worker: W48BatchReportingWorker,
+    worker: FourCycleReportingWorker,
     first: int,
     cameras: int = 6,
     count: int = 4,
@@ -106,23 +108,21 @@ def submit(
 
 
 @pytest.mark.parametrize("cameras", [5, 6])
-@pytest.mark.parametrize("mode", [ReportingMode.W48_OBSERVE, ReportingMode.W48_ACTIVE])
+@pytest.mark.parametrize("base", [49, 149])
 @pytest.mark.parametrize("partial", [False, True])
 def test_four_authoritative_projections_and_register_ownership(
-    cameras: int, mode: ReportingMode, partial: bool
+    cameras: int, base: int, partial: bool
 ) -> None:
-    with TcpPeer(900) as peer:
-        peer.set_words(48, (123, 900, 0, 0, 0xABCD))
-        with owner(peer, mode) as worker:
+    with TcpPeer(900, base_address=base) as peer:
+        peer.set_words(base - 1, (123, 900, 0, 0, 0xABCD))
+        other = 149 if base == 49 else 49
+        peer.set_words(other - 1, (17, 18, 19, 20, 21))
+        with owner(peer) as worker:
             admit(worker, 21)
             futures = submit(worker, 21, cameras, partial=partial)
             outcome = futures[-1].result(3)
             assert all(f.result(3) is outcome for f in futures)
-            assert outcome.outcome is (
-                ReportOutcome.OBSERVED
-                if mode is ReportingMode.W48_OBSERVE
-                else ReportOutcome.ACKNOWLEDGED
-            )
+            assert outcome.outcome is ReportOutcome.ACKNOWLEDGED
             assert outcome.sequence == 123
             expected = (0xCF3C, 0x3CF3) if cameras == 5 else (0xCF3C, 0x3CF3, 15)
             if partial:
@@ -130,32 +130,32 @@ def test_four_authoritative_projections_and_register_ownership(
                 expected = (0xEFBE, 0x3FFB) if cameras == 5 else (0xEFBE, 0xFEFB, 15)
             assert outcome.reject_words == expected
             writes = [p for p in peer.packets if p[10:12] == b"\x01\x02"]
-            if mode is ReportingMode.W48_OBSERVE:
-                assert not writes and peer.words(49, 4) == (900, 0, 0, 0xABCD)
-                assert worker.snapshot().observed_count == 1
-            else:
-                assert [
-                    (int.from_bytes(p[13:15]), int.from_bytes(p[16:18])) for p in writes
-                ] == [(50, cameras // 6 + 2), (49, 1)]
-                assert peer.words(49, 4) == (
-                    123,
-                    *expected,
-                    *((0xABCD,) if cameras == 5 else ()),
-                )
-                assert [int.from_bytes(p[13:15]) for p in peer.packets] == [
-                    48,
-                    48,
-                    50,
-                    48,
-                    49,
-                ]
-            evidence = worker.snapshot().pilot_batches[-1]
+            assert [
+                (int.from_bytes(p[13:15]), int.from_bytes(p[16:18])) for p in writes
+            ] == [(base + 1, cameras // 6 + 2), (base, 1)]
+            assert peer.words(base, 4) == (
+                123,
+                *expected,
+                *((0xABCD,) if cameras == 5 else ()),
+            )
+            assert [int.from_bytes(p[13:15]) for p in peer.packets] == [
+                base - 1,
+                base - 1,
+                base + 1,
+                base - 1,
+                base,
+            ]
+            assert peer.words(other - 1, 5) == (17, 18, 19, 20, 21)
+            evidence = worker.snapshot().batch_observations[-1]
             assert (
                 evidence.cycles == (21, 22, 23, 24)
                 and len(evidence.terminal_outcomes) == 4
             )
             assert all(
-                r.value == 123 and r.finished_at >= r.started_at for r in evidence.reads
+                r.value == 123
+                and r.address == base - 1
+                and r.finished_at >= r.started_at
+                for r in evidence.reads
             )
             assert evidence.completed_at is not None and not evidence.commit_uncertain
 
@@ -173,16 +173,22 @@ def test_counter_skips_wrap_bounded_evidence_and_no_local_sequence() -> None:
             snapshot.acknowledged_count == len(counters)
             and snapshot.next_sequence is None
         )
-        assert len(snapshot.pilot_batches) == 16 and snapshot.phase_issue is None
+        assert len(snapshot.batch_observations) == 16 and snapshot.phase_issue is None
 
 
 @pytest.mark.parametrize(
     "scenario", ["counter", "stale", "ambiguous", "duplicate", "gap", "late"]
 )
-def test_observable_association_loss_suppresses_and_latches(scenario: str) -> None:
+@pytest.mark.parametrize("base", [49, 149])
+def test_observable_association_loss_suppresses_and_latches(
+    scenario: str, base: int
+) -> None:
     valid = True
-    with TcpPeer() as peer, owner(peer, attributable=lambda _: valid) as worker:
-        peer.set_words(48, (5,))
+    with (
+        TcpPeer(base_address=base) as peer,
+        owner(peer, attributable=lambda _: valid) as worker,
+    ):
+        peer.set_words(base - 1, (5,))
         first = 1
         if scenario == "stale":
             admit(worker, first)
@@ -191,7 +197,7 @@ def test_observable_association_loss_suppresses_and_latches(scenario: str) -> No
         before = len(peer.packets)
         admit(worker, first)
         if scenario == "counter":
-            peer.set_words(48, (6,))
+            peer.set_words(base - 1, (6,))
         elif scenario == "ambiguous":
             valid = False
         elif scenario == "duplicate":
@@ -205,18 +211,19 @@ def test_observable_association_loss_suppresses_and_latches(scenario: str) -> No
         assert not [p for p in peer.packets[before:] if p[10:12] == b"\x01\x02"]
 
 
-def test_changed_counter_after_bitmap_ack_never_commits() -> None:
-    with TcpPeer() as peer, owner(peer) as worker:
-        peer.set_words(48, (14,))
+@pytest.mark.parametrize("base", [49, 149])
+def test_changed_counter_after_bitmap_ack_never_commits(base: int) -> None:
+    with TcpPeer(base_address=base) as peer, owner(peer) as worker:
+        peer.set_words(base - 1, (14,))
         admit(worker, 1)
         peer.hold_next("bitmap")
         future = submit(worker, 1)[-1]
         assert peer.entered.wait(3)
-        peer.set_words(48, (15,))
+        peer.set_words(base - 1, (15,))
         peer.release.set()
         assert future.result(3).outcome is ReportOutcome.SKIPPED
-        assert peer.words(49) == (0,)
-        assert worker.snapshot().pilot_batches[-1].commit_started_at is None
+        assert peer.words(base) == (0,)
+        assert worker.snapshot().batch_observations[-1].commit_started_at is None
 
 
 @pytest.mark.parametrize(
@@ -229,16 +236,19 @@ def test_changed_counter_after_bitmap_ack_never_commits() -> None:
         ("sequence", "drop_after"),
     ],
 )
-def test_failed_or_uncertain_writes_never_replayed(stage: Stage, fault: Fault) -> None:
-    with TcpPeer() as peer, owner(peer) as worker:
-        peer.set_words(48, (15,))
+@pytest.mark.parametrize("base", [49, 149])
+def test_failed_or_uncertain_writes_never_replayed(
+    stage: Stage, fault: Fault, base: int
+) -> None:
+    with TcpPeer(base_address=base) as peer, owner(peer) as worker:
+        peer.set_words(base - 1, (15,))
         admit(worker, 1)
         peer.fail_next(stage, fault)
         outcome = submit(worker, 1)[-1].result(3)
         assert outcome.outcome is ReportOutcome.FAILED and outcome.issue is not None
-        evidence = worker.snapshot().pilot_batches[-1]
+        evidence = worker.snapshot().batch_observations[-1]
         assert evidence.commit_uncertain == (stage == "sequence")
-        assert peer.words(49) == (
+        assert peer.words(base) == (
             (15,) if stage == "sequence" and fault == "drop_after" else (0,)
         )
         packets = peer.packets
@@ -247,23 +257,27 @@ def test_failed_or_uncertain_writes_never_replayed(stage: Stage, fault: Fault) -
 
 
 @pytest.mark.parametrize("count", [1, 2, 3])
-def test_incomplete_stop_and_fresh_generation(count: int) -> None:
-    with TcpPeer() as peer, owner(peer) as worker:
+@pytest.mark.parametrize("base", [49, 149])
+def test_incomplete_stop_and_fresh_generation(count: int, base: int) -> None:
+    with TcpPeer(base_address=base) as peer, owner(peer) as worker:
         admit(worker, 1, count)
         futures = submit(worker, 1, count=count)
         worker.request_stop(drain=True)
         assert worker.join(3)
         assert all(f.result(3).outcome is ReportOutcome.SKIPPED for f in futures)
-        assert len(worker.snapshot().pilot_batches[-1].cycles) == count
+        assert len(worker.snapshot().batch_observations[-1].cycles) == count
         assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
-    with TcpPeer() as peer, owner(peer) as fresh:
+    with TcpPeer(base_address=base) as peer, owner(peer) as fresh:
         admit(fresh, 20)
         assert submit(fresh, 20)[-1].result(3).outcome is ReportOutcome.ACKNOWLEDGED
 
 
-def test_delayed_initial_read_and_read_failure_preserve_terminal_handoffs() -> None:
+@pytest.mark.parametrize("base", [49, 149])
+def test_delayed_initial_read_and_read_failure_preserve_terminal_handoffs(
+    base: int,
+) -> None:
     for failing in (False, True):
-        with TcpPeer() as peer, owner(peer) as worker:
+        with TcpPeer(base_address=base) as peer, owner(peer) as worker:
             peer.hold_next("read")
             if failing:
                 peer.fail_next("read", "plc")
@@ -274,7 +288,7 @@ def test_delayed_initial_read_and_read_failure_preserve_terminal_handoffs() -> N
             futures = submit(worker, 1)
             peer.release.set()
             assert futures[-1].result(3).outcome is ReportOutcome.SKIPPED
-            assert len(worker.snapshot().pilot_batches[-1].terminal_outcomes) == 4
+            assert len(worker.snapshot().batch_observations[-1].terminal_outcomes) == 4
             assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
 
 
@@ -292,10 +306,10 @@ def test_socket_factory_and_cleanup_stay_on_one_communication_owner() -> None:
             owners.append(get_ident())
             return Client(endpoint.host, port=endpoint.port)
 
-        worker = W48BatchReportingWorker(
+        worker = FourCycleReportingWorker(
             7,
             ReportingSettings(
-                endpoint=FinsTcpEndpoint(port=peer.port), mode=ReportingMode.W48_OBSERVE
+                endpoint=FinsTcpEndpoint(port=peer.port), mode=ReportingMode.FOUR_CYCLE
             ),
             client_factory=factory,
         )
@@ -313,12 +327,12 @@ def test_socket_factory_and_cleanup_stay_on_one_communication_owner() -> None:
 def test_unsupported_transport_rejected_without_io(endpoint: Endpoint) -> None:
     with pytest.raises(ValueError, match="FINS/TCP"):
         ReportingSelection(
-            True, ReportingSettings(endpoint, 49, mode=ReportingMode.W48_ACTIVE)
+            True, ReportingSettings(endpoint, 49, mode=ReportingMode.FOUR_CYCLE)
         )
     with pytest.raises(ValueError, match="W49"):
         ReportingSelection(
             True,
-            ReportingSettings(FinsTcpEndpoint(), 120, mode=ReportingMode.W48_OBSERVE),
+            ReportingSettings(FinsTcpEndpoint(), 120, mode=ReportingMode.FOUR_CYCLE),
         )
 
 
@@ -356,7 +370,7 @@ def test_terminal_order_independent_and_capacity_remains_bounded() -> None:
         assert (
             sum(
                 len(b.cycles)
-                for b in worker.snapshot().pilot_batches
+                for b in worker.snapshot().batch_observations
                 if b.report is None
             )
             == 9
@@ -377,24 +391,31 @@ def test_duplicate_terminal_and_missing_result_never_fabricate_reports() -> None
         assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
 
 
-def test_next_batch_during_sequence_request_is_visible_uncertain_commit() -> None:
-    with TcpPeer() as peer, owner(peer) as worker:
-        peer.set_words(48, (19,))
+@pytest.mark.parametrize("base", [49, 149])
+def test_next_batch_during_sequence_request_is_visible_uncertain_commit(
+    base: int,
+) -> None:
+    with TcpPeer(base_address=base) as peer, owner(peer) as worker:
+        peer.set_words(base - 1, (19,))
         admit(worker, 1)
         peer.hold_next("sequence")
         future = submit(worker, 1)[-1]
         assert peer.entered.wait(3)
         worker.admit_cycle(CycleId(5))
-        peer.set_words(48, (20,))
+        peer.set_words(base - 1, (20,))
         peer.release.set()
         assert future.result(3).outcome is ReportOutcome.FAILED
-        assert peer.words(49) == (19,)  # Already in flight: cannot recall this write.
-        assert worker.snapshot().pilot_batches[-2].commit_uncertain
+        assert peer.words(base) == (19,)  # Already in flight: cannot recall this write.
+        assert worker.snapshot().batch_observations[-2].commit_uncertain
 
 
-def test_source_fence_during_inflight_commit_is_uncertain() -> None:
+@pytest.mark.parametrize("base", [49, 149])
+def test_source_fence_during_inflight_commit_is_uncertain(base: int) -> None:
     valid = True
-    with TcpPeer() as peer, owner(peer, attributable=lambda _: valid) as worker:
+    with (
+        TcpPeer(base_address=base) as peer,
+        owner(peer, attributable=lambda _: valid) as worker,
+    ):
         admit(worker, 1)
         peer.hold_next("sequence")
         future = submit(worker, 1)[-1]
@@ -402,7 +423,7 @@ def test_source_fence_during_inflight_commit_is_uncertain() -> None:
         valid = False
         peer.release.set()
         assert future.result(3).outcome is ReportOutcome.FAILED
-        assert worker.snapshot().pilot_batches[-1].commit_uncertain
+        assert worker.snapshot().batch_observations[-1].commit_uncertain
 
 
 @pytest.mark.parametrize("defect", ["generation", "layout"])

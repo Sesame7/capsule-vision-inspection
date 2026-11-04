@@ -24,7 +24,7 @@ from capsule_vision.application.folder_replay import (
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.session import EngineFactory, real_engine
-from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
+from capsule_vision.communication.batch_reporting import FourCycleReportingWorker
 from capsule_vision.communication.reporting import (
     FirstStationReportingWorker,
     ReportingMode,
@@ -315,17 +315,17 @@ def create_production_application(
             session_reporting is not None
             and session_reporting.mode is not ReportingMode.PER_CYCLE
         ):
-            session_reporting.validate_pilot()
+            session_reporting.validate_four_cycle()
             if continuous_source is None:
                 raise ApplicationStateError(
-                    "W48 batch pilot requires Basler Production"
+                    "Four-cycle reporting requires Basler Production"
                 )
-        report_worker: FirstStationReportingWorker | W48BatchReportingWorker | None
+        report_worker: FirstStationReportingWorker | FourCycleReportingWorker | None
         if session_reporting is None:
             report_worker = None
         elif session_reporting.mode is not ReportingMode.PER_CYCLE:
             assert continuous_source is not None
-            report_worker = W48BatchReportingWorker(
+            report_worker = FourCycleReportingWorker(
                 generation,
                 session_reporting,
                 attributable=lambda identity: continuous_source.attributable(

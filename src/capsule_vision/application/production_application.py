@@ -23,11 +23,11 @@ from capsule_vision.application.source_control import (
     SourceControlSnapshot,
 )
 from capsule_vision.communication import FinsMemoryArea, HoldingRegisters
-from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
+from capsule_vision.communication.batch_reporting import FourCycleReportingWorker
 from capsule_vision.communication.modbus_tcp import ModbusSettings
 from capsule_vision.communication.operations import CommunicationRequest, RequestKind
 from capsule_vision.communication.reporting import (
-    CompletedPilotBatch,
+    CompletedReportingBatch,
     FirstStationReportingWorker,
     ReportingMode,
     ReportingSelection,
@@ -82,7 +82,7 @@ class SourceProductionApplication(ProductionApplication):
         self._display_store = store
         self._reporting_lock = Lock()
         self._reporting_worker: (
-            FirstStationReportingWorker | W48BatchReportingWorker | None
+            FirstStationReportingWorker | FourCycleReportingWorker | None
         ) = None
         self._archive_owner: ImageArchive | None = None
         self._reporting_selection = initial_reporting or ReportingSelection(
@@ -130,7 +130,7 @@ class SourceProductionApplication(ProductionApplication):
             )  # Existing authorization/state/reset boundary.
             self._pilot_counters = PilotCounters()
 
-    def observe_pilot_batch(self, batch: CompletedPilotBatch) -> None:
+    def observe_pilot_batch(self, batch: CompletedReportingBatch) -> None:
         """Trusted reporting completion, independent of Qt, History and PLC ACK."""
         with self._condition:
             if (
@@ -340,10 +340,10 @@ class SourceProductionApplication(ProductionApplication):
     def _admit_replay(self, *, single_step: bool) -> Future[None]:
         selection = self.reporting_selection()
         if selection.enabled and selection.settings.mode is not ReportingMode.PER_CYCLE:
-            selection.settings.validate_pilot()
+            selection.settings.validate_four_cycle()
             if not self.basler_available:
                 raise ApplicationStateError(
-                    "W48 batch pilot requires Basler Production"
+                    "Four-cycle reporting requires Basler Production"
                 )
         if self.basler_available:
             if single_step:
@@ -484,7 +484,7 @@ class SourceProductionApplication(ProductionApplication):
                     return
                 base = settings.require_base_address()
                 protected_start = (
-                    base if settings.mode is ReportingMode.PER_CYCLE else 48
+                    base if settings.mode is ReportingMode.PER_CYCLE else base - 1
                 )
                 endpoint = settings.endpoint
                 manual = request.endpoint
@@ -589,7 +589,7 @@ class SourceProductionApplication(ProductionApplication):
             settings = self.reporting_for_generation(self._generation)
             if settings is not None and settings.mode is not ReportingMode.PER_CYCLE:
                 raise ApplicationStateError(
-                    "W48 batch pilot cannot Pause/Step/Resume; Stop and restart at a new batch's first trigger"
+                    "Four-cycle reporting cannot Pause/Step/Resume; Stop and restart at a new batch's first trigger"
                 )
             return (
                 self._running_basler_control()
@@ -630,7 +630,7 @@ class SourceProductionApplication(ProductionApplication):
         return control
 
     def set_reporting_owner(
-        self, worker: FirstStationReportingWorker | W48BatchReportingWorker | None
+        self, worker: FirstStationReportingWorker | FourCycleReportingWorker | None
     ) -> None:
         with self._reporting_lock:
             self._reporting_worker = worker

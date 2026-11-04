@@ -6,12 +6,12 @@ from .translations import EXTRA_STRINGS
 STRINGS: dict[str, tuple[str, str]] = {
     "plc_mode": ("上报模式", "Reporting mode"),
     "plc_mode_per_cycle": ("逐周期上报", "Per-cycle reporting"),
-    "plc_mode_w48_observe": ("W48 试点 · 仅观察", "W48 pilot · Observe only"),
-    "plc_mode_w48_active": ("W48 试点 · 批次上报", "W48 pilot · Active reporting"),
-    "plc_pilot_evidence": ("试点记录", "Pilot evidence"),
-    "plc_pilot_hint": (
-        "W48 试点仅支持 Basler + FINS/TCP + W49 基址。启用并保存后在下次 Start 生效。必须从新批次首触发开始，四次触发内及上报前 W48 保持不变；禁止暂停/单步。观察模式仅读取，不写入结果。现场前提见通信契约。",
-        "W48 pilot requires Basler + FINS/TCP + W49 base. Enable and Save for next Start. Start at a new batch's first trigger; W48 must stay stable across four triggers and until reporting finishes. No Pause/Step. Observe only reads, never writes results. See the communication contract for field prerequisites.",
+    "plc_mode_four_cycle": ("四周期上报", "Four-cycle reporting"),
+    "plc_mode_per_cycle_short": ("逐次", "Per cycle"),
+    "plc_mode_four_cycle_short": ("4次合并", "4-cycle"),
+    "plc_four_cycle_hint": (
+        "四周期上报要求 Basler、FINS/TCP 和 W49 或 W149 提交基址。计数器为基址前一字，位图从基址后一字开始。启用并保存后在下次 Start 生效。必须从新组首触发开始；四次触发内直至上报结束，PLC 计数器须保持不变。现场前提见通信契约。",
+        "Four-cycle reporting requires Basler, FINS/TCP and commit base W49 or W149. The counter is at base−1 and the bitmap starts at base+1. Enable and Save for next Start. Start at a new group's first trigger; the PLC counter must remain stable through all four triggers and reporting completion. See the communication contract for field prerequisites.",
     ),
     "identity_close": ("关闭", "Close"),
     "identity_disabled": ("已停用", "Disabled"),
@@ -651,12 +651,12 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "pilot_batches": ("批次", "Batches"),
     "pilot_batches_help": (
-        "已完成的四周期 W48 物理批次",
-        "Completed four-cycle W48 physical batches",
+        "已完成的四周期 PLC 物理批次",
+        "Completed four-cycle PLC physical batches",
     ),
     "pilot_channels_help": (
-        "按已完成 W48 批次累计的物理通道位置；不是检测次数。UNKNOWN 为保守剔除，NG 为确认缺陷。",
-        "Cumulative physical channel positions in completed W48 batches, not inspection occurrences. UNKNOWN is conservative rejection; NG is confirmed defect.",
+        "按已完成 PLC 批次累计的物理通道位置；不是检测次数。UNKNOWN 为保守剔除，NG 为确认缺陷。",
+        "Cumulative physical channel positions in completed PLC batches, not inspection occurrences. UNKNOWN is conservative rejection; NG is confirmed defect.",
     ),
     "pilot_unknown": ("未知 {count}", "UNKNOWN {count}"),
     "pilot_raw_cycles": ("原始检测周期：{count}", "Raw inspection cycles: {count}"),

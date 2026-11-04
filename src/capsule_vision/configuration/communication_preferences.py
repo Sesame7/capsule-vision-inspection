@@ -56,7 +56,9 @@ class CommunicationPreferences:
     """Initial editing values; persisted omissions retain their legacy defaults."""
 
     reporting: ReportingSelection = ReportingSelection(
-        settings=ReportingSettings(endpoint=FinsTcpEndpoint())
+        settings=ReportingSettings(
+            endpoint=FinsTcpEndpoint(), mode=ReportingMode.FOUR_CYCLE
+        )
     )
     diagnostic: Endpoint = FinsTcpEndpoint()
     web: WebPreferences = WebPreferences(enabled=False)

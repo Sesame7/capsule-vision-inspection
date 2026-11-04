@@ -25,7 +25,7 @@ from capsule_vision.application.session import (
     real_engine,
 )
 from capsule_vision.application.source_control import FolderReplayControl
-from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
+from capsule_vision.communication.batch_reporting import FourCycleReportingWorker
 from capsule_vision.communication.reporting import (
     FirstStationReport,
     FirstStationReportingWorker,
@@ -88,7 +88,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         replay: FolderReplay | None = None,
         sources: CameraSources | None = None,
         source_base: Path = Path("."),
-        reporting: FirstStationReportingWorker | W48BatchReportingWorker | None = None,
+        reporting: FirstStationReportingWorker | FourCycleReportingWorker | None = None,
         replay_control: FolderReplayControl | None = None,
         continuous_source: BaslerConnection | None = None,
         basler_control: BaslerAdmissionControl | None = None,
@@ -168,7 +168,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 archive.complete(cycle_id, None)
             raise
         if self.reporting is not None:
-            if isinstance(self.reporting, W48BatchReportingWorker):
+            if isinstance(self.reporting, FourCycleReportingWorker):
                 try:
                     self.reporting.admit_cycle(cycle_id)
                 except (ReportingCapacityError, ReportingStateError) as exc:
@@ -227,7 +227,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         try:
             pending = (
                 reporter.submit_cycle(report, result.cycle_status)
-                if isinstance(reporter, W48BatchReportingWorker)
+                if isinstance(reporter, FourCycleReportingWorker)
                 else reporter.submit(report)
             )  # Nonblocking; never socket work.
             control = self.basler_control

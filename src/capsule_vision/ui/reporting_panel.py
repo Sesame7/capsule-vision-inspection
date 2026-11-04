@@ -1,23 +1,20 @@
 """Compact next-Start preferences and bounded reporting-worker observations."""
 
-import json
-from dataclasses import asdict
-
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
-    QDialog,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -81,7 +78,27 @@ class ReportingPanel(QFrame):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         header.addWidget(self.summary, 1)
+        self.mode_control = QWidget()
+        modes = QHBoxLayout(self.mode_control)
+        modes.setContentsMargins(0, 0, 0, 0)
+        modes.setSpacing(0)
+        modes.addStretch()
+        self.mode_group = QButtonGroup(self)
+        self.mode_buttons: dict[ReportingMode, QPushButton] = {}
+        for index, mode in enumerate(ReportingMode):
+            button = QPushButton()
+            button.setCheckable(True)
+            button.setMinimumHeight(Style.touch)
+            button.setProperty("reportingSegment", "first" if index == 0 else "last")
+            self.mode_group.addButton(button, index)
+            self.mode_buttons[mode] = button
+            modes.addWidget(button)
+        modes.addStretch()
+        header.addWidget(self.mode_control, 1)
         self.service_status = QLabel()
+        self.service_status.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         header.addWidget(self.service_status)
         self.enabled = QPushButton()
         self.enabled.setCheckable(True)
@@ -91,22 +108,6 @@ class ReportingPanel(QFrame):
         self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.enabled)
         root.addLayout(header)
-        mode_row = QHBoxLayout()
-        self.mode = QComboBox()
-        self.mode.setMinimumHeight(Style.touch)
-        for mode in ReportingMode:
-            self.mode.addItem("", mode.value)
-        self.mode.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.mode.setMinimumContentsLength(18)
-        mode_row.addWidget(self.mode)
-        mode_row.addStretch()
-        self.evidence = QPushButton()
-        self.evidence.setMinimumHeight(Style.touch)
-        self.evidence.clicked.connect(self._show_evidence)
-        mode_row.addWidget(self.evidence)
-        root.addLayout(mode_row)
         settings = root
         self._captions: list[tuple[str, QLabel]] = []
         self.host = QLineEdit()
@@ -122,6 +123,12 @@ class ReportingPanel(QFrame):
         self.base_address = QSpinBox()
         self.base_address.setRange(0, 508)
         self.base_address.setPrefix("W")
+        self.base_choices = QComboBox()
+        self.base_choices.addItems(("W49", "W149"))
+        self.base_choices.setMinimumHeight(Style.touch)
+        self.base_field = QStackedWidget()
+        self.base_field.addWidget(self.base_address)
+        self.base_field.addWidget(self.base_choices)
         self.advanced_button = QPushButton()
         self.advanced_button.setCheckable(True)
         self.advanced_button.setMinimumHeight(Style.touch)
@@ -135,7 +142,7 @@ class ReportingPanel(QFrame):
                 ("comm_host", self.host),
                 ("comm_port", self.port),
                 ("comm_timeout", self.timeout),
-                ("plc_base_address", self.base_address),
+                ("plc_base_address", self.base_field),
             )
         ):
             caption = QLabel()
@@ -194,7 +201,8 @@ class ReportingPanel(QFrame):
         port_edit.textEdited.connect(self._port_text_edited)
         self.enabled.toggled.connect(self._changed)
         self.protocol.currentIndexChanged.connect(self._protocol_changed)
-        self.mode.currentIndexChanged.connect(self._changed)
+        self.mode_group.idClicked.connect(self._changed)
+        self.base_choices.currentIndexChanged.connect(self._base_selected)
         self.host.textChanged.connect(self._changed)
         self._load_selection()
         self.set_language("zh")
@@ -218,9 +226,7 @@ class ReportingPanel(QFrame):
         self._syncing = True
         try:
             self.enabled.setChecked(selected.enabled)
-            self.mode.setCurrentIndex(
-                tuple(ReportingMode).index(selected.settings.mode)
-            )
+            self.mode_buttons[selected.settings.mode].setChecked(True)
             endpoint = selected.settings.endpoint
             self.host.setText(endpoint.host)
             self.protocol.setCurrentIndex(
@@ -300,6 +306,26 @@ class ReportingPanel(QFrame):
         self.refresh()
         self.edited.emit()
 
+    @Slot(int)
+    def _base_selected(self, index: int) -> None:
+        if not self._syncing and index >= 0:
+            self.base_address.setValue((49, 149)[index])
+
+    def _refresh_base(self) -> None:
+        # A mode change never rewrites the existing address. Unsupported values
+        # stay visible as a placeholder until the user explicitly selects a base.
+        four_cycle = self.mode_buttons[ReportingMode.FOUR_CYCLE].isChecked()
+        self.base_field.setCurrentIndex(int(four_cycle))
+        syncing, self._syncing = self._syncing, True
+        try:
+            base = self.base_address.value()
+            self.base_choices.setPlaceholderText(f"W{base}" if base >= 0 else "—")
+            self.base_choices.setCurrentIndex(
+                (49, 149).index(base) if base in (49, 149) else -1
+            )
+        finally:
+            self._syncing = syncing
+
     def selection(self) -> ReportingSelection:
         common = (self.host.text().strip(), self.port.value(), self.timeout.value())
         endpoint = (
@@ -317,7 +343,7 @@ class ReportingPanel(QFrame):
             self.enabled.isChecked(),
             ReportingSettings(
                 endpoint=endpoint,
-                mode=tuple(ReportingMode)[self.mode.currentIndex()],
+                mode=tuple(ReportingMode)[self.mode_group.checkedId()],
                 max_pending=self._draft.settings.max_pending,
                 base_address=None
                 if self._modbus and self.base_address.value() == -1
@@ -327,12 +353,43 @@ class ReportingPanel(QFrame):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        for index, mode in enumerate(ReportingMode):
-            self.mode.setItemText(index, text("plc_mode_" + mode.value, language))
-        self.mode.setAccessibleName(text("plc_mode", language))
-        self.mode.setToolTip(text("plc_pilot_hint", language))
-        self.evidence.setText(text("plc_pilot_evidence", language))
-        self.evidence.setAccessibleName(self.evidence.text())
+        self.mode_control.setAccessibleName(text("plc_mode", language))
+        for mode, button in self.mode_buttons.items():
+            key = "plc_mode_" + mode.value
+            short_key = key + "_short"
+            set_button_caption(
+                button,
+                text(short_key, language),
+                max(
+                    Style.touch,
+                    button_width(button, (short_key,), languages=("zh", "en")),
+                ),
+            )
+            button.setAccessibleName(text(key, language))
+            button.setToolTip(
+                text(key, language) + "\n" + text("plc_next_start", language)
+            )
+        # Reserve the current language's lifecycle captions, independent of live
+        # ACKs/status and the selected draft mode. The summary can elide first.
+        self.service_status.setFixedWidth(
+            max(
+                self.service_status.fontMetrics().horizontalAdvance(caption)
+                for caption in (
+                    "OFF",
+                    *(
+                        text(key, language)
+                        for key in (
+                            "service_next_start",
+                            "web_starting",
+                            "STOPPING",
+                            "state_RUNNING",
+                            "plc_report_failed",
+                        )
+                    ),
+                )
+            )
+            + Style.small
+        )
         self.enabled.setIcon(production_icon("power", theme_colors(self).primary))
         self._power_width = button_width(
             self.enabled,
@@ -343,9 +400,7 @@ class ReportingPanel(QFrame):
         self.title.setToolTip(text("plc_reporting", language))
         self.title.setAccessibleName(self.title.toolTip())
         self.summary.setMinimumWidth(
-            self.summary.fontMetrics().horizontalAdvance(
-                f"ACK -- · {text('plc_success', language)} 0 · ERR 0"
-            )
+            self.summary.fontMetrics().horizontalAdvance("ACK --") + Style.small
         )
         self.advanced_button.setText("")
         self.advanced_button.setFixedSize(Style.touch, Style.touch)
@@ -372,6 +427,7 @@ class ReportingPanel(QFrame):
             ("comm_port", self.port),
             ("comm_timeout", self.timeout),
             ("plc_base_address", self.base_address),
+            ("plc_base_address", self.base_choices),
         ):
             widget.setAccessibleName(text(key, language))
         for key, fields in (
@@ -400,6 +456,7 @@ class ReportingPanel(QFrame):
         return super().eventFilter(watched, event)
 
     def _render_summary(self) -> None:
+        self.summary.setAccessibleName(self._summary_text)
         self.summary.setText(
             self.summary.fontMetrics().elidedText(
                 self._summary_text, Qt.TextElideMode.ElideRight, self.summary.width()
@@ -407,41 +464,8 @@ class ReportingPanel(QFrame):
         )
 
     @Slot()
-    def _show_evidence(self) -> None:
-        snapshot = self.controller.reporting_snapshot()
-        if snapshot is None:
-            return
-        dialog = QDialog(self)
-        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.setWindowTitle(text("plc_pilot_evidence", self.language))
-        layout = QVBoxLayout(dialog)
-        evidence = QPlainTextEdit()
-        evidence.setReadOnly(True)
-        evidence.setAccessibleName(dialog.windowTitle())
-        evidence.setPlainText(
-            json.dumps(
-                {
-                    "mode": snapshot.mode.value,
-                    "phase_issue": snapshot.phase_issue,
-                    "failure_issue": asdict(snapshot.failure_issue)
-                    if snapshot.failure_issue
-                    else None,
-                    "cleanup_issue": asdict(snapshot.cleanup_issue)
-                    if snapshot.cleanup_issue
-                    else None,
-                    "batches": [asdict(batch) for batch in snapshot.pilot_batches],
-                },
-                ensure_ascii=False,
-                indent=2,
-                default=str,
-            )
-        )
-        layout.addWidget(evidence)
-        dialog.resize(760, 520)
-        dialog.open()
-
-    @Slot()
     def refresh(self) -> None:
+        self._refresh_base()
         editable = self.can_manage and self.state in (
             ApplicationState.READY,
             ApplicationState.UNCONFIGURED,
@@ -450,7 +474,8 @@ class ReportingPanel(QFrame):
             self.enabled,
             self.host,
             self.protocol,
-            self.mode,
+            self.mode_control,
+            self.base_choices,
             self.port,
             *self._fields,
         ):
@@ -496,17 +521,13 @@ class ReportingPanel(QFrame):
                 "plc_modbus_base_hint" if modbus else "plc_base_address", self.language
             )
         )
+        self.base_choices.setToolTip(text("plc_four_cycle_hint", self.language))
         for caption_key, caption in self._captions:
             if caption_key == "plc_base_address":
                 caption.setText(
                     text(caption_key, self.language) + (" *" if modbus else "")
                 )
         snapshot = self.controller.reporting_snapshot()
-        self.evidence.setEnabled(bool(snapshot and snapshot.pilot_batches))
-        self.evidence.setVisible(
-            self.mode.currentIndex() != 0
-            or bool(snapshot and snapshot.mode is not ReportingMode.PER_CYCLE)
-        )
         key = "plc_disabled" if not selected.enabled else "plc_enabled"
         if selected.enabled and self.state is ApplicationState.STARTING:
             key = "plc_starting"
@@ -546,9 +567,7 @@ class ReportingPanel(QFrame):
             f"ERR {snapshot.failed_count if snapshot else 0}"
         )
         if snapshot is not None and snapshot.mode is not ReportingMode.PER_CYCLE:
-            self._summary_text += (
-                f" · OBS {snapshot.observed_count} · SKIP {snapshot.skipped_count}"
-            )
+            self._summary_text += f" · SKIP {snapshot.skipped_count}"
         warning = key == "plc_report_failed" or bool(
             snapshot
             and snapshot.last_outcome

@@ -8,7 +8,12 @@ from time import perf_counter
 
 import pytest
 from PySide6.QtWidgets import QApplication
-from tests.integration.test_basler_production import Engine, PassiveBackend, save_basler
+from tests.integration.test_basler_production import (
+    SERIALS,
+    Engine,
+    PassiveBackend,
+    save_basler,
+)
 from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import close_window, until
 from tests.support.startup import (
@@ -28,8 +33,12 @@ from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
-from capsule_vision.communication import FinsMemoryArea, FinsTcpEndpoint
-from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
+from capsule_vision.communication import (
+    FinsMemoryArea,
+    FinsTcpEndpoint,
+    FinsUdpEndpoint,
+)
+from capsule_vision.communication.batch_reporting import FourCycleReportingWorker
 from capsule_vision.communication.operations import CommunicationRequest, RequestKind
 from capsule_vision.communication.reporting import (
     ReportingMode,
@@ -48,14 +57,172 @@ from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 
 
-@pytest.mark.parametrize("role", list(Role))
-@pytest.mark.parametrize("mode", [ReportingMode.W48_OBSERVE, ReportingMode.W48_ACTIVE])
-def test_normal_authorization_warmup_controls_and_stop(
+@pytest.mark.parametrize("mode", ["w48_observe", "w48_active"])
+def test_obsolete_saved_mode_is_visible_and_preserved_on_normal_startup(
+    tmp_path: Path, mode: str
+) -> None:
+    data = saved_data(tmp_path)
+    with TcpPeer() as peer:
+        data.communication.write_text(
+            json.dumps(
+                {
+                    "reporting": {
+                        "protocol": "fins_tcp",
+                        "mode": mode,
+                        "enabled": True,
+                        "port": peer.port,
+                        "base_address": 149,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        original = data.communication.read_bytes()
+        startup = authenticated_startup(data)
+        assert isinstance(startup.application, SourceProductionApplication)
+        try:
+            assert mode in startup.communication_error
+            assert not startup.communication.reporting.enabled
+            assert startup.application.reporting_snapshot() is None
+            assert peer.connections == 0 and not peer.packets
+            assert data.communication.read_bytes() == original
+        finally:
+            close(startup)
+
+
+@pytest.mark.parametrize("base", [49, 149])
+@pytest.mark.parametrize("cameras", [5, 6])
+@pytest.mark.parametrize("ending", ["stop", "close"])
+def test_selected_register_range_protected_until_reporting_owner_exits(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    role: Role,
-    mode: ReportingMode,
+    base: int,
+    cameras: int,
+    ending: str,
+) -> None:
+    backend = PassiveBackend()
+    backend.serials = SERIALS[:cameras]
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
+    data = saved_data(tmp_path, camera_count=cameras)
+    save_basler(data.sources)
+    engine = Engine()
+    with TcpPeer(base_address=base) as peer:
+        startup = authenticated_startup(data, engine_factory=lambda _: engine)
+        app = startup.application
+        assert isinstance(app, SourceProductionApplication)
+        endpoint = FinsTcpEndpoint(port=peer.port, timeout=2)
+        selection = ReportingSelection(
+            True,
+            ReportingSettings(
+                endpoint,
+                base,
+                mode=ReportingMode.FOUR_CYCLE,
+            ),
+        )
+
+        def write(address: int, count: int = 1) -> CommunicationRequest:
+            request = CommunicationRequest(
+                kind=RequestKind.WRITE,
+                start=address,
+                count=count,
+                values=(7,) * count,
+                area=FinsMemoryArea.W,
+                endpoint=endpoint,
+            )
+            request.validate()
+            return request
+
+        def protected() -> None:
+            last = base + (2 if cameras == 5 else 3)
+            for address in range(base - 1, last + 1):
+                with pytest.raises(ReportingWriteProtectedError):
+                    app.validate_manual_request(write(address))
+            with pytest.raises(ReportingWriteProtectedError):
+                app.validate_manual_request(write(base - 2, 2))
+            with pytest.raises(ReportingWriteProtectedError):
+                app.validate_manual_request(
+                    replace(write(base - 1), endpoint=FinsUdpEndpoint(port=peer.port))
+                )
+            for address in (base - 2, last + 1):
+                app.validate_manual_request(write(address))
+            other = 149 if base == 49 else 49
+            app.validate_manual_request(write(other - 1, 5))
+            app.validate_manual_request(replace(write(base), area=FinsMemoryArea.DM))
+            app.validate_manual_request(
+                replace(write(base), endpoint=replace(endpoint, port=peer.port + 1))
+            )
+            app.validate_manual_request(
+                CommunicationRequest(
+                    kind=RequestKind.READ,
+                    start=base - 1,
+                    count=1,
+                    area=FinsMemoryArea.W,
+                    endpoint=endpoint,
+                )
+            )
+
+        try:
+            app.set_reporting_selection(selection)
+            started = app.start()
+            assert engine.warm.wait(3)
+            assert app.snapshot().state is ApplicationState.STARTING
+            protected()
+            assert not peer.packets and peer.connections == 0
+            engine.release_warm.set()
+            started.result(3)
+            peer.set_words(base - 1, (73,))
+            peer.hold_next("sequence")
+            for cycle in range(1, 5):
+                backend.expose(cycle, tuple(range(cameras)))
+                until(
+                    lambda cycle=cycle: (
+                        app.snapshot().counters.cycles_completed == cycle
+                    )
+                )
+                if cycle == 1:
+                    until(
+                        lambda: bool(
+                            (s := app.reporting_snapshot())
+                            and s.batch_observations
+                            and s.batch_observations[0].reads
+                        )
+                    )
+            assert peer.entered.wait(3)
+            settled = app.stop() if ending == "stop" else app.close()
+            assert not settled.done()
+            if ending == "stop":
+                protected()
+            else:
+                # Close rejects all new commands before the range guard. The
+                # frozen reporting owner still owns the unfinished commit.
+                assert (
+                    app.reporting_for_generation(app.snapshot().generation)
+                    == selection.settings
+                )
+                pending = app.reporting_snapshot()
+                assert pending is not None and pending.thread_alive
+                for address in range(base - 1, base + (3 if cameras == 5 else 4)):
+                    with pytest.raises(
+                        ApplicationStateError, match="Command unavailable"
+                    ):
+                        app.validate_manual_request(write(address))
+            peer.release.set()
+            settled.result(3)
+            observed = app.reporting_snapshot()
+            assert observed is not None and not observed.thread_alive
+            assert peer.words(base) == (73,)
+            if ending == "stop":
+                app.validate_manual_request(write(base - 1, cameras // 6 + 4))
+        finally:
+            engine.release_warm.set()
+            peer.release.set()
+            close(startup)
+
+
+@pytest.mark.parametrize("base", [49, 149])
+def test_disabled_four_cycle_selection_has_no_plc_owner_or_group_attribution(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base: int
 ) -> None:
     backend = PassiveBackend()
     monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
@@ -63,9 +230,62 @@ def test_normal_authorization_warmup_controls_and_stop(
     save_basler(data.sources)
     engine = Engine()
     engine.release_warm.set()
-    with TcpPeer() as peer:
+    with TcpPeer(base_address=base) as peer:
+        startup = authenticated_startup(data, engine_factory=lambda _: engine)
+        app = startup.application
+        assert isinstance(app, SourceProductionApplication)
+        try:
+            app.set_reporting_selection(
+                ReportingSelection(
+                    False,
+                    ReportingSettings(
+                        FinsTcpEndpoint(port=peer.port),
+                        base,
+                        mode=ReportingMode.FOUR_CYCLE,
+                    ),
+                )
+            )
+            app.start().result(3)
+            for cycle in range(1, 5):
+                backend.expose(cycle)
+                until(
+                    lambda cycle=cycle: (
+                        app.snapshot().counters.cycles_completed == cycle
+                    )
+                )
+            app.stop().result(3)
+            assert app.reporting_snapshot() is None
+            assert not peer.packets and peer.connections == 0
+            assert not app.snapshot().pilot_counting
+            assert app.snapshot().pilot_counters.batches_completed == 0
+            assert app.snapshot().counters.cycles_completed == 4
+        finally:
+            close(startup)
+
+
+@pytest.mark.parametrize("role", list(Role))
+@pytest.mark.parametrize("base", [49, 149])
+def test_normal_authorization_warmup_controls_and_stop(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    role: Role,
+    base: int,
+) -> None:
+    backend = PassiveBackend()
+    monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    engine = Engine()
+    engine.release_warm.set()
+    with TcpPeer(base_address=base) as peer:
         selection = ReportingSelection(
-            True, ReportingSettings(endpoint=FinsTcpEndpoint(port=peer.port), mode=mode)
+            True,
+            ReportingSettings(
+                endpoint=FinsTcpEndpoint(port=peer.port),
+                base_address=base,
+                mode=ReportingMode.FOUR_CYCLE,
+            ),
         )
         startup = authenticated_startup(data, engine_factory=lambda _: engine)
         app, identity = startup.application, startup.application.identity
@@ -99,10 +319,10 @@ def test_normal_authorization_warmup_controls_and_stop(
             app.start().result(3)
             assert not peer.packets and peer.connections == 0
             for action in (app.pause_source, app.step_source, app.resume_source):
-                with pytest.raises(ApplicationStateError, match="W48"):
+                with pytest.raises(ApplicationStateError, match="Four-cycle"):
                     action()
             if role >= Role.ENGINEER:
-                for address in (48, 49, 50, 51, 52):
+                for address in range(base - 1, base + 4):
                     with pytest.raises(ReportingWriteProtectedError):
                         app.validate_manual_request(
                             CommunicationRequest(
@@ -113,7 +333,7 @@ def test_normal_authorization_warmup_controls_and_stop(
                                 endpoint=selection.settings.endpoint,
                             )
                         )
-            peer.set_words(48, (38,))
+            peer.set_words(base - 1, (38,))
             for cycle in range(1, 5):
                 backend.expose(cycle)
                 until(
@@ -125,14 +345,14 @@ def test_normal_authorization_warmup_controls_and_stop(
                     until(
                         lambda: bool(
                             (s := app.reporting_snapshot())
-                            and s.pilot_batches
-                            and s.pilot_batches[0].reads
+                            and s.batch_observations
+                            and s.batch_observations[0].reads
                         )
                     )
             until(lambda: bool((s := app.reporting_snapshot()) and s.last_outcome))
             snapshot = app.reporting_snapshot()
             assert snapshot is not None
-            assert snapshot.acknowledged_count + snapshot.observed_count == 1
+            assert snapshot.acknowledged_count == 1
             counters = app.snapshot().counters
             assert counters.channel_ok == 144
             assert counters.business_ok + counters.business_empty == 144
@@ -142,9 +362,7 @@ def test_normal_authorization_warmup_controls_and_stop(
             assert physical.batches_completed == 1
             assert physical.channel_ok + physical.channel_empty == 36
             assert physical.channel_ng == physical.channel_unknown == 0
-            assert peer.words(49) == (
-                (38,) if mode is ReportingMode.W48_ACTIVE else (0,)
-            )
+            assert peer.words(base) == (38,)
             identity.logout()  # Stop/Close do not require a production role.
             app.stop().result(3)
             assert app.snapshot().state is ApplicationState.READY
@@ -156,9 +374,9 @@ def test_normal_authorization_warmup_controls_and_stop(
         assert engine.closed and backend.closed
 
 
-@pytest.mark.parametrize("mode", [ReportingMode.W48_OBSERVE, ReportingMode.W48_ACTIVE])
+@pytest.mark.parametrize("base", [49, 149])
 def test_folder_pilot_rejected_before_session_or_engine(
-    tmp_path: Path, mode: ReportingMode
+    tmp_path: Path, base: int
 ) -> None:
     data = saved_data(tmp_path)
     engine = Engine()
@@ -168,7 +386,12 @@ def test_folder_pilot_rejected_before_session_or_engine(
     try:
         app.set_reporting_selection(
             ReportingSelection(
-                True, ReportingSettings(endpoint=FinsTcpEndpoint(), mode=mode)
+                True,
+                ReportingSettings(
+                    endpoint=FinsTcpEndpoint(),
+                    base_address=base,
+                    mode=ReportingMode.FOUR_CYCLE,
+                ),
             )
         )
         before = app.snapshot()
@@ -204,7 +427,7 @@ def test_failed_warmup_never_reads_w48(
                     True,
                     ReportingSettings(
                         endpoint=FinsTcpEndpoint(port=peer.port),
-                        mode=ReportingMode.W48_ACTIVE,
+                        mode=ReportingMode.FOUR_CYCLE,
                     ),
                 )
             )
@@ -241,7 +464,7 @@ def test_preferences_roundtrip_explicit_pilot(
     assert payload["reporting"].get("mode", "per_cycle") == mode.value
 
 
-def test_pilot_ui_draft_save_localization_and_permission(
+def test_four_cycle_ui_draft_save_localization_and_permission(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     startup = authenticated_startup(saved_data(tmp_path))
@@ -253,18 +476,27 @@ def test_pilot_ui_draft_save_localization_and_permission(
         window.navigate(2)
         page = window.communication
         panel = page.reporting_panel
-        assert panel is not None and panel.mode.currentIndex() == 0
-        panel.mode.setCurrentIndex(1)
+        assert panel is not None
+        assert panel.mode_buttons[ReportingMode.FOUR_CYCLE].isChecked()
+        assert tuple(panel.mode_buttons) == tuple(ReportingMode)
+        assert panel.mode_group.exclusive()
+        assert not panel.enabled.isChecked() and not hasattr(panel, "evidence")
+        panel.mode_buttons[ReportingMode.PER_CYCLE].click()
+        panel.base_address.setValue(120)
+        panel.mode_buttons[ReportingMode.FOUR_CYCLE].click()
+        assert panel.base_address.value() == 120  # No implicit address replacement.
+        assert panel.base_choices.currentIndex() == -1
+        with pytest.raises(ValueError, match="W49 or W149"):
+            panel.selection()
+        panel.base_choices.setCurrentIndex(1)
         panel.enabled.setChecked(True)
-        assert (
-            panel.controller.reporting_selection().settings.mode
-            is ReportingMode.PER_CYCLE
-        )
+        assert panel.controller.reporting_selection().settings.base_address == 49
+        assert not panel.controller.reporting_selection().enabled
         page.save_settings.click()
         until(
             lambda: (
-                panel.controller.reporting_selection().settings.mode
-                is ReportingMode.W48_OBSERVE
+                panel.controller.reporting_selection().enabled
+                and panel.controller.reporting_selection().settings.base_address == 149
             )
         )
         assert (
@@ -274,16 +506,22 @@ def test_pilot_ui_draft_save_localization_and_permission(
         for language in LANGUAGES:
             window.set_language(language)
             qapp.processEvents()
-            assert panel.mode.currentIndex() == 1 and panel.mode.accessibleName()
-            assert panel.mode.toolTip() and panel.mode.width() >= 180
-            assert panel.evidence.isVisible() and not panel.evidence.isEnabled()
+            assert panel.mode_buttons[ReportingMode.FOUR_CYCLE].isChecked()
+            assert panel.mode_control.accessibleName()
+            for mode, button in panel.mode_buttons.items():
+                assert button.accessibleName() == text(
+                    "plc_mode_" + mode.value, language
+                )
+                assert button.accessibleName() in button.toolTip()
+            assert panel.base_choices.currentText() == "W149"
+            assert panel.base_field.rect().contains(panel.base_choices.geometry())
         identity = startup.application.identity
         assert identity is not None
         identity.logout()
         window.identity_controls.refresh()
-        assert not panel.mode.isEnabled() and not panel.enabled.isEnabled()
+        assert not panel.mode_control.isEnabled() and not panel.enabled.isEnabled()
         # A phase fence is an error even with no failed socket request.
-        worker = W48BatchReportingWorker(1, panel.selection().settings)
+        worker = FourCycleReportingWorker(1, panel.selection().settings)
         window.bridge.reporting_snapshot = replace(
             worker.snapshot(), phase_issue="W48 changed"
         )
@@ -319,7 +557,7 @@ def test_four_trigger_burst_latency_and_unchanged_native_ownership(
                     True,
                     ReportingSettings(
                         endpoint=FinsTcpEndpoint(port=peer.port),
-                        mode=ReportingMode.W48_ACTIVE,
+                        mode=ReportingMode.FOUR_CYCLE,
                     ),
                 )
             )
@@ -333,7 +571,7 @@ def test_four_trigger_burst_latency_and_unchanged_native_ownership(
             until(lambda: bool((s := app.reporting_snapshot()) and s.last_outcome))
             snapshot = app.reporting_snapshot()
             assert snapshot is not None and snapshot.acknowledged_count == 1
-            batch = snapshot.pilot_batches[-1]
+            batch = snapshot.batch_observations[-1]
             assert batch.report is not None and batch.report.acknowledged_at is not None
             elapsed = (batch.report.acknowledged_at - start) * 1000
             evidence = {

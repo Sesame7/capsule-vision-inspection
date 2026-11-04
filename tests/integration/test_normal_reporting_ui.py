@@ -39,6 +39,7 @@ from capsule_vision.communication.operations import (
     RequestKind,
 )
 from capsule_vision.communication.reporting import (
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
     ReportStage,
@@ -130,6 +131,9 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         startup.application.stop().result(WAIT)
         panel.update_state(ApplicationState.READY)
         panel.port.setValue(19600)
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         assert not commands.reporting_selection().enabled
         assert panel.selection().enabled
@@ -215,6 +219,9 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         panel.timeout.setValue(0.2)
         panel.source[1].setValue(3)
         panel.source[2].setValue(7)
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         selected = panel.controller.reporting_selection()
@@ -324,6 +331,9 @@ def test_settings_locked_starting_stopping_then_restart_has_new_generation(
     ):
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         selected = panel.controller.reporting_selection()
@@ -380,6 +390,9 @@ def test_reporting_failure_feedback_does_not_fault_production(
         peer.fail_next(ReportStage.INITIALIZATION, "plc")
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         window.bridge.start()
@@ -423,6 +436,9 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
         panel.timeout.setValue(2)
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         startup.application.start().result(WAIT)
@@ -497,6 +513,9 @@ def test_manual_execution_rechecks_protection_after_dispatch(
     with server() as peer, normal_window(tmp_path, engine) as (startup, window, panel):
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         guard = panel.controller.validate_manual_request
@@ -601,6 +620,9 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
             panel.protocol.setCurrentIndex(1)
             panel.port.setValue(peer.port)
             panel.timeout.setValue(5)
+            panel.mode_buttons[
+                ReportingMode.PER_CYCLE
+            ].click()  # Explicit per-cycle protocol exercise.
             panel.enabled.setChecked(True)
             window.communication.persist_settings()
             try:
@@ -644,6 +666,9 @@ def test_fault_and_closed_keep_preferences_locked(
 ) -> None:
     engine = Engine(fatal=True, hold=100)
     with normal_window(tmp_path, engine) as (startup, window, panel):
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         startup.application.start().result(WAIT)
@@ -699,6 +724,9 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         )
         panel.port.setValue(automatic.port)
         panel.timeout.setValue(0.2)
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         selected = panel.controller.reporting_selection()
@@ -869,6 +897,9 @@ def test_unsaved_reporting_draft_does_not_admit_or_change_active_session(
         page.persist_settings()
         before = startup.data.communication.read_bytes()
         original = panel.controller.reporting_selection()
+        panel.mode_buttons[
+            ReportingMode.PER_CYCLE
+        ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         panel.port.setValue(19600)
         startup.application.start().result(WAIT)

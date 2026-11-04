@@ -370,14 +370,18 @@ Holding Register addresses are zero-based, independent of FINS DM/WR. Watch
 groups remain session-only and are never implicitly converted by a protocol edit.
 
 Reporting additionally permits `enabled` (default false), `base_address` and
-`mode`. Omitted `mode` retains `per_cycle`; the only other values are
-`w48_observe` and `w48_active`. Nondefault modes are saved explicitly. An enabled
-W48 selection requires `protocol: "fins_tcp"` and base 49, and Start additionally
-requires Basler. It does not change diagnostics, enable reporting implicitly or
-connect on load. For the provisional association, read-only observation and
-field prerequisites, see the [communication contract](communication.md#conditional-w48-batch-pilot).
+`mode`. The only values are `per_cycle` and `four_cycle`; omitted `mode` in
+existing documents retains `per_cycle`. Four-cycle mode is saved explicitly and
+requires `protocol: "fins_tcp"` with base 49 or 149, even when disabled. Enabled
+four-cycle Start additionally requires Basler. Counter reads use base−1, bitmap
+writes base+1 and commit writes base. Selecting this mode never enables reporting
+or replaces an endpoint/address automatically. Obsolete `w48_observe` and
+`w48_active` values are invalid: no compatibility interpretation, migration or
+file replacement occurs on load. Replacement is an explicit stopped-environment
+maintenance/recovery action. See the [reporting contract](communication.md#four-cycle-reporting)
+for attribution, register ownership and field acceptance.
 
-FINS defaults to 49 (integer 0–508, WR area). Modbus has **no default base**:
+Per-cycle FINS defaults to 49 (integer 0–508, WR area). Modbus has **no default base**:
 it must be explicitly supplied as an integer 0–65532 whenever reporting is enabled.
 A disabled Modbus definition may omit it for later completion. Present null,
 invalid types and out-of-range bases are rejected. Save always retains an explicit
@@ -428,8 +432,10 @@ subnet validity. There is no DNS, wildcard fallback or automatic IP substitution
 
 A missing file leaves reporting and Web disabled, without blocking valid
 Production startup or creating a file. Communication shows **Defaults · not saved**;
-both reporting and Diagnostics initially use FINS/TCP at 127.0.0.1:9600 with a
-one-second timeout. Web remains 127.0.0.1:8765 at 500 ms. These are editing defaults,
+reporting initially selects `four_cycle`, FINS/TCP and W49, disabled. Diagnostics
+also initially uses FINS/TCP at 127.0.0.1:9600 with a one-second timeout, as does
+the reporting endpoint. Explicit engineering launchers retain their per-cycle
+defaults. Web remains 127.0.0.1:8765 at 500 ms. These are editing defaults,
 not a saved Production destination. Camera source mode never selects a PLC endpoint.
 An existing empty or partially populated document still decodes omitted endpoint
 sections/fields as FINS/UDP; explicit UDP, TCP and Modbus selections are unchanged.

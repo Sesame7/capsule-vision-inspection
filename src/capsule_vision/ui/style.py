@@ -222,6 +222,8 @@ def stylesheet(theme: Theme = "dark") -> str:
     QFrame#visionModeSwitch QPushButton:focus:enabled {{ border: 1px dotted {c.accent}; }}
     QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton[compactAction="true"] {{ padding: 5px 4px; }}
+    QPushButton[reportingSegment="first"] {{ border-top-right-radius: 0; border-bottom-right-radius: 0; }}
+    QPushButton[reportingSegment="last"] {{ border-top-left-radius: 0; border-bottom-left-radius: 0; }}
     QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}
     QPushButton#recipeRule {{ text-align: left; }}
@@ -231,6 +233,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}
     QWidget#page_production QPushButton#start:focus:enabled {{ border-color: {c.primary}; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
+    QPushButton[reportingSegment]:checked:disabled {{ background: {c.selected}; border-color: {c.secondary}; }}
     QDateEdit#historyDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QDateEdit#historyDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
     QCalendarWidget#historyCalendar {{ background: {c.surface}; color: {c.primary}; }}

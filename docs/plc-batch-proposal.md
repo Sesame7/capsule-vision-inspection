@@ -1,14 +1,13 @@
 # Proposed W48/W49 batch synchronization — offline evaluation
 
-**Retained offline experiment, not universal attribution evidence.** Per-cycle
-reporting remains the default; the separately enabled
-[conditional W48 field pilot](communication.md#conditional-w48-batch-pilot) now
-implements provisional association under explicitly adopted external assumptions.
-The evidence and unresolved guarantees below remain applicable. This document
-and `scripts/simulate_plc_batches.py` retain the original finite proposal, including
-its experimental three-word CH30 mailbox. The current pilot instead preserves
-two-word CH30 writes and never modifies W52. The proposal below is not a deployment
-procedure or a description of the pilot's current register ownership.
+**Retained historical offline experiment, not universal attribution evidence.**
+The current [four-cycle reporting contract](communication.md#four-cycle-reporting)
+owns formal W49/W149 register layouts and runtime behavior. The evidence and
+unresolved equipment guarantees below remain applicable. This document and
+`scripts/simulate_plc_batches.py` retain the original finite proposal, including
+its experimental three-word CH30 mailbox. Current reporting writes only two CH30
+bitmap words and leaves the third untouched. This proposal is not a deployment
+procedure or authority for current defaults, modes or register ownership.
 The reviewed physical process and target final group outcomes belong to
 [Product Scope](product-scope.md#31-inspection-flow-and-accepted-baseline), not this
 offline attribution experiment.
@@ -174,7 +173,7 @@ No queues or deadlines are enlarged by this work.
 
 Reliable general attribution is **not established** by the current signals.
 The following requirements belong to the original offline proposal. The
-[conditional pilot](communication.md#conditional-w48-batch-pilot) uses narrower,
+[four-cycle reporting contract](communication.md#four-cycle-reporting) uses narrower,
 explicit equipment assumptions; its implementation does not establish these
 general guarantees:
 

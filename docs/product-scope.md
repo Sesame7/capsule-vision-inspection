@@ -125,7 +125,7 @@ group attribution must not become a fabricated completed group or guessed PLC
 report. Inspection completion, report delivery and mechanical action remain
 distinct: a result-reporting **ACK does not prove mechanical ejection**.
 
-The [current W48 pilot](communication.md#conditional-w48-batch-pilot) already ORs
+The [current four-cycle reporting](communication.md#four-cycle-reporting) already ORs
 per-Cycle bitmaps, but its accounting retains conservative rejection as UNKNOWN
 unless confirmed NG exists. The target final NG mapping above is a separate
 implementation change; it does not rewrite that current contract.
@@ -156,9 +156,9 @@ for an explicitly approved change. The product requirements are:
 
 - Communication is primarily an Engineer workspace: persist settings once, and have normal Production Start use the saved settings. Operator should not need to visit Communication each shift.
 - Retain **FINS/TCP**, **FINS/UDP**, and **Modbus/TCP**, with their existing applicable endpoint and validation rules. Preserve per-Cycle reporting.
-- Replace the customer-facing three-way `per_cycle / w48_observe / w48_active` Pilot selection with a straightforward **four-Cycle batch-reporting option** while retaining the separate reporting enabled setting. Retire Observe-only and Pilot Evidence **customer UI** as normal product features; preserve necessary engineering error/evidence observations.
-- For the two IPCs, the configured four-Cycle FINS/TCP reporting commit base must support **W49 or W149**. Corresponding counter reads are **W48 or W148**. For 30 channels write two bitmap words; for 36 write three. The actual register/protocol change is a dedicated future contract change requiring implementation and validation, not a UI-only rename.
-- Engineer can save **reporting disabled** and still run pure inspection and statistics. Production clearly states **PLC reporting disabled**, without implying successful delivery. This does not itself disable independent alarm monitoring. The counting/attribution policy for this case remains [open below](#10-open-decisions-and-audit-boundaries). Saved reporting edits activate at the next Start; do not unexpectedly mutate an active reporting worker.
+- Offer only `per_cycle` and `four_cycle` reporting, with a separate Enabled setting. New normal installations select four-cycle/FINS-TCP/W49 with reporting disabled. Obsolete `w48_observe` and `w48_active` settings are invalid, without migration or automatic replacement. Retire Observe-only execution and Pilot Evidence customer UI; preserve bounded engineering diagnostics and attribution evidence.
+- For the two IPCs, the configured four-Cycle FINS/TCP reporting commit base must support **W49 or W149**. Corresponding counter reads are **W48 or W148**. For 30 channels write two bitmap words; for 36 write three. The [current communication contract](communication.md#four-cycle-reporting) owns the implemented register, attribution and protection rules; equipment acceptance remains separate.
+- Engineer can save **reporting disabled** and still run pure inspection and statistics. Production clearly states **PLC reporting disabled**, without implying successful delivery. This does not itself disable independent alarm monitoring. Disabled reporting performs no automatic PLC reads/writes or group attribution; retain per-Cycle occurrence counting and Guest replay without inventing groups. Saved reporting edits activate at the next Start; do not unexpectedly mutate an active reporting worker.
 - Retain independent PLC Diagnostics endpoint, manual read/write, grouped watches, automatic refresh, DEC/HEX presentation, and ownership/authorization/write-protection behavior. Only targeted layout simplification is planned (including a compact, readable manual-write row).
 - Web Observer remains an **optional, read-only service for a trusted LAN**, without an independent Web login system or remote Production control. New four-Cycle presentation should reuse authoritative batch state, not invent Web-specific grouping.
 
@@ -243,10 +243,6 @@ for an explicitly approved change. The product requirements are:
 The following details are unresolved; they do not reopen the target decisions
 above or authorize choosing a convenient implementation silently.
 
-- **Reporting-disabled statistics:** define the counting units and whether any
-  PLC reads are intended when result reporting is disabled. The current disabled
-  mode has no reporting owner or group attribution. Do not infer physical groups
-  from four CycleIds or change Guest's equipment-free replay exception.
 - **ViMo enable policy:** the current Recipe permits ViMo to be disabled. Decide
   how existing disabled Recipes will be handled before enforcing the target
   every-exposure inspection policy; this document does not reinterpret their
@@ -258,10 +254,6 @@ above or authorize choosing a convenient implementation silently.
   delivery and mechanical action. Define how an invalidated group affects the
   advancing mini-tile and what appears when the fourth camera frame is unavailable;
   an earlier frame cannot be presented as the fourth.
-- **Existing reporting preferences:** define the transition for saved
-  `per_cycle`, `w48_observe` and `w48_active` selections and the default for a new
-  installation. The intended normal four-Cycle workflow does not by itself
-  authorize converting Observe into Active or enabling result writes.
 - **Durable Batch and export completeness:** define continuation after interrupted
   Runs, the minimal durable summaries needed across restarts and 30-day detail
   expiry, and how missing/dropped evidence is disclosed. Keep a new Batch distinct

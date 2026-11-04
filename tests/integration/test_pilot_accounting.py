@@ -25,7 +25,7 @@ from capsule_vision.application.production_application import (
 )
 from capsule_vision.communication import FinsTcpEndpoint
 from capsule_vision.communication.reporting import (
-    CompletedPilotBatch,
+    CompletedReportingBatch,
     ReportingMode,
     ReportingSelection,
     ReportingSettings,
@@ -56,16 +56,16 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
         startup = authenticated_startup(data, engine_factory=engine_factory)
         app = startup.application
         assert isinstance(app, SourceProductionApplication)
-        events: list[CompletedPilotBatch] = []
+        events: list[CompletedReportingBatch] = []
         observe = app.observe_pilot_batch
 
-        def capture(batch: CompletedPilotBatch) -> None:
+        def capture(batch: CompletedReportingBatch) -> None:
             events.append(batch)
             observe(batch)
 
         monkeypatch.setattr(app, "observe_pilot_batch", capture)
         settings = ReportingSettings(
-            endpoint=FinsTcpEndpoint(port=peer.port), mode=ReportingMode.W48_OBSERVE
+            endpoint=FinsTcpEndpoint(port=peer.port), mode=ReportingMode.FOUR_CYCLE
         )
         ordinal = 0
 
@@ -84,8 +84,8 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
                     until(
                         lambda: bool(
                             (s := app.reporting_snapshot())
-                            and s.pilot_batches
-                            and s.pilot_batches[-1].reads
+                            and s.batch_observations
+                            and s.batch_observations[-1].reads
                         )
                     )
 
@@ -153,7 +153,7 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
 
             app.set_reporting_selection(
                 ReportingSelection(
-                    True, replace(settings, mode=ReportingMode.W48_ACTIVE)
+                    True, replace(settings, mode=ReportingMode.FOUR_CYCLE)
                 )
             )
             peer.set_words(48, (12,))

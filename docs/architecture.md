@@ -349,12 +349,13 @@ or reports. PAUSING becomes PAUSED only after the admitted capture boundary,
 terminal inspection, actual camera-task return and accepted reporting settle.
 Reporting settlement may be ACK or an explicit failure; it is not PLC consumption.
 
-The explicitly enabled [W48 batch pilot](communication.md#conditional-w48-batch-pilot)
+The explicitly enabled [four-cycle reporting mode](communication.md#four-cycle-reporting)
 uses an alternative serial communication worker under the same generation/session
 owner. Camera admission queues scalar CycleIds; terminal callbacks hand off the
-existing reject projection. Only the communication thread reads W48 or writes
-bitmap/W49. Four observed cycles are associated under provisional external phase
-assumptions, without changing scheduling, judgments, occurrence accounting or History.
+existing reject projection. Only the communication thread reads the selected
+W48/W148 counter or writes bitmap/commit words derived from W49/W149. Four observed
+cycles are associated under external phase assumptions, without changing
+scheduling, judgments, occurrence accounting or History.
 At the existing successful pre-write attribution check, the worker publishes one
 immutable four-result completion to Application. Separate `PilotCounters` classify
 each ChannelId once using those business statuses and the already merged reject
@@ -364,10 +365,13 @@ physical-position totals never divide or replace `ProductionCounters`.
 Application consumes the completion outside the reporting lock and without Qt;
 one generation-local CycleId high-water mark prevents duplicate/stale accounting.
 Incomplete or initially unattributable batches do not count. A subsequent bitmap
-or W49 failure does not retract an already eligible inspection completion.
-This pilot rejects Pause/Step/Resume at the Application boundary; Stop/Close and
-actual worker cleanup retain their existing ownership. Per-cycle mode remains
-the default and retains the internal admission/draining semantics described here.
+or commit failure does not retract an already eligible inspection completion.
+Four-cycle reporting rejects Pause/Step/Resume at the Application boundary;
+Stop/Close and actual worker cleanup retain their existing ownership. Disabled reporting has
+no automatic owner, counter reads or group attribution, while per-Cycle inspection
+and occurrence counting continue. New normal installations select disabled
+four-cycle/FINS-TCP/W49; explicit engineering launchers retain per-cycle defaults.
+Per-cycle mode retains the internal admission/draining semantics described here.
 
 Step and Resume first drain available SDK results and require a complete common
 ImageNumber boundary. Buffered paused groups remain discarded. Step admits one
@@ -460,7 +464,7 @@ zero production results/counters. Only successful Start promotes the candidate;
 failed activation preserves last-known-good active identity and returns READY if
 cleanup is safe. Stop/Start or a Recipe change retains counters; explicit Batch
 resets them. `ProductionCounters` describe cycle/channel occurrences, not physical
-products; the enabled W48 pilot's separate conditional channel-position totals are
+products; enabled four-cycle reporting's separate conditional channel-position totals are
 described above.
 
 Stop prevents inspection admission, finalizes incomplete collection and explicitly rejects
@@ -723,17 +727,17 @@ timing displays `--`. Whole metric groups wrap when their text cannot fit one ro
 These are cumulative occurrences, retained by Stop/Start and Recipe changes and
 reset only by explicit Batch, not physical capsule counts.
 
-An enabled W48 Observe/Active session instead presents completed **Batches** and
+An enabled four-cycle session instead presents completed **Batches** and
 separate cumulative physical-channel OK, NG and EMPTY totals. UNKNOWN remains
 visible inline beside NG and in accessibility text; it is not included in NG.
 The Batches tooltip exposes the original raw inspection-cycle count. `Δt` still
 means the last inspection-cycle duration, not batch duration. The five metric
-groups and their wrapping behavior are unchanged. Chinese/English pilot captions
+groups and their wrapping behavior are unchanged. Chinese/English four-cycle captions
 use the existing English fallback in other languages.
 
 The last successfully activated session determines the displayed counting unit,
 including after Stop; editing future reporting settings or a failed Start cannot
-relabel retained facts. A successful legacy/reporting-disabled/Folder Start uses
+relabel retained facts. A successful per-cycle/reporting-disabled/Folder Start uses
 the original occurrence counters. Both cumulative stores survive Stop/Start and
 Recipe changes, remain separate across mode changes, and reset only on explicit
 operator Batch. No physical totals or new identities are persisted in History.

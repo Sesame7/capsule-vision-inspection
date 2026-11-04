@@ -1,4 +1,4 @@
-"""Conditional four-trigger W48 pilot. One socket owner, no retries or polling."""
+"""Attributed four-cycle reporting. One socket owner, no retries or polling."""
 
 from collections import deque
 from collections.abc import Callable
@@ -13,9 +13,10 @@ from .endpoints import Endpoint, open_client
 from .fins import FinsMemoryArea
 from .fins_tcp import FinsTcpClient
 from .reporting import (
-    CompletedPilotBatch,
+    BatchReportObservation,
+    CompletedReportingBatch,
+    CounterRead,
     FirstStationReport,
-    PilotBatchObservation,
     ReportIdentity,
     ReportingCapacityError,
     ReportingIssue,
@@ -26,7 +27,6 @@ from .reporting import (
     ReportObservation,
     ReportOutcome,
     ReportStage,
-    W48Read,
 )
 
 
@@ -41,7 +41,7 @@ class _Batch:
     futures: list[Future[ReportObservation]] = field(
         default_factory=list[Future[ReportObservation]]
     )
-    reads: list[W48Read] = field(default_factory=list[W48Read])
+    reads: list[CounterRead] = field(default_factory=list[CounterRead])
     reason: str | None = None
     completed_at: float | None = None
     commit_started_at: float | None = None
@@ -52,8 +52,8 @@ class _Batch:
 
     def observation(
         self, report: ReportObservation | None = None
-    ) -> PilotBatchObservation:
-        return PilotBatchObservation(
+    ) -> BatchReportObservation:
+        return BatchReportObservation(
             tuple(self.cycles),
             tuple(sorted(self.terminals.items())),
             self.admitted_at,
@@ -68,13 +68,13 @@ class _Batch:
         )
 
 
-def _open_pilot_client(endpoint: Endpoint) -> FinsTcpClient:
+def _open_four_cycle_client(endpoint: Endpoint) -> FinsTcpClient:
     client = open_client(endpoint)
     assert isinstance(client, FinsTcpClient)
     return client
 
 
-class W48BatchReportingWorker:
+class FourCycleReportingWorker:
     """Admission only copies scalar identities; this thread owns every socket call.
 
     A lost association latches for this generation. Subsequent cycles remain
@@ -86,20 +86,21 @@ class W48BatchReportingWorker:
         generation: int,
         settings: ReportingSettings,
         *,
-        client_factory: Callable[[Endpoint], FinsTcpClient] = _open_pilot_client,
+        client_factory: Callable[[Endpoint], FinsTcpClient] = _open_four_cycle_client,
         attributable: Callable[[ReportIdentity], bool] = lambda _: True,
-        on_completed: Callable[[CompletedPilotBatch], None] = lambda _: None,
+        on_completed: Callable[[CompletedReportingBatch], None] = lambda _: None,
     ) -> None:
         ReportIdentity(generation, CycleId(0))
-        settings.validate_pilot()
+        settings.validate_four_cycle()
         if settings.mode is ReportingMode.PER_CYCLE:
-            raise ValueError("W48 worker requires an explicit pilot mode")
+            raise ValueError("Four-cycle worker requires four_cycle mode")
         self.generation, self.settings = generation, settings
+        self._base = settings.require_base_address()
         self._factory, self._attributable = client_factory, attributable
         self._on_completed = on_completed
         self._condition = Condition()
         self._batches: deque[_Batch] = deque()
-        self._recent: deque[PilotBatchObservation] = deque(maxlen=16)
+        self._recent: deque[BatchReportObservation] = deque(maxlen=16)
         self._last_cycle: CycleId | None = None
         self._last_counter: int | None = None
         self._phase_issue: str | None = None
@@ -107,7 +108,7 @@ class W48BatchReportingWorker:
         self._client: FinsTcpClient | None = None
         self._cleanup_issue: ReportingIssue | None = None
         self._failure_issue: ReportingIssue | None = None
-        self._queued = self._attempted = self._acknowledged = self._observed = 0
+        self._queued = self._attempted = self._acknowledged = 0
         self._failed = self._skipped = self._peak = 0
         self._last_queued: ReportIdentity | None = None
         self._last_attempt: ReportObservation | None = None
@@ -116,7 +117,7 @@ class W48BatchReportingWorker:
         self._last_skip: ReportObservation | None = None
         self._last_outcome: ReportObservation | None = None
         self._thread = Thread(
-            target=self._run, name=f"W48Reporting-{generation}", daemon=False
+            target=self._run, name=f"FourCycleReporting-{generation}", daemon=False
         )
 
     @property
@@ -163,9 +164,8 @@ class W48BatchReportingWorker:
                 failure_issue=self._failure_issue,
                 cleanup_issue=self._cleanup_issue,
                 mode=self.settings.mode,
-                observed_count=self._observed,
                 phase_issue=self._phase_issue,
-                pilot_batches=(
+                batch_observations=(
                     *self._recent,
                     *(batch.observation() for batch in self._batches),
                 ),
@@ -175,7 +175,7 @@ class W48BatchReportingWorker:
         return ReportIdentity(self.generation, batch.cycles[0])
 
     def _lose_phase(self, reason: str) -> None:
-        # Caller holds the condition. Never silently recover or reassign W48.
+        # Caller holds the condition. Never silently recover or reassign the counter.
         self._phase_issue = self._phase_issue or reason
         for batch in self._batches:
             if not batch.finished:
@@ -186,7 +186,7 @@ class W48BatchReportingWorker:
         ReportIdentity(self.generation, cycle)
         with self._condition:
             if not self._started or self._stopping:
-                raise ReportingStateError("W48 owner is not accepting cycles")
+                raise ReportingStateError("Four-cycle owner is not accepting cycles")
             if self._last_cycle is not None and cycle != self._last_cycle + 1:
                 self._lose_phase("Nonconsecutive or duplicate Basler CycleId")
                 if cycle <= self._last_cycle:
@@ -195,7 +195,7 @@ class W48BatchReportingWorker:
                 sum(len(batch.cycles) for batch in self._batches)
                 >= self.settings.max_pending + 1
             ):
-                self._lose_phase("W48 reporting capacity exceeded")
+                self._lose_phase("Four-cycle reporting capacity exceeded")
                 raise ReportingCapacityError(self._phase_issue)
             if not self._batches or len(self._batches[-1].cycles) == 4:
                 if any(not batch.finished for batch in self._batches):
@@ -268,11 +268,13 @@ class W48BatchReportingWorker:
         try:
             if self._client is None:
                 self._client = self._factory(self.settings.endpoint)
-            value = self._client.read_words(48, 1, area=FinsMemoryArea.W)[0]
+            value = self._client.read_words(self._base - 1, 1, area=FinsMemoryArea.W)[0]
             return value
         finally:
             with self._condition:
-                batch.reads.append(W48Read(stage, started, perf_counter(), value))
+                batch.reads.append(
+                    CounterRead(stage, started, perf_counter(), value, self._base - 1)
+                )
 
     def _check(self, batch: _Batch, retained: int) -> None:
         if any(
@@ -288,8 +290,10 @@ class W48BatchReportingWorker:
                 raise ReportingStateError("Stopped before batch submission")
         if self._read(batch, "confirm") != retained:
             with self._condition:
-                self._lose_phase("W48 changed before commit; retained batch suppressed")
-            raise ReportingStateError("W48 changed before commit")
+                self._lose_phase(
+                    "PLC counter changed before commit; retained group suppressed"
+                )
+            raise ReportingStateError("PLC counter changed before commit")
         # Admission can change while a read is in flight.
         with self._condition:
             if batch.reason is not None:
@@ -320,14 +324,16 @@ class W48BatchReportingWorker:
                     # fails, so diagnostics include their terminal outcomes.
                     with self._condition:
                         self._failure_issue = ReportingIssue.from_error(exc)
-                        self._lose_phase(f"W48 admission read failed: {str(exc)[:300]}")
+                        self._lose_phase(
+                            f"PLC counter admission read failed: {str(exc)[:300]}"
+                        )
                 with self._condition:
                     if len(batch.cycles) > 1:
                         self._lose_phase(
-                            "Initial W48 read completed after second cycle admission"
+                            "Initial counter read completed after second cycle admission"
                         )
                     if retained == self._last_counter:
-                        self._lose_phase("Stale W48 at next batch admission")
+                        self._lose_phase("Stale PLC counter at next group admission")
                     self._last_counter = retained
             with self._condition:
                 self._condition.wait_for(
@@ -340,7 +346,7 @@ class W48BatchReportingWorker:
                 if batch.reason is not None:
                     raise ReportingStateError(batch.reason)
                 if retained is None:
-                    raise ReportingStateError("No admission W48 observation")
+                    raise ReportingStateError("No admission counter observation")
                 reports = tuple(batch.reports[c] for c in batch.cycles)
             if len({len(r.reject_words) for r in reports}) != 1:
                 with self._condition:
@@ -356,7 +362,7 @@ class W48BatchReportingWorker:
                 else (merged[0], merged[1], merged[2])
             )
             self._check(batch, retained)
-            completion = CompletedPilotBatch(identity, retained, reports, words)
+            completion = CompletedReportingBatch(identity, retained, reports, words)
             with self._condition:
                 if batch.reason is not None:
                     raise ReportingStateError(batch.reason)
@@ -369,18 +375,6 @@ class W48BatchReportingWorker:
             except BaseException as exc:
                 with self._condition:
                     self._failure_issue = ReportingIssue.from_error(exc)
-            if self.settings.mode is ReportingMode.W48_OBSERVE:
-                with self._condition:
-                    if batch.reason is not None:
-                        raise ReportingStateError(batch.reason)
-                    batch.finished = True
-                return ReportObservation(
-                    identity,
-                    ReportOutcome.OBSERVED,
-                    retained,
-                    words,
-                    duration_ms=(perf_counter() - batch.admitted_at) * 1000,
-                )
             with self._condition:
                 self._attempted += 1
                 self._last_attempt = ReportObservation(
@@ -389,16 +383,16 @@ class W48BatchReportingWorker:
             assert self._client is not None
             stage = ReportStage.BITMAP
             started = perf_counter()
-            self._client.write_words(50, words, area=FinsMemoryArea.W)
+            self._client.write_words(self._base + 1, words, area=FinsMemoryArea.W)
             bitmap_ms = (perf_counter() - started) * 1000
-            self._check(batch, retained)  # After bitmap ACK, immediately before W49.
+            self._check(batch, retained)  # After bitmap ACK, immediately before commit.
             stage = ReportStage.SEQUENCE
             with self._condition:
                 if batch.reason is not None:
                     raise ReportingStateError(batch.reason)
                 batch.commit_started_at = perf_counter()
                 batch.commit_uncertain = True
-            self._client.write_words(49, (retained,), area=FinsMemoryArea.W)
+            self._client.write_words(self._base, (retained,), area=FinsMemoryArea.W)
             finished = perf_counter()
             attributable = all(
                 self._attributable(ReportIdentity(self.generation, cycle))
@@ -407,7 +401,7 @@ class W48BatchReportingWorker:
             with self._condition:
                 batch.commit_finished_at = finished
                 if not attributable:
-                    self._lose_phase("Basler attribution lost during W49 request")
+                    self._lose_phase("Basler attribution lost during commit request")
                 if batch.reason is not None:
                     raise ReportingStateError(
                         "Commit ACK arrived after association loss; uncertain"
@@ -461,8 +455,6 @@ class W48BatchReportingWorker:
             if observation.outcome is ReportOutcome.ACKNOWLEDGED:
                 self._acknowledged += 1
                 self._last_ack = observation
-            elif observation.outcome is ReportOutcome.OBSERVED:
-                self._observed += 1
             elif observation.outcome is ReportOutcome.FAILED:
                 self._failed += 1
                 self._last_fail = observation

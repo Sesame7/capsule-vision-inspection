@@ -14,6 +14,7 @@ from capsule_vision.communication import (
 )
 from capsule_vision.communication.modbus_tcp import ModbusSettings
 from capsule_vision.communication.reporting import (
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
 )
@@ -391,14 +392,84 @@ def test_initial_tcp_defaults_are_disabled_and_saved_explicitly(tmp_path: Path) 
         1.0,
     )
     assert value.reporting.settings.base_address == 49
+    assert value.reporting.settings.mode is ReportingMode.FOUR_CYCLE
+    assert ReportingSettings().mode is ReportingMode.PER_CYCLE
     assert not value.reporting.enabled and not value.web.enabled
     path = tmp_path / "communication.json"
     save_communication_preferences(path, value)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "reporting": {"protocol": "fins_tcp"},
+        "reporting": {"protocol": "fins_tcp", "mode": "four_cycle"},
         "diagnostic": {"protocol": "fins_tcp"},
     }
     assert load_communication_preferences(path) == value
+
+
+@pytest.mark.parametrize("mode", ["w48_observe", "w48_active", "pilot", "four-cycle"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_obsolete_reporting_modes_rejected_without_replacing_file(
+    tmp_path: Path, mode: str, enabled: bool
+) -> None:
+    path = tmp_path / "communication.json"
+    path.write_text(
+        json.dumps(
+            {"reporting": {"protocol": "fins_tcp", "mode": mode, "enabled": enabled}}
+        ),
+        encoding="utf-8",
+    )
+    original = path.read_bytes()
+    with pytest.raises(ConfigurationError, match="Invalid communication settings"):
+        load_communication_preferences(path)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("base", [49, 149])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_four_cycle_saved_layout_roundtrip(
+    tmp_path: Path, base: int, enabled: bool
+) -> None:
+    path = tmp_path / "communication.json"
+    value = CommunicationPreferences(
+        reporting=ReportingSelection(
+            enabled,
+            ReportingSettings(FinsTcpEndpoint(), base, mode=ReportingMode.FOUR_CYCLE),
+        )
+    )
+    save_communication_preferences(path, value)
+    assert load_communication_preferences(path) == value
+    assert json.loads(path.read_text())["reporting"]["mode"] == "four_cycle"
+
+
+@pytest.mark.parametrize(
+    "protocol,base",
+    [
+        ("fins_udp", 49),
+        ("modbus_tcp", 149),
+        ("fins_tcp", 48),
+        ("fins_tcp", 50),
+        ("fins_tcp", 148),
+        ("fins_tcp", 150),
+    ],
+)
+def test_four_cycle_invalid_transport_or_base_rejected_even_disabled(
+    tmp_path: Path, protocol: str, base: int
+) -> None:
+    path = tmp_path / "communication.json"
+    path.write_text(
+        json.dumps(
+            {
+                "reporting": {
+                    "mode": "four_cycle",
+                    "protocol": protocol,
+                    "base_address": base,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = path.read_bytes()
+    with pytest.raises(ConfigurationError, match="FINS/TCP.*W49 or W149"):
+        load_communication_preferences(path)
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize(
