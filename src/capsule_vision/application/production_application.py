@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import Future
+from dataclasses import replace
 from threading import Lock
 
 from capsule_vision.application.basler_connection import (
@@ -22,10 +23,13 @@ from capsule_vision.application.source_control import (
     SourceControlSnapshot,
 )
 from capsule_vision.communication import FinsMemoryArea, HoldingRegisters
+from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
 from capsule_vision.communication.modbus_tcp import ModbusSettings
 from capsule_vision.communication.operations import CommunicationRequest, RequestKind
 from capsule_vision.communication.reporting import (
+    CompletedPilotBatch,
     FirstStationReportingWorker,
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
     ReportingSnapshot,
@@ -37,7 +41,7 @@ from capsule_vision.configuration import (
 )
 from capsule_vision.configuration.drafts import CameraSourceDraft
 from capsule_vision.display import LatestDisplayFrameStore
-from capsule_vision.inspection import CameraId
+from capsule_vision.inspection import CameraId, CycleId
 
 from .application import ProductionApplication
 from .identity_models import AuthorizationError, Role
@@ -45,7 +49,9 @@ from .model_preparation import ModelPreparationFactory, real_preparation_engine
 from .models import (
     ApplicationState,
     ApplicationStateError,
+    PilotCounters,
     PreparedConfiguration,
+    ProductionApplicationSnapshot,
 )
 from .production_session import SourceRuntimeSession
 
@@ -74,7 +80,9 @@ class SourceProductionApplication(ProductionApplication):
         self.replay_cache = cache
         self._display_store = store
         self._reporting_lock = Lock()
-        self._reporting_worker: FirstStationReportingWorker | None = None
+        self._reporting_worker: (
+            FirstStationReportingWorker | W48BatchReportingWorker | None
+        ) = None
         self._archive_owner: ImageArchive | None = None
         self._reporting_selection = initial_reporting or ReportingSelection(
             reporting is not None,
@@ -84,6 +92,9 @@ class SourceProductionApplication(ProductionApplication):
         self._reporting_generation = 0
         self._session_reporting: ReportingSettings | None = None
         self._session_reporting_words = 4
+        self._pilot_counters = PilotCounters()
+        self._pilot_counting = False
+        self._last_pilot_cycle: CycleId | None = None
         self._guest_demo_generation: int | None = None
         self._replay_lock = Lock()
         self.replay_controls = replay_controls
@@ -100,6 +111,45 @@ class SourceProductionApplication(ProductionApplication):
             identity=identity,
             initial_candidate=initial_candidate,
         )
+
+    def snapshot(self) -> ProductionApplicationSnapshot:
+        with self._condition:
+            return replace(
+                super().snapshot(),
+                pilot_counters=self._pilot_counters,
+                pilot_counting=self._pilot_counting,
+            )
+
+    def start_batch(self, batch_id: str | None) -> None:
+        with self._condition:
+            super().start_batch(
+                batch_id
+            )  # Existing authorization/state/reset boundary.
+            self._pilot_counters = PilotCounters()
+
+    def observe_pilot_batch(self, batch: CompletedPilotBatch) -> None:
+        """Trusted reporting completion, independent of Qt, History and PLC ACK."""
+        with self._condition:
+            if (
+                batch.identity.generation != self._generation
+                or batch.identity.generation != self._reporting_generation
+                or self._session is None
+                or self._state
+                not in (
+                    ApplicationState.RUNNING,
+                    ApplicationState.STOPPING,
+                    ApplicationState.FAULT,
+                )
+                or self._session_reporting is None
+                or self._session_reporting.mode is ReportingMode.PER_CYCLE
+                or (
+                    self._last_pilot_cycle is not None
+                    and batch.identity.cycle_id <= self._last_pilot_cycle
+                )
+            ):
+                return
+            self._pilot_counters = self._pilot_counters.completed(batch)
+            self._last_pilot_cycle = batch.reports[-1].identity.cycle_id
 
     def _install_candidate(self, candidate: PreparedConfiguration) -> None:
         with self._condition:
@@ -231,6 +281,13 @@ class SourceProductionApplication(ProductionApplication):
         return startup
 
     def _admit_replay(self, *, single_step: bool) -> Future[None]:
+        selection = self.reporting_selection()
+        if selection.enabled and selection.settings.mode is not ReportingMode.PER_CYCLE:
+            selection.settings.validate_pilot()
+            if not self.basler_available:
+                raise ApplicationStateError(
+                    "W48 batch pilot requires Basler Production"
+                )
         if self.basler_available:
             if single_step:
                 raise ApplicationStateError("Start Basler before requesting Pause/Step")
@@ -276,11 +333,24 @@ class SourceProductionApplication(ProductionApplication):
                 self._session_reporting_words = (
                     3 if len(prepared.configuration.layout.cameras) == 5 else 4
                 )
-                self._reporting_generation = self.snapshot().generation
+                generation = self._reporting_generation = self._generation
+                self._last_pilot_cycle = None
                 selection = self._reporting_selection
                 self._session_reporting = (
                     selection.settings if selection.enabled else None
                 )
+                pilot = (
+                    selection.enabled
+                    and selection.settings.mode is not ReportingMode.PER_CYCLE
+                )
+
+            def activated(future: Future[None]) -> None:
+                if future.exception() is None:
+                    with self._condition:
+                        if generation == self._generation:
+                            self._pilot_counting = pilot
+
+            startup.add_done_callback(activated)
             return startup
 
     @property
@@ -353,6 +423,9 @@ class SourceProductionApplication(ProductionApplication):
                 if settings is None:
                     return
                 base = settings.require_base_address()
+                protected_start = (
+                    base if settings.mode is ReportingMode.PER_CYCLE else 48
+                )
                 endpoint = settings.endpoint
                 manual = request.endpoint
                 same_space = (
@@ -366,7 +439,7 @@ class SourceProductionApplication(ProductionApplication):
                 if (
                     same_space
                     and request.start < base + self._session_reporting_words
-                    and request.start + request.count > base
+                    and request.start + request.count > protected_start
                     and (manual.host, manual.port)
                     == (
                         endpoint.host,
@@ -375,7 +448,7 @@ class SourceProductionApplication(ProductionApplication):
                 ):
                     prefix = "HR " if isinstance(endpoint, ModbusSettings) else "W"
                     raise ReportingWriteProtectedError(
-                        f"Manual write overlaps active reporting {prefix}{base}.."
+                        f"Manual write overlaps active reporting {prefix}{protected_start}.."
                         f"{prefix}{base + self._session_reporting_words - 1}"
                     )
 
@@ -453,6 +526,11 @@ class SourceProductionApplication(ProductionApplication):
             else Role.OPERATOR
         )
         with self._admission(minimum):
+            settings = self.reporting_for_generation(self._generation)
+            if settings is not None and settings.mode is not ReportingMode.PER_CYCLE:
+                raise ApplicationStateError(
+                    "W48 batch pilot cannot Pause/Step/Resume; Stop and restart at a new batch's first trigger"
+                )
             return (
                 self._running_basler_control()
                 if self.basler_available
@@ -491,7 +569,9 @@ class SourceProductionApplication(ProductionApplication):
             )
         return control
 
-    def set_reporting_owner(self, worker: FirstStationReportingWorker | None) -> None:
+    def set_reporting_owner(
+        self, worker: FirstStationReportingWorker | W48BatchReportingWorker | None
+    ) -> None:
         with self._reporting_lock:
             self._reporting_worker = worker
 

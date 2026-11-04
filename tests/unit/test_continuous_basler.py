@@ -316,6 +316,29 @@ def test_missing_frame_times_out_only_after_observed_cycle(
         run.close()
 
 
+@pytest.mark.parametrize("camera_count", [5, 6])
+def test_whole_trigger_missed_by_all_cameras_has_no_acquisition_counter_gap(
+    monkeypatch: pytest.MonkeyPatch,
+    camera_count: int,
+) -> None:
+    run = Run(monkeypatch, camera_count=camera_count)
+    try:
+        run.start()
+        # Physical trigger 2 never reaches any camera. The SDK only exposes the
+        # three successful acquisitions; no new electrical-trigger ID is invented.
+        for ordinal, physical_trigger in ((1, 1), (2, 3), (3, 4)):
+            with run.clock.lock:
+                run.clock.now = 100.0 + (physical_trigger - 1) * 0.060
+            run.backend.expose(ordinal, tuple(range(camera_count)))
+            assert run.received[ordinal * camera_count - 1].wait(WAIT)
+        assert run.starts == [1, 2, 3] and not run.done.done()
+        assert all(run.source.attributable(CycleId(i)) for i in (1, 2, 3))
+        assert len(run.frames) == 3 * camera_count
+    finally:
+        run.close()
+    run.done.result(WAIT)
+
+
 @pytest.mark.parametrize(
     "ordinal,change",
     [(1, None), (2, None), (2, {"block_id": 9}), (1, {"image_number": None})],

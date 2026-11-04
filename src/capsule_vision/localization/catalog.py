@@ -4,6 +4,15 @@ from .languages import Language
 from .translations import EXTRA_STRINGS
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "plc_mode": ("上报模式", "Reporting mode"),
+    "plc_mode_per_cycle": ("逐周期上报", "Per-cycle reporting"),
+    "plc_mode_w48_observe": ("W48 试点 · 仅观察", "W48 pilot · Observe only"),
+    "plc_mode_w48_active": ("W48 试点 · 批次上报", "W48 pilot · Active reporting"),
+    "plc_pilot_evidence": ("试点记录", "Pilot evidence"),
+    "plc_pilot_hint": (
+        "W48 试点仅支持 Basler + FINS/TCP + W49 基址。启用并保存后在下次 Start 生效。必须从新批次首触发开始，四次触发内及上报前 W48 保持不变；禁止暂停/单步。观察模式仅读取，不写入结果。现场前提见通信契约。",
+        "W48 pilot requires Basler + FINS/TCP + W49 base. Enable and Save for next Start. Start at a new batch's first trigger; W48 must stay stable across four triggers and until reporting finishes. No Pause/Step. Observe only reads, never writes results. See the communication contract for field prerequisites.",
+    ),
     "identity_close": ("关闭", "Close"),
     "identity_disabled": ("已停用", "Disabled"),
     "identity_guest": ("访客", "Guest"),
@@ -640,6 +649,17 @@ STRINGS: dict[str, tuple[str, str]] = {
         "通道业务检测次数；同一胶囊重复观察会重复计数，不是实际胶囊或产品数量。",
         "Channel business detection occurrences; repeated observations count again, not physical capsules or products.",
     ),
+    "pilot_batches": ("批次", "Batches"),
+    "pilot_batches_help": (
+        "已完成的四周期 W48 物理批次",
+        "Completed four-cycle W48 physical batches",
+    ),
+    "pilot_channels_help": (
+        "按已完成 W48 批次累计的物理通道位置；不是检测次数。UNKNOWN 为保守剔除，NG 为确认缺陷。",
+        "Cumulative physical channel positions in completed W48 batches, not inspection occurrences. UNKNOWN is conservative rejection; NG is confirmed defect.",
+    ),
+    "pilot_unknown": ("未知 {count}", "UNKNOWN {count}"),
+    "pilot_raw_cycles": ("原始检测周期：{count}", "Raw inspection cycles: {count}"),
     "configure_first": (
         "请在配方页保存并应用有效配方，再开始检测。",
         "Save and apply a valid Recipe on the Recipe page before starting inspection.",

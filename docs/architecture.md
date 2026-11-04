@@ -333,6 +333,26 @@ or reports. PAUSING becomes PAUSED only after the admitted capture boundary,
 terminal inspection, actual camera-task return and accepted reporting settle.
 Reporting settlement may be ACK or an explicit failure; it is not PLC consumption.
 
+The explicitly enabled [W48 batch pilot](communication.md#conditional-w48-batch-pilot)
+uses an alternative serial communication worker under the same generation/session
+owner. Camera admission queues scalar CycleIds; terminal callbacks hand off the
+existing reject projection. Only the communication thread reads W48 or writes
+bitmap/W49. Four observed cycles are associated under provisional external phase
+assumptions, without changing scheduling, judgments, occurrence accounting or History.
+At the existing successful pre-write attribution check, the worker publishes one
+immutable four-result completion to Application. Separate `PilotCounters` classify
+each ChannelId once using those business statuses and the already merged reject
+words: confirmed NG first, otherwise any reject bit UNKNOWN, otherwise all verified
+EMPTY, otherwise OK with only OK/verified EMPTY observations. These conditional
+physical-position totals never divide or replace `ProductionCounters`.
+Application consumes the completion outside the reporting lock and without Qt;
+one generation-local CycleId high-water mark prevents duplicate/stale accounting.
+Incomplete or initially unattributable batches do not count. A subsequent bitmap
+or W49 failure does not retract an already eligible inspection completion.
+This pilot rejects Pause/Step/Resume at the Application boundary; Stop/Close and
+actual worker cleanup retain their existing ownership. Per-cycle mode remains
+the default and keeps the normal source controls described here.
+
 Step and Resume first drain available SDK results and require a complete common
 ImageNumber boundary. Buffered paused groups remain discarded. Step admits one
 subsequent attributable ordinal, including an attributable partial deadline result,
@@ -420,7 +440,9 @@ requires resolved identities and verified artifacts before preparing a stopped c
 zero production results/counters. Only successful Start promotes the candidate;
 failed activation preserves last-known-good active identity and returns READY if
 cleanup is safe. Stop/Start or a Recipe change retains counters; explicit Batch
-resets them. Accounting describes cycle/channel occurrences, not physical products.
+resets them. `ProductionCounters` describe cycle/channel occurrences, not physical
+products; the enabled W48 pilot's separate conditional channel-position totals are
+described above.
 
 Stop prevents inspection admission, finalizes incomplete collection and explicitly rejects
 unclaimed inspection work. A claimed native call finishes naturally. Owners are
@@ -672,6 +694,21 @@ from the application business counters; unavailable
 timing displays `--`. Whole metric groups wrap when their text cannot fit one row.
 These are cumulative occurrences, retained by Stop/Start and Recipe changes and
 reset only by explicit Batch, not physical capsule counts.
+
+An enabled W48 Observe/Active session instead presents completed **Batches** and
+separate cumulative physical-channel OK, NG and EMPTY totals. UNKNOWN remains
+visible inline beside NG and in accessibility text; it is not included in NG.
+The Batches tooltip exposes the original raw inspection-cycle count. `Δt` still
+means the last inspection-cycle duration, not batch duration. The five metric
+groups and their wrapping behavior are unchanged. Chinese/English pilot captions
+use the existing English fallback in other languages.
+
+The last successfully activated session determines the displayed counting unit,
+including after Stop; editing future reporting settings or a failed Start cannot
+relabel retained facts. A successful legacy/reporting-disabled/Folder Start uses
+the original occurrence counters. Both cumulative stores survive Stop/Start and
+Recipe changes, remain separate across mode changes, and reset only on explicit
+operator Batch. No physical totals or new identities are persisted in History.
 
 History uses short Time, `#`, Batch and `CAM` headings. Full identities remain in
 stored records. The Time heading tooltip retains clock semantics, and elided

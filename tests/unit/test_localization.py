@@ -89,6 +89,17 @@ IDENTITY_UI_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "pilot_batches",
+    "pilot_batches_help",
+    "pilot_channels_help",
+    "pilot_unknown",
+    "pilot_raw_cycles",
+    "plc_mode",
+    "plc_mode_per_cycle",
+    "plc_mode_w48_observe",
+    "plc_mode_w48_active",
+    "plc_pilot_evidence",
+    "plc_pilot_hint",
     "preview_ambiguous_body",
     "permission_operator",
     "permission_engineer",
@@ -1261,7 +1272,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 469
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 480
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

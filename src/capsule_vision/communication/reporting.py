@@ -18,7 +18,13 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 
-from .endpoints import Endpoint, FinsUdpEndpoint, open_client, validate_endpoint
+from .endpoints import (
+    Endpoint,
+    FinsTcpEndpoint,
+    FinsUdpEndpoint,
+    open_client,
+    validate_endpoint,
+)
 from .fins import (
     FinsError,
     FinsMemoryArea,
@@ -35,11 +41,18 @@ from .modbus_tcp import ModbusError, ModbusSettings, ModbusTcpClient
 from .operations import CommunicationRequest
 
 
+class ReportingMode(Enum):
+    PER_CYCLE = "per_cycle"
+    W48_OBSERVE = "w48_observe"
+    W48_ACTIVE = "w48_active"
+
+
 @dataclass(frozen=True, slots=True)
 class ReportingSettings:
     endpoint: Endpoint = FinsUdpEndpoint()
     base_address: int | None = None
     max_pending: int = 8
+    mode: ReportingMode = ReportingMode.PER_CYCLE
 
     def __post_init__(self) -> None:
         modbus = isinstance(validate_endpoint(self.endpoint), ModbusSettings)
@@ -51,6 +64,16 @@ class ReportingSettings:
             )
         if type(self.max_pending) is not int or self.max_pending < 1:
             raise ValueError("max_pending must be a positive integer")
+        if type(self.mode) is not ReportingMode:
+            raise ValueError("Unsupported reporting mode")
+
+    def validate_pilot(self) -> None:
+        if self.mode is not ReportingMode.PER_CYCLE and (
+            not isinstance(self.endpoint, FinsTcpEndpoint) or self.base_address != 49
+        ):
+            raise ValueError(
+                "W48 pilot requires FINS/TCP and W49 base (W48–W52 layout)"
+            )
 
     def require_base_address(self) -> int:
         if self.base_address is None:
@@ -72,6 +95,7 @@ class ReportingSelection:
             raise ValueError("Reporting enabled must be bool")
         if self.enabled:
             self.settings.require_base_address()
+            self.settings.validate_pilot()
 
 
 class ReportingWriteProtectedError(PermissionError):
@@ -160,6 +184,31 @@ class FirstStationReport:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CompletedPilotBatch:
+    """Four eligible scalar results at the pre-write attribution boundary.
+
+    reject_words is the worker's existing OR projection, not a new projection.
+    Completion is independent of subsequent transport success or uncertainty.
+    """
+
+    identity: ReportIdentity
+    sequence: int
+    reports: tuple[FirstStationReport, ...]
+    reject_words: tuple[int, int] | tuple[int, int, int]
+
+    def __post_init__(self) -> None:
+        if len(self.reports) != 4 or any(
+            report.identity.generation != self.identity.generation
+            or report.identity.cycle_id != self.identity.cycle_id + index
+            or len(report.reject_words) != len(self.reject_words)
+            for index, report in enumerate(self.reports)
+        ):
+            raise ValueError(
+                "Completed pilot batch requires four consecutive same-generation/layout results"
+            )
+
+
 class ReportOutcome(Enum):
     QUEUED = "queued"
     ATTEMPTED = "attempted"
@@ -167,6 +216,7 @@ class ReportOutcome(Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
     REJECTED = "rejected"
+    OBSERVED = "observed"
 
 
 class ReportStage(Enum):
@@ -221,6 +271,31 @@ class ReportObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class W48Read:
+    stage: str
+    started_at: float
+    finished_at: float
+    value: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class PilotBatchObservation:
+    """Bounded scalar evidence; timestamps use the process monotonic clock."""
+
+    cycles: tuple[CycleId, ...]
+    terminal_outcomes: tuple[tuple[CycleId, str], ...]
+    admitted_at: float
+    reads: tuple[W48Read, ...]
+    report: ReportObservation | None
+    reason: str | None
+    completed_at: float | None
+    commit_started_at: float | None
+    commit_finished_at: float | None
+    commit_uncertain: bool
+    inspection_complete: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ReportingSnapshot:
     generation: int
     accepting: bool
@@ -244,6 +319,10 @@ class ReportingSnapshot:
     last_rejected: ReportObservation | None
     failure_issue: ReportingIssue | None
     cleanup_issue: ReportingIssue | None
+    mode: ReportingMode = ReportingMode.PER_CYCLE
+    observed_count: int = 0
+    phase_issue: str | None = None
+    pilot_batches: tuple[PilotBatchObservation, ...] = ()
 
 
 @runtime_checkable
@@ -291,6 +370,8 @@ class FirstStationReportingWorker:
         attributable: Callable[[ReportIdentity], bool] = lambda _: True,
     ) -> None:
         ReportIdentity(generation, CycleId(0))
+        if settings.mode is not ReportingMode.PER_CYCLE:
+            raise ValueError("Per-cycle worker cannot execute a W48 pilot selection")
         settings.require_base_address()  # Reject missing address before any owner/I/O.
         self.generation, self.settings = generation, settings
         self._factory = client_factory

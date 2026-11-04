@@ -649,6 +649,12 @@ class MainWindow(QMainWindow):
         self._refresh_theme_icons()
         self.buttons["batch"].setToolTip(text("batch", language))
         self.buttons["batch"].setAccessibleName(text("batch", language))
+        self._render()
+        self.language_changed.emit(language)
+
+    def _render_metric_captions(self) -> None:
+        language = self.language
+        pilot = self.snapshot.pilot_counting
         for key, (_, caption) in self.metrics.items():
             full = text(
                 {
@@ -659,7 +665,7 @@ class MainWindow(QMainWindow):
                 language,
             )
             caption.setText(
-                text("short_cycles", language)
+                text("pilot_batches" if pilot else "short_cycles", language)
                 if key == "cycles"
                 else {
                     "channel_ok": "OK",
@@ -670,10 +676,30 @@ class MainWindow(QMainWindow):
             )
             caption.setToolTip(full)
             caption.setAccessibleName(full)
+        if pilot:
+            batches = self.metrics["cycles"][1]
+            batches.setToolTip(text("pilot_batches_help", language))
+            batches.setAccessibleName(text("pilot_batches_help", language))
+            unknown = text("pilot_unknown", language).format(
+                count=f"{self.snapshot.pilot_counters.channel_unknown:,}"
+            )
+            self.metrics["channel_ng"][1].setText(f"NG · {unknown}")
+            self.metrics["channel_ng"][1].setAccessibleName(f"NG · {unknown}")
+        diagnostic = text("pilot_raw_cycles", language).format(
+            count=f"{self.snapshot.counters.cycles_completed:,}"
+        )
+        self.metrics["cycles"][0].setToolTip(
+            f"{text('pilot_batches_help', language)}\n{diagnostic}"
+            if pilot
+            else text("cycles", language)
+        )
         for key in ("channel_ok", "channel_ng", "channel_empty"):
-            self.metrics[key][0].setToolTip(text("channel_count_help", language))
-        self._render()
-        self.language_changed.emit(language)
+            help_text = text(
+                "pilot_channels_help" if pilot else "channel_count_help", language
+            )
+            self.metrics[key][0].setToolTip(help_text)
+            if pilot:
+                self.metrics[key][1].setToolTip(help_text)
 
     @Slot(int)
     def _operate(self, index: int) -> None:
@@ -1158,12 +1184,30 @@ class MainWindow(QMainWindow):
         self.state_label.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.state_label.setAccessibleName(text(state, language))
         self._render_identity()
+        self._render_metric_captions()
         counts = snapshot.counters
+        pilot = snapshot.pilot_counters
         for key, count in (
-            ("cycles", counts.cycles_completed),
-            ("channel_ok", counts.business_ok),
-            ("channel_ng", counts.business_ng),
-            ("channel_empty", counts.business_empty),
+            (
+                "cycles",
+                pilot.batches_completed
+                if snapshot.pilot_counting
+                else counts.cycles_completed,
+            ),
+            (
+                "channel_ok",
+                pilot.channel_ok if snapshot.pilot_counting else counts.business_ok,
+            ),
+            (
+                "channel_ng",
+                pilot.channel_ng if snapshot.pilot_counting else counts.business_ng,
+            ),
+            (
+                "channel_empty",
+                pilot.channel_empty
+                if snapshot.pilot_counting
+                else counts.business_empty,
+            ),
         ):
             self.metrics[key][0].setText(f"{count:,}")
             self.metrics[key][0].setAccessibleName(
@@ -1350,6 +1394,7 @@ class MainWindow(QMainWindow):
             if (
                 report.failure_issue
                 or report.cleanup_issue
+                or report.phase_issue
                 or (
                     outcome
                     and outcome.outcome

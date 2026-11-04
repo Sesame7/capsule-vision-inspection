@@ -69,6 +69,10 @@ and [TCP messaging guide](https://www.modbus.org/file/secure/messagingimplementa
 
 ## First-station registers
 
+The sequence and submission rules here describe the default per-cycle mode.
+The [conditional W48 pilot](#conditional-w48-batch-pilot) retains the bit projection
+and bitmap widths but uses a PLC batch number instead of an allocated sequence.
+
 `first_station_reject_words()` requires exactly one explicit business status for
 every ChannelId 1..30 or 1..36. Missing/duplicate/out-of-range/bool identities or invalid
 statuses fail before I/O. Arrival order and presentation slots never determine bits.
@@ -126,6 +130,10 @@ still require equipment commissioning.
 
 ## Automatic reporting lifecycle
 
+The following per-cycle lifecycle remains the default. The explicitly selected
+[W48 pilot](#conditional-w48-batch-pilot) replaces only its communication worker
+and phase-breaking controls for a supported Basler session.
+
 Communication's Production enable/endpoint/routing fields are drafts. Only a
 successful **Save settings** publishes preferences to the next Start and persists
 them in `data/communication.json`. Persistence and publication share the existing
@@ -182,6 +190,122 @@ alive, including unfinished Stop/Close. Reads and independent endpoints remain
 available, including writes to the former W49–W52 range when it does not overlap.
 The guard prevents competing writers; it is not PLC-side locking or
 access control.
+
+## Conditional W48 batch pilot
+
+Communication → Production reporting offers **Per-cycle reporting** (default),
+**W48 pilot · Observe only** and **W48 pilot · Active reporting**. Select the mode,
+enable reporting and use **Save settings** as Engineer/Administrator. The saved
+selection is frozen at the next Start. Disabled reporting creates no pilot owner
+and performs no reads. Loading preferences or Start warm-up never contacts a PLC.
+The pilot requires Basler, FINS/TCP and base W49: W48 is the PLC batch counter,
+W49 its committed batch number, W50–W51 the 30-channel bitmap, and W50–W52 the
+36-channel bitmap. Incompatible enabled transport/base selections are invalid;
+Folder/explicit-image Start with an enabled pilot is rejected before session/engine
+creation. Folder Replay, FINS/UDP and Modbus retain their per-cycle behavior.
+
+This is a provisional field association, **not hardware trigger attribution**.
+All these external conditions are required:
+
+- Production reaches RUNNING before triggering, at the first trigger of a new batch.
+- PLC advances unsigned 16-bit W48 before that first trigger and holds it across
+  exactly four triggers and until the report is submitted (including its ACK).
+- Every trigger reaches every configured camera; no complete electrical trigger
+  is silently missed by all cameras.
+- No unobserved counter reset/reuse occurs while the session runs.
+
+Four consecutive observed Basler CycleIds from that initial phase form a local
+batch. ImageNumber continuity does not prove physical trigger continuity; a W48
+read is not exposure-correlated evidence. Counter skips and 65535 → 0 wrap are
+accepted between batches, without inventing skipped batches. Same W48 on the
+next batch is rejected. Hidden full reuse/reset remains undetectable. See the
+[retained offline attribution and timing evidence](plc-batch-proposal.md).
+
+`W48BatchReportingWorker` is the generation's sole reporting socket owner. The
+first observed cycle queues a W48 WR read without socket work on the camera,
+inference, Qt or terminal-result callback thread. For prompt association, this
+read must finish before the second observed cycle is admitted; otherwise the
+batch is suppressed. Four distinct attributable terminal results are required.
+Their **existing `FirstStationReport.reject_words`** are ORed, including FIELD-1
+verified EMPTY decisions. Partial/error cycles contribute their existing
+conservative words. No entirely missing trigger or unavailable result is invented.
+History, inspection business statuses and per-cycle counters are unchanged.
+
+After all four results and the existing pre-write W48/source attribution check
+succeed, Observe and Active publish the same immutable inspection completion to
+Application. Its separate cumulative physical-batch accounting uses the original
+business statuses and already ORed bitmap: any confirmed NG wins, then any reject
+bit means UNKNOWN, then all verified EMPTY means EMPTY, otherwise a mixture of OK
+and verified EMPTY means OK. Each ChannelId counts once; the bitmap is not changed
+or recomputed for accounting. Four attributable terminal results may include
+partial/error cycles, whose conservative bits remain UNKNOWN unless confirmed NG
+exists. Fewer than four results or attribution failure before this checkpoint
+produce no physical count.
+
+This completion precedes any result write/ACK. Later transport failure, W49
+uncertainty or loss of reporting attribution does not retract the inspection fact
+that was eligible at the checkpoint. Thus physical counts are not delivered/ACKed
+batch counts and cannot establish PLC consumption or physical traceability.
+Application retains only cumulative totals and a generation-local CycleId
+high-water mark, independently of the bounded diagnostic history. Stop/Start and
+Recipe changes retain totals; explicit operator Batch resets them. The
+[Production presentation contract](architecture.md) distinguishes these totals
+from raw inspection occurrences.
+
+Observation mode confirms W48 and records the combined result as OBSERVED;
+it makes **zero result writes**, with no ACK count. Active mode confirms the
+retained number, writes exactly two bitmap words for 30 channels (never W52),
+or three for 36, then confirms W48 and source attribution again after bitmap ACK,
+immediately before writing W49 equal to that retained number. No local sequence
+is allocated. Each admitted batch has at most one attempt; failed or uncertain
+writes are never replayed. Two transport ACKs do not prove PLC scan consumption,
+physical product association or pneumatic action. The read/check/write sequence
+is not atomic: an in-flight write cannot be recalled if attribution is lost.
+
+An observed counter change, stale counter, late initial read, duplicate/gapped
+CycleId, missing terminal evidence, mixed layout or source ambiguity latches a
+reporting phase issue for this generation. A next batch arriving before the prior
+batch settles also suppresses the late batch; a W49 already in flight remains
+explicitly uncertain. Subsequent inspections may continue, but their reports
+remain suppressed until Stop and a new known-phase Start. There is no polling,
+guessed replacement counter, fabricated all-NG batch, PLC stop or W10.7 command.
+The source's existing fault/overload handling remains separate.
+
+Pause, Step and Resume are rejected at the Application boundary for an enabled
+pilot session; Stop/Close remain available regardless of role. Stop first settles
+runtime/source work, then drains complete admitted batches and records incomplete
+batches locally. Actual thread exit/socket cleanup are still required; a timeout
+does not release ownership. A new Start creates a fresh owner and never resumes
+a partial batch. Manual writes to the same endpoint are protected from W48 through
+W51 (30 channels) or W52 (36) while starting/alive, including observation mode.
+Account authorization remains unchanged: Engineer saves, Operator runs Basler,
+and Guest cannot run an enabled pilot.
+
+The existing early-inspection 100 ms deadline, four-cycle capacity and serial
+inference owner are unchanged. The communication handoff retains at most the
+existing default eight-plus-one cycle capacity, with four scalar results per
+batch. **Pilot evidence** opens a copyable, read-only snapshot: latest 16 settled
+batches plus bounded pending batches, associated CycleIds/count, terminal status
+names, timed W48 reads, OR words, outcome/reason, batch admission/completion,
+bitmap duration, inspection-completion eligibility and W49
+attempt/completion/uncertainty. Times use the process monotonic clock in seconds;
+report durations are milliseconds. Summary counts are
+batches in pilot mode, not cycles. No frames/masks or History records are added.
+Evidence survives Stop, is replaced on the next Start, and is lost on process
+Close; copy it before restarting. An open evidence window is a snapshot, not a
+live polling view. Chinese/English pilot controls use the established English
+fallback for other languages.
+
+Before field testing, an authorized engineer must verify the above phase/counter
+conditions, saved camera order and 30/36 register ownership, PLC handling of stale
+W49 equality/reset, trigger spacing and the earliest next-W48 update. Establish
+the available completion/write/ACK margin using observation mode with actual
+camera/SDK timings and PLC-side records. Do not enable active writes until PLC
+ownership, consumption and physical safety are agreed and observation evidence
+shows a sufficient margin without missed/ambiguous batches. The retained offline
+60 ms-spacing experiment and local loopback tests cannot establish that margin
+on equipment. A complete batch can be late even when all four terminal outcomes
+exist; conservative timeout projection does not repair a lost timing window.
 
 ## Communication workspace
 

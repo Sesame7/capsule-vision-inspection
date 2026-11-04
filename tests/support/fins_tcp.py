@@ -46,6 +46,12 @@ class TcpPeer:
         with self._lock:
             self._fault = stage, fault
 
+    def set_words(self, start: int, values: tuple[int, ...], area: int = 0xB1) -> None:
+        """Local PLC-side state change, including while a client owns the socket."""
+        with self._lock:
+            for offset, value in enumerate(values):
+                self._memory[area, start + offset] = value
+
     def hold_next(self, stage: Stage) -> None:
         self.entered.clear()
         self.release.clear()

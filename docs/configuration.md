@@ -355,7 +355,14 @@ Unit ID are omitted:
 Holding Register addresses are zero-based, independent of FINS DM/WR. Watch
 groups remain session-only and are never implicitly converted by a protocol edit.
 
-Reporting additionally permits `enabled` (default false) and `base_address`.
+Reporting additionally permits `enabled` (default false), `base_address` and
+`mode`. Omitted `mode` retains `per_cycle`; the only other values are
+`w48_observe` and `w48_active`. Nondefault modes are saved explicitly. An enabled
+W48 selection requires `protocol: "fins_tcp"` and base 49, and Start additionally
+requires Basler. It does not change diagnostics, enable reporting implicitly or
+connect on load. For the provisional association, read-only observation and
+field prerequisites, see the [communication contract](communication.md#conditional-w48-batch-pilot).
+
 FINS defaults to 49 (integer 0–508, WR area). Modbus has **no default base**:
 it must be explicitly supplied as an integer 0–65532 whenever reporting is enabled.
 A disabled Modbus definition may omit it for later completion. Present null,

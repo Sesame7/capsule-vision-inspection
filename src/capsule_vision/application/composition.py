@@ -24,8 +24,10 @@ from capsule_vision.application.folder_replay import (
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.session import EngineFactory, real_engine
+from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
 from capsule_vision.communication.reporting import (
     FirstStationReportingWorker,
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
 )
@@ -308,8 +310,30 @@ def create_production_application(
             if group is None:
                 raise ValueError("No complete image group")
         session_reporting = app.reporting_for_generation(generation)
-        report_worker = (
-            FirstStationReportingWorker(
+        if (
+            session_reporting is not None
+            and session_reporting.mode is not ReportingMode.PER_CYCLE
+        ):
+            session_reporting.validate_pilot()
+            if continuous_source is None:
+                raise ApplicationStateError(
+                    "W48 batch pilot requires Basler Production"
+                )
+        report_worker: FirstStationReportingWorker | W48BatchReportingWorker | None
+        if session_reporting is None:
+            report_worker = None
+        elif session_reporting.mode is not ReportingMode.PER_CYCLE:
+            assert continuous_source is not None
+            report_worker = W48BatchReportingWorker(
+                generation,
+                session_reporting,
+                attributable=lambda identity: continuous_source.attributable(
+                    identity.cycle_id
+                ),
+                on_completed=app.observe_pilot_batch,
+            )
+        else:
+            report_worker = FirstStationReportingWorker(
                 generation,
                 session_reporting,
                 attributable=lambda identity: (
@@ -317,9 +341,6 @@ def create_production_application(
                     or continuous_source.attributable(identity.cycle_id)
                 ),
             )
-            if session_reporting is not None
-            else None
-        )
         session = SourceRuntimeSession(
             config,
             generation,

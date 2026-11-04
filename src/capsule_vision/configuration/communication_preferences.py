@@ -14,6 +14,7 @@ from capsule_vision.communication.endpoints import (
 )
 from capsule_vision.communication.modbus_tcp import ModbusSettings
 from capsule_vision.communication.reporting import (
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
 )
@@ -148,12 +149,13 @@ def _reporting(value: dict[str, object]) -> ReportingSettings:
             {
                 key: item
                 for key, item in value.items()
-                if key not in ("enabled", "base_address")
+                if key not in ("enabled", "base_address", "mode")
             }
         ),
         _integer(value["base_address"], "base_address")
         if "base_address" in value
         else None,
+        mode=ReportingMode(_text(value.get("mode", "per_cycle"), "reporting.mode")),
     )
 
 
@@ -166,6 +168,7 @@ def load_communication_preferences(path: Path) -> CommunicationPreferences:
             obj.get("reporting", {}),
             {
                 "enabled",
+                "mode",
                 "protocol",
                 "host",
                 "port",
@@ -243,6 +246,8 @@ def save_communication_preferences(path: Path, value: CommunicationPreferences) 
         reporting = _endpoint_json(value.reporting.settings.endpoint)
         if value.reporting.enabled:
             reporting["enabled"] = True
+        if value.reporting.settings.mode is not ReportingMode.PER_CYCLE:
+            reporting["mode"] = value.reporting.settings.mode.value
         if value.reporting.settings.base_address is not None and (
             isinstance(value.reporting.settings.endpoint, ModbusSettings)
             or value.reporting.settings.base_address != 49

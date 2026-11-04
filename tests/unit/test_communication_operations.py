@@ -282,6 +282,7 @@ def test_endpoint_has_only_its_protocol_fields_and_is_immutable(
         "endpoint",
         "base_address",
         "max_pending",
+        "mode",
     }
     request = CommunicationRequest(RequestKind.READ, endpoint, 0)
     assert request.endpoint is endpoint

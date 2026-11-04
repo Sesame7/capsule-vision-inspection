@@ -25,6 +25,7 @@ from capsule_vision.application.session import (
     real_engine,
 )
 from capsule_vision.application.source_control import FolderReplayControl
+from capsule_vision.communication.batch_reporting import W48BatchReportingWorker
 from capsule_vision.communication.reporting import (
     FirstStationReport,
     FirstStationReportingWorker,
@@ -87,7 +88,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         replay: FolderReplay | None = None,
         sources: CameraSources | None = None,
         source_base: Path = Path("."),
-        reporting: FirstStationReportingWorker | None = None,
+        reporting: FirstStationReportingWorker | W48BatchReportingWorker | None = None,
         replay_control: FolderReplayControl | None = None,
         continuous_source: BaslerConnection | None = None,
         basler_control: BaslerAdmissionControl | None = None,
@@ -167,6 +168,13 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 archive.complete(cycle_id, None)
             raise
         if self.reporting is not None:
+            if isinstance(self.reporting, W48BatchReportingWorker):
+                try:
+                    self.reporting.admit_cycle(cycle_id)
+                except (ReportingCapacityError, ReportingStateError) as exc:
+                    self.reporting.note_skipped(
+                        ReportIdentity(self.generation, cycle_id), exc
+                    )
             cycle.result.add_done_callback(
                 lambda future: self._report_result(cycle_id, future)
             )
@@ -217,7 +225,11 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 self.basler_control.reported(cycle_id)
             return
         try:
-            pending = reporter.submit(report)  # Nonblocking; never socket work.
+            pending = (
+                reporter.submit_cycle(report, result.cycle_status)
+                if isinstance(reporter, W48BatchReportingWorker)
+                else reporter.submit(report)
+            )  # Nonblocking; never socket work.
             control = self.basler_control
             if control is not None:
                 pending.add_done_callback(lambda _: control.reported(cycle_id))

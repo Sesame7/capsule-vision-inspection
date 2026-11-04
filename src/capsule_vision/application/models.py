@@ -1,9 +1,10 @@
-"""Application facts and immutable snapshots; no physical product counting."""
+"""Immutable occurrence facts and conditional W48 pilot channel-position totals."""
 
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 from pathlib import Path
 
+from capsule_vision.communication.reporting import CompletedPilotBatch
 from capsule_vision.configuration import (
     ResolvedInspectionConfiguration,
     validate_model_artifact,
@@ -135,6 +136,49 @@ class ProductionCounters:
 
 
 @dataclass(frozen=True, slots=True)
+class PilotCounters:
+    """Cumulative channel positions, conditional on the pilot's field assumptions."""
+
+    batches_completed: int = 0
+    channel_ok: int = 0
+    channel_ng: int = 0
+    channel_empty: int = 0
+    channel_unknown: int = 0
+
+    def completed(self, batch: CompletedPilotBatch) -> PilotCounters:
+        statuses = [dict(report.statuses) for report in batch.reports]
+        counts = dict.fromkeys(ChannelBusinessStatus, 0)
+        for channel in statuses[0]:
+            observed = tuple(row[channel] for row in statuses)
+            word, bit = divmod(channel - 1, 16)
+            if ChannelBusinessStatus.NG in observed:
+                final = ChannelBusinessStatus.NG
+            elif batch.reject_words[word] & (1 << bit):
+                final = ChannelBusinessStatus.UNKNOWN
+            elif all(status is ChannelBusinessStatus.EMPTY for status in observed):
+                # A clear authoritative bit proves EMPTY was verified in every
+                # cycle; disabled/missing/error evidence alone cannot clear it.
+                final = ChannelBusinessStatus.EMPTY
+            elif ChannelBusinessStatus.OK in observed and all(
+                status in (ChannelBusinessStatus.OK, ChannelBusinessStatus.EMPTY)
+                for status in observed
+            ):
+                final = ChannelBusinessStatus.OK
+            else:
+                final = ChannelBusinessStatus.UNKNOWN
+            counts[final] += 1
+        return replace(
+            self,
+            batches_completed=self.batches_completed + 1,
+            channel_ok=self.channel_ok + counts[ChannelBusinessStatus.OK],
+            channel_ng=self.channel_ng + counts[ChannelBusinessStatus.NG],
+            channel_empty=self.channel_empty + counts[ChannelBusinessStatus.EMPTY],
+            channel_unknown=self.channel_unknown
+            + counts[ChannelBusinessStatus.UNKNOWN],
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProductionApplicationSnapshot:
     state: ApplicationState
     generation: int
@@ -148,6 +192,8 @@ class ProductionApplicationSnapshot:
     active_prepared: PreparedConfiguration | None = None
     candidate_prepared: PreparedConfiguration | None = None
     candidate_requires_preparation: bool = False
+    pilot_counters: PilotCounters = PilotCounters()
+    pilot_counting: bool = False
 
     @property
     def has_pending_configuration(self) -> bool:

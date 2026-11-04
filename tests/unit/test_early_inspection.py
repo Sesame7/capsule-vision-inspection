@@ -17,7 +17,10 @@ from capsule_vision.inference._validation import uint8_array
 from capsule_vision.inspection import CameraId, CycleId, CycleStatus, Frame, FrameId
 from capsule_vision.inspection.production import ProductJudgment, TechnicalStatus
 from capsule_vision.runtime import CoordinatorCapacityError, InferenceWorker
-from capsule_vision.runtime.early_inspection import EarlyInspectionCoordinator
+from capsule_vision.runtime.early_inspection import (
+    EarlyAdmission,
+    EarlyInspectionCoordinator,
+)
 
 
 class Clock:
@@ -265,5 +268,99 @@ def test_late_native_result_discarded_while_next_cycle_completes(
         assert first.result.result() is terminal
         assert coordinator.snapshot().late_results == 1
         assert engine.calls == [11, 26, 21, 25, 22, 24, 23]
+    finally:
+        close(coordinator, engine)
+
+
+def test_four_sixty_ms_captures_expire_while_native_call_remains_owned(
+    tmp_path: Path,
+) -> None:
+    engine, clock = Engine(block=11), Clock()
+    coordinator = runtime(tmp_path, engine, clock)
+    receipts: list[EarlyAdmission] = []
+
+    def at(milliseconds: int) -> None:
+        with clock.lock:
+            clock.now = 100.0 + milliseconds / 1000
+        coordinator.expire()
+
+    try:
+        for milliseconds, identity in ((0, 1), (60, 2), (120, 3), (180, 4)):
+            if identity > 2:
+                at(milliseconds - 20)
+                assert (
+                    receipts[identity - 3].result.result(WAIT).cycle_status
+                    is CycleStatus.TIMED_OUT
+                )
+            at(milliseconds)
+            receipt = coordinator.begin(CycleId(identity))
+            receipts.append(receipt)
+            for camera in range(1, 7):
+                coordinator.submit_frame(frame(identity, camera))
+            if identity == 1:
+                assert engine.entered.wait(WAIT)
+        for index, deadline in ((2, 220), (3, 280)):
+            at(deadline)
+            result = receipts[index].result.result(WAIT)
+            assert result.cycle_status is CycleStatus.TIMED_OUT
+            assert all(c.frame_id is not None for c in result.cameras)
+        assert coordinator.snapshot().peak_cycles == 2
+        assert coordinator.snapshot().peak_queued_cameras <= 12
+        assert engine.calls == [11]
+        assert not coordinator.when_settled(CycleId(1)).done()
+        coordinator.request_stop()
+        assert not coordinator.join(0) and not engine.closed
+    finally:
+        close(coordinator, engine)
+
+
+def test_default_four_cycle_capacity_rejects_fifth_before_native_return(
+    tmp_path: Path,
+) -> None:
+    engine, clock = Engine(block=11), Clock()
+    coordinator = runtime(tmp_path, engine, clock)
+    try:
+        receipts = [coordinator.begin(CycleId(1))]
+        coordinator.submit_frame(frame(1, 1))
+        assert engine.entered.wait(WAIT)
+        receipts.extend(coordinator.begin(CycleId(i)) for i in (2, 3, 4))
+        with pytest.raises(CoordinatorCapacityError):
+            coordinator.begin(CycleId(5))
+        assert coordinator.snapshot().peak_cycles == 4
+        clock.advance()
+        coordinator.expire()
+        assert all(
+            r.result.result(WAIT).cycle_status is CycleStatus.TIMED_OUT
+            for r in receipts
+        )
+        assert not coordinator.when_settled(CycleId(1)).done()
+    finally:
+        close(coordinator, engine)
+
+
+@pytest.mark.parametrize("finished_ms", [99, 100, 101])
+def test_native_completion_must_precede_exact_early_deadline(
+    tmp_path: Path,
+    finished_ms: int,
+) -> None:
+    engine, clock = Engine(block=16), Clock()
+    coordinator = runtime(tmp_path, engine, clock)
+    try:
+        receipt = coordinator.begin(CycleId(1))
+        for camera in range(1, 7):
+            coordinator.submit_frame(frame(1, camera))
+        assert engine.entered.wait(WAIT)
+        with clock.lock:
+            clock.now = 100.0 + finished_ms / 1000
+        engine.release.set()
+        coordinator.expire()
+        result = receipt.result.result(WAIT)
+        assert result.cycle_status is (
+            CycleStatus.COMPLETE if finished_ms < 100 else CycleStatus.TIMED_OUT
+        )
+        assert result.cameras[0].channels[0].forced_reject is None
+        assert (result.cameras[-1].channels[0].forced_reject is None) == (
+            finished_ms < 100
+        )
     finally:
         close(coordinator, engine)
