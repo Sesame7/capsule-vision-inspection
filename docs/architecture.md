@@ -377,10 +377,13 @@ Reporting eligibility and ambiguity checks are in [communication](communication.
 
 ## Inspection and results
 
-Full-camera ViMo runs at most once per camera when enabled, then findings are
-assigned against saved channel ROIs with original global ChannelIds. Per-channel
-label filtering is a consumption policy, not a change to SDK evidence. Unassigned
-camera findings remain distinct and never fabricate channel findings.
+Full-camera ViMo runs at most once per eligible camera frame when enabled, then
+findings are assigned against saved channel ROIs with original global ChannelIds.
+Per-channel label filtering is a consumption policy, not a change to SDK evidence.
+Unassigned camera findings remain distinct and never fabricate channel findings.
+They contribute camera-level NG and prevent verified EMPTY from clearing reject bits
+on that camera under the [PLC projection contract](communication.md#first-station-registers);
+they are not automatically classified as harmless background.
 
 Occupancy always measures the centered `max(1, width*70//100)` portion of the saved
 ROI, split into upper/lower views; a pixel is foreground if any BGR component is

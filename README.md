@@ -10,7 +10,8 @@ application.
 
 - Five-camera/30-channel or six-camera/36-channel inspection layouts
 - Passive Basler acquisition and Folder Replay input
-- ViMo segmentation and configurable Occupancy, Size and Color rules
+- ViMo segmentation, mandatory Occupancy, and configurable Size (Length) and Color
+  checks
 - Recipe, Production, Vision, Communication and History workspaces
 - Omron FINS UDP/TCP and Modbus TCP result reporting
 - Multilingual Qt interface and an optional read-only Web observer
@@ -97,17 +98,27 @@ licenses and local images retain their own licensing and authorization.
 | `src/capsule_vision/` | Application, UI, runtime and inspection packages |
 | `scripts/` | Engineering and equipment-free diagnostic tools |
 | `tests/` | Unit and integration coverage |
-| `docs/` | Architecture and operational contracts |
+| `docs/` | Current operational contracts and target product requirements |
 | `data/` | Local configuration and generated application data |
 | `models/` | Optional independent engineering model inputs |
 | `outputs/` | Optional tool diagnostics and generated artifacts |
 
 ## Documentation
 
+The capabilities above and the following operational contracts describe the
+current application:
+
 - [Architecture](docs/architecture.md) - runtime ownership and system composition
 - [Configuration](docs/configuration.md) - files, paths and local configuration
 - [Communication](docs/communication.md) - FINS/Modbus diagnostics and reporting
 - [Field UI validation](docs/field-ui-validation.md) - Windows launch and UI smoke checks
+
+[Product scope](docs/product-scope.md) records the reviewed PRODUCT-0 target and
+open decisions, not a list of already implemented capabilities. An explicitly
+authorized implementation Phase defines only its scoped change to current behavior;
+target requirements do not authorize adjacent work. Follow
+[AGENTS.md](AGENTS.md#documentation-authority), preserve current contracts outside
+that scope, and update affected operational documentation after validation.
 
 ## Development and validation
 

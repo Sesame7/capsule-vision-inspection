@@ -5,6 +5,19 @@ Read [README](README.md), [architecture](docs/architecture.md) and the relevant
 contract before changing behavior. Keep changes small and testable. Do not commit,
 tag, push, add features or redesign architecture without authorization.
 
+## Documentation authority
+
+- Architecture, Configuration and Communication describe current implementation
+  contracts; [field UI validation](docs/field-ui-validation.md) governs field evidence.
+- [Product scope](docs/product-scope.md) records reviewed PRODUCT-0 target
+  requirements and explicitly open decisions. It is not evidence of implemented
+  capability or authorization to implement the whole target.
+- The explicitly authorized Phase defines the permitted delta and validation.
+  Outside that delta, preserve current validated behavior and contracts. After an
+  implemented change is validated, update only the affected current contracts.
+  Report material source/contract or target/current conflicts; do not silently
+  resolve them by treating a target requirement as current behavior.
+
 For field UI smoke checks, follow [field UI validation](docs/field-ui-validation.md)
 for interactive-desktop evidence, normal launch/Close and protected-asset checks.
 
@@ -50,8 +63,9 @@ for interactive-desktop evidence, normal launch/Close and protected-asset checks
   callbacks never mutate widgets; use queued delivery. Bound latest display/Web
   caches and keep artifact hashing outside GUI dispatch.
 - Start warm-up has zero production side effects. Only successful Start promotes
-  a candidate; failed startup preserves active identity. Counters are occurrences,
-  not physical products; explicit Batch resets them. ERROR, NG and FAULT differ.
+  a candidate; failed startup preserves active identity. Keep occurrence counters
+  separate from conditional W48 pilot channel-position totals; explicit Batch
+  resets both. ERROR, NG and FAULT differ.
 - Preserve strict configuration validation, atomic persistence, hidden Recipe
   settings and Save/preparation/activation separation. Saved MachineLayout is
   authoritative; opening an editor never repairs or reinitializes geometry.
@@ -92,5 +106,6 @@ before committing a release baseline. Node tests are required for Web changes.
 Report commands/results and unexecuted checks honestly. Real GPU/hardware checks
 are opt-in and proportional to changed behavior; do not routinely benchmark,
 stress or run full datasets. For documentation-only changes, check links/anchors,
-commands and whitespace; runtime tests/screenshots are unnecessary. Documentation
-describes current operation; avoid phase narratives or duplicate contract trees.
+commands and whitespace; runtime tests/screenshots are unnecessary. Operational
+contracts describe current behavior; target requirements stay in Product Scope.
+Avoid phase narratives or duplicate contract trees.

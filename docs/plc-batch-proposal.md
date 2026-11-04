@@ -9,6 +9,9 @@ and `scripts/simulate_plc_batches.py` retain the original finite proposal, inclu
 its experimental three-word CH30 mailbox. The current pilot instead preserves
 two-word CH30 writes and never modifies W52. The proposal below is not a deployment
 procedure or a description of the pilot's current register ownership.
+The reviewed physical process and target final group outcomes belong to
+[Product Scope](product-scope.md#31-inspection-flow-and-accepted-baseline), not this
+offline attribution experiment.
 
 ## Proposed mailbox contract
 
@@ -20,7 +23,8 @@ procedure or a description of the pilot's current register ownership.
   reinterpret business statuses. Verified EMPTY can remain clear, while NG,
   UNKNOWN and unverified EMPTY retain the authoritative conservative projection.
 - Stage the proposed W50–W52 bitmap, then commit W49 equal to that batch's W48.
-  This is a **future batch number**, not today's attempted-result sequence.
+  This is a **batch-number commit**, distinct from the default per-cycle
+  attempted-result sequence.
   The experiment uses a fixed three-word proposed mailbox: 30 channels retain
   CH1–16 and CH17–30 in the first two words, with reserved high bits and W52 zero;
   36 channels use CH33–36 in W52 bits 0–3. Confirm W52 ownership for 30-channel
@@ -166,10 +170,13 @@ bitmap stage late. Delayed frames can move batch readiness past the update entir
 Transport failures and an occupied report owner are separate unsuccessful outcomes.
 No queues or deadlines are enlarged by this work.
 
-## Conditions required before COMM-M1
+## Unresolved general-attribution requirements
 
 Reliable general attribution is **not established** by the current signals.
-Choose and confirm an equipment contract before production implementation:
+The following requirements belong to the original offline proposal. The
+[conditional pilot](communication.md#conditional-w48-batch-pilot) uses narrower,
+explicit equipment assumptions; its implementation does not establish these
+general guarantees:
 
 1. Prefer a batch identifier plus capture index/trigger identifier latched with
    each exposure (or a trigger event independently correlated to every camera
@@ -191,7 +198,7 @@ Choose and confirm an equipment contract before production implementation:
    onto complete physical batches.
 
 The OR projection and bounded scheduler tests support further design work, but
-cannot authorize COMM-M1's association or establish physical GPU/camera/PLC,
+cannot establish general physical attribution, equipment throughput, reliable
 half-capsule detection or pneumatic performance.
 
 ## Reproduce without equipment
@@ -204,5 +211,6 @@ uv run --no-sync pytest tests/unit/test_plc_batch_simulation.py tests/unit/test_
 
 The script prints JSON and performs no file publication, socket operation, source
 connection or native inference. Tests reuse synthetic business evidence, Basler
-fakes and controlled clocks. Production source, Folder Replay, reporting workers,
-sequence allocation, persistence, History and UI are unchanged.
+fakes and controlled clocks. Running this offline reproduction does not change
+Production source, Folder Replay, reporting workers, sequence allocation,
+persistence, History or UI.
