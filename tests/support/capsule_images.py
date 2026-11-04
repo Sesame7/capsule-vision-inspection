@@ -12,7 +12,7 @@ from capsule_vision.inspection.production.capsule import (
 )
 
 ROI = BoundingRect(0, 0, 80, 120)
-SETTINGS = CapsuleSettings(SizeSettings(True, 20, 0, 30, 0), ColorSettings(True, 30, 0))
+SETTINGS = CapsuleSettings(SizeSettings(True, 29, 0), ColorSettings(True, 30, 0))
 
 
 def bodies(hue: int = 30, brightness: int = 180) -> NDArray[np.uint8]:

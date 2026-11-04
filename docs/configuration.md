@@ -586,8 +586,8 @@ overrides or a configurable `required` switch:
 | Fields | Values / omitted defaults |
 | --- | --- |
 | `size.enabled`, `color.enabled` | boolean / false |
-| `size.target_width`, `size.target_height` | positive pixels / 1 |
-| `size.width_tolerance`, `size.height_tolerance` | nonnegative pixels / 0 |
+| `size.target_length` | positive integer pixels / 1 |
+| `size.length_tolerance` | nonnegative integer pixels / 0 |
 | `color.target_hue` | integer 0..179 / 0 |
 | `color.hue_tolerance` | integer 0..90 circular distance / 0 |
 
@@ -596,6 +596,17 @@ Enabled Size/Color are required checks, subject to the explicit confirmed-EMPTY
 skip. Occupancy is always on and has no persisted switch/threshold fields. Recipe
 ROI, old presence/blob and old per-check color fields are rejected. There is no
 automatic Recipe migration or threshold fitting.
+
+Size compares the longer side of the selected body's minimum-area rotated
+rectangle with Target Length, inclusively within Length tolerance. Length spans
+pixel centers, not occupied-pixel counts. Both logical views independently require
+valid evidence. Body assignment uses the complete Channel ROI, allowing a small
+cross-divider tail while conservatively rejecting ambiguous ownership; see the
+[inspection contract](architecture.md#inspection-and-results).
+Legacy `target_width`, `target_height`, `width_tolerance` and `height_tolerance`
+are rejected with explicit guidance, including on disabled Size definitions.
+An engineer must explicitly replace these fields with calibrated Length settings;
+old W/H targets are never reinterpreted. Loading does not rewrite or delete files.
 
 `image_archive` optionally contains `root_directory` (string, omitted default `""`)
 and independent booleans `save_ok`, `save_ng`, `save_error`, `save_empty` (all
@@ -725,7 +736,7 @@ Refresh, numeric parameters and image color sampling remain draft-only, with no
 production admission, counters, source commands or activation. The former separate
 Tune page and duplicate enablement controls are removed. Size and Color summaries
 use actual draft limits, including `H <target> ± <tolerance>` for circular Hue.
-The compact tuning fields use W/H, pixel units and ± notation; full localized
+The compact Size tuning fields use L, pixel units and ± notation; full localized
 parameter names remain in tooltips and accessibility labels.
 
 On first selection, Folder tuning reads the camera's first decodable image in the
@@ -747,12 +758,14 @@ Image tools reuse Vision's icons, whole-group wrapping, Fit and 1:1; Recipe
 management icons retain localized names/tooltips and the existing confirmations.
 
 Click an upper/lower view in the current image to select its camera, ChannelId
-and view. A single detail area beside the parameters shows actual body W/H with
+and view. A single detail area beside the parameters shows actual major-axis Length with
 configured limits, or actual Hue with target/circular tolerance. View status uses
 the existing Size/Color judge's reasons for that capability and view; it is not
 the combined channel result or production acceptance. Image overlays keep compact
 selected Size or Color check judgments/body outlines and a selection highlight, without twelve repeated
-W/H captions. Threshold edits rejudge cached evidence; mode switches retain the
+Length captions. Complete major-axis lines and endpoints use original image
+coordinates and remain visible across the logical divider; selection retains the
+owning view identity. Threshold edits rejudge cached evidence; mode switches retain the
 selection. New images/camera changes clear it; stale asynchronous evidence is
 never displayed as the selected view's measurements.
 Disabled checks, unavailable/pending evidence, execution ERROR and content NG are

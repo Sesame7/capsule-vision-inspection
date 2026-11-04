@@ -110,18 +110,28 @@ def _model(value: object, path: Path) -> ModelDefinition:
 
 def _capsule(value: object) -> CapsuleSettings:
     row = _object(value, "size color")
+    raw_size = row.get("size", {})
+    if isinstance(raw_size, dict) and {
+        "target_width",
+        "width_tolerance",
+        "target_height",
+        "height_tolerance",
+    }.intersection(cast(dict[object, object], raw_size)):
+        raise ValueError(
+            "Legacy Size W/H fields are unsupported. Explicitly replace them with "
+            "target_length and length_tolerance after validating pixel-center "
+            "major-axis lengths; existing targets cannot be converted automatically."
+        )
     size = _object(
         row.get("size", {}),
-        "enabled target_width width_tolerance target_height height_tolerance",
+        "enabled target_length length_tolerance",
     )
     color = _object(row.get("color", {}), "enabled target_hue hue_tolerance")
     return CapsuleSettings(
         SizeSettings(
             _bool(size.get("enabled", False)),
-            _int(size.get("target_width", 1)),
-            _int(size.get("width_tolerance", 0)),
-            _int(size.get("target_height", 1)),
-            _int(size.get("height_tolerance", 0)),
+            _int(size.get("target_length", 1)),
+            _int(size.get("length_tolerance", 0)),
         ),
         ColorSettings(
             _bool(color.get("enabled", False)),

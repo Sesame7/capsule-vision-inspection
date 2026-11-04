@@ -369,11 +369,34 @@ Only equal EMPTY/EMPTY or PRESENT/PRESENT pairs fuse to that state. Geometry sta
 unchanged. Valid EMPTY explicitly skips enabled Size/Color, preserving provenance;
 it does not suppress ViMo or erase its NG evidence.
 
-Enabled Size/Color operate on the original ROI and its two views. Size measures
-detected body width/height; Color uses usable saturated/bright HSV pixels and
-circular Hue statistics. Only requested capabilities execute. Measurement is
-separate from target/tolerance judgment. These checks require product/lighting
-calibration; integration tests are not accuracy certification.
+Size thresholds the complete Channel ROI once (any BGR channel >20), then labels
+8-connected foreground once. The divider at `height // 2` assigns logical views;
+it does not crop Size bodies. Each component belongs to at most one view. Its
+predominant foreground side and centroid position must agree. The existing view
+minimum area, `max(12, floor(view_area * 0.005))`, and quarter-dominant competition
+rule remain: a crossing component with minority support meeting that side's
+minimum and at least 25% of its majority support is ambiguous in both views.
+This conservatively rejects significant cross-view merges without reconstructing
+objects. Smaller crossing tails stay attached to the complete selected component.
+Within each assigned view, a qualifying runner-up at least 25% of the dominant
+component's full area rejects that view. External Channel ROI edge contact is
+truncated; internal-divider contact alone is valid. Missing, competing, ambiguous,
+externally truncated and degenerate geometry remain explicit NG evidence.
+
+Size reuses selected component labels to fit the minimum-area rotated rectangle
+from transient external boundary vertices. Its longer side is Length, spanning
+pixel centers (30 occupied axis-aligned pixels span 29 px). Scalar bounds, major
+and minor lengths and original-image axis endpoints survive measurement; contours
+and label arrays do not. Production, frozen Recipe tuning and the offline evaluator
+use this same implementation. Thresholds do not affect measurement validity.
+Each logical view independently requires `abs(length - target_length) <=
+length_tolerance`. The other view never receives a duplicate or passing placeholder.
+
+Color retains independently cropped upper/lower views, usable saturated/bright
+HSV pixels and circular Hue statistics. Only requested capabilities execute;
+Color-only does not label or measure Size bodies. Occupancy, ViMo and confirmed-EMPTY
+skip/reporting remain unchanged. These checks require product/lighting calibration;
+geometric tests cannot certify half-capsule detection or physical rejection.
 
 Technical status is SUCCESS / ERROR / DISABLED; product judgment is OK / NG /
 UNKNOWN. Definite NG survives a simultaneous error. Missing required work, or all

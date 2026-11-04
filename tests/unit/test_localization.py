@@ -89,6 +89,7 @@ IDENTITY_UI_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "preview_ambiguous_body",
     "permission_operator",
     "permission_engineer",
     "recipe_reprepare",
@@ -1160,8 +1161,8 @@ def test_generated_localization_keys_remain_reachable_in_every_language() -> Non
             "invalid_geometry",
             "insufficient_foreground",
             "unusable",
-            "width",
-            "height",
+            "length",
+            "ambiguous_body",
             "tolerance",
         )
     )
@@ -1260,7 +1261,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 470
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 469
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

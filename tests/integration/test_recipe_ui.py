@@ -552,7 +552,7 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         assert text("preview_scope_tip", language) in preview.canvas.toolTip()
         assert tuple(spin.geometry() for spin in preview.spins.values()) == fields
         for key, label in preview.labels.items():
-            assert label.text() in ("W (px)", "H (px)", "± W (px)", "± H (px)")
+            assert label.text() in ("L (px)", "± L (px)")
             assert label.fontMetrics().horizontalAdvance(label.text()) <= label.width()
             assert text(key, language) in label.toolTip() == label.accessibleName()
         assert_inside(preview.controls, preview)

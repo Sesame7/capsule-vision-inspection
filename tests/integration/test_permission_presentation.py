@@ -63,7 +63,7 @@ def screen(
         product_code="SECOND",
         capsule=replace(
             original.capsule,
-            size=replace(original.capsule.size, enabled=True, target_width=47),
+            size=replace(original.capsule.size, enabled=True, target_length=47),
         ),
         defaults=replace(
             original.defaults,

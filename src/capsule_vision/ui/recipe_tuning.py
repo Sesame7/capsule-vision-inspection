@@ -9,7 +9,7 @@ from time import monotonic
 from typing import Literal
 
 import numpy as np
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QMouseEvent,
@@ -79,8 +79,8 @@ _REASON_LABELS = {
         "invalid_geometry",
         "insufficient_foreground",
         "unusable",
-        "width",
-        "height",
+        "length",
+        "ambiguous_body",
         "tolerance",
     )
 }
@@ -212,6 +212,19 @@ class PreviewCanvas(RoiCanvas):
                 body = QRectF(*transform.rectangle(box))
                 painter.setPen(QPen(QColor(color), 1.5))
                 painter.drawRect(body)
+                points = tuple(
+                    QPointF(
+                        transform.x + x * transform.scale,
+                        transform.y + y * transform.scale,
+                    )
+                    for x, y in view.body.endpoints
+                )
+                painter.setPen(QPen(QColor("#ff50ff"), 2))
+                painter.drawLine(*points)
+                painter.setBrush(QColor("#ffff00"))
+                for point in points:
+                    painter.drawEllipse(point, 3, 3)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
         if self.selection is not None:
             index, view = self.selection
             slot = self.slots[index].rect
@@ -350,10 +363,8 @@ class RecipeTuning(QWidget):
         self.spins: dict[str, QSpinBox] = {}
         self.labels: dict[str, QLabel] = {}
         for key in (
-            "target_width",
-            "width_tolerance",
-            "target_height",
-            "height_tolerance",
+            "target_length",
+            "length_tolerance",
         ):
             column = QVBoxLayout()
             column.setSpacing(Style.small)
@@ -477,24 +488,13 @@ class RecipeTuning(QWidget):
             self.camera_tabs.setTabToolTip(index, f"{name} ({camera.camera_id})")
             self.camera_tabs.setAccessibleTabName(index, f"{name} ({camera.camera_id})")
         for key in (
-            "target_width",
-            "width_tolerance",
-            "target_height",
-            "height_tolerance",
+            "target_length",
+            "length_tolerance",
         ):
             caption = text(key, language)
             if key.endswith("tolerance"):
                 caption += " (px)"
-            # Match Vision's W/H notation; long translated phrases must not
-            # squeeze neighboring parameters or silently clip their labels.
-            self.labels[key].setText(
-                {
-                    "target_width": "W (px)",
-                    "width_tolerance": "± W (px)",
-                    "target_height": "H (px)",
-                    "height_tolerance": "± H (px)",
-                }[key]
-            )
+            self.labels[key].setText("L (px)" if key == "target_length" else "± L (px)")
             self.labels[key].setFixedWidth(self.spins[key].width())
             self.labels[key].setToolTip(caption)
             self.labels[key].setAccessibleName(caption)
@@ -515,10 +515,8 @@ class RecipeTuning(QWidget):
         self.controls.setCurrentIndex(0 if self.mode == "size" else 1)
         for key, spin in self.spins.items():
             value = {
-                "target_width": settings.size.target_width,
-                "width_tolerance": settings.size.width_tolerance,
-                "target_height": settings.size.target_height,
-                "height_tolerance": settings.size.height_tolerance,
+                "target_length": settings.size.target_length,
+                "length_tolerance": settings.size.length_tolerance,
             }[key]
             spin.setValue(value)
         self.tolerance.setValue(settings.color.hue_tolerance)
@@ -630,14 +628,10 @@ class RecipeTuning(QWidget):
         check_name = text(self.mode, self.language)
         header = f"{self.camera.camera_id} · CH{slot.channel_id:02d} · {caption} · {check_name} {status}"
         if self.mode == "size":
-            rect = (
-                view.body.bounding_rect
-                if view is not None and view.body is not None and enabled and available
-                else None
-            )
-            width, height = (str(rect.width), str(rect.height)) if rect else ("—", "—")
+            body = view.body if view is not None and enabled and available else None
+            actual = f"{body.length:.2f}" if body is not None else "—"
             s = settings.size
-            values = f"W {width} [{s.target_width - s.width_tolerance}, {s.target_width + s.width_tolerance}] · H {height} [{s.target_height - s.height_tolerance}, {s.target_height + s.height_tolerance}] px"
+            values = f"{text('length', self.language)} {actual} [{s.target_length - s.length_tolerance}, {s.target_length + s.length_tolerance}] px"
         else:
             hue = (
                 view.color.hue
@@ -660,10 +654,8 @@ class RecipeTuning(QWidget):
                 settings,
                 size=replace(
                     settings.size,
-                    target_width=self.spins["target_width"].value(),
-                    width_tolerance=self.spins["width_tolerance"].value(),
-                    target_height=self.spins["target_height"].value(),
-                    height_tolerance=self.spins["height_tolerance"].value(),
+                    target_length=self.spins["target_length"].value(),
+                    length_tolerance=self.spins["length_tolerance"].value(),
                 ),
             )
         else:

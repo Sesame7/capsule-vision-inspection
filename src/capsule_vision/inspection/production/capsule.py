@@ -1,5 +1,6 @@
 """Black-background two-view capsule screening; calibration remains external."""
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -33,18 +34,14 @@ def _integer(value: int, minimum: int, maximum: int | None = None) -> None:
 @dataclass(frozen=True, slots=True)
 class SizeSettings:
     enabled: bool = False
-    target_width: int = 1
-    width_tolerance: int = 0
-    target_height: int = 1
-    height_tolerance: int = 0
+    target_length: int = 1
+    length_tolerance: int = 0
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
             raise ValueError("Size enabled must be boolean")
-        for value in (self.target_width, self.target_height):
-            _integer(value, 1)
-        for value in (self.width_tolerance, self.height_tolerance):
-            _integer(value, 0)
+        _integer(self.target_length, 1)
+        _integer(self.length_tolerance, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +72,9 @@ class BodyMeasurement:
     """Size geometry in original full-image coordinates."""
 
     bounding_rect: BoundingRect
+    length: float
+    minor_length: float
+    endpoints: tuple[tuple[float, float], tuple[float, float]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,16 +196,13 @@ def _masked_pixel_hue(
     return _histogram_hue(counts, count, samples)
 
 
-def _geometry(
-    foreground: NDArray[np.uint8], x_origin: int, y_origin: int
+def _body(
+    candidates: list[int],
+    labels: NDArray[np.int32],
+    stats: NDArray[np.int32],
+    roi: BoundingRect,
 ) -> tuple[BodyMeasurement | None, str | None]:
-    """Same 8-connected body selection and bounds as the accepted Size path."""
-    count, _, stats, _ = cv2.connectedComponentsWithStats(foreground, connectivity=8)
-    minimum = max(12, int(foreground.size * 0.005))
-    candidates = sorted(
-        (i for i in range(1, count) if int(stats[i, cv2.CC_STAT_AREA]) >= minimum),
-        key=lambda i: (-int(stats[i, cv2.CC_STAT_AREA]), i),
-    )
+    candidates.sort(key=lambda i: (-int(stats[i, cv2.CC_STAT_AREA]), i))
     if not candidates:
         return None, "missing_body"
     dominant = candidates[0]
@@ -216,18 +213,86 @@ def _geometry(
     ):
         return None, "competing_bodies"
     x, y, width, height = (int(v) for v in stats[dominant, :4])
-    if (
-        x == 0
-        or y == 0
-        or x + width == foreground.shape[1]
-        or y + height == foreground.shape[0]
-    ):
+    if x == 0 or y == 0 or x + width == roi.width or y + height == roi.height:
         return None, "truncated_body"
     if min(width, height) < 3:
         return None, "invalid_geometry"
+    # Reuse the full-ROI labels. Only boundary vertices enter minAreaRect; no
+    # per-pixel Python coordinates or visualization contours survive this call.
+    selected = cv2.inRange(labels[y : y + height, x : x + width], dominant, dominant)
+    contours, _ = cv2.findContours(selected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    points = contours[0] if len(contours) == 1 else np.concatenate(contours)
+    (cx, cy), (w, h), degrees = cv2.minAreaRect(points)
+    if min(w, h) <= 1e-6:
+        return None, "invalid_geometry"
+    angle = math.radians(degrees if w >= h else degrees + 90)
+    length = max(w, h)
+    dx, dy = math.cos(angle) * length / 2, math.sin(angle) * length / 2
+    cx, cy = cx + roi.x + x, cy + roi.y + y
+    first, second = sorted(((cx - dx, cy - dy), (cx + dx, cy + dy)))
     return BodyMeasurement(
-        BoundingRect(x_origin + x, y_origin + y, width, height)
+        BoundingRect(roi.x + x, roi.y + y, width, height),
+        length,
+        min(w, h),
+        (first, second),
     ), None
+
+
+def _geometry(
+    foreground: NDArray[np.uint8], roi: BoundingRect
+) -> tuple[tuple[BodyMeasurement | None, str | None], ...]:
+    """Assign whole components once; a significant rival view is ambiguous.
+
+    The existing quarter-dominant competition rule also guards cross-divider
+    ownership. A significant minority (meeting its view's minimum area) cannot
+    be discarded as a crossing tail. No clipped-body reconstruction is used.
+    """
+    _, labels, stats, centers = cv2.connectedComponentsWithStats(
+        foreground, connectivity=8
+    )
+    labels, stats = (
+        labels.astype(np.int32, copy=False),
+        stats.astype(np.int32, copy=False),
+    )
+    middle = roi.height // 2
+    minima = tuple(
+        max(12, int(roi.width * height * 0.005))
+        for height in (middle, roi.height - middle)
+    )
+    candidates: tuple[list[int], list[int]] = ([], [])
+    ambiguous = [False, False]
+    # Filter small specks in native array operations before extracting Python
+    # geometry. Images may contain many below-minimum connected components.
+    eligible = np.flatnonzero(stats[1:, cv2.CC_STAT_AREA] >= min(minima)) + 1
+    for label in eligible:
+        i = int(label)
+        x, y, width, height, area = (int(v) for v in stats[i])
+        upper = (
+            area
+            if y + height <= middle
+            else 0
+            if y >= middle
+            else cv2.countNonZero(cv2.inRange(labels[y:middle, x : x + width], i, i))
+        )
+        portions = (upper, area - upper)
+        owner = int(portions[1] > portions[0])
+        rival = 1 - owner
+        if portions[owner] < minima[owner]:
+            continue
+        # Centroid and foreground predominance must agree. Significant support
+        # on both sides includes merged upper/lower bodies and exact ties.
+        if (
+            portions[rival] >= minima[rival] and portions[rival] * 4 >= portions[owner]
+        ) or int(centers[i, 1] >= middle - 0.5) != owner:
+            ambiguous[0] = ambiguous[1] = True
+            continue
+        candidates[owner].append(i)
+    return tuple(
+        (None, "ambiguous_body")
+        if ambiguous[index]
+        else _body(rows, labels, stats, roi)
+        for index, rows in enumerate(candidates)
+    )
 
 
 def _color(pixels: NDArray[np.uint8], usable: NDArray[np.uint8]) -> ColorMeasurement:
@@ -280,13 +345,14 @@ def measure_capsule(
         else None
     )
     middle = roi.height // 2
+    geometry = (
+        _geometry(foreground, roi)
+        if foreground is not None
+        else ((None, None), (None, None))
+    )
 
     def view(name: str, start: int, end: int) -> ViewMeasurement:
-        body, reason = (
-            _geometry(foreground[start:end], roi.x, roi.y + start)
-            if foreground is not None
-            else (None, None)
-        )
+        body, reason = geometry[int(start != 0)]
         evidence = (
             _color(hsv[start:end], usable[start:end])
             if hsv is not None and usable is not None
@@ -325,24 +391,17 @@ def judge_capsule(
                 )
             else:
                 rect = body.bounding_rect
-                values.extend(
-                    (
-                        Measurement(f"capsule.{view.name}.width", rect.width, "px"),
-                        Measurement(f"capsule.{view.name}.height", rect.height, "px"),
-                    )
+                values.append(
+                    Measurement(f"capsule.{view.name}.length", body.length, "px")
                 )
-                for name, actual, target, tolerance in (
-                    ("width", rect.width, size.target_width, size.width_tolerance),
-                    ("height", rect.height, size.target_height, size.height_tolerance),
-                ):
-                    if abs(actual - target) > tolerance:
-                        reasons.append(
-                            Reason(
-                                source,
-                                f"capsule.size.{view.name}.{name}",
-                                bounding_rect=rect,
-                            )
+                if abs(body.length - size.target_length) > size.length_tolerance:
+                    reasons.append(
+                        Reason(
+                            source,
+                            f"capsule.size.{view.name}.length",
+                            bounding_rect=rect,
                         )
+                    )
         if color.enabled:
             evidence = view.color
             if evidence is None:

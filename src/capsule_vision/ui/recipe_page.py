@@ -860,7 +860,7 @@ class RecipePage(QWidget):
                 )
                 check.blockSignals(False)
                 summary = (
-                    f"W {settings.size.target_width} ± {settings.size.width_tolerance} · H {settings.size.target_height} ± {settings.size.height_tolerance} px"
+                    f"{text('length', self.language)} {settings.size.target_length} ± {settings.size.length_tolerance} px"
                     if mode == "size"
                     else f"H {settings.color.target_hue} ± {settings.color.hue_tolerance}"
                 )

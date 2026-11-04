@@ -46,7 +46,7 @@ from capsule_vision.inspection.production import (
 )
 from capsule_vision.inspection.production.capsule import CapsuleSettings, judge_capsule
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.recipe_tuning import (
     PreviewMode,
     RecipeTuning,
@@ -274,7 +274,7 @@ def test_runtime_preview_never_invents_pixels_or_results_but_preserves_real_pixe
             session.draft.capsule = replace(
                 SETTINGS,
                 size=replace(
-                    SETTINGS.size, target_width=SETTINGS.size.target_width + 50
+                    SETTINGS.size, target_length=SETTINGS.size.target_length + 50
                 ),
             )
     window.recipe_page.open_preview("size")
@@ -488,6 +488,54 @@ def setup(screen: Screen, *, pixel_scale: int = 1) -> RecipeTuning:
     return preview
 
 
+def test_length_controls_and_complete_crossing_axis(configured_screen: Screen) -> None:
+    window, session, _ = configured_screen
+    preview = setup(configured_screen)
+    window.set_language("en")
+    image = np.zeros((120, 80, 3), dtype=np.uint8)
+    image[22:62, 20:30] = (0, 180, 180)
+    window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(2), CameraId("CAM1"), 2),
+            2,
+            np.concatenate([image] * 6, axis=1),
+        ),
+        generation=0,
+    )
+    preview.refresh_reference()
+    until(lambda: not preview.busy)
+    preview.select_view(0, 0)
+    assert set(preview.spins) == {"target_length", "length_tolerance"}
+    assert "Length 39.00" in preview.selection_detail.text()
+    measured = preview.measurements[0].measured
+    assert measured is not None and measured.views[0].body is not None
+    assert measured.views[1].body is None
+    body = measured.views[0].body
+    assert max(y for _, y in body.endpoints) == 61
+    transform = preview.canvas.model.transform(
+        preview.canvas.width(), preview.canvas.height()
+    )
+    assert transform is not None
+    pixels = preview.canvas.grab().toImage()
+    for x, y in body.endpoints:
+        point = QPoint(
+            round(transform.x + x * transform.scale),
+            round(transform.y + y * transform.scale),
+        )
+        assert pixels.pixelColor(point).name() == "#ffff00"
+    original = session.draft.capsule
+    for language in LANGUAGES:
+        window.set_language(language)
+        assert preview.canvas.selection == (0, 0)
+        assert preview.measurements[0].measured is measured
+        assert text("length", language) in preview.selection_detail.text()
+        for key, spin in preview.spins.items():
+            assert text(key, language) in spin.accessibleName()
+            assert_inside(spin, preview)
+    assert session.draft.capsule == original
+    collapse(preview, configured_screen)
+
+
 def test_cached_judgment_and_isolation_and_save(
     configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -514,12 +562,12 @@ def test_cached_judgment_and_isolation_and_save(
         pytest.fail("Threshold edit must not segment again")
 
     monkeypatch.setattr(module, "measure_capsule", forbidden)
-    preview.spins["target_width"].setValue(25)
+    preview.spins["target_length"].setValue(25)
     assert all(
         result and result.assessment.judgment is ProductJudgment.NG
         for result in preview.results
     )
-    preview.spins["width_tolerance"].setValue(5)
+    preview.spins["length_tolerance"].setValue(5)
     assert all(
         result and result.assessment.judgment is ProductJudgment.OK
         for result in preview.results
@@ -633,7 +681,8 @@ def test_unavailable_reference_no_invented_measurement(
     assert not preview.sample.isEnabled()
     preview.select_view(0, 0)
     assert (
-        preview.canvas.selection is None and "W " not in preview.selection_detail.text()
+        preview.canvas.selection is None
+        and "Length " not in preview.selection_detail.text()
     )
     collapse(preview, configured_screen)
 
@@ -817,10 +866,10 @@ def test_view_judgment_is_separate_from_other_view_and_check(
         and "Hue 30.00" in preview.selection_detail.text()
     )
     preview.set_mode("size")
-    preview.spins["target_width"].setValue(21)
+    preview.spins["target_length"].setValue(21)
     assert (
         "Size NG" in preview.selection_detail.text()
-        and "W 20 [21, 21]" in preview.selection_detail.text()
+        and "Length 29.00 [21, 21]" in preview.selection_detail.text()
     )
     window.set_language("zh")
     assert preview.canvas.toolTip() == (
@@ -849,7 +898,9 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     until(lambda: not preview.busy)
     preview.select_view(0, 0)
     assert f"{mode.title()} NG" in preview.selection_detail.text()
-    assert ("W —" if mode == "size" else "Hue —") in preview.selection_detail.text()
+    assert (
+        "Length —" if mode == "size" else "Hue —"
+    ) in preview.selection_detail.text()
     assert (
         "No measurable body" if mode == "size" else "Insufficient usable color pixels"
     ) in preview.selection_detail.text()
@@ -878,7 +929,9 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     window.recipe_page.capsule_enabled[mode].click()
     until(lambda: not preview.busy)
     assert "DISABLED" in preview.selection_detail.text()
-    assert ("W —" if mode == "size" else "Hue —") in preview.selection_detail.text()
+    assert (
+        "Length —" if mode == "size" else "Hue —"
+    ) in preview.selection_detail.text()
     assert not preview.canvas.check_enabled and not preview.message.isVisible()
     preview.canvas.selection = None
     preview.refresh_state()
@@ -918,7 +971,7 @@ def test_selection_clears_on_image_camera_change_and_while_evidence_pending(
             "CAM2" in preview.selection_detail.text()
             and "Unavailable" in preview.selection_detail.text()
         )
-        assert "W —" in preview.selection_detail.text()
+        assert "Length —" in preview.selection_detail.text()
     finally:
         release.set()
     until(lambda: not preview.busy)
@@ -1037,7 +1090,7 @@ def test_color_only_sampling_without_body_geometry(configured_screen: Screen) ->
         r and r.assessment.judgment is ProductJudgment.OK for r in preview.results[1:]
     )
     assert all(
-        r and not any(m.name.endswith((".width", ".height")) for m in r.measurements)
+        r and not any(m.name.endswith((".length",)) for m in r.measurements)
         for r in preview.results
     )
     assert window.bridge.application.snapshot() == before and not runtimes
@@ -1165,7 +1218,7 @@ def test_one_entry_mode_selection_and_draft_synchronization(
     page.capsule_enabled[preview.mode].click()
     until(lambda: not preview.busy)
     preview.set_mode("size")
-    preview.spins["target_width"].setValue(21)
+    preview.spins["target_length"].setValue(21)
     preview.set_mode("color")
     preview.tolerance.setValue(7)
     expected = session.draft.capsule
@@ -1189,7 +1242,7 @@ def test_disabled_selected_mode_keeps_other_checks_ng(
     before = window.bridge.application.snapshot()
     session.draft.capsule = replace(
         SETTINGS,
-        size=replace(SETTINGS.size, enabled=mode != "size", target_width=25),
+        size=replace(SETTINGS.size, enabled=mode != "size", target_length=25),
         color=replace(SETTINGS.color, enabled=mode != "color", target_hue=50),
     )
     preview.set_mode("size" if (0 if mode == "size" else 1) == 0 else "color")
@@ -1269,7 +1322,7 @@ def _assert_preview_zoom_selection(
             assert preview.canvas.selection == (index, view_index)
             detail = preview.selection_detail.text()
             assert f"CH{row.slot.channel_id:02d}" in detail and view.name in detail
-            assert "W 60 [20, 20]" in detail and "H 90 [30, 30]" in detail
+            assert "Length 89.00 [29, 29]" in detail
             assert "Size NG" in detail and "Occupancy" not in detail
             count += 1
     assert count > 0

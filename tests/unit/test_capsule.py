@@ -68,7 +68,7 @@ def test_content_rejection_is_ng_not_error(kind: str, reason: str) -> None:
     result = judge_capsule(measured, SETTINGS)
     assert result.assessment.technical_status is TechnicalStatus.SUCCESS
     assert result.assessment.judgment is ProductJudgment.NG
-    assert len([m for m in result.measurements if m.name.endswith(".width")]) == 1
+    assert len([m for m in result.measurements if m.name.endswith(".length")]) == 1
 
 
 def test_particles_and_dark_edges_do_not_distort_body() -> None:
@@ -81,14 +81,14 @@ def test_particles_and_dark_edges_do_not_distort_body() -> None:
 
 
 @pytest.mark.parametrize(
-    "target,tolerance,ok", [(19, 1, True), (21, 1, True), (18, 1, False), (20, 0, True)]
+    "target,tolerance,ok", [(28, 1, True), (30, 1, True), (27, 1, False), (29, 0, True)]
 )
 def test_size_inclusive_limits(target: int, tolerance: int, ok: bool) -> None:
-    settings = CapsuleSettings(SizeSettings(True, target, tolerance, 30, 0))
+    settings = CapsuleSettings(SizeSettings(True, target, tolerance))
     result = judge_capsule(measure_capsule(bodies(), ROI, SETTINGS), settings)
     assert (result.assessment.judgment is ProductJudgment.OK) == ok
     tall = replace(
-        settings, size=replace(settings.size, target_height=28, height_tolerance=1)
+        settings, size=replace(settings.size, target_length=27, length_tolerance=1)
     )
     assert (
         judge_capsule(
@@ -229,10 +229,10 @@ def test_production_content_ng_and_execution_error(
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("target_width", 0),
-        ("target_width", True),
-        ("width_tolerance", -1),
-        ("target_height", 1.5),
+        ("target_length", 0),
+        ("target_length", True),
+        ("length_tolerance", -1),
+        ("target_length", 1.5),
     ],
 )
 def test_invalid_size_recipe_fields(tmp_path: Path, field: str, value: object) -> None:
@@ -281,10 +281,10 @@ def test_invalid_color_recipe_fields(tmp_path: Path, field: str, value: object) 
 
 def test_lower_view_independently_rejects_size_and_color() -> None:
     image = bodies()
-    image[70:100, 40:42] = (0, 180, 180)
+    image[100:102, 20:40] = (0, 180, 180)
     measured = measure_capsule(image, ROI, SETTINGS)
     result = judge_capsule(measured, SETTINGS)
-    assert [r.code for r in result.reasons] == ["capsule.size.lower.width"]
+    assert [r.code for r in result.reasons] == ["capsule.size.lower.length"]
     image = bodies()
     image[60:] = bodies(40)[60:]
     result = judge_capsule(measure_capsule(image, ROI, SETTINGS), SETTINGS)

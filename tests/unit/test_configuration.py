@@ -88,12 +88,12 @@ def test_minimal_recipe_and_compact_settings_keep_effective_defaults(
     changed = replace(
         minimal,
         defaults=CheckConfiguration(ViMoCheckConfig(required=False)),
-        capsule=CapsuleSettings(size=SizeSettings(target_width=12)),
+        capsule=CapsuleSettings(size=SizeSettings(target_length=12)),
     )
     save_recipe(path, changed)
     value = json.loads(path.read_text(encoding="utf-8"))
     assert value["defaults"] == {"vimo": {"required": False}}
-    assert value["capsule"] == {"size": {"target_width": 12}}
+    assert value["capsule"] == {"size": {"target_length": 12}}
     assert "image_archive" not in value
     assert load_recipe(path) == changed
     resolved = resolve_configuration(
