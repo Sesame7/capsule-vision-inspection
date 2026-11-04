@@ -113,8 +113,13 @@ def login(window: MainWindow, role: Role) -> None:
 
 
 @pytest.mark.parametrize("role", list(Role))
-def test_page_controls_combine_role_and_state(screen: MainWindow, role: Role) -> None:
+@pytest.mark.parametrize("protocol", [0, 1])
+def test_page_controls_combine_role_and_state(
+    screen: MainWindow, role: Role, protocol: int
+) -> None:
     window = screen
+    # Select each FINS protocol as Administrator before testing the observed role.
+    window.communication.protocol.setCurrentIndex(protocol)
     login(window, role)
     engineer, operator = role >= Role.ENGINEER, role >= Role.OPERATOR
     assert window.pages.count() == 5 and window.buttons["operation"].isEnabled()
@@ -138,7 +143,9 @@ def test_page_controls_combine_role_and_state(screen: MainWindow, role: Role) ->
     assert comm.reporting_panel.enabled.isEnabled() == engineer
     assert comm.write_button.isEnabled() == engineer
     assert comm.save_settings.isEnabled() == engineer
-    assert comm.advanced_button.isEnabled() and comm.manual_button.isEnabled()
+    assert comm.manual_button.isEnabled()
+    assert comm.advanced_button.isEnabled() == (protocol == 0)
+    assert comm.advanced_button.isVisible() == (protocol == 0)
     assert comm.web_panel.port.isEnabled() == engineer
     window.navigate(3)
     window.navigate(4)

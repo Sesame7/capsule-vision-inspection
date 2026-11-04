@@ -68,7 +68,7 @@ def test_protocol_save_discard_manual_and_watch_io(
         page.persist_settings()
         saved = load_communication_preferences(tmp_path / "communication.json")
         assert saved.diagnostic == ModbusSettings(port=peer.port, unit_id=17)
-        assert saved.reporting.settings.endpoint.protocol == "fins_udp"
+        assert saved.reporting.settings.endpoint.protocol == "fins_tcp"
         assert not saved.reporting.enabled and not page.dirty
         page.host.setText("192.0.2.99")
         page.port.setValue(1)

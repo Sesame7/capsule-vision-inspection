@@ -427,6 +427,7 @@ def test_normal_paused_reporting_ack_and_overload_use_genuine_stop(
         peer.hold_next(ReportStage.BITMAP)
         panel = window.communication.reporting_panel
         assert panel is not None
+        panel.protocol.setCurrentIndex(0)  # Reporting peer uses FINS/UDP.
         panel.port.setValue(peer.port)
         panel.timeout.setValue(2)
         panel.enabled.setChecked(True)

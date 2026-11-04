@@ -140,6 +140,7 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         page = window.communication
         panel = page.reporting_panel
         assert panel is not None
+        panel.protocol.setCurrentIndex(0)  # Reporting peer uses FINS/UDP.
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)
         with socket.socket() as probe:

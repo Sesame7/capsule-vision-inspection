@@ -322,8 +322,8 @@ can be explicitly saved to establish that initial file. Save/Discard feedback
 and actions remain outside the scrolling content.
 
 The versionless object permits optional `reporting`, `diagnostic` and `web`
-sections; `{}` means neutral defaults, with reporting and Web disabled. Unknown
-or duplicate fields and invalid present types/ranges are rejected. Superseded
+sections; an existing `{}` means legacy UDP defaults, with reporting and Web
+disabled. Unknown or duplicate fields and invalid present types/ranges are rejected. Superseded
 `endpoint` envelopes, `transport` fields and protocol aliases are not accepted;
 startup reports them without rewriting the file. Explicit Save writes this format.
 
@@ -376,7 +376,10 @@ ID serializes as:
 {"reporting": {"protocol": "modbus_tcp", "enabled": true, "base_address": 100}}
 ```
 
-Save omits default fields and whole default sections. Nondefault settings remain
+Save omits fields and whole sections equal to the persisted schema's legacy
+defaults, independently of initial in-memory defaults. Newly saved FINS/TCP
+reporting and diagnostic sections always contain `"protocol": "fins_tcp"`, even
+when disabled and otherwise unchanged. Nondefault settings remain
 even when a service is disabled; endpoint sections written by Save identify their
 protocol explicitly. For example:
 
@@ -404,8 +407,12 @@ subnet validity. There is no DNS, wildcard fallback or automatic IP substitution
 
 A missing file leaves reporting and Web disabled, without blocking valid
 Production startup or creating a file. Communication shows **Defaults · not saved**;
-localhost/UDP and Web 127.0.0.1:8765 at 500 ms are neutral editing defaults, not a
-saved Production destination. Camera source mode never selects a PLC endpoint.
+both reporting and Diagnostics initially use FINS/TCP at 127.0.0.1:9600 with a
+one-second timeout. Web remains 127.0.0.1:8765 at 500 ms. These are editing defaults,
+not a saved Production destination. Camera source mode never selects a PLC endpoint.
+An existing empty or partially populated document still decodes omitted endpoint
+sections/fields as FINS/UDP; explicit UDP, TCP and Modbus selections are unchanged.
+No PLC connection or reporting activity starts merely from loading initial values.
 Explicit Save establishes the file; Discard cannot reload a nonexistent file and
 preserves the draft with feedback. Valid files restore their exact saved
 settings, including Web auto-start when enabled, without rewriting them.

@@ -28,7 +28,11 @@ implicit UDP fallback occurs. UDP uses explicit FINS routing. Clients do not
 change PLC mode, implement safety interlocks or infer photo/reject semantics.
 
 FINS endpoints independently select UDP/TCP and a
-numeric target. UDP/localhost are neutral editing defaults; normal Production
+numeric target. Without a communication preferences file, both reporting and
+Diagnostics initially select FINS/TCP at 127.0.0.1:9600 with a one-second timeout;
+reporting remains disabled. Existing documents with omitted protocol or endpoint
+fields retain FINS/UDP defaults. Initial values neither open a PLC connection nor
+create a settings file. Normal Production
 reporting uses an explicitly saved selection, never a camera-source-derived PLC
 endpoint. Engineer authorization applies to manual writes on both local and
 remote endpoints. Confirm the commissioned endpoint and intended operation.

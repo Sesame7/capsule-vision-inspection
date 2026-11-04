@@ -516,6 +516,7 @@ def test_slow_reporter_keeps_gui_responsive_and_close_waits_actual_exit(
             window.communication.configure_preferences(
                 tmp_path / "communication.json", CommunicationPreferences()
             )
+            window.communication.protocol.setCurrentIndex(0)
             window.communication.port.setValue(manual_peer.port)
             window.communication.persist_settings()
             window.communication.dispatch(RequestKind.READ)

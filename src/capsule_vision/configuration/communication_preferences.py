@@ -52,9 +52,22 @@ class WebPreferences:
 
 @dataclass(frozen=True, slots=True)
 class CommunicationPreferences:
-    reporting: ReportingSelection = ReportingSelection()
-    diagnostic: Endpoint = FinsUdpEndpoint()
+    """Initial editing values; persisted omissions retain their legacy defaults."""
+
+    reporting: ReportingSelection = ReportingSelection(
+        settings=ReportingSettings(endpoint=FinsTcpEndpoint())
+    )
+    diagnostic: Endpoint = FinsTcpEndpoint()
     web: WebPreferences = WebPreferences(enabled=False)
+
+
+# Existing documents, including {}, must keep their original UDP interpretation.
+# Save compares with these schema defaults so initial TCP sections are explicit.
+_PERSISTED_DEFAULTS = CommunicationPreferences(
+    reporting=ReportingSelection(),
+    diagnostic=FinsUdpEndpoint(),
+    web=WebPreferences(enabled=False),
+)
 
 
 def _object(value: object, fields: set[str], context: str) -> dict[str, object]:
@@ -167,7 +180,7 @@ def load_communication_preferences(path: Path) -> CommunicationPreferences:
         web = _object(
             obj.get("web", {}), {"enabled", "host", "port", "interval_ms"}, "web"
         )
-        defaults = CommunicationPreferences()
+        defaults = _PERSISTED_DEFAULTS
         return CommunicationPreferences(
             ReportingSelection(
                 _boolean(reporting.get("enabled", False), "reporting.enabled"),
@@ -224,7 +237,7 @@ def _address_json(address: FinsAddress, default: FinsAddress) -> dict[str, int]:
 
 def save_communication_preferences(path: Path, value: CommunicationPreferences) -> None:
     """Atomic replacement of definitions only; no sockets, ACKs or runtime state."""
-    defaults = CommunicationPreferences()
+    defaults = _PERSISTED_DEFAULTS
     payload: dict[str, object] = {}
     if value.reporting != defaults.reporting:
         reporting = _endpoint_json(value.reporting.settings.endpoint)

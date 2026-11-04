@@ -102,7 +102,8 @@ def test_disabled_modbus_reporting_can_be_saved_without_choosing_a_base(
     )
     save_communication_preferences(path, value)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "reporting": {"protocol": "modbus_tcp"}
+        "reporting": {"protocol": "modbus_tcp"},
+        "diagnostic": {"protocol": "fins_tcp"},
     }
     assert load_communication_preferences(path) == value
 
@@ -318,7 +319,9 @@ def test_sparse_defaults_and_protocol_specific_endpoint_round_trip(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "communication.json"
-    defaults = CommunicationPreferences()
+    defaults = CommunicationPreferences(
+        reporting=ReportingSelection(), diagnostic=FinsUdpEndpoint()
+    )
     save_communication_preferences(path, defaults)
     assert json.loads(path.read_text(encoding="utf-8")) == {}
     assert load_communication_preferences(path) == defaults
@@ -377,3 +380,47 @@ def test_sparse_defaults_and_protocol_specific_endpoint_round_trip(
     stored = json.loads(path.read_text(encoding="utf-8"))
     assert stored["reporting"] == {"protocol": "fins_tcp"}
     assert load_communication_preferences(path) == tcp
+
+
+def test_initial_tcp_defaults_are_disabled_and_saved_explicitly(tmp_path: Path) -> None:
+    value = CommunicationPreferences()
+    assert value.reporting.settings.endpoint == value.diagnostic == FinsTcpEndpoint()
+    assert (value.diagnostic.host, value.diagnostic.port, value.diagnostic.timeout) == (
+        "127.0.0.1",
+        9600,
+        1.0,
+    )
+    assert value.reporting.settings.base_address == 49
+    assert not value.reporting.enabled and not value.web.enabled
+    path = tmp_path / "communication.json"
+    save_communication_preferences(path, value)
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "reporting": {"protocol": "fins_tcp"},
+        "diagnostic": {"protocol": "fins_tcp"},
+    }
+    assert load_communication_preferences(path) == value
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {},
+        {"reporting": {}, "diagnostic": {}, "web": {}},
+        {"web": {"port": 8766}},
+        {"reporting": {"enabled": True}},
+        {"reporting": {"host": "192.0.2.10"}, "diagnostic": {"timeout": 2}},
+        {"reporting": {"protocol": "fins_udp"}, "diagnostic": {"protocol": "fins_udp"}},
+    ],
+)
+def test_legacy_omissions_stay_udp_and_loading_never_rewrites(
+    tmp_path: Path, raw: object
+) -> None:
+    path = tmp_path / "communication.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    before = path.read_bytes()
+    value = load_communication_preferences(path)
+    assert isinstance(value.reporting.settings.endpoint, FinsUdpEndpoint)
+    assert isinstance(value.diagnostic, FinsUdpEndpoint)
+    assert path.read_bytes() == before
+    save_communication_preferences(path, value)
+    assert load_communication_preferences(path) == value

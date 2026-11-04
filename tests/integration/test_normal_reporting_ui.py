@@ -112,8 +112,8 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
     engine = Engine()
     with normal_window(tmp_path, engine) as (startup, window, panel):
         commands = panel.controller
-        assert commands.reporting_selection() == ReportingSelection()
-        assert panel.protocol.currentText() == "FINS/UDP"
+        assert commands.reporting_selection() == startup.communication.reporting
+        assert panel.protocol.currentText() == "FINS/TCP"
         assert commands.reporting_snapshot() is None
         assert panel.service_status.text() == "OFF"
         assert (
@@ -141,8 +141,10 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         window = create_window(restored, delivery)
         panel = window.communication.reporting_panel
         assert panel is not None
-        assert panel.controller.reporting_selection() == ReportingSelection()
-        assert panel.protocol.currentText() == "FINS/UDP"
+        assert (
+            panel.controller.reporting_selection() == restored.communication.reporting
+        )
+        assert panel.protocol.currentText() == "FINS/TCP"
         close_window(window)
         delivery.detach()
     finally:
@@ -208,6 +210,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         normal_window(tmp_path, Engine()) as (startup, window, panel),
     ):
         seed(peer, 88)
+        panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
         panel.timeout.setValue(0.2)
         panel.source[1].setValue(3)
@@ -272,6 +275,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         window.communication.host.setText("127.0.0.1")
 
         page = window.communication
+        page.protocol.setCurrentIndex(0)
         page.port.setValue(peer.port)
         window.communication.persist_settings()
         page.area.setCurrentIndex(1)  # W, independent from automatic settings.
@@ -318,6 +322,7 @@ def test_settings_locked_starting_stopping_then_restart_has_new_generation(
         server() as peer,
         normal_window(tmp_path, first, second) as (startup, window, panel),
     ):
+        panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
@@ -373,6 +378,7 @@ def test_reporting_failure_feedback_does_not_fault_production(
         normal_window(tmp_path, Engine()) as (startup, window, panel),
     ):
         peer.fail_next(ReportStage.INITIALIZATION, "plc")
+        panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
@@ -414,6 +420,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
     ):
         seed(peer, 50)
         peer.hold_next(ReportStage.SEQUENCE)
+        panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
         panel.timeout.setValue(2)
         panel.enabled.setChecked(True)
@@ -430,6 +437,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
             == panel.service_status.accessibleName()
         )
         page = window.communication
+        page.protocol.setCurrentIndex(0)
         page.port.setValue(peer.port)
         window.communication.persist_settings()
         page.area.setCurrentIndex(1)
@@ -487,6 +495,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
 ) -> None:
     engine = Engine(hold=1)
     with server() as peer, normal_window(tmp_path, engine) as (startup, window, panel):
+        panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
@@ -502,6 +511,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
 
         monkeypatch.setattr(panel.controller, "validate_manual_request", delayed_guard)
         page = window.communication
+        page.protocol.setCurrentIndex(0)
         page.port.setValue(peer.port)
         window.communication.persist_settings()
         page.area.setCurrentIndex(1)

@@ -197,6 +197,8 @@ def test_tcp_roundtrip_bilingual_owner_and_routes(
         page.set_language("zh")
         page.show()
         try:
+            # Exercise UDP routing edits before switching to TCP's negotiated route.
+            page.protocol.setCurrentIndex(0)
             assert page.protocol.currentText() == "FINS/UDP"
             page.destination[1].setValue(33)
             page.source[1].setValue(44)

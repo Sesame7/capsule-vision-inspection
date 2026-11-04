@@ -62,7 +62,8 @@ class WatchProbe(CommunicationPage):
 def page(qapp: QApplication, tmp_path: Path) -> Iterator[WatchProbe]:
     widget = WatchProbe()
     widget.configure_preferences(
-        tmp_path / "communication.json", CommunicationPreferences()
+        tmp_path / "communication.json",
+        CommunicationPreferences(diagnostic=FinsUdpEndpoint()),
     )
     widget.persist_settings()
     widget.show()
@@ -128,7 +129,8 @@ def test_validation_remote_read_and_write(
 
     page = CommunicationPage(execute=execute)
     page.configure_preferences(
-        tmp_path / "communication.json", CommunicationPreferences()
+        tmp_path / "communication.json",
+        CommunicationPreferences(diagnostic=FinsUdpEndpoint()),
     )
     page.set_language(language)
     page.area.setCurrentIndex(0 if area is FinsMemoryArea.DM else 1)
@@ -367,7 +369,8 @@ def test_close_during_real_udp_wait_keeps_socket_on_worker_until_reply(
         owner.start()
         page = window.communication
         page.configure_preferences(
-            tmp_path / "communication.json", CommunicationPreferences()
+            tmp_path / "communication.json",
+            CommunicationPreferences(diagnostic=FinsUdpEndpoint()),
         )
         page.port.setValue(peer.getsockname()[1])
         page.persist_settings()

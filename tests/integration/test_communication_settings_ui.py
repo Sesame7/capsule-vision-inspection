@@ -614,6 +614,7 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     panel.port.setValue(19601)
     panel.source[1].setValue(5)
     panel.enabled.setChecked(True)
+    page.protocol.setCurrentIndex(0)  # Exercise independently saved UDP routing.
     page.port.setValue(19602)
     page.destination[1].setValue(7)
     page.web_panel.port.setValue(8766)
@@ -729,8 +730,15 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
 
 @pytest.mark.parametrize("mode", ["folder", "basler"])
 def test_missing_preferences_are_unsaved_disabled_and_source_independent(
-    qapp: QApplication, tmp_path: Path, mode: str
+    qapp: QApplication, tmp_path: Path, mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    sockets: list[bool] = []
+
+    def unexpected_socket(*args: object, **kwargs: object) -> None:
+        sockets.append(True)
+        raise AssertionError("Initial communication defaults must not open sockets")
+
+    monkeypatch.setattr(socket, "socket", unexpected_socket)
     data = saved_data(tmp_path)
     sources = load_camera_sources(data.sources)
     save_camera_sources(
@@ -753,11 +761,16 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         assert not startup.communication.reporting.enabled
         assert not startup.communication.web.enabled
         assert startup.application.snapshot().state is ApplicationState.READY
-        assert startup.communication.diagnostic == FinsUdpEndpoint()
+        assert startup.communication.diagnostic == FinsTcpEndpoint()
         page = window.communication
         panel = page.reporting_panel
         assert panel is not None
-        assert panel.controller.reporting_selection() == ReportingSelection()
+        assert panel.controller.reporting_selection() == startup.communication.reporting
+        assert panel.selection().settings.endpoint == FinsTcpEndpoint()
+        assert panel.protocol.currentText() == page.protocol.currentText() == "FINS/TCP"
+        assert panel.port.value() == page.port.value() == 9600
+        assert panel.host.text() == page.host.text() == "127.0.0.1"
+        assert not sockets
         assert panel.controller.reporting_snapshot() is None
         assert not page.web_panel.saved_available and not page.dirty
         assert page.preferences_status.text() == text(
@@ -774,6 +787,10 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         panel.enabled.setChecked(False)
         page.persist_settings()  # Explicitly establish neutral disabled settings.
         payload = data.communication.read_bytes()
+        assert json.loads(payload) == {
+            "reporting": {"protocol": "fins_tcp"},
+            "diagnostic": {"protocol": "fins_tcp"},
+        }
         assert not page.dirty and page.web_panel.saved_available
         assert page.preferences_status.text() == text("saved", window.language)
         assert not page.preferences_status.toolTip()
@@ -787,6 +804,40 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         finally:
             restored.application.close().result(5)
             assert restored.application.join(5)
+    finally:
+        close_window(window)
+        delivery.detach()
+    assert not sockets
+
+
+@pytest.mark.parametrize("protocol", [None, "fins_udp", "fins_tcp", "modbus_tcp"])
+def test_existing_preferences_keep_protocol_in_both_panels(
+    qapp: QApplication, tmp_path: Path, protocol: str | None
+) -> None:
+    data = ApplicationData.at_entry(tmp_path)
+    data.communication.parent.mkdir(parents=True)
+    raw = (
+        {section: {"protocol": protocol} for section in ("reporting", "diagnostic")}
+        if protocol is not None
+        else {}
+    )
+    data.communication.write_text(json.dumps(raw), encoding="utf-8")
+    original = data.communication.read_bytes()
+    startup = load_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        page, panel = window.communication, window.communication.reporting_panel
+        assert panel is not None
+        expected = {"fins_udp": 0, "fins_tcp": 1, "modbus_tcp": 2}[
+            protocol or "fins_udp"
+        ]
+        assert panel.protocol.currentIndex() == page.protocol.currentIndex() == expected
+        assert panel.selection() == startup.communication.reporting
+        assert page.diagnostic_selection() == startup.communication.diagnostic
+        assert not panel.controller.reporting_selection().enabled
+        assert panel.controller.reporting_snapshot() is None
+        assert data.communication.read_bytes() == original
     finally:
         close_window(window)
         delivery.detach()
@@ -1020,6 +1071,8 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         if size[0] == 1300:
             # Expanded controls must fit the viewport after first navigation,
             # language changes and shrinking from a previously wide grid.
+            panel.protocol.setCurrentIndex(0)
+            page.protocol.setCurrentIndex(0)
             panel.advanced_button.click()
             page.advanced_button.click()
             page.watch_editor_button.click()

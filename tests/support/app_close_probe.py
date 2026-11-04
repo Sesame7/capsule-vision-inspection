@@ -170,6 +170,7 @@ def install() -> None:
                 window.navigate(2)
             if scenario in ("success", "timeout", "pending", "switch"):
                 simulator = FinsUdpSimulator(port=0)
+                window.communication.protocol.setCurrentIndex(0)
                 window.communication.port.setValue(simulator.port)
                 window.communication.persist_settings()
                 window.communication.timeout.setValue(0.15)
