@@ -158,13 +158,16 @@ def test_accounts_persist_casefold_id_role_and_enabled_state(database: Path) -> 
 
 
 @pytest.mark.parametrize("kind", ["wrong-password", "unknown", "disabled"])
-def test_failed_authentication_is_generic_and_guest(database: Path, kind: str) -> None:
+def test_failed_authentication_preserves_current_session(
+    database: Path, kind: str
+) -> None:
     with opened(database) as owner:
         owner.login("Admin", SECRET).result(WAIT)
         owner.create_account("Disabled", Role.OPERATOR, SECRET).result(WAIT)
         accounts = owner.list_accounts().result(WAIT)
         disabled = next(a for a in accounts if a.username == "Disabled")
         owner.set_enabled(disabled.account_id, False).result(WAIT)
+        before = owner.snapshot()
         name = (
             "Admin"
             if kind == "wrong-password"
@@ -176,7 +179,7 @@ def test_failed_authentication_is_generic_and_guest(database: Path, kind: str) -
             owner.login(
                 name, "incorrect" if kind == "wrong-password" else SECRET
             ).result(WAIT)
-        assert owner.snapshot().role is Role.GUEST
+        assert owner.snapshot() == before
 
 
 def test_management_boundary_and_self_password_change(database: Path) -> None:
@@ -266,7 +269,7 @@ def test_late_login_cannot_overwrite_logout_or_later_login(
             assert entered.wait(WAIT)
             logout = owner.logout()
             second = owner.login("Admin", SECRET)
-            assert owner.snapshot().revision > logout.revision
+            assert owner.snapshot() == logout
             release.set()
             with pytest.raises(StaleSessionError):
                 first.result(WAIT)

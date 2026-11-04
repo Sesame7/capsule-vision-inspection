@@ -41,6 +41,8 @@ from capsule_vision.application.identity_models import (
     Account,
     Role,
     SecurityStorageError,
+    SessionSnapshot,
+    StaleSessionError,
     StorageState,
 )
 from capsule_vision.application.passwords import PasswordVerifier
@@ -326,13 +328,17 @@ def test_guest_login_wrong_disabled_switch_logout_and_self_password(
     assert owner.snapshot().role is Role.ADMINISTRATOR
     worker = next(a for a in completed(owner.list_accounts()) if a.username == "Worker")
     completed(owner.set_enabled(worker.account_id, False))
+    current = owner.snapshot()
     ui.switch_user()
-    assert owner.snapshot().role is Role.GUEST
+    assert owner.snapshot() == current
     dialog = submit(ui, username="Worker", password=SECRET)
     until(lambda: not dialog.busy)
     assert dialog.status.text() == text("identity_invalid", "en")
+    assert owner.snapshot() == current
+    assert ui.controls["identity_manage"].isVisible()
     submit(ui, username="Admin", password=NEW_SECRET)
     until(lambda: ui.form is None)
+    assert owner.snapshot().revision == current.revision + 1
     ui.logout()
     assert window.navbar.user.text() == "Guest"
     assert window.bridge.application.snapshot() == before
@@ -425,6 +431,73 @@ def test_self_disable_and_admin_reset_refresh_without_production_effect(
     assert owner.snapshot().role is Role.GUEST
     assert window.navbar.user.text() == "Guest"
     assert window.bridge.application.snapshot() == before
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_switch_dismissal_is_ordered_with_service_commit(
+    identity_screen: tuple[MainWindow, LocalIdentity],
+    monkeypatch: pytest.MonkeyPatch,
+    committed: bool,
+) -> None:
+    window, owner = identity_screen
+    ui = window.identity_controls
+    login(ui)
+    current = owner.snapshot()
+    production = window.bridge.application.snapshot()
+    changes = QSignalSpy(ui.session_changed)
+    ui.switch_user()
+    form(ui).reject()  # Opening and canceling without a request changes nothing.
+    assert owner.snapshot() == current and changes.count() == 0
+    entered, release = Event(), Event()
+    original_login = owner.login
+    attempts: list[Future[SessionSnapshot]] = []
+
+    def request(username: str, password: str) -> Future[SessionSnapshot]:
+        attempt = original_login(username, password)
+        attempts.append(attempt)
+        return attempt
+
+    def verify(password: str, verifier: PasswordVerifier) -> bool:
+        entered.set()
+        assert release.wait(10)
+        return passwords.verify_password(password, verifier)
+
+    monkeypatch.setattr(owner, "login", request)
+    monkeypatch.setattr(identity_module, "verify_password", verify)
+    try:
+        ui.switch_user()
+        dialog = submit(ui, username="Worker", password=SECRET)
+        until(entered.is_set)
+        assert owner.snapshot() == current
+        assert window.navbar.user.text() == "Admin"
+        assert ui.controls["identity_manage"].isVisible()
+        assert changes.count() == 0
+        attempt = attempts[0]
+        if committed:
+            release.set()
+            # Deliberately withhold Qt dispatch until the service has committed.
+            replacement = attempt.result(5)
+            assert replacement.role is Role.OPERATOR and dialog.busy
+        dialog.reject()
+        release.set()
+        until(attempt.done)
+        if committed:
+            assert owner.snapshot().revision == current.revision + 1
+            assert window.navbar.user.text() == "Worker"
+            assert not ui.controls["identity_manage"].isVisible()
+            assert changes.count() == 1
+        else:
+            with pytest.raises(StaleSessionError):
+                attempt.result()
+            assert owner.snapshot() == current
+            assert window.navbar.user.text() == "Admin"
+            assert ui.controls["identity_manage"].isVisible()
+            assert changes.count() == 0
+        QApplication.processEvents()  # Late delivery cannot reopen or replace a form.
+        assert ui.form is None
+        assert window.bridge.application.snapshot() == production
+    finally:
+        release.set()
 
 
 def test_stale_login_cancel_switch_logout_and_real_close(
@@ -524,6 +597,7 @@ def test_runtime_database_failure_is_sanitized_and_returns_guest(
 ) -> None:
     window, owner = identity_screen
     before = window.bridge.application.snapshot()
+    login(window.identity_controls)
 
     def failed_read(self: AccountStore, username: str) -> None:
         assert current_thread() is not main_thread()
@@ -539,6 +613,8 @@ def test_runtime_database_failure_is_sanitized_and_returns_guest(
     assert owner.snapshot().role is Role.GUEST
     assert owner.storage_snapshot().state is StorageState.UNAVAILABLE
     assert window.navbar.user.text() == "Guest"
+    dialog.reject()
+    assert owner.snapshot().role is Role.GUEST
     assert (
         window.navbar.user.toolTip()
         == window.navbar.user.accessibleName()

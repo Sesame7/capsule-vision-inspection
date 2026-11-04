@@ -125,9 +125,14 @@ cleanup and the independent label/Preview work before releasing presentation.
 bounded serial account/credential worker (16 waiting requests plus one active).
 SQLite and PBKDF2 execute on that worker; normal consumers use Futures and cheap
 session/storage observations. Logout advances the session revision immediately.
-Admission revisions prevent late authentication or stale administrative work from
-replacing a newer decision. Password work stays outside the session lock; short
-authorized transactions and their session publication are serialized together.
+Starting authentication supersedes the previous pending attempt without changing
+the active session. The service tracks that attempt separately from the admission
+revision; both must still match at commit. `cancel_login` invalidates the specific
+pending attempt under the same lock as Last Login persistence/session publication,
+without undoing an already committed login. Admission revisions prevent stale
+administrative work from replacing a newer session decision. Password work stays
+outside the session lock; short authorized transactions and their session
+publication are serialized together.
 
 The private account store owns SQLite validation and transactions; the fixed-role
 service owns Administrator admission. Last-enabled-Administrator protection is
@@ -149,11 +154,13 @@ forms clear secrets on submission/dismissal. Authentication and account IO use
 the service worker and queued, destruction-safe Qt delivery; superseded results
 cannot replace a later session decision. The existing shell refresh observes role
 changes. Manage Users presents a read-only four-column table and captures account
-IDs in separate role and disable-confirmation dialogs. Dialog dismissal invalidates
-its delivery token without cancelling accepted account work; the service remains
-the transaction and authorization owner. The shell disables account UI on confirmed
-Close. Application retains worker stop/join ownership. Login/logout never controls
-an inspection session.
+IDs in separate role and disable-confirmation dialogs. Switch User retains the
+current login until successful replacement. Dismissing its pending credential form
+invalidates authentication at the service boundary as well as queued Qt delivery.
+Other account-dialog dismissal fences delivery without cancelling accepted account
+work; the service remains the transaction and authorization owner. The shell
+disables account UI on confirmed Close. Application retains worker stop/join
+ownership. Login/logout never controls an inspection session.
 
 Production checks the session at command admission under the Application lock.
 Start freezes automatic reporting and Guest demonstration provenance for the

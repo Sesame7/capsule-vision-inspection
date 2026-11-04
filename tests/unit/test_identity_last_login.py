@@ -22,10 +22,15 @@ from capsule_vision.application.identity_models import (
     AuthenticationError,
     Role,
     SecurityStorageError,
+    SessionSnapshot,
     StaleSessionError,
     StorageState,
 )
-from capsule_vision.application.passwords import PasswordVerifier, verify_password
+from capsule_vision.application.passwords import (
+    PasswordVerifier,
+    hash_password,
+    verify_password,
+)
 
 SECRET = "isolated migration credential"
 V1_SCHEMA = """
@@ -251,13 +256,17 @@ def test_failed_or_disabled_login_leaves_metadata_untouched(
     v1_store: Path, name: str, password: str
 ) -> None:
     with opened(v1_store) as owner:
+        current = owner.login("Admin", SECRET).result(10)
+        metadata = login_values(v1_store)
         with pytest.raises(AuthenticationError):
             owner.login(name, password).result(10)
-        owner.logout()
-    assert all(value is None for value in login_values(v1_store).values())
+        assert owner.snapshot() == current
+        assert login_values(v1_store) == metadata
 
 
-@pytest.mark.parametrize("later", ["logout", "login", "close"])
+@pytest.mark.parametrize(
+    "later", ["cancel", "logout", "login", "failed-login", "close"]
+)
 def test_stale_verified_login_does_not_write_timestamp(
     v1_store: Path, monkeypatch: pytest.MonkeyPatch, later: str
 ) -> None:
@@ -268,12 +277,26 @@ def test_stale_verified_login_does_not_write_timestamp(
         assert release.wait(10)
         return verify_password(password, verifier)
 
-    monkeypatch.setattr(identity_module, "verify_password", held)
     with opened(v1_store) as owner:
+        current = owner.login("Admin", SECRET).result(10)
+        metadata = login_values(v1_store)
+        monkeypatch.setattr(identity_module, "verify_password", held)
         try:
-            first = owner.login("Admin", SECRET)
+            first = owner.login("Worker", SECRET)
             assert entered.wait(10)
-            second = owner.login("Worker", SECRET) if later == "login" else None
+            assert owner.snapshot() == current
+            second = (
+                owner.login("Admin" if later == "login" else "Unknown", SECRET)
+                if later in ("login", "failed-login")
+                else None
+            )
+            if second is not None:
+                assert owner.snapshot() == current
+                assert not owner.cancel_login(first)  # Does not cancel its successor.
+            if later == "cancel":
+                assert owner.cancel_login(first)
+                assert not owner.cancel_login(first)
+                assert owner.snapshot() == current
             if later == "logout":
                 owner.logout()
             if later == "close":
@@ -282,25 +305,144 @@ def test_stale_verified_login_does_not_write_timestamp(
             with pytest.raises(StaleSessionError):
                 first.result(10)
             if second is not None:
-                assert second.result(10).role is Role.OPERATOR
-            assert login_values(v1_store)["Admin"] is None
-            assert (login_values(v1_store)["Worker"] is not None) == (later == "login")
+                if later == "login":
+                    assert second.result(10).revision == current.revision + 1
+                else:
+                    with pytest.raises(AuthenticationError):
+                        second.result(10)
+            if later in ("cancel", "failed-login"):
+                assert owner.snapshot() == current
+            if later != "login":
+                assert login_values(v1_store) == metadata
+            assert login_values(v1_store)["Worker"] is None
         finally:
             release.set()
 
 
 def test_timestamp_write_failure_never_publishes_success(v1_store: Path) -> None:
     with opened(v1_store) as owner:
+        current = owner.login("Admin", SECRET).result(10)
+        metadata = login_values(v1_store)
         # Installed after schema validation: this is a deterministic storage-failure fixture.
         with closing(sqlite3.connect(v1_store)) as connection, connection:
             connection.execute(
                 "CREATE TRIGGER deny_login BEFORE UPDATE OF last_login_utc ON accounts BEGIN SELECT RAISE(ABORT, 'isolated write failure'); END"
             )
         with pytest.raises(SecurityStorageError):
-            owner.login("Admin", SECRET).result(10)
+            owner.login("Worker", SECRET).result(10)
         assert owner.snapshot().role is Role.GUEST
+        assert owner.snapshot().revision == current.revision + 1
         assert owner.storage_snapshot().state is StorageState.UNAVAILABLE
-    assert all(value is None for value in login_values(v1_store).values())
+    assert login_values(v1_store) == metadata
+
+
+def test_replacement_and_same_account_login_each_publish_one_revision(
+    v1_store: Path,
+) -> None:
+    with opened(v1_store) as owner:
+        current = owner.login("Admin", SECRET).result(10)
+        for username in ("Worker", "Worker"):
+            previous = current
+            current = owner.login(username, SECRET).result(10)
+            assert current.revision == previous.revision + 1
+            assert owner.snapshot() == current
+            assert current.account is not None and current.account.username == username
+            assert current.account.last_login_utc is not None
+            assert login_values(v1_store)[
+                username
+            ] == current.account.last_login_utc.isoformat(timespec="microseconds")
+
+
+def test_cancellation_after_commit_before_future_delivery_cannot_undo_login(
+    v1_store: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    verifying, verify_release, committed, deliver_release = (Event() for _ in range(4))
+
+    def held(password: str, verifier: PasswordVerifier) -> bool:
+        verifying.set()
+        assert verify_release.wait(10)
+        return verify_password(password, verifier)
+
+    with opened(v1_store) as owner:
+        current = owner.login("Admin", SECRET).result(10)
+        monkeypatch.setattr(identity_module, "verify_password", held)
+        try:
+            attempt = owner.login("Worker", SECRET)
+            assert verifying.wait(10)
+            deliver = attempt.set_result
+
+            def held_delivery(value: SessionSnapshot) -> None:
+                committed.set()
+                assert deliver_release.wait(10)
+                deliver(value)
+
+            monkeypatch.setattr(attempt, "set_result", held_delivery)
+            verify_release.set()
+            assert committed.wait(10)
+            assert not attempt.done()
+            assert not owner.cancel_login(attempt)
+            replacement = owner.snapshot()
+            assert replacement.role is Role.OPERATOR
+            assert replacement.revision == current.revision + 1
+            assert login_values(v1_store)["Worker"] is not None
+            deliver_release.set()
+            assert attempt.result(10) == replacement
+        finally:
+            verify_release.set()
+            deliver_release.set()
+
+
+@pytest.mark.parametrize("change", ["role", "disable", "reset", "self-password"])
+def test_committed_current_account_change_invalidates_pending_authentication(
+    v1_store: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    entered, release = Event(), Event()
+
+    def held(password: str) -> PasswordVerifier:
+        entered.set()
+        assert release.wait(10)
+        return hash_password(password)
+
+    with opened(v1_store) as owner:
+        current = owner.login("Admin", SECRET).result(10)
+        assert current.account is not None
+        account_id = current.account.account_id
+        metadata = login_values(v1_store)
+        monkeypatch.setattr(identity_module, "hash_password", held)
+        try:
+            # Hold the serial worker outside its session lock so both the account
+            # change and authentication are admitted under the original revision.
+            backup = owner.create_account("Backup", Role.ADMINISTRATOR, SECRET)
+            assert entered.wait(10)
+            match change:
+                case "role":
+                    update = owner.set_role(account_id, Role.ENGINEER)
+                case "disable":
+                    update = owner.set_enabled(account_id, False)
+                case "reset":
+                    update = owner.reset_password(account_id, "replacement credential")
+                case _:
+                    update = owner.change_password(SECRET, "replacement credential")
+            attempt = owner.login("Worker", SECRET)
+            assert owner.snapshot() == current
+            release.set()
+            backup.result(10)
+            update.result(10)
+            changed = owner.snapshot()
+            with pytest.raises(StaleSessionError):
+                attempt.result(10)
+            assert owner.snapshot() == changed
+            assert changed.revision == current.revision + 1
+            assert changed.role is (
+                Role.ENGINEER
+                if change == "role"
+                else Role.ADMINISTRATOR
+                if change == "self-password"
+                else Role.GUEST
+            )
+            assert login_values(v1_store) == {**metadata, "Backup": None}
+        finally:
+            release.set()
 
 
 @pytest.mark.parametrize(

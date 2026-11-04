@@ -66,6 +66,7 @@ class LocalIdentity:
         self._queue: Queue[Callable[[], None] | None] = Queue(16)
         self._accepting = True
         self._session = SessionSnapshot()
+        self._authentication: Future[SessionSnapshot] | None = None
         self._storage = SecurityStorageSnapshot()
         self._store: AccountStore | None = None
         self._dummy = PasswordVerifier(
@@ -103,6 +104,7 @@ class LocalIdentity:
             return self._storage
 
     def _publish(self, account: Account | None) -> SessionSnapshot:
+        self._authentication = None
         self._session = SessionSnapshot(self._session.revision + 1, account)
         return self._session
 
@@ -164,27 +166,55 @@ class LocalIdentity:
         password_bytes(password)
         with self._lock:
             self._admission()
-            revision = self._publish(None).revision
+            revision = self._session.revision
 
             def authenticate() -> SessionSnapshot:
-                with self._lock:
-                    if not self._accepting or self._session.revision != revision:
-                        raise StaleSessionError("Authentication was superseded")
-                record = self._available().by_name(username)
-                # Unknown names still perform the ordinary expensive verifier work.
-                verifier = record[1] if record is not None else self._dummy
-                valid = verify_password(password, verifier)
-                with self._lock:
-                    if not self._accepting or self._session.revision != revision:
-                        raise StaleSessionError("Authentication was superseded")
-                    if record is None or not record[0].enabled or not valid:
-                        raise AuthenticationError("Invalid username or password")
-                    account = self._available().record_login(
-                        record[0].account_id, datetime.now(UTC)
-                    )
-                    return self._publish(account)
+                try:
+                    with self._lock:
+                        self._check_authentication(attempt, revision)
+                    record = self._available().by_name(username)
+                    # Unknown names still perform the ordinary expensive verifier work.
+                    verifier = record[1] if record is not None else self._dummy
+                    valid = verify_password(password, verifier)
+                    with self._lock:
+                        self._check_authentication(attempt, revision)
+                        if record is None or not record[0].enabled or not valid:
+                            raise AuthenticationError("Invalid username or password")
+                        account = self._available().record_login(
+                            record[0].account_id, datetime.now(UTC)
+                        )
+                        return self._publish(account)
+                finally:
+                    with self._lock:
+                        if self._authentication is attempt:
+                            self._authentication = None
 
-            return self._enqueue(authenticate)
+            attempt = self._enqueue(authenticate)
+            self._authentication = attempt
+            return attempt
+
+    def _check_authentication(
+        self, attempt: Future[SessionSnapshot], revision: int
+    ) -> None:
+        # Caller holds the same lock used for cancellation and session publication.
+        if (
+            not self._accepting
+            or self._session.revision != revision
+            or self._authentication is not attempt
+        ):
+            raise StaleSessionError("Authentication was superseded")
+
+    def cancel_login(self, attempt: Future[SessionSnapshot]) -> bool:
+        """Invalidate only this pending attempt, without undoing a committed login.
+
+        Worker ownership is retained; its Future still delivers a terminal result.
+        Cancellation and the Last Login/session commit share the session lock.
+        """
+        with self._lock:
+            if self._authentication is not attempt:
+                return False
+            self._authentication = None
+            return True
 
     def _admin[T](self, operation: Callable[[AccountStore], T]) -> Future[T]:
         with self._lock:

@@ -158,6 +158,49 @@ def test_page_controls_combine_role_and_state(
     assert vision.folder.isReadOnly() != engineer
 
 
+def test_switch_keeps_engineering_controls_until_successful_replacement(
+    screen: MainWindow,
+) -> None:
+    window = screen
+    owner = window.bridge.application.identity
+    assert owner is not None
+    ui = window.identity_controls
+    before = owner.snapshot()
+    production = window.bridge.application.snapshot()
+    ui.controls["identity_switch"].trigger()
+    dialog = ui.form
+    assert dialog is not None
+
+    def assert_engineer() -> None:
+        assert owner.snapshot() == before
+        assert window.communication.write_button.isEnabled()
+        assert window.communication.save_settings.isEnabled()
+        assert not window.recipe_page.metadata["display_name"].isReadOnly()
+
+    assert_engineer()
+    dialog.fields["identity_username"].setText("OPERATOR")
+    dialog.fields["identity_password"].setText("wrong")
+    dialog.submit.click()
+    assert_engineer()
+    until(lambda: not dialog.busy)
+    assert_engineer()
+    dialog.reject()
+    assert_engineer()
+    ui.switch_user()
+    retry = ui.form
+    assert retry is not None
+    retry.fields["identity_username"].setText("OPERATOR")
+    retry.fields["identity_password"].setText(TEST_PASSWORD)
+    retry.submit.click()
+    until(lambda: ui.form is None)
+    assert owner.snapshot().role is Role.OPERATOR
+    assert not window.communication.write_button.isEnabled()
+    assert not window.communication.save_settings.isEnabled()
+    assert window.recipe_page.metadata["display_name"].isReadOnly()
+    assert window.buttons["batch"].isEnabled()
+    assert window.bridge.application.snapshot() == production
+
+
 @pytest.mark.parametrize("role", [Role.GUEST, Role.OPERATOR])
 def test_browsing_saved_recipes_preserves_dirty_engineering_state(
     screen: MainWindow, tmp_path: Path, role: Role

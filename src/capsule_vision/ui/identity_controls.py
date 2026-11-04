@@ -616,6 +616,7 @@ class IdentityControls(QObject):
         self.confirmation: DisableDialog | None = None
         self._serial = 0
         self._pending: tuple[str, int] | None = None
+        self._login_attempt: Future[SessionSnapshot] | None = None
         self._closing = False
         self._delivery = FutureDelivery()
         # Detach fences worker callbacks before QObject destroys this sender on
@@ -703,6 +704,9 @@ class IdentityControls(QObject):
             form.reject()
 
     def _invalidate(self) -> None:
+        if self._login_attempt is not None and self.owner is not None:
+            self.owner.cancel_login(self._login_attempt)
+        self._login_attempt = None
         self._serial += 1
         self._pending = None
 
@@ -730,7 +734,6 @@ class IdentityControls(QObject):
 
     @Slot()
     def switch_user(self) -> None:
-        self.logout()
         self.login()
 
     @Slot()
@@ -779,9 +782,6 @@ class IdentityControls(QObject):
             return
         if form.busy:
             self._invalidate()
-            # A dismissed login is a later session decision, not Future cancellation.
-            if form.kind == "login" and self.owner is not None:
-                self.owner.logout()
         form.deleteLater()
         if self.users is not None:
             self.users.set_busy(False)
@@ -804,12 +804,14 @@ class IdentityControls(QObject):
         form.set_busy(True, self.language)
 
         if form.kind == "login":
-            self._request(
-                "credential",
-                lambda: owner.login(
+
+            def authenticate() -> Future[SessionSnapshot]:
+                self._login_attempt = owner.login(
                     values["identity_username"], values["identity_password"]
-                ),
-            )
+                )
+                return self._login_attempt
+
+            self._request("credential", authenticate)
         elif form.kind == "change":
             self._request(
                 "credential",
@@ -999,6 +1001,7 @@ class IdentityControls(QObject):
             return
         kind, revision = self._pending
         self._pending = None
+        self._login_attempt = None
         snapshot = self.owner.snapshot() if self.owner else SessionSnapshot()
         if isinstance(value, SessionSnapshot) and value != snapshot:
             error = StaleSessionError()

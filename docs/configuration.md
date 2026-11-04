@@ -155,12 +155,14 @@ stored counts are bounded to 100,000–2,000,000. Passwords are nonempty UTF-8 t
 at most 1024 encoded bytes. Verification uses constant-time digest comparison.
 Plaintext passwords are not persisted, returned in observations or logged.
 
-Successful authentication rechecks its session revision, commits Last Login as
-UTC ISO 8601 text, and then publishes the immutable account/session observation.
-A timestamp write failure cannot produce a successful login. Failed or superseded
-authentication, Guest, logout, password changes/resets and account management do
-not update this value. The UI displays device-local `YYYY-MM-DD HH:mm`, or an em
-dash for an account that has never logged in. This metadata is not an audit trail.
+Successful authentication rechecks its attempt identity and session revision,
+commits Last Login as UTC ISO 8601 text, and then publishes the immutable
+account/session observation with a new revision, including same-account
+reauthentication. A timestamp write failure cannot produce a successful login.
+Failed, canceled or superseded authentication, Guest, logout, password changes/resets
+and account management do not update this value. The UI displays device-local
+`YYYY-MM-DD HH:mm`, or an em dash for an account that has never logged in. This
+metadata is not an audit trail.
 
 Administrator authorization is enforced by the account service for account listing,
 creation, enable/disable, role changes and password resets. The last enabled
@@ -170,14 +172,23 @@ operation completes: role changes take effect, disabling or administrative passw
 reset returns to Guest, and successful self-password change can retain login.
 All session observations are immutable and carry monotonically increasing
 revisions within that owner lifetime. A restart starts a new Guest revision sequence.
-A later login, logout or Close invalidates pending authentication and
-uncommitted account-management requests from an older session decision.
+A new authentication attempt supersedes an older pending attempt without changing
+the active session or its revision. Ordinary authentication rejection (including
+wrong credentials, unknown names and disabled target accounts) and cancellation
+preserve the otherwise-valid current session. Logout, committed login, current-account
+role/enablement/password changes and Close invalidate pending authentication and
+uncommitted account-management requests from an older session decision. Cancellation
+and successful login are ordered by the service commit lock: canceling a specific
+pending attempt prevents its Last Login write, but cannot undo a login that already
+committed. Accepted worker requests still drain to terminal completion.
 
 Corrupt, unsupported and unwritable stores are never silently replaced. Normal
 startup exposes the unavailable storage observation and `Startup.security_error`,
 and the launcher prints the error to stderr; Guest has no account privileges.
 Failure to acquire the ownership lock rejects startup/maintenance explicitly.
 There is no automatic database repair, account creation or privileged fallback.
+Runtime security-storage failure returns the session to Guest; dismissing a form
+does not restore an earlier session snapshot.
 SQLite account data has its own schema/application identity, no History retention
 and no audit/event storage. Local filesystem access and the maintenance environment
 remain OS-level trust boundaries.
@@ -202,8 +213,11 @@ The navigation's current-user button uses the exact caption `Guest` for anonymou
 sessions in every language, or the account's original username when logged in.
 Its tooltip and accessible name retain the localized role and any storage status,
 without repeating the anonymous identity. Role names elsewhere remain localized.
-Login and Switch User use masked credential forms; Switch User first logs out,
-so canceling it leaves Guest. Logout immediately invalidates pending authentication.
+Login and Switch User use masked credential forms. Opening, canceling or failing
+Switch User preserves the otherwise-valid current login; only committed successful
+authentication replaces it. Pending dismissal invalidates that specific attempt
+in the account service as well as its UI callback. Logout immediately invalidates
+pending authentication.
 Change Password verifies the current password and confirms the new one. The
 Administrator's resizable Manage Users dialog prefers 850×500 Qt logical pixels,
 bounded by the available screen work area on first display. Its read-only,
