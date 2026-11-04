@@ -15,6 +15,9 @@ from capsule_vision.application.image_archive import (
     ArchiveSnapshot,
     ImageArchiveCommands,
 )
+from capsule_vision.application.production_application import (
+    SourceProductionApplication,
+)
 from capsule_vision.application.source_control import (
     SourceControlCommands,
     SourceControlSnapshot,
@@ -100,7 +103,14 @@ class QtProductionBridge(QObject):
 
     @property
     def controls_enabled(self) -> bool:
-        return self.source_control is not None and self.source_control.control_available
+        return (
+            self.source_control is not None
+            and self.source_control.control_available
+            and not (
+                isinstance(self.application, SourceProductionApplication)
+                and self.application.basler_available
+            )
+        )
 
     def control_snapshot(self) -> SourceControlSnapshot | None:
         return self.source_control.control_snapshot() if self.source_control else None

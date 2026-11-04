@@ -690,8 +690,13 @@ when inactive. No automatic scanning, identity inference or mapping repair occur
 
 `loop` is boolean; FPS is finite/positive. They pace Folder Replay only. Stored
 Folder paths are retained across mode changes but are not shown or used as
-independent references in Basler mode. They may be empty. Connect all explicitly uses saved mappings; Start requires
-the connected source, validates actual dimensions and warms ViMo with synthetic BGR.
+independent references in Basler mode. They may be empty. Vision Connect all uses
+saved mappings. Production Start connects a DISCONNECTED source using the prepared
+candidate's validated captured mapping, or reuses a CONNECTED source only when
+camera identities, serials and actual dimensions satisfy that candidate. It then
+validates ROIs and warms ViMo with synthetic BGR before activation. Busy connection
+states, source FAULT and mismatched connections require explicit recovery, not a
+second SDK owner or automatic retry.
 Switching mode preserves both folders and serials. Disconnect before changing
 source mapping/mode; Recipe/Batch/page changes do not disconnect cameras.
 Live source keys are `basler:<serial>`; Folder keys are lexical normalized paths.
@@ -974,7 +979,8 @@ Reselecting the same saved Recipe prepares current dependencies; failed preparat
 retains the old candidate and does not clear its re-preparation requirement.
 
 Every Start also parses and compares those files on the Application lifecycle worker
-before constructing a session or engine. External changes, missing or unreadable
+before automatic camera connection, session construction or engine creation.
+External changes, missing or unreadable
 dependencies reject Start without activating the candidate. Re-preparation clears
 this requirement only on successful installation. Start uses the captured sources
 with the captured layout; it never combines newly read sources with an older layout.

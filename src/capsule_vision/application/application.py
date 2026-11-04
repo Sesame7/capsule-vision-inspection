@@ -559,6 +559,9 @@ class ProductionApplication:
                 )
             self._condition.notify_all()
 
+    def _settle_startup(self) -> None:
+        """Settle canceled pre-session work on the lifecycle owner before Stop completes."""
+
     def _close_resources(self) -> None:
         """Application-lifetime resources; called only by the lifecycle owner."""
         if self.history is not None:
@@ -637,6 +640,7 @@ class ProductionApplication:
             resource_error = False
             resources_checked = False
             try:
+                self._settle_startup()
                 if self._preparation is not None:
                     if not self._preparation.settle():
                         raise ApplicationError(

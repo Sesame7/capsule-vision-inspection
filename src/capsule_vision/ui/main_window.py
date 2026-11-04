@@ -766,6 +766,7 @@ class MainWindow(QMainWindow):
             )
         )
         app = self.bridge.application
+        basler = isinstance(app, SourceProductionApplication) and app.basler_available
         operator = permits(app, Role.OPERATOR)
         demo_start = (
             not operator
@@ -775,13 +776,19 @@ class MainWindow(QMainWindow):
         demo_controls = isinstance(
             app, SourceProductionApplication
         ) and app.is_guest_demo(self.snapshot.generation)
+        source_state = (
+            app.source_snapshot().state
+            if isinstance(app, SourceProductionApplication) and basler
+            else None
+        )
         source_ready = (
             self.snapshot.state is not ApplicationState.READY
-            or not isinstance(app, SourceProductionApplication)
-            or not app.basler_available
-            or app.source_snapshot().state is ConnectionState.CONNECTED
+            or not basler
+            or source_state in (ConnectionState.DISCONNECTED, ConnectionState.CONNECTED)
         )
         identity = (
+            basler,
+            source_state,
             source_ready,
             operator,
             demo_start,
@@ -798,6 +805,7 @@ class MainWindow(QMainWindow):
         if identity == self._operation_presentation:
             return
         self._operation_presentation = identity
+        self.buttons["pause"].setVisible(not basler)
         for key, action in actions.items():
             button = self.buttons[key]
             enabled = action is not None and not self._closing
@@ -827,7 +835,14 @@ class MainWindow(QMainWindow):
             button.setToolTip(
                 text("permission_operator", self.language)
                 if not permitted
-                else text("source_connect", self.language)
+                else text(
+                    "source_connecting"
+                    if source_state is ConnectionState.CONNECTING
+                    else "source_disconnecting"
+                    if source_state is ConnectionState.DISCONNECTING
+                    else "source_fault",
+                    self.language,
+                )
                 if action == "start" and not source_ready
                 else text("configure_first", self.language)
                 if key == "operation"
@@ -894,13 +909,16 @@ class MainWindow(QMainWindow):
                     button.accessibleName(), Qt.TextElideMode.ElideRight, width - 20
                 )
             )
-        self.operation_group.setFixedWidth(Style.touch + 3 * width + 3 * Style.small)
+        slots = 2 if basler else 3
+        self.operation_group.setFixedWidth(Style.touch + slots * (width + Style.small))
         self.context_control.setCurrentIndex(1 if actions["secondary"] else 0)
 
     @Slot(object)
     def _source_ready_changed(self, _source: object) -> None:
         if self.snapshot.state is ApplicationState.READY:
             self._render_operations()
+        elif self.snapshot.state is ApplicationState.STARTING:
+            self._render()
 
     @Slot(object)
     def _controls_changed(self, _snapshot: object) -> None:
@@ -1138,6 +1156,14 @@ class MainWindow(QMainWindow):
         state = "closing" if self._closing else snapshot.state.name
         if (
             not self._closing
+            and snapshot.state is ApplicationState.STARTING
+            and self.bridge.source_connection is not None
+            and self.bridge.source_connection.source_snapshot().state
+            is ConnectionState.CONNECTING
+        ):
+            state = "source_connecting"
+        if (
+            not self._closing
             and snapshot.state is ApplicationState.RUNNING
             and self.bridge.control_observation is not None
         ):
@@ -1172,6 +1198,7 @@ class MainWindow(QMainWindow):
         color = {
             "READY": colors.secondary,
             "STARTING": colors.accent,
+            "source_connecting": colors.accent,
             "RUNNING": colors.ok,
             "replay_paused": colors.warning,
             "source_paused": colors.warning,
@@ -1614,6 +1641,7 @@ class MainWindow(QMainWindow):
                 "CLOSED",
                 "READY",
                 "state_STARTING",
+                "source_connecting",
                 "state_RUNNING",
                 "state_replay_paused",
                 "state_source_paused",

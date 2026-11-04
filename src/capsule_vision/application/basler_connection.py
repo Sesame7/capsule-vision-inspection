@@ -191,6 +191,19 @@ class BaslerConnection:
             self._stop.set()
             self._retry_cleanup.set()
 
+    def cancel_connect(self) -> bool:
+        """Cancel before CONNECTED, atomically with the SDK owner's ARMED publication.
+
+        A valid connection is retained. This signals initial cleanup, not a retry
+        of failed native cleanup; the original SDK owner remains responsible.
+        """
+        with self._lock:
+            if self._state is not ConnectionState.CONNECTING:
+                return False
+            self._state = ConnectionState.DISCONNECTING
+            self._stop.set()
+            return True
+
     def disconnect(self) -> None:
         self.request_disconnect()
         self.wait_disconnected()

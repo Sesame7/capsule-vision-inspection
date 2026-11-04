@@ -175,9 +175,12 @@ Stop keeps its existing active-attempt completion and explicit pending skips.
 No new reports start from rejected work. Session release additionally requires
 report-thread exit and safe socket cleanup; notification/timeout alone is not exit.
 The separately connected Basler source keeps grabbing/discarding after Stop; only
-Vision Disconnect or application Close releases cameras. Basler Pause/Step keeps the reporting owner alive and waits for accepted reports
+Vision Disconnect or application Close releases valid connections; cancellation of
+an unfinished Start connection follows the [Application cleanup contract](architecture.md#application-and-shutdown).
+Internal Basler Pause/Step keeps the reporting owner alive and waits for accepted reports
 to settle before PAUSED. Discarded paused captures send no report or sequence write.
-These controls do not pause the PLC or mechanical equipment.
+These controls are not exposed by the Basler Production player and do not pause
+the PLC or mechanical equipment.
 
 Manual clients/watches remain independent. While an automatic owner is starting
 or alive, manual writes overlapping its frozen range (base through base+2 for 30

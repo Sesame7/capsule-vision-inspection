@@ -47,6 +47,7 @@ from .application import ProductionApplication
 from .identity_models import AuthorizationError, Role
 from .model_preparation import ModelPreparationFactory, real_preparation_engine
 from .models import (
+    ApplicationError,
     ApplicationState,
     ApplicationStateError,
     PilotCounters,
@@ -102,6 +103,8 @@ class SourceProductionApplication(ProductionApplication):
         self._replay_control: FolderReplayControl | None = None
         self._basler_control: BaslerAdmissionControl | None = None
         self.connection = BaslerConnection()
+        self._connecting_start = False
+        self._cancelled_start_connection = False
         self._source_cameras = source_cameras
         self._source_camera_ids = source_camera_ids
         super().__init__(
@@ -204,11 +207,64 @@ class SourceProductionApplication(ProductionApplication):
                 raise ApplicationStateError("Application is closing")
             return self.connection.capture_image(camera, timeout=timeout)
 
+    def _cancel_start_connection(self) -> None:
+        # Caller holds the lifecycle lock; connection cancellation also orders
+        # against ARMED, so Stop never tears down a newly valid connection.
+        if self._connecting_start and self.connection.cancel_connect():
+            self._cancelled_start_connection = True
+
+    def stop(self) -> Future[None]:
+        with self._condition:
+            completed = super().stop()
+            self._cancel_start_connection()
+            return completed
+
     def close(self) -> Future[None]:
         with self._condition:
             completed = super().close()
+            self._cancel_start_connection()
             self.connection.cancel_capture()
             return completed
+
+    def connect_for_start(
+        self, cameras: tuple[CameraId, ...], serials: tuple[str, ...]
+    ) -> None:
+        """Lifecycle-worker preflight using the factory's validated captured sources."""
+        with self._condition:
+            if self._stop_requested or self._closing:
+                raise ApplicationStateError("Stopped before source connection")
+            self._require(ApplicationState.STARTING)
+            state = self.connection.snapshot().state
+            if state is ConnectionState.CONNECTED:
+                return  # The factory still validates mapping and actual dimensions.
+            if state is not ConnectionState.DISCONNECTED:
+                raise ApplicationStateError(
+                    "Source requires explicit recovery in Vision"
+                )
+            self.connection.begin_connect(cameras, serials)
+            self._cancelled_start_connection = False
+            self._connecting_start = True
+        try:
+            self.connection.wait_connected()
+        finally:
+            with self._condition:
+                self._connecting_start = False
+        with self._condition:
+            if self._stop_requested or self._closing:
+                raise ApplicationStateError(
+                    "Stopped before source session construction"
+                )
+
+    def _settle_startup(self) -> None:
+        if self._cancelled_start_connection:
+            # wait_connected has observed initial cleanup already. Unsafe cleanup
+            # keeps its SDK owner and requires an explicit Disconnect/Close retry.
+            if not self.connection.snapshot().cleanup_safe:
+                raise ApplicationError(
+                    "Canceled camera connection still owns resources"
+                )
+            self.connection.wait_disconnected()
+            self._cancelled_start_connection = False
 
     def connect_source(self) -> None:
         with self._condition:
@@ -229,6 +285,7 @@ class SourceProductionApplication(ProductionApplication):
             # Register ownership under the same lock as Start/Close, then wait
             # outside it so GUI commands never wait for native camera startup.
             self.connection.begin_connect(cameras, serials)
+            self._cancelled_start_connection = False
             self._source_cameras = cameras
         self.connection.wait_connected()
 
@@ -292,9 +349,12 @@ class SourceProductionApplication(ProductionApplication):
             if single_step:
                 raise ApplicationStateError("Start Basler before requesting Pause/Step")
             with self._replay_lock:
-                if self.connection.snapshot().state is not ConnectionState.CONNECTED:
+                if self.connection.snapshot().state not in (
+                    ConnectionState.DISCONNECTED,
+                    ConnectionState.CONNECTED,
+                ):
                     raise ApplicationStateError(
-                        "Connect the Basler source in Vision before Start"
+                        "Source connection is busy or requires explicit recovery in Vision"
                     )
                 control = BaslerAdmissionControl(self.snapshot().generation + 1)
                 startup = self._start_reporting_session()

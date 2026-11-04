@@ -269,6 +269,7 @@ def create_production_application(
         continuous_source = app.connection if serials is not None else None
         if continuous_source is not None:
             assert serials is not None
+            app.connect_for_start(config.configuration.layout.camera_ids, serials)
             connected = continuous_source.snapshot()
             if connected.state is not ConnectionState.CONNECTED or tuple(
                 (row.camera_id, row.serial) for row in connected.cameras

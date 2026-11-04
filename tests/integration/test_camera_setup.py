@@ -32,6 +32,9 @@ from capsule_vision.application.basler_connection import (
 )
 from capsule_vision.application.composition import compose
 from capsule_vision.application.folder_replay import FolderSourceError, decode_image
+from capsule_vision.application.production_application import (
+    SourceProductionApplication,
+)
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
@@ -278,6 +281,7 @@ def test_confirmed_camera_count_edit_save_discard_and_template_restoration(
 def test_cam6_template_needs_its_own_source_and_valid_image_bounds(
     camera_screen: tuple[MainWindow, VisionPage, ControlledEngine],
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     mode: str,
 ) -> None:
     window, workspace, engine = camera_screen
@@ -352,8 +356,24 @@ def test_cam6_template_needs_its_own_source_and_valid_image_bounds(
         select_production_recipe(window)
         until(lambda: not window.recipe_page.busy)
         assert len(window.cards) == 6 and not workspace.vision_dirty
-        with pytest.raises(ApplicationStateError, match="Connect"):
-            window.bridge.application.start()
+        app = window.bridge.application
+        assert isinstance(app, SourceProductionApplication)
+        requested: list[tuple[tuple[CameraId, ...], tuple[str, ...]]] = []
+
+        def connect(cameras: tuple[CameraId, ...], serials: tuple[str, ...]) -> None:
+            requested.append((cameras, serials))
+            raise ApplicationStateError("Fake source unavailable")
+
+        monkeypatch.setattr(app.connection, "begin_connect", connect)
+        failed = app.start()
+        until(failed.done)
+        assert isinstance(failed.exception(), ApplicationError)
+        assert requested == [
+            (
+                tuple(CameraId(f"CAM{i}") for i in range(1, 7)),
+                tuple(str(1000 + i) for i in range(1, 7)),
+            )
+        ]
         assert window.bridge.application.snapshot().state is ApplicationState.READY
         assert window.bridge.application.snapshot().active is None and not engine.calls
         assert window.bridge.application.snapshot().counters == before.counters

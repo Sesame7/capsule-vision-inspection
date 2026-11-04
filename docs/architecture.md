@@ -306,20 +306,27 @@ PAUSED at the safe boundary, and Step produces one formal result. This is still
 application RUNNING, with editing locks retained. The Stop control requests actual
 shutdown.
 
-Vision's explicit Connect all opens/arms all five or six saved Basler mappings on one
-application-owned SDK thread. Connection survives page/Recipe/Batch changes and
-Production Stop. CONNECTED/ARMED is independent of inspection RUNNING; there is no
-automatic connection/retry. Idle connected frames are retrieved, validated and
-released without cycles, counters, display publication or PLC reports. One optional
+Vision's explicit Connect all and Production Start from DISCONNECTED open/arm the
+required five or six saved Basler mappings on one application-owned SDK thread.
+Start coordinates connection on the existing Application lifecycle worker, after
+saved-dependency validation and before session construction. It uses the prepared
+candidate's captured sources, never unsaved Vision drafts. CONNECTING,
+DISCONNECTING and source FAULT reject another Start connection attempt; mismatched
+connected mappings require explicit recovery. There is no automatic replacement,
+reconnection or retry. Connection survives page/Recipe/Batch changes and successful
+Production Stop. CONNECTED/ARMED is independent of inspection RUNNING. Idle connected
+frames are retrieved, validated and released without cycles, counters, display
+publication or PLC reports. One optional
 idle capture request copies only the selected camera's next matching frame into a
 Future for Vision; it does not enter the Production path.
 Acquisition runs through `ContinuousBaslerSource` on this connection owner;
 `application.basler` provides read-only discovery, serial validation and shared SDK
 observations.
 
-Basler Start requires CONNECTED, checks every saved ROI against current camera
-Width/Height and warms one ViMo worker with black uint8 BGR inputs, twice per
-distinct shape. Folder references are optional. Only after warm-up and an idle,
+Basler Start establishes or reuses a matching CONNECTED source, checks every saved
+ROI against current camera Width/Height and warms one ViMo worker with black uint8
+BGR inputs, twice per distinct shape. Folder references are optional. Only after
+warm-up and an idle,
 complete SDK boundary is the session bound; production admission additionally
 requires RUNNING. Start inspection before external triggering: mid-stream takeover
 is unsupported. Buffered/partial pre-session frames are never retroactively admitted.
@@ -333,8 +340,10 @@ metadata stop the source; no shifted reassociation or software-trigger fallback.
 These counters are **not independent hardware trigger IDs**: undetectable missed
 electrical triggers remain a commissioning limit.
 
-Normal Basler Pause closes new inspection admission while keeping all configured cameras
-grabbing and the same worker/engine alive. The SDK owner continues retrieving,
+The Basler Production player exposes Start/Stop and applicable Fault Reset;
+Pause/Resume/Step remain internal admission controls, not Production UI actions.
+Internal Basler Pause closes new inspection admission while keeping all configured
+cameras grabbing and the same worker/engine alive. The SDK owner continues retrieving,
 validating and releasing paused frames without publishing images, cycles, counters
 or reports. PAUSING becomes PAUSED only after the admitted capture boundary,
 terminal inspection, actual camera-task return and accepted reporting settle.
@@ -358,7 +367,7 @@ Incomplete or initially unattributable batches do not count. A subsequent bitmap
 or W49 failure does not retract an already eligible inspection completion.
 This pilot rejects Pause/Step/Resume at the Application boundary; Stop/Close and
 actual worker cleanup retain their existing ownership. Per-cycle mode remains
-the default and keeps the normal source controls described here.
+the default and retains the internal admission/draining semantics described here.
 
 Step and Resume first drain available SDK results and require a complete common
 ImageNumber boundary. Buffered paused groups remain discarded. Step admits one
@@ -457,9 +466,14 @@ described above.
 Stop prevents inspection admission, finalizes incomplete collection and explicitly rejects
 unclaimed inspection work. A claimed native call finishes naturally. Owners are
 retained until source/runtime/worker/report threads actually exit and SDK cleanup
-is safe. Basler session shutdown detaches its callbacks and drains reports but
-keeps the SDK connection grabbing/discarding. Vision Disconnect is available only
-with inspection stopped; it releases cameras and joins their actual owner.
+is safe. Stop during an unfinished automatic connection cancels that Start and
+requests connection cleanup; successful Stop requires actual SDK-owner termination.
+Unsafe cleanup remains observable as source/application FAULT with the original
+owner retained for explicit recovery. Cancellation is ordered against CONNECTED
+publication: once the connection is valid, Stop retains it even if later warm-up
+or activation fails. Basler session shutdown detaches its callbacks and drains
+reports but keeps the SDK connection grabbing/discarding. Vision Disconnect is
+available only with inspection stopped; it releases cameras and joins their actual owner.
 Application Close first settles inspection, then disconnects application-owned
 sources on the lifecycle thread. Partial connection failures remain source FAULT
 with explicit ownership/error observations; a failed application Close remains
@@ -640,11 +654,14 @@ are retained where they exercise responsive allocation. Sub-1080 windows are not
 acceptance targets. This support boundary does not change Qt's existing minimum
 size constraints or the image canvas coordinate system.
 
-Production keeps Start/Resume, Pause/Step and Stop in fixed player positions.
+Folder Replay keeps Start/Resume, Pause/Step and Stop in fixed player positions.
+Basler shows only Start and Stop in a stable right-anchored pair, retaining the
+separate applicable Fault Reset slot. Connecting uses the localized connection
+caption before the existing warm-up presentation.
 Their icons always sit above their captions, independently of navigation's mode.
-The three native buttons have equal widths and a common height of about 60 logical
-pixels at ordinary fonts. Their shared width follows a comfortable font-metric
-budget, normally 120 logical pixels, rather than the longest translated action
+The visible native player buttons have equal widths and a common height of about
+60 logical pixels at ordinary fonts. Their shared width follows a comfortable
+font-metric budget, normally 120 logical pixels, rather than the longest translated action
 across all languages. Slots stay stationary across ordinary language, theme and
 action-state changes; exceptional captions elide with complete localized names
 and guidance retained in tooltips/accessibility. Actual larger fonts can increase
@@ -691,10 +708,11 @@ History wraps pagination below filters when their compact icon group cannot shar
 a row. Date and filter budgets use that row's available space, retaining equal
 pagination buttons and equal bounded Batch/Result selectors. Dynamic values may
 elide with full tooltips; localized date digits retain their measured width.
-The middle control becomes Step while paused; Folder and Basler retain distinct
-source-boundary semantics. Reset is a separate fault-recovery action. Basler control
-only affects software admission, never equipment or PLC mode. Empty canvases and
-routine acquisition waits stay quiet. Read-only channel symbols retain static
+The Folder Replay middle control becomes Step while paused. Folder and internal
+Basler admission retain distinct source-boundary semantics. Reset is a separate
+fault-recovery action. Basler control only affects software admission, never
+equipment or PLC mode. Empty canvases and routine acquisition waits stay quiet.
+Read-only channel symbols retain static
 ChannelId tooltips and accessible short states, without expanding runtime evidence.
 Only identity-matched results draw defect boxes.
 
