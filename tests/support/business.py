@@ -67,9 +67,12 @@ def channel(
     )
 
 
-def mixed_result(cycle: int = 1) -> ProductionInspectionResult:
+def mixed_result(
+    cycle: int = 1, *, camera_count: int = 6
+) -> ProductionInspectionResult:
     """Per camera: one OK, two NG, one EMPTY, two UNKNOWN; not physical products."""
     base = production(cycle)
+    cameras = base.cameras[:camera_count]
     states = (
         (OccupancyState.PRESENT, TechnicalStatus.SUCCESS, ProductJudgment.OK),
         (OccupancyState.EMPTY, TechnicalStatus.SUCCESS, ProductJudgment.OK),
@@ -80,6 +83,7 @@ def mixed_result(cycle: int = 1) -> ProductionInspectionResult:
     )
     return replace(
         base,
+        layout=replace(base.layout, cameras=tuple(camera.layout for camera in cameras)),
         result_ready_at=2.025,  # Explicit fake clock: 25 ms, not live monotonic time.
         cameras=tuple(
             replace(
@@ -89,6 +93,6 @@ def mixed_result(cycle: int = 1) -> ProductionInspectionResult:
                     for row, state in zip(camera.channels, states, strict=True)
                 ),
             )
-            for camera in base.cameras
+            for camera in cameras
         ),
     )

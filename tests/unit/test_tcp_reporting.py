@@ -2,7 +2,6 @@
 
 from collections.abc import Sequence
 from contextlib import ExitStack
-from dataclasses import replace
 from threading import enumerate as threads
 from threading import get_ident
 
@@ -29,15 +28,8 @@ from capsule_vision.communication.reporting import (
 
 
 def report(cycle: int, camera_count: int = 6) -> FirstStationReport:
-    result = mixed_result(cycle)
-    cameras = result.cameras[:camera_count]
     return FirstStationReport.from_result(
-        7,
-        replace(
-            result,
-            layout=replace(result.layout, cameras=tuple(c.layout for c in cameras)),
-            cameras=cameras,
-        ),
+        7, mixed_result(cycle, camera_count=camera_count)
     )
 
 
@@ -71,9 +63,9 @@ def test_tcp_custom_base_preserves_bitmap_commit_and_negotiation(
                     and outcome.sequence == sequence
                 )
                 expected = (
-                    (0xEFBE, 0x3EFB, 0xABCD)
+                    (0xCF3C, 0x3CF3, 0xABCD)
                     if camera_count == 5
-                    else (0xEFBE, 0xBEFB, 15)
+                    else (0xCF3C, 0x3CF3, 15)
                 )
                 assert peer.words(base, 4) == (sequence, *expected)
             packets = peer.packets[before:]
@@ -112,22 +104,12 @@ def test_identical_ordered_bitmap_and_sequence_rollover_across_transports(
         worker.start()
         try:
             for cycle, sequence in ((100, 65535), (101, 0), (102, 1)):
-                result = mixed_result(cycle)
-                cameras = result.cameras[:camera_count]
-                result = replace(
-                    result,
-                    layout=replace(
-                        result.layout, cameras=tuple(c.layout for c in cameras)
-                    ),
-                    cameras=cameras,
-                )
-                outcome = worker.submit(
-                    FirstStationReport.from_result(7, result)
-                ).result(WAIT)
+                item = report(cycle, camera_count)
+                outcome = worker.submit(item).result(WAIT)
                 assert outcome.outcome is ReportOutcome.ACKNOWLEDGED
                 assert outcome.sequence == sequence
-                words = (0xEFBE, 0x3EFB) if camera_count == 5 else (0xEFBE, 0xBEFB, 15)
-                assert outcome.reject_words == words
+                words = (0xCF3C, 0x3CF3) if camera_count == 5 else (0xCF3C, 0x3CF3, 15)
+                assert outcome.reject_words == item.reject_words == words
             packets = peer.packets[before:]
             assert [(p[10:12], int.from_bytes(p[13:15], "big")) for p in packets] == [
                 (b"\x01\x01", 49),
@@ -139,7 +121,7 @@ def test_identical_ordered_bitmap_and_sequence_rollover_across_transports(
                 (b"\x01\x02", 49),
             ]
             assert [p[18:] for p in packets[1::2]] == [
-                bytes.fromhex("EFBE 3EFB" if camera_count == 5 else "EFBE BEFB 000F")
+                bytes.fromhex("CF3C 3CF3" if camera_count == 5 else "CF3C 3CF3 000F")
             ] * 3
             assert all(
                 int.from_bytes(p[16:18], "big") == len(words) for p in packets[1::2]
@@ -230,7 +212,7 @@ def test_tcp_failed_report_is_not_retried_and_later_cycle_keeps_sequence(
             second = worker.submit(report(2, camera_count)).result(WAIT)
             assert second.outcome is ReportOutcome.ACKNOWLEDGED
             assert second.reject_words == (
-                (0xEFBE, 0x3EFB) if camera_count == 5 else (0xEFBE, 0xBEFB, 15)
+                (0xCF3C, 0x3CF3) if camera_count == 5 else (0xCF3C, 0x3CF3, 15)
             )
             assert second.sequence == (202 if initialized else 201)
             reads = [p for p in peer.packets if p[10:12] == b"\x01\x01"]

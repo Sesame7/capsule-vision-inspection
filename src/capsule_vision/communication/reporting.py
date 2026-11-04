@@ -9,12 +9,13 @@ from threading import Condition, Thread, current_thread
 from time import perf_counter
 from typing import Protocol, runtime_checkable
 
-from capsule_vision.inspection import CycleId
+from capsule_vision.inspection import CycleId, CycleStatus
 from capsule_vision.inspection.models import nonnegative_integer
 from capsule_vision.inspection.production import (
     ChannelBusinessStatus,
     ChannelId,
     ProductionInspectionResult,
+    TechnicalStatus,
 )
 
 from .endpoints import Endpoint, FinsUdpEndpoint, open_client, validate_endpoint
@@ -97,11 +98,20 @@ class FirstStationReport:
     statuses: tuple[tuple[ChannelId, ChannelBusinessStatus], ...]
     reject_words: tuple[int, int] | tuple[int, int, int] = field(init=False)
     result_ready_at: float | None = None
+    _verified_empty_channels: frozenset[ChannelId] = field(
+        default=frozenset(), kw_only=True, repr=False
+    )
 
     def __post_init__(self) -> None:
         pairs = tuple((channel, status) for channel, status in self.statuses)
         object.__setattr__(self, "statuses", pairs)
-        object.__setattr__(self, "reject_words", first_station_reject_words(pairs))
+        object.__setattr__(
+            self,
+            "reject_words",
+            first_station_reject_words(
+                pairs, verified_empty_channels=self._verified_empty_channels
+            ),
+        )
 
     @classmethod
     def from_result(
@@ -113,20 +123,39 @@ class FirstStationReport:
             raise ValueError(
                 "Reporting requires an observed cycle and five or six camera results"
             )
+        statuses: list[tuple[ChannelId, ChannelBusinessStatus]] = []
+        verified_empty: set[ChannelId] = set()
+        complete = result.cycle_status is CycleStatus.COMPLETE
+        for camera in result.cameras:
+            observed = (
+                camera.frame_id is not None
+                and camera.image_shape is not None
+                and camera.collection_issue is None
+            )
+            if not observed:
+                complete = False
+            for row in camera.channels:
+                status = (
+                    row.business_status if observed else ChannelBusinessStatus.UNKNOWN
+                )
+                statuses.append((row.channel_id, status))
+                # Business EMPTY already requires two empty views and excludes NG
+                # and forced rejection. Optional check errors can still coexist with it.
+                if (
+                    status is ChannelBusinessStatus.EMPTY
+                    and not camera.unassigned_findings
+                    and all(
+                        check.assessment.technical_status is not TechnicalStatus.ERROR
+                        for check in row.checks
+                    )
+                ):
+                    verified_empty.add(row.channel_id)
         return cls(
             ReportIdentity(generation, result.cycle_id),
-            tuple(
-                (
-                    row.channel_id,
-                    ChannelBusinessStatus.UNKNOWN
-                    if camera.frame_id is None
-                    or camera.image_shape is None
-                    or camera.collection_issue is not None
-                    else row.business_status,
-                )
-                for camera in result.cameras
-                for row in camera.channels
-            ),
+            tuple(statuses),
+            _verified_empty_channels=frozenset(verified_empty)
+            if complete
+            else frozenset(),
             result_ready_at=result.result_ready_at,
         )
 
@@ -460,8 +489,8 @@ class FirstStationReportingWorker:
                 )
             stage = ReportStage.BITMAP
             try:
-                commit = self._reporter.submit(
-                    report.statuses,
+                commit = self._reporter.submit_report(
+                    report,
                     commit_allowed=lambda: self._attributable(report.identity),
                 )
             finally:

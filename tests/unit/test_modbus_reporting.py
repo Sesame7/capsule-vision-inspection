@@ -1,7 +1,6 @@
 """Existing reporting owner over real localhost Modbus TCP, no physical PLC."""
 
 import struct
-from dataclasses import replace
 from threading import Event, get_ident
 from threading import enumerate as threads
 from typing import Literal
@@ -38,8 +37,9 @@ from capsule_vision.communication.reporting import (
 
 
 def report(cycle: int, count: int = 36) -> FirstStationReport:
-    item = FirstStationReport.from_result(7, mixed_result(cycle))
-    return replace(item, statuses=item.statuses[:count])
+    return FirstStationReport.from_result(
+        7, mixed_result(cycle, camera_count=count // 6)
+    )
 
 
 def stop(worker: FirstStationReportingWorker) -> None:
@@ -63,11 +63,13 @@ def test_exact_modbus_reporting_bytes_addresses_and_rollover(
         )
         worker.start()
         try:
-            words = (0xEFBE, 0x3EFB) if count == 30 else (0xEFBE, 0xBEFB, 15)
+            words = (0xCF3C, 0x3CF3) if count == 30 else (0xCF3C, 0x3CF3, 15)
             for cycle, sequence in ((1, 65535), (2, 0), (3, 1)):
-                result = worker.submit(report(cycle, count)).result(WAIT)
+                item = report(cycle, count)
+                result = worker.submit(item).result(WAIT)
                 assert result.outcome is ReportOutcome.ACKNOWLEDGED
-                assert result.sequence == sequence and result.reject_words == words
+                assert result.sequence == sequence
+                assert result.reject_words == item.reject_words == words
                 assert tuple(peer.words.get(base + i, 0) for i in range(4)) == (
                     sequence,
                     *words,

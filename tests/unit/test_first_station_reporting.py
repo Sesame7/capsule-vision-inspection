@@ -33,8 +33,13 @@ from capsule_vision.communication.reporting import (
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection import CycleId, CycleStatus
 from capsule_vision.inspection.production import (
+    Assessment,
+    ChannelBusinessStatus,
+    FindingSource,
+    OccupancyResult,
     OccupancyState,
     ProductJudgment,
+    Reason,
     TechnicalStatus,
     ViMoFinding,
 )
@@ -58,14 +63,16 @@ def test_custom_udp_reporting_window_and_sequence_read(
         worker.start()
         try:
             for cycle, sequence in ((1, 65535), (2, 0)):
-                item = report(cycle)
-                item = replace(item, statuses=item.statuses[:channel_count])
+                item = FirstStationReport.from_result(
+                    7, mixed_result(cycle, camera_count=channel_count // 6)
+                )
                 outcome = worker.submit(item).result(WAIT)
                 assert outcome.outcome is ReportOutcome.ACKNOWLEDGED
                 assert outcome.sequence == sequence
                 expected = (
-                    (0xEFBE, 0x3EFB) if channel_count == 30 else (0xEFBE, 0xBEFB, 15)
+                    (0xCF3C, 0x3CF3) if channel_count == 30 else (0xCF3C, 0x3CF3, 15)
                 )
+                assert item.reject_words == outcome.reject_words == expected
                 assert (
                     readback(peer) == (sequence, *expected, 0xABCD)
                     if channel_count == 30
@@ -95,14 +102,20 @@ def test_invalid_reporting_window_rejected_before_client_creation(base: int) -> 
         ReportingSettings(base_address=base, endpoint=FinsUdpEndpoint())
 
 
-@pytest.mark.parametrize("status", [CycleStatus.COMPLETE, CycleStatus.FAILED])
+@pytest.mark.parametrize("status", list(CycleStatus))
 def test_complete_collection_projects_scalar_business_states(
     status: CycleStatus,
 ) -> None:
     result = replace(mixed_result(100), cycle_status=status)
     data = FirstStationReport.from_result(7, result)
     assert data.identity == ReportIdentity(7, CycleId(100))
-    assert data.reject_words == (0xEFBE, 0xBEFB, 15)
+    # Every camera has OK, EMPTY, UNKNOWN, NG, UNKNOWN, NG in slot order.
+    assert data.reject_words == (
+        (0xCF3C, 0x3CF3, 15) if status is CycleStatus.COMPLETE else (0xEFBE, 0xBEFB, 15)
+    )
+    assert data.statuses == tuple(
+        (row.channel_id, row.business_status) for row in result.channels
+    )
     assert len(data.statuses) == 36
     assert all(type(channel) is int for channel, _ in data.statuses)
 
@@ -111,16 +124,92 @@ def test_complete_collection_projects_scalar_business_states(
 def test_partial_outcomes_preserve_completed_and_reject_missing(
     status: CycleStatus,
 ) -> None:
-    result = production()
+    result = mixed_result()
     missing = replace(result.cameras[0], frame_id=None, image_shape=None)
     partial = replace(
         result, cycle_status=status, cameras=(missing, *result.cameras[1:])
     )
     data = FirstStationReport.from_result(1, partial)
-    expected = FirstStationReport.from_result(1, result).reject_words
-    assert len(expected) == 3
-    assert data.reject_words == (expected[0] | 0x3F, expected[1], expected[2])
+    # Missing first camera rejects all six. Remaining OKs clear, but their
+    # EMPTY siblings cannot clear on a timed-out or shutdown cycle.
+    assert data.reject_words == (0xEFBF, 0xBEFB, 15)
     assert len(data.statuses) == 36 and data.result_ready_at == partial.result_ready_at
+
+
+@pytest.mark.parametrize("missing", ["frame", "shape", "collection"])
+def test_complete_marker_alone_cannot_verify_an_incomplete_collection(
+    missing: str,
+) -> None:
+    result = mixed_result()
+    camera, *others = result.cameras
+    camera = replace(
+        camera,
+        frame_id=None if missing == "frame" else camera.frame_id,
+        image_shape=None if missing == "shape" else camera.image_shape,
+        collection_issue=Reason(FindingSource.COLLECTION, "missing_camera")
+        if missing == "collection"
+        else None,
+    )
+    report = FirstStationReport.from_result(
+        1, replace(result, cameras=(camera, *others))
+    )
+    assert report.reject_words == (0xEFBF, 0xBEFB, 15)
+
+
+@pytest.mark.parametrize("source", [FindingSource.VIMO, FindingSource.TRADITIONAL])
+def test_optional_execution_error_blocks_empty_even_if_aggregate_succeeds(
+    source: FindingSource,
+) -> None:
+    result = mixed_result()
+    camera, *others = result.cameras
+    row = camera.channels[1]
+    checks = tuple(
+        replace(
+            check,
+            assessment=Assessment(TechnicalStatus.ERROR, ProductJudgment.UNKNOWN),
+            reasons=(Reason(source, "execution_error"),),
+            required=False,
+        )
+        if check.source is source
+        else replace(
+            check, assessment=Assessment(TechnicalStatus.SUCCESS, ProductJudgment.OK)
+        )
+        for check in row.checks
+    )
+    row = replace(row, traditional_skip=None, checks=checks)
+    assert row.assessment.technical_status is TechnicalStatus.SUCCESS
+    assert row.business_status is ChannelBusinessStatus.EMPTY
+    camera = replace(camera, channels=(camera.channels[0], row, *camera.channels[2:]))
+    report = FirstStationReport.from_result(
+        1, replace(result, cameras=(camera, *others))
+    )
+    assert report.reject_words == (0xCF3E, 0x3CF3, 15)
+
+
+def test_forced_rejection_overrides_empty_evidence() -> None:
+    result = mixed_result()
+    camera, *others = result.cameras
+    row = replace(
+        camera.channels[1],
+        forced_reject=Reason(FindingSource.COLLECTION, "inspection_deadline"),
+    )
+    assert row.occupancy is not None and row.occupancy.state is OccupancyState.EMPTY
+    assert row.business_status is ChannelBusinessStatus.NG
+    camera = replace(camera, channels=(camera.channels[0], row, *camera.channels[2:]))
+    report = FirstStationReport.from_result(
+        1, replace(result, cameras=(camera, *others))
+    )
+    assert report.reject_words == (0xCF3E, 0x3CF3, 15)
+
+
+def test_disabled_checks_without_occupancy_never_clear_reject_bits() -> None:
+    result = production(
+        status=TechnicalStatus.DISABLED, judgment=ProductJudgment.UNKNOWN
+    )
+    report = FirstStationReport.from_result(1, result)
+    assert all(row.occupancy is None for row in result.channels)
+    assert all(status is ChannelBusinessStatus.UNKNOWN for _, status in report.statuses)
+    assert report.reject_words == (0xFFFF, 0xFFFF, 0x000F)
 
 
 def test_unobserved_cycle_and_invalid_projection_are_not_reports() -> None:
@@ -175,6 +264,43 @@ def test_unassigned_ng_does_not_spread_to_channel_bits() -> None:
         == FirstStationReport.from_result(1, result).reject_words
         == (0, 0, 0)
     )
+
+
+def test_unassigned_finding_rejects_camera_empty_evidence() -> None:
+    result = mixed_result()
+    camera = result.cameras[0]
+    assert camera.frame_id is not None
+    assert camera.channels[1].business_status is ChannelBusinessStatus.EMPTY
+    finding = ViMoFinding(
+        camera.frame_id, 0, "unassigned", 4, BoundingRect(58, 15, 2, 2), "fake"
+    )
+    changed = replace(
+        result,
+        cameras=(replace(camera, unassigned_findings=(finding,)), *result.cameras[1:]),
+    )
+    assert FirstStationReport.from_result(1, changed).reject_words == (
+        0xCF3E,
+        0x3CF3,
+        15,
+    )
+
+
+def test_occupancy_execution_error_does_not_clear_empty_report_bit() -> None:
+    result = mixed_result()
+    camera = result.cameras[0]
+    row = replace(
+        camera.channels[1],
+        occupancy=OccupancyResult(
+            error_code="occupancy.execution_error", exception_type="RuntimeError"
+        ),
+        traditional_skip=None,
+    )
+    camera = replace(camera, channels=(camera.channels[0], row, *camera.channels[2:]))
+    report = FirstStationReport.from_result(
+        1, replace(result, cameras=(camera, *result.cameras[1:]))
+    )
+    assert row.business_status is ChannelBusinessStatus.UNKNOWN
+    assert report.reject_words == (0xCF3E, 0x3CF3, 15)
 
 
 @pytest.mark.parametrize("host", ["192.0.2.1", "127.0.0.2", "localhost"])
@@ -236,7 +362,7 @@ def test_initial_read_sequence_progression_rollover_and_identical_bitmap() -> No
                 assert outcome.outcome is ReportOutcome.ACKNOWLEDGED
                 assert outcome.sequence == sequence
                 assert outcome.duration_ms is not None and outcome.duration_ms >= 0
-                assert readback(peer) == (sequence, 0xEFBE, 0xBEFB, 15)
+                assert readback(peer) == (sequence, 0xCF3C, 0x3CF3, 15)
             snapshot = worker.snapshot()
             assert snapshot.acknowledged_count == snapshot.attempted_count == 3
             assert snapshot.failed_count == 0 and snapshot.next_sequence == 2
@@ -277,8 +403,12 @@ def test_failure_stage_original_cause_and_later_cycle_recovery(
         worker = FirstStationReportingWorker(7, settings(peer))
         worker.start()
         try:
-            failed = worker.submit(report(1)).result(WAIT)
+            item = report(1)
+            failed = worker.submit(item).result(WAIT)
             assert failed.outcome is ReportOutcome.FAILED and failed.stage is stage
+            assert failed.reject_words == item.reject_words
+            attempted = worker.snapshot().last_attempted
+            assert attempted is not None and attempted.reject_words == item.reject_words
             assert failed.identity.cycle_id == 1 and failed.issue is not None
             if stage is ReportStage.INITIALIZATION:
                 assert failed.sequence is None
@@ -288,6 +418,7 @@ def test_failure_stage_original_cause_and_later_cycle_recovery(
             else:
                 assert failed.sequence == 11
                 assert isinstance(failed.error, FirstStationSubmissionError)
+                assert failed.error.reject_words == item.reject_words
                 assert isinstance(
                     failed.error.__cause__,
                     FinsPlcError if mode == "plc" else FinsTimeoutError,
@@ -304,7 +435,7 @@ def test_failure_stage_original_cause_and_later_cycle_recovery(
                 recovered.outcome is ReportOutcome.ACKNOWLEDGED
                 and recovered.sequence == sequence
             )
-            assert readback(peer) == (sequence, 0xEFBE, 0xBEFB, 15)
+            assert readback(peer) == (sequence, 0xCF3C, 0x3CF3, 15)
             snapshot = worker.snapshot()
             assert snapshot.failed_count == snapshot.acknowledged_count == 1
             assert snapshot.last_failed == failed

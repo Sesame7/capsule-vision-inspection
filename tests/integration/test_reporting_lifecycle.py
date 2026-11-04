@@ -33,7 +33,6 @@ from capsule_vision.communication import (
     FinsUdpEndpoint,
     HoldingRegisters,
     ModbusSettings,
-    first_station_reject_words,
 )
 from capsule_vision.communication.operations import CommunicationRequest, RequestKind
 from capsule_vision.communication.reporting import (
@@ -56,6 +55,7 @@ from capsule_vision.configuration.communication_preferences import (
 from capsule_vision.inference import ImageResult
 from capsule_vision.inference._validation import uint8_array
 from capsule_vision.inspection import CycleStatus
+from capsule_vision.inspection.production import ChannelBusinessStatus
 from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.ui.production_bridge import QtProductionBridge
 
@@ -253,14 +253,15 @@ def test_production_completion_reports_once_without_qt_polling_and_preserves_cou
             assert snapshot.state is ApplicationState.RUNNING
             expected = ProductionCounters().admitted().completed(result).admitted()
             assert snapshot.counters == expected
-            assert readback(peer) == (
-                201,
-                *first_station_reject_words(
-                    (row.channel_id, row.business_status) for row in result.channels
-                ),
+            assert all(
+                row.business_status is ChannelBusinessStatus.EMPTY
+                for row in result.channels
             )
+            words = (0xFFFF, 0xFFFF, 0x000F) if fail else (0, 0, 0)
+            assert readback(peer) == (201, *words)
             observed = app.reporting_snapshot()
             assert observed is not None and observed.last_acknowledged is not None
+            assert observed.last_acknowledged.reject_words == words
             assert (
                 observed.last_acknowledged.identity.generation
                 == snapshot.generation

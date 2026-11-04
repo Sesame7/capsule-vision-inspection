@@ -32,7 +32,6 @@ from capsule_vision.communication import (
     FinsTcpEndpoint,
     FinsUdpClient,
     FinsUdpEndpoint,
-    first_station_reject_words,
 )
 from capsule_vision.communication.operations import (
     CommunicationRequest,
@@ -50,6 +49,7 @@ from capsule_vision.configuration.communication_preferences import (
 )
 from capsule_vision.inference import ImageResult
 from capsule_vision.inference._validation import uint8_array
+from capsule_vision.inspection.production import ChannelBusinessStatus
 from capsule_vision.localization.catalog import text
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -253,12 +253,11 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         )
         result = startup.application.snapshot().latest_production_result
         assert result is not None
-        assert readback(peer) == (
-            89,
-            *first_station_reject_words(
-                (r.channel_id, r.business_status) for r in result.channels
-            ),
+        assert all(
+            row.business_status is ChannelBusinessStatus.EMPTY
+            for row in result.channels
         )
+        assert readback(peer) == (89, 0, 0, 0)
         # A programmatic UI mutation and direct command both obey the live state.
         panel.port.setValue(peer.port + 1 if peer.port < 65535 else peer.port - 1)
         assert panel.port.value() == peer.port
@@ -733,9 +732,12 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         )
         result = startup.application.snapshot().latest_production_result
         assert result is not None
-        words = first_station_reject_words(
-            (r.channel_id, r.business_status) for r in result.channels
+        assert all(
+            row.business_status is ChannelBusinessStatus.EMPTY
+            for row in result.channels
         )
+        words = (0, 0, 0)
+        assert observed.last_acknowledged.reject_words == words
         if isinstance(automatic, TcpPeer):
             assert automatic.words(49, 4) == (89, *words)
             assert all(

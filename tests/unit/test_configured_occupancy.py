@@ -11,6 +11,7 @@ from tests.support.capsule_images import SETTINGS, bodies
 from tests.support.production import inferred
 
 from capsule_vision.application import ConfiguredProductionPipeline
+from capsule_vision.communication.reporting import FirstStationReport
 from capsule_vision.configuration import ResolvedInspectionConfiguration
 from capsule_vision.inference import BoundingRect, ImageResult
 from capsule_vision.inspection import CycleCollector, CycleId, Frame, FrameId
@@ -128,6 +129,7 @@ def test_always_on_and_selective_skip_preserves_original_traditional_results(
     assert len(seen) == (18 if settings.enabled else 0)
     assert result.layout is config.layout
     assert tuple(c.camera_id for c in result.cameras) == config.layout.camera_ids
+    words = FirstStationReport.from_result(1, result).reject_words
     expected = (
         OccupancyState.EMPTY,
         OccupancyState.PRESENT,
@@ -144,6 +146,11 @@ def test_always_on_and_selective_skip_preserves_original_traditional_results(
         ):
             assert row.slot == slot.slot and row.channel_id == slot.channel_id
             assert row.occupancy is not None and row.occupancy.state is state
+            word, bit = divmod(row.channel_id - 1, 16)
+            if state is OccupancyState.EMPTY:
+                assert words[word] & (1 << bit) == 0
+            elif state is OccupancyState.UNKNOWN:
+                assert words[word] & (1 << bit)
             check = row.checks[0]
             if settings.enabled and state is not OccupancyState.EMPTY:
                 assert check == judge_capsule(
@@ -257,6 +264,23 @@ def test_empty_keeps_accepted_vimo_ng_and_unassigned_findings(tmp_path: Path) ->
         assert all(not row.vimo_findings for row in camera.channels[1:])
     assert result.assessment.judgment is ProductJudgment.NG
     assert len(original.regions) == 2
+    # The unresolved finding on each camera prevents trusting its apparently empty slots.
+    assert FirstStationReport.from_result(1, result).reject_words == (
+        0xFFFF,
+        0xFFFF,
+        0x000F,
+    )
+    # With only the assigned finding, CH1 keeps its NG bit. The other five empty
+    # slots on that camera clear without affecting the unresolved cameras.
+    first_camera, *others = result.cameras
+    assigned_only = replace(
+        result, cameras=(replace(first_camera, unassigned_findings=()), *others)
+    )
+    assert FirstStationReport.from_result(1, assigned_only).reject_words == (
+        0xFFC1,
+        0xFFFF,
+        0x000F,
+    )
 
 
 @pytest.mark.parametrize("ng", [False, True])
@@ -296,6 +320,7 @@ def test_occupancy_exception_is_explicit_required_error_and_later_channels_conti
     assert first.occupancy is not None
     assert first.occupancy.state is OccupancyState.UNKNOWN
     assert first.traditional_skip is None
+    assert FirstStationReport.from_result(1, result).reject_words[0] & 1
     assert first.assessment == Assessment(
         TechnicalStatus.ERROR, ProductJudgment.NG if ng else ProductJudgment.UNKNOWN
     )

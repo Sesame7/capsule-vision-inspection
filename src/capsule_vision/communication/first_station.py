@@ -29,20 +29,26 @@ type FirstStationClient = FinsUdpClient | FinsTcpClient | ModbusTcpClient
 if TYPE_CHECKING:
     from capsule_vision.inspection.production import ChannelBusinessStatus, ChannelId
 
+    from .reporting import FirstStationReport
 
-def _rejects(status: object) -> bool:
+
+def _rejects(status: object, verified_empty: bool) -> bool:
     # Lazy runtime validation keeps standalone transport imports independent.
     from capsule_vision.inspection.production import ChannelBusinessStatus
 
     if not isinstance(status, ChannelBusinessStatus):
         raise ValueError("status must be a ChannelBusinessStatus instance")
-    return status is not ChannelBusinessStatus.OK
+    return status is not ChannelBusinessStatus.OK and not (
+        status is ChannelBusinessStatus.EMPTY and verified_empty
+    )
 
 
 def first_station_reject_words(
     statuses: Iterable[tuple[ChannelId, ChannelBusinessStatus]],
+    *,
+    verified_empty_channels: frozenset[ChannelId] = frozenset(),
 ) -> tuple[int, int] | tuple[int, int, int]:
-    """Project exactly CH1..30 or CH1..36; only business OK clears a bit.
+    """Project CH1..30 or CH1..36. Status-only EMPTY remains conservative.
 
     Import the domain enum only when projecting. Low-level FINS/CLI use remains
     standard-library-only, without importing the inspection image stack.
@@ -54,7 +60,7 @@ def first_station_reject_words(
         if channel_id in seen:
             raise ValueError(f"Duplicate ChannelId {channel_id}")
         seen.add(channel_id)
-        if _rejects(status):
+        if _rejects(status, channel_id in verified_empty_channels):
             word, bit = divmod(channel_id - 1, 16)
             words[word] |= 1 << bit
     expected = 30 if len(seen) == 30 else 36
@@ -146,6 +152,24 @@ class FirstStationReporter:
         *,
         commit_allowed: Callable[[], bool] = lambda: True,
     ) -> FirstStationCommit:
+        return self._submit(
+            lambda: first_station_reject_words(statuses), commit_allowed
+        )
+
+    def submit_report(
+        self,
+        report: FirstStationReport,
+        *,
+        commit_allowed: Callable[[], bool] = lambda: True,
+    ) -> FirstStationCommit:
+        """Write the validated bitmap already recorded for this cycle."""
+        return self._submit(lambda: report.reject_words, commit_allowed)
+
+    def _submit(
+        self,
+        projection: Callable[[], tuple[int, int] | tuple[int, int, int]],
+        commit_allowed: Callable[[], bool],
+    ) -> FirstStationCommit:
         if not self._operation.acquire(blocking=False):
             error = (
                 ModbusTransportError
@@ -154,7 +178,9 @@ class FirstStationReporter:
             )
             raise error("A first-station submission is already active")
         try:
-            words = first_station_reject_words(statuses)  # Validate before I/O.
+            words = (
+                projection()
+            )  # Validate standalone statuses before reserving a sequence.
             sequence = self._next_sequence
             self._next_sequence = (self._next_sequence + 1) & 0xFFFF
             stage = SubmissionStage.BITMAP

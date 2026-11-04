@@ -84,9 +84,16 @@ four-register address window before I/O, including for 30-channel machines.
 | base+2 (W51) | 30 channels: CH17..CH30 in bits 0..13, bits 14..15 zero; 36 channels: CH17..CH32 in bits 0..15 |
 | base+3 (W52) | 36 channels only: CH33..CH36 in bits 0..3, bits 4..15 zero |
 
-Business OK maps to 0; NG, EMPTY and UNKNOWN map to 1. This is one inspection
-pass's communication projection, not physical product tracking or a new counter.
-Technical status and product judgment remain separate inspection data.
+A set bit requests rejection for its channel. OK clears the bit.
+NG and UNKNOWN set it. EMPTY clears the bit only on a normally completed cycle
+with an observed frame and valid shape for every configured camera and no collection
+failure. The channel must have successful Occupancy evidence of EMPTY in both
+views. A forced rejection, a channel NG, an error in any enabled channel check
+(including an optional check), or an unassigned defect on that camera prevents
+the bit from clearing for EMPTY. A disabled check or a Size/Color check skipped
+for confirmed EMPTY allows the bit to clear when the other requirements hold.
+Status-only submissions have no verifying evidence and set the bit for EMPTY.
+This projection leaves the inspection judgments, counters and History intact.
 
 `FirstStationReporter` borrows a client and one serial owner submits:
 
@@ -125,8 +132,9 @@ a reporting client or sends before Start; warm-up still sends nothing. Productio
 settings remain locked during STARTING/RUNNING/STOPPING and FAULT. Old ACKs,
 counts and connectivity are never restored as live observations.
 
-`FirstStationReportingWorker` receives compact generation/CycleId and 30 or 36 scalar
-statuses, never image/result histories. One non-daemon thread owns its connection,
+`FirstStationReportingWorker` receives compact generation/CycleId, channel statuses
+and the bitmap derived while inspection evidence is available. The worker uses
+that bitmap for writes and reporting observations. One non-daemon thread owns its connection,
 with a bounded FIFO (default eight pending plus one active) and bounded observations.
 Submission/settling is separate from terminal inspection and accounting. Socket
 work never runs in Qt, inference or result-completion callbacks.
@@ -143,8 +151,9 @@ that reconnect, without reading back/replaying the failed attempt.
 
 Basler reports attributable terminal cycles, including partial timeout/shutdown
 results with all five or six configured camera results and at least one observed frame. Missing/unfinished
-camera channels are projected conservatively as UNKNOWN/reject; completed camera
-judgments survive. No observed cycle means no report. The source's ambiguity fence
+camera channels are projected conservatively as UNKNOWN/reject. Completed camera
+judgments survive, but EMPTY keeps its reject bit on a partial or failed cycle.
+No observed cycle means no report. The source's ambiguity fence
 is checked at admission and again after bitmap ACK, before the sequence write. A known ambiguous
 cycle gets no commit; an already in-flight sequence write cannot be recalled.
 
