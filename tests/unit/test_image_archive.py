@@ -64,7 +64,7 @@ def pixels(camera: CameraInspectionResult) -> Frame:
         (PRESENT, SUCCESS, NG, 1),
         (PRESENT, ERROR, UNKNOWN, 2),
         (PRESENT, ERROR, NG, 1),
-        (EMPTY, SUCCESS, OK, 3),
+        (EMPTY, SUCCESS, OK, 0),
         (UNCERTAIN, SUCCESS, OK, None),
         (None, SUCCESS, OK, None),
         (PRESENT, DISABLED, UNKNOWN, None),
@@ -124,6 +124,16 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
             for camera, state in zip(result.cameras, states, strict=True)
         ),
     )
+    # CAM1 has three occupied OK capsules and three confirmed empty slots.
+    first = result.cameras[0]
+    first = replace(
+        first,
+        channels=tuple(
+            channel(row, EMPTY, SUCCESS, OK) if row.slot % 2 else row
+            for row in first.channels
+        ),
+    )
+    result = replace(result, cameras=(first, *result.cameras[1:]))
     count = [0]
 
     def now() -> datetime:
@@ -169,7 +179,7 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
     "other,expected",
     [
         ((EMPTY, SUCCESS, OK), 3),
-        ((PRESENT, SUCCESS, OK), 3),
+        ((PRESENT, SUCCESS, OK), 0),
         ((PRESENT, SUCCESS, NG), 1),
         ((PRESENT, ERROR, UNKNOWN), 2),
         ((EMPTY, ERROR, UNKNOWN), 2),
@@ -178,7 +188,7 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
         ((PRESENT, DISABLED, UNKNOWN), None),
     ],
 )
-def test_empty_requires_confirmed_evidence_and_all_remaining_ok_or_empty(
+def test_five_confirmed_empty_slots_and_one_remaining_channel(
     other: tuple[OccupancyState | None, TechnicalStatus, ProductJudgment],
     expected: int | None,
 ) -> None:

@@ -227,7 +227,7 @@ class ProductionHistory:
 
     def start_run(
         self,
-        batch: str,
+        batch: str | None,
         run: str,
         recipe: ConfigurationIdentity,
         reporting: ReportingSettings | None,
@@ -342,7 +342,7 @@ class ProductionHistory:
         connection = sqlite3.connect(self.path, timeout=0.2)
         try:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 2) or (
+            if version not in (0, 2, 3) or (
                 version == 0
                 and connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
@@ -370,7 +370,7 @@ class ProductionHistory:
                 CREATE INDEX IF NOT EXISTS history_batch ON cycles(batch_segment, completed_at DESC, id DESC);
             """
                     + batch_records.SCHEMA
-                    + "PRAGMA user_version=2; COMMIT;"
+                    + "PRAGMA user_version=3; COMMIT;"
                 )
             with connection:
                 batch_records.recover(connection, self.clock())

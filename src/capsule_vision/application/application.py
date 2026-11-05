@@ -168,6 +168,11 @@ class ProductionApplication:
 
     def snapshot(self) -> ProductionApplicationSnapshot:
         with self._condition:
+            uncertain = self._batch_uncertain or bool(
+                self.history
+                and self._durable_run
+                and self.history.run_uncertain(self._durable_run)
+            )
             return ProductionApplicationSnapshot(
                 self._state,
                 self._generation,
@@ -190,12 +195,8 @@ class ProductionApplication:
                 batch_duration_ms=self._batch_duration_ms,
                 batch_uuid=self._batch_segment if self._batch is not None else None,
                 run_id=self._run_id,
-                batch_uncertain=self._batch_uncertain
-                or bool(
-                    self.history
-                    and self._durable_run
-                    and self.history.run_uncertain(self._durable_run)
-                ),
+                batch_uncertain=self._batch is not None and uncertain,
+                unbatched_run_uncertain=self._batch is None and uncertain,
                 detail_expired=self._detail_expired
                 or bool(self.history and self.history.expired_for(self._batch_segment)),
                 batch_pending=self._batch_pending or self._restoring,
@@ -652,8 +653,8 @@ class ProductionApplication:
     def _settle_startup(self) -> None:
         """Settle canceled pre-session work on the lifecycle owner before Stop completes."""
 
-    def _requires_batch(self) -> bool:
-        return False  # Identity-free engineering sessions and Folder Replay may run unbatched.
+    def _records_unbatched_runs(self) -> bool:
+        return False
 
     def _run_reporting(self) -> ReportingSettings | None:
         return None
@@ -701,13 +702,19 @@ class ProductionApplication:
                         prepared.vision_dependencies.validate_current()
                     with self._condition:
                         self._condition.wait_for(lambda: not self._restoring)
-                        if self._requires_batch() and (
-                            self._batch is None
-                            or self.history is None
-                            or not self.history.snapshot().accepting
+                        batch = self._batch_segment if self._batch is not None else None
+                        record_unbatched = self._records_unbatched_runs()
+                        if (
+                            batch is not None
+                            and record_unbatched
+                            and self.identity is not None
+                            and (
+                                self.history is None
+                                or not self.history.snapshot().accepting
+                            )
                         ):
                             raise ApplicationStateError(
-                                "Select a Production Batch with available History storage before Start"
+                                "Named Production Batch requires available History storage"
                             )
                     session = self._factory(prepared, generation)
                     with self._condition:
@@ -722,14 +729,24 @@ class ProductionApplication:
                     session.start().result()
                     run_id = uuid4().hex
                     durable_run = None
-                    if self._batch is not None and self.history is not None:
-                        self.history.start_run(
-                            self._batch_segment,
+                    if self.history is not None and (
+                        record_unbatched or batch is not None
+                    ):
+                        recording = self.history.start_run(
+                            batch,
                             run_id,
                             ConfigurationIdentity.from_prepared(prepared),
                             self._run_reporting(),
-                        ).result()
-                        durable_run = run_id
+                        )
+                        try:
+                            recording.result()
+                        except Exception:
+                            if batch is not None:
+                                raise
+                            # History exposes the storage failure. An unbatched
+                            # inspection can proceed with volatile accounting.
+                        else:
+                            durable_run = run_id
                     with self._condition:
                         self._durable_run = durable_run
                         if self._stop_requested or session.finished.done():
@@ -738,6 +755,10 @@ class ProductionApplication:
                             )
                         self._active = prepared
                         self._run_id = run_id
+                        if record_unbatched and batch is None:
+                            # Anonymous History filtering uses the Run itself.
+                            self._batch_segment = run_id
+                            self._batch_uncertain |= durable_run is None
                         self._state = ApplicationState.RUNNING
                     assert startup is not None
                     startup.set_result(None)

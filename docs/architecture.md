@@ -497,11 +497,16 @@ an Operator can select a trimmed, nonempty, case-sensitive label or confirm End
 Batch. The same label always resumes its original Batch on this IPC. Switching
 labels deselects the previous Batch. End records an event and clears selection.
 
-Each successful Start under a Batch has its own Run UUID, start observation,
-activated Recipe/Model identity and reporting mode, base and endpoint when
-enabled. After warm-up the lifecycle owner waits for the Run transaction before
-publishing RUNNING. Formal Basler Start requires a selected Batch and available
-storage. Folder Replay and identity-free engineering sessions may run unbatched.
+Each successful Start has its own Run UUID. After warm-up the lifecycle owner
+requires a committed Run for a selected, durable Batch before publishing RUNNING.
+Basler also opens a Run without a Batch, with a null Batch reference. Its
+Cycle detail and eligible PLC groups use that Run UUID and cannot accrue to a
+later Batch. The Run records its start observation, active Recipe/Model identity
+and reporting mode, base and endpoint when enabled.
+If unbatched Run recording fails, inspection continues with a visible warning
+that totals and detail may be incomplete. Individual Cycle records are still
+offered to History on a best-effort basis. Unbatched Folder Replay continues to
+record individual Cycles without opening a durable Run.
 Stop records termination after session cleanup, including for zero-Cycle Runs,
 and preserves the Batch selection. Exclusive owner startup marks any abandoned
 open Run interrupted and uncertain, with the recovery time as its termination
@@ -517,9 +522,9 @@ reason codes. Images, masks, raw outputs, measurements and full snapshots are
 excluded. Neither judgments nor PLC delivery depend on storage success.
 
 Accepted Cycle admissions, terminal results and eligible four-Cycle completions
-enter this owner through bounded non-waiting handoffs. A transaction updates the
-Batch summary once per source fact. The owner retains deduplication keys for
-the lifetime of the open Run so detail expiry cannot allow a duplicate. The
+enter this owner through bounded non-waiting handoffs. For a named Batch a
+transaction updates its summary once per source fact. The owner retains deduplication
+keys for the lifetime of the open Run so detail expiry cannot allow a duplicate. The
 eligible group stores its Run and first
 Cycle identity, PLC counter, four actual member CycleIds in slot order, timing
 and final channel outcomes. Joining on Run/Cycle works in either arrival order.
@@ -578,11 +583,11 @@ display copies are never a substitute. Borrowed aliases remain immutable until
 archival write/drop as well as inference completion. No additional full-image copy
 is made at handoff.
 
-Each camera's six channels determine its code: any definite channel NG -> `1`;
-otherwise technical ERROR -> `2`; otherwise at least one confirmed EMPTY with all
-remaining channels explicitly OK/EMPTY -> `3`; otherwise all six explicitly OK ->
-`0`. UNKNOWN prevents EMPTY/OK classification. EMPTY means confirmed absence in an
-inspected frame, never absence of a frame. The matching
+Each camera's six channels determine its code. Any definite channel NG takes
+precedence (`1`), followed by channel technical ERROR (`2`). When every channel
+is explicitly OK or confirmed EMPTY, at least one OK gives archive OK (`0`) and
+six EMPTY give archive EMPTY (`3`). UNKNOWN prevents EMPTY/OK classification.
+EMPTY requires confirmed absence in an inspected frame. The matching
 Recipe switch controls one image per camera/cycle, independently of other cameras.
 Unassigned findings do not invent channel judgments. Collection-forced rejection
 does not turn an unfinished frame into an inspected archive image.

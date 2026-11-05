@@ -293,7 +293,11 @@ Cancelling the import can remove its staging directory after logout.
 
 Normal startup creates the history owner independently of configuration readiness.
 Both Folder and Basler terminal Production results are eligible. The database
-uses internal schema version 2 and may have SQLite `-wal`/`-shm` sidecars. Preserve
+uses internal schema version 3 for new installations and may have SQLite
+`-wal`/`-shm` sidecars. Version 3 allows a null Batch reference on a Run.
+Existing version 2 databases continue to support named Batches and Runs in
+place. Their schema requires a Batch on every Run, so unbatched Basler inspection
+displays a recording warning. There is no automatic migration. Preserve
 these files with other local assets; do not copy an active database without its
 SQLite consistency requirements. An unsupported schema, corrupt database or
 unwritable path is reported as unavailable, never silently reset or replaced.

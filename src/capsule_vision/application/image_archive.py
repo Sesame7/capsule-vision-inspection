@@ -23,7 +23,7 @@ from capsule_vision.inspection.production import (
 
 
 def camera_archive_status(camera: CameraInspectionResult) -> int | None:
-    """NG > ERROR > confirmed EMPTY > all OK; never absence of a frame."""
+    """NG, then ERROR; otherwise distinguish occupied OK images from all EMPTY."""
     if (
         len(camera.channels) != 6
         or camera.collection_issue is not None
@@ -39,13 +39,11 @@ def camera_archive_status(camera: CameraInspectionResult) -> int | None:
         for row in camera.channels
     ):
         return 2
-    if ChannelBusinessStatus.EMPTY in states and all(
+    if all(
         state in (ChannelBusinessStatus.OK, ChannelBusinessStatus.EMPTY)
         for state in states
     ):
-        return 3
-    if all(state is ChannelBusinessStatus.OK for state in states):
-        return 0
+        return 0 if ChannelBusinessStatus.OK in states else 3
     return None
 
 

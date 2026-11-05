@@ -765,9 +765,6 @@ class MainWindow(QMainWindow):
         )
         app = self.bridge.application
         basler = isinstance(app, SourceProductionApplication) and app.basler_available
-        needs_batch = (
-            basler and app.identity is not None and self.snapshot.batch_uuid is None
-        )
         operator = permits(app, Role.OPERATOR)
         demo_start = (
             not operator
@@ -789,7 +786,6 @@ class MainWindow(QMainWindow):
         )
         identity = (
             basler,
-            needs_batch,
             self.snapshot.batch_pending,
             source_state,
             source_ready,
@@ -816,7 +812,7 @@ class MainWindow(QMainWindow):
                 enabled = (
                     enabled
                     and source_ready
-                    and not (draft_locked or needs_batch or self.snapshot.batch_pending)
+                    and not (draft_locked or self.snapshot.batch_pending)
                 )
             permitted = (
                 operator
@@ -842,8 +838,6 @@ class MainWindow(QMainWindow):
             button.setToolTip(
                 text("permission_operator", self.language)
                 if not permitted
-                else text("batch_required", self.language)
-                if action == "start" and needs_batch
                 else text(
                     "source_connecting"
                     if source_state is ConnectionState.CONNECTING
@@ -1279,6 +1273,8 @@ class MainWindow(QMainWindow):
         event_key = snapshot.state.name
         if snapshot.batch_uncertain:
             event_key = "batch_uncertain"
+        elif snapshot.unbatched_run_uncertain:
+            event_key = "run_uncertain"
         if result and result.assessment.technical_status is TechnicalStatus.ERROR:
             event_key = "technical_note"
         if snapshot.last_issue:
@@ -1299,6 +1295,7 @@ class MainWindow(QMainWindow):
             event_key = "close_wait" if self._command_issue else "closing"
         warning = event_key in {
             "batch_uncertain",
+            "run_uncertain",
             "technical_note",
             "issue_note",
             "command_error",
@@ -1651,6 +1648,8 @@ class MainWindow(QMainWindow):
         batch = f"{batch_caption} {batch_value}"
         if snapshot.batch_uncertain:
             batch += "\n" + text("batch_uncertain", language)
+        elif snapshot.unbatched_run_uncertain:
+            batch += "\n" + text("run_uncertain", language)
         self.batch_label.ensurePolished()
         self.batch_caption.ensurePolished()
         batch_padding = 16 + 2 * self.batch_group.frameWidth()

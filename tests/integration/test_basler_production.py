@@ -173,7 +173,9 @@ def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
     saved = recipe_file.read_bytes()
     engine = Engine()
     engine.release_warm.set()
-    startup = authenticated_startup(data, engine_factory=lambda _: engine)
+    startup = authenticated_startup(
+        data, engine_factory=lambda _: engine, select_basler_batch=False
+    )
     app = startup.application
     assert isinstance(app, SourceConnectionCommands) and isinstance(
         app, ImageArchiveCommands
@@ -181,6 +183,7 @@ def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
     try:
         app.connect_source()
         app.start().result(WAIT)
+        assert app.snapshot().batch_id is None
         assert startup.editor is not None
         startup.editor.draft.image_archive.save_empty = not save_empty
         passive.expose(1, tuple(i for i in (4, 2, 5, 1, 3, 0) if i < camera_count))

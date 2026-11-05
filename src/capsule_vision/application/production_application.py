@@ -124,8 +124,8 @@ class SourceProductionApplication(ProductionApplication):
                 else None,
             )
 
-    def _requires_batch(self) -> bool:
-        return self.identity is not None and self.basler_available
+    def _records_unbatched_runs(self) -> bool:
+        return self.basler_available
 
     def _run_reporting(self) -> ReportingSettings | None:
         return self._session_reporting

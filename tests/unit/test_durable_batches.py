@@ -187,6 +187,60 @@ def test_existing_unsupported_database_is_preserved(
     assert path.read_bytes() == original
 
 
+def test_v2_preserves_named_runs_and_rejects_only_unbatched_recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "history.sqlite3"
+    # Build a populated legacy fixture with the original required Batch FK.
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            batch_records,
+            "SCHEMA",
+            batch_records.SCHEMA.replace(
+                "batch TEXT REFERENCES batches",
+                "batch TEXT NOT NULL REFERENCES batches",
+            ),
+        )
+        legacy = ProductionHistory(path)
+        try:
+            batch = legacy.select_batch("Existing").result(WAIT)
+            assert batch
+            legacy.start_run(batch.uuid, "old", RECIPE, None).result(WAIT)
+            legacy.finish_run("old", "stopped", False).result(WAIT)
+        finally:
+            finish(legacy)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("PRAGMA user_version=2")
+        schema = db.execute("SELECT sql FROM sqlite_master ORDER BY name").fetchall()
+    history = ProductionHistory(path)
+    try:
+        assert history.initial_selection.result(WAIT) is not None
+        history.select_batch(None).result(WAIT)
+        with pytest.raises(
+            ValueError, match="History v2 cannot record an unbatched Run"
+        ):
+            history.start_run(None, "unbatched", RECIPE, None).result(WAIT)
+        assert "History v2" in history.snapshot().error
+        restored = history.select_batch("Existing").result(WAIT)
+        assert restored and restored.uuid == batch.uuid
+        history.start_run(batch.uuid, "later", RECIPE, None).result(WAIT)
+        history.finish_run("later", "stopped", False).result(WAIT)
+    finally:
+        finish(history)
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("PRAGMA user_version").fetchone() == (2,)
+        assert (
+            db.execute("SELECT sql FROM sqlite_master ORDER BY name").fetchall()
+            == schema
+        )
+        assert db.execute(
+            "SELECT uuid,batch,outcome FROM runs ORDER BY rowid"
+        ).fetchall() == [
+            ("old", batch.uuid, "stopped"),
+            ("later", batch.uuid, "stopped"),
+        ]
+
+
 def test_recovery_requires_actual_owner_exit_and_marks_interrupted(
     tmp_path: Path,
 ) -> None:

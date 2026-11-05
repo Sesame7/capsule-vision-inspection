@@ -605,7 +605,7 @@ def test_unsupported_detail_shape_is_observable(
             "UPDATE cycles SET detail = ?",
             (zlib.compress(json.dumps(invalid).encode()),),
         )
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
     owner = ProductionHistory(path)
     try:
         with pytest.raises(ValueError, match="Invalid History detail payload"):

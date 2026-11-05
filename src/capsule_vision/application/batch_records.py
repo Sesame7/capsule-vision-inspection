@@ -35,7 +35,7 @@ CREATE TABLE batches (
 CREATE UNIQUE INDEX current_batch ON batches(selected) WHERE selected=1;
 CREATE TABLE batch_ends (batch TEXT NOT NULL REFERENCES batches, ended REAL NOT NULL);
 CREATE TABLE runs (
-    uuid TEXT PRIMARY KEY, batch TEXT NOT NULL REFERENCES batches, started REAL NOT NULL,
+    uuid TEXT PRIMARY KEY, batch TEXT REFERENCES batches, started REAL NOT NULL,
     terminated REAL, outcome TEXT NOT NULL, uncertain INTEGER NOT NULL DEFAULT 0,
     detail_expired INTEGER NOT NULL DEFAULT 0, recipe TEXT NOT NULL, reporting_mode TEXT NOT NULL,
     reporting_base INTEGER, endpoint TEXT
@@ -121,17 +121,21 @@ def recover(db: sqlite3.Connection, observed: float) -> None:
 
 def start_run(
     db: sqlite3.Connection,
-    batch: str,
+    batch: str | None,
     run: str,
     now: float,
     recipe: ConfigurationIdentity,
     reporting: ReportingSettings | None,
 ) -> None:
+    if batch is None and db.execute("PRAGMA user_version").fetchone()[0] == 2:
+        raise ValueError("History v2 cannot record an unbatched Run")
     inserted = db.execute(
         "INSERT INTO runs(uuid,batch,started,outcome,recipe,reporting_mode,reporting_base,endpoint) "
-        "SELECT ?,uuid,?,'open',?,?,?,? FROM batches WHERE uuid=? AND selected=1",
+        "SELECT ?,?,?,'open',?,?,?,? WHERE ? IS "
+        "(SELECT uuid FROM batches WHERE selected=1)",
         (
             run,
+            batch,
             now,
             json.dumps(asdict(recipe)),
             reporting.mode.value if reporting else "disabled",
@@ -184,9 +188,11 @@ def occurrence(
     if not _first(db, run, kind, cycle):
         return False
     batch, saved = db.execute(
-        "SELECT b.uuid,b.occurrences FROM batches b JOIN runs r ON r.batch=b.uuid WHERE r.uuid=?",
+        "SELECT r.batch,b.occurrences FROM runs r LEFT JOIN batches b ON r.batch=b.uuid WHERE r.uuid=?",
         (run,),
     ).fetchone()
+    if batch is None:  # Unbatched Runs retain Cycle facts without a Batch summary.
+        return True
     counters = ProductionCounters(**json.loads(saved))
     if result is None:
         counters = counters.admitted()
@@ -228,9 +234,11 @@ def group(
         ),
     )
     batch, saved = db.execute(
-        "SELECT b.uuid,b.positions FROM batches b JOIN runs r ON r.batch=b.uuid WHERE r.uuid=?",
+        "SELECT r.batch,b.positions FROM runs r LEFT JOIN batches b ON r.batch=b.uuid WHERE r.uuid=?",
         (run,),
     ).fetchone()
+    if batch is None:
+        return
     counters = PilotCounters(**json.loads(saved)).completed(fact)
     db.execute(
         "UPDATE batches SET positions=?,duration_ms=? WHERE uuid=?",

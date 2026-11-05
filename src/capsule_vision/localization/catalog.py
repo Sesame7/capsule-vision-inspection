@@ -617,9 +617,9 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "batch_keep_open": ("暂不结束", "Keep Open"),
     "batch_select": ("设置批号", "Set Batch ID"),
-    "batch_required": (
-        "请先选择生产批次再启动",
-        "Select a Production Batch before Start",
+    "run_uncertain": (
+        "运行记录可能不完整（数量和明细）",
+        "Run records may be incomplete (totals and detail)",
     ),
     "batch_uncertain": ("累计数量可能不完整", "Batch totals may be incomplete"),
     "batch_expired": ("部分明细已超过保留期", "Some details have expired"),

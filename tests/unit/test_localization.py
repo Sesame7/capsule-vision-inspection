@@ -95,7 +95,7 @@ OPTIONAL_UI_KEYS = {
     "batch_end",
     "batch_end_confirm",
     "batch_select",
-    "batch_required",
+    "run_uncertain",
     "batch_uncertain",
     "batch_expired",
     "batch_duration",

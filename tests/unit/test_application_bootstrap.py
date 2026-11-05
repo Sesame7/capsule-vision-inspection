@@ -825,6 +825,9 @@ def test_prepare_rechecks_only_selected_model_metadata(
     startup = load_startup(data)
     try:
         assert startup.editor is not None and startup.editor.entry is not None
+        # The queued read follows publication of the restored Batch selection.
+        assert startup.application.history is not None
+        startup.application.history.query().result(WAIT)
         before = startup.application.snapshot()
         metadata = data.models / "general" / "model.json"
         if change == "invalid":

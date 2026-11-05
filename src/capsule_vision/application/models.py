@@ -212,6 +212,7 @@ class ProductionApplicationSnapshot:
     batch_uncertain: bool = False
     detail_expired: bool = False
     batch_pending: bool = False
+    unbatched_run_uncertain: bool = False
 
     @property
     def has_pending_configuration(self) -> bool:
