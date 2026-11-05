@@ -42,27 +42,12 @@ def wait(predicate: Callable[[], bool]) -> None:
         Event().wait(0.002)
 
 
-def synchronize(worker: FourCycleReportingWorker, peer: TcpPeer, counter: int) -> None:
-    address = peer.base_address - 1
-    peer.set_words(address, ((counter - 1) & 0xFFFF,))
-    worker.startup_boundary(0, lambda: True)
-    wait(lambda: worker.snapshot().startup_read is not None)
-    peer.set_words(address, (counter,))
-    wait(lambda: worker.startup_boundary(0, lambda: True))
-    assert (
-        not worker.snapshot().waiting_for_sync and worker.snapshot().phase_issue is None
-    )
-
-
 @contextmanager
 def owner(
     peer: TcpPeer,
     mode: ReportingMode = ReportingMode.FOUR_CYCLE,
     attributable: Callable[[ReportIdentity], bool] = lambda _: True,
     on_completed: Callable[[CompletedReportingBatch], None] = lambda _: None,
-    *,
-    counter: int | None = None,
-    align: bool = True,
 ) -> Generator[FourCycleReportingWorker]:
     worker = FourCycleReportingWorker(
         7,
@@ -77,12 +62,6 @@ def owner(
     worker.start()
     try:
         assert not peer.packets and peer.connections == 0  # Start is I/O-free.
-        if align:
-            synchronize(
-                worker,
-                peer,
-                peer.words(peer.base_address - 1)[0] if counter is None else counter,
-            )
         yield worker
     finally:
         worker.request_stop(drain=True)
@@ -139,7 +118,6 @@ def test_four_authoritative_projections_and_register_ownership(
         other = 149 if base == 49 else 49
         peer.set_words(other - 1, (17, 18, 19, 20, 21))
         with owner(peer) as worker:
-            before = len(peer.packets)
             admit(worker, 21)
             futures = submit(worker, 21, cameras, partial=partial)
             outcome = futures[-1].result(3)
@@ -160,7 +138,7 @@ def test_four_authoritative_projections_and_register_ownership(
                 *expected,
                 *((0xABCD,) if cameras == 5 else ()),
             )
-            assert [int.from_bytes(p[13:15]) for p in peer.packets[before:]] == [
+            assert [int.from_bytes(p[13:15]) for p in peer.packets] == [
                 base - 1,
                 base - 1,
                 base + 1,
@@ -183,7 +161,7 @@ def test_four_authoritative_projections_and_register_ownership(
 
 
 def test_counter_skips_wrap_bounded_evidence_and_no_local_sequence() -> None:
-    with TcpPeer() as peer, owner(peer, counter=65534) as worker:
+    with TcpPeer() as peer, owner(peer) as worker:
         counters = (65534, 65535, 0, 17, *range(18, 36))
         for index, counter in enumerate(counters):
             peer.set_words(48, (counter,))
@@ -198,86 +176,6 @@ def test_counter_skips_wrap_bounded_evidence_and_no_local_sequence() -> None:
         assert len(snapshot.batch_observations) == 16 and snapshot.phase_issue is None
 
 
-@pytest.mark.parametrize("ambiguity", ["cycle_during_read", "buffered_or_partial"])
-def test_startup_rejects_late_or_unclean_transition_then_accepts_next(
-    ambiguity: str,
-) -> None:
-    with TcpPeer() as peer, owner(peer, align=False) as worker:
-        assert not worker.startup_boundary(6, lambda: True)
-        wait(lambda: worker.snapshot().startup_read is not None)
-        peer.hold_next("read")
-        assert peer.entered.wait(3)
-        peer.set_words(48, (19,))
-        frames = 6
-        if ambiguity == "cycle_during_read":
-            assert not worker.admit_cycle(CycleId(2))
-            frames += 6
-            worker.startup_boundary(frames, lambda: True)
-        peer.release.set()
-        wait(lambda: bool((r := worker.snapshot().startup_read) and r.value == 19))
-        observed = worker.snapshot().startup_read
-        assert observed
-
-        def rejected_and_sampling() -> bool:
-            assert not worker.startup_boundary(
-                frames, lambda: ambiguity != "buffered_or_partial"
-            )
-            read = worker.snapshot().startup_read
-            return read is not None and read.started_at >= observed.finished_at
-
-        wait(rejected_and_sampling)
-        assert worker.snapshot().waiting_for_sync and not worker.snapshot().phase_issue
-        assert not worker.admit_cycle(CycleId(3))
-        assert not worker.snapshot().batch_observations
-        assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
-        # Complete the partial/queued exposure, then observe a stable old
-        # counter with the new SDK watermark before the next transition.
-        frames += 6
-        worker.startup_boundary(frames, lambda: True)
-        after = perf_counter()
-        wait(
-            lambda: bool(
-                (r := worker.snapshot().startup_read) and r.started_at >= after
-            )
-        )
-        peer.set_words(48, (27,))
-        wait(lambda: worker.startup_boundary(frames, lambda: True))
-        admit(worker, 4)
-        assert submit(worker, 4)[-1].result(3).sequence == 27
-        assert worker.snapshot().acknowledged_count == 1
-
-
-@pytest.mark.parametrize("failed", [False, True])
-def test_startup_reads_settle_on_stop_or_visible_failure(failed: bool) -> None:
-    with TcpPeer() as peer, owner(peer, align=False) as worker:
-        peer.hold_next("read")
-        if failed:
-            peer.fail_next("read", "plc")
-        worker.startup_boundary(0, lambda: True)
-        assert peer.entered.wait(3)
-        if not failed:
-            worker.stop_startup_wait()
-            assert not worker.join(0)
-        peer.release.set()
-        if failed:
-            wait(lambda: worker.snapshot().phase_issue is not None)
-            assert worker.snapshot().failure_issue is not None
-            assert not worker.admit_cycle(CycleId(11))
-            assert worker.startup_boundary(6, lambda: True)
-            worker.request_stop()
-        assert worker.join(3) and len(peer.packets) == 1
-        assert not worker.snapshot().batch_observations
-
-
-def test_admission_cannot_substitute_a_different_counter_after_alignment() -> None:
-    with TcpPeer() as peer, owner(peer, counter=17) as worker:
-        peer.set_words(48, (18,))
-        admit(worker, 11)
-        assert submit(worker, 11)[-1].result(3).outcome is ReportOutcome.SKIPPED
-        assert worker.snapshot().phase_issue and not worker.snapshot().waiting_for_sync
-        assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
-
-
 @pytest.mark.parametrize(
     "scenario", ["counter", "stale", "ambiguous", "duplicate", "gap", "late"]
 )
@@ -288,8 +186,9 @@ def test_observable_association_loss_suppresses_and_latches(
     valid = True
     with (
         TcpPeer(base_address=base) as peer,
-        owner(peer, attributable=lambda _: valid, counter=5) as worker,
+        owner(peer, attributable=lambda _: valid) as worker,
     ):
+        peer.set_words(base - 1, (5,))
         first = 1
         if scenario == "stale":
             admit(worker, first)
@@ -314,7 +213,8 @@ def test_observable_association_loss_suppresses_and_latches(
 
 @pytest.mark.parametrize("base", [49, 149])
 def test_changed_counter_after_bitmap_ack_never_commits(base: int) -> None:
-    with TcpPeer(base_address=base) as peer, owner(peer, counter=14) as worker:
+    with TcpPeer(base_address=base) as peer, owner(peer) as worker:
+        peer.set_words(base - 1, (14,))
         admit(worker, 1)
         peer.hold_next("bitmap")
         future = submit(worker, 1)[-1]
@@ -340,7 +240,8 @@ def test_changed_counter_after_bitmap_ack_never_commits(base: int) -> None:
 def test_failed_or_uncertain_writes_never_replayed(
     stage: Stage, fault: Fault, base: int
 ) -> None:
-    with TcpPeer(base_address=base) as peer, owner(peer, counter=15) as worker:
+    with TcpPeer(base_address=base) as peer, owner(peer) as worker:
+        peer.set_words(base - 1, (15,))
         admit(worker, 1)
         peer.fail_next(stage, fault)
         outcome = submit(worker, 1)[-1].result(3)
@@ -414,7 +315,6 @@ def test_socket_factory_and_cleanup_stay_on_one_communication_owner() -> None:
         )
         worker.start()
         try:
-            synchronize(worker, peer, 0)
             admit(worker, 1)
             submit(worker, 1)[-1].result(3)
         finally:
@@ -496,7 +396,8 @@ def test_duplicate_terminal_and_missing_result_never_fabricate_reports() -> None
 def test_next_batch_during_sequence_request_is_visible_uncertain_commit(
     base: int,
 ) -> None:
-    with TcpPeer(base_address=base) as peer, owner(peer, counter=19) as worker:
+    with TcpPeer(base_address=base) as peer, owner(peer) as worker:
+        peer.set_words(base - 1, (19,))
         admit(worker, 1)
         peer.hold_next("sequence")
         future = submit(worker, 1)[-1]

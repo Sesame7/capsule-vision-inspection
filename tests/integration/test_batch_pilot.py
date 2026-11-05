@@ -18,7 +18,6 @@ from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import close_window, until
 from tests.support.startup import (
     TEST_PASSWORD,
-    align_four_cycle,
     authenticated_startup,
     close,
     saved_data,
@@ -47,7 +46,6 @@ from capsule_vision.communication.reporting import (
     ReportingSettings,
     ReportingWriteProtectedError,
 )
-from capsule_vision.configuration import ImageArchiveSettings, load_recipe, save_recipe
 from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
     load_communication_preferences,
@@ -57,233 +55,6 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
-
-
-@pytest.mark.parametrize("before_start", [0, 1, 2, 3])
-def test_running_trigger_stream_synchronizes_without_reassigning_startup_cycles(
-    qapp: QApplication,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    before_start: int,
-) -> None:
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-    archive = tmp_path / "archive"
-    path = data.recipes / "local.json"
-    save_recipe(
-        path,
-        replace(
-            load_recipe(path),
-            image_archive=ImageArchiveSettings(str(archive), True, True, True, True),
-        ),
-    )
-    backend = PassiveBackend()
-    monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
-    engine = Engine()
-    engine.release_warm.set()
-    base = 149 if before_start % 2 else 49
-    with TcpPeer(base_address=base) as peer:
-        startup = authenticated_startup(
-            data, engine_factory=lambda _: engine, select_basler_batch=False
-        )
-        app = startup.application
-        assert isinstance(app, SourceProductionApplication)
-        try:
-            app.set_reporting_selection(
-                ReportingSelection(
-                    True,
-                    ReportingSettings(
-                        FinsTcpEndpoint(port=peer.port),
-                        base,
-                        mode=ReportingMode.FOUR_CYCLE,
-                    ),
-                )
-            )
-            app.connect_source()
-            peer.set_words(base - 1, (65535,))
-            for ordinal in range(1, before_start + 1):
-                # Start during a partial SDK ordinal in one case. These peers
-                # belong to the idle binding, even if they arrive after Start.
-                partial = before_start == ordinal == 2
-                backend.expose(ordinal, (0,) if partial else tuple(range(6)))
-                received = (ordinal - 1) * 6 + (1 if partial else 6)
-                until(
-                    lambda received=received: (
-                        app.source_snapshot().discarded_frames == received
-                    )
-                )
-            app.start().result(3)
-            until(
-                lambda: bool(
-                    (s := app.reporting_snapshot()) and s.initial_counter == 65535
-                )
-            )
-            if before_start == 2:
-                partial_control = app.basler_control_for(app.snapshot().generation)
-                assert partial_control is not None
-                # Deliberately present an unsafe transition with five peers
-                # still missing. A second read proves the SDK rejected it.
-                peer.set_words(base - 1, (23,))
-                until(
-                    lambda: bool(
-                        (s := app.reporting_snapshot())
-                        and s.startup_read
-                        and s.startup_read.value == 23
-                    )
-                )
-                after = perf_counter()
-                until(
-                    lambda: bool(
-                        (s := app.reporting_snapshot())
-                        and s.waiting_for_sync
-                        and s.startup_read
-                        and s.startup_read.started_at >= after
-                    )
-                )
-                backend.expose(2, (1, 2, 3, 4, 5))
-                until(
-                    lambda: (
-                        app.source_snapshot().discarded_frames == 12
-                        and partial_control.snapshot().boundary_ready
-                    )
-                )
-            skipped = 4 - before_start if before_start else 0
-
-            def expose_and_archive(ordinal: int, completed: int) -> None:
-                backend.expose(ordinal)
-                until(lambda: app.snapshot().counters.cycles_completed == completed)
-                # Pace the fixture's inputs to the bounded PNG writer. The
-                # actual inspection/reporting paths never wait on this writer.
-                until(
-                    lambda: bool(
-                        (a := app.archive_snapshot()) and a.written == completed * 6
-                    )
-                )
-
-            for i in range(1, skipped + 1):
-                expose_and_archive(before_start + i, i)
-            snapshot = app.reporting_snapshot()
-            assert (
-                snapshot
-                and snapshot.waiting_for_sync
-                and not snapshot.batch_observations
-            )
-            assert not snapshot.group_progress and not startup.frames.snapshot().frames
-            control = app.basler_control_for(app.snapshot().generation)
-            assert control is not None
-            until(lambda: control.snapshot().pending_cycles == 0)
-            assert app.snapshot().pilot_counters.batches_completed == 0
-            assert (
-                app.history is not None
-                and len(app.history.query().result(3).records) == skipped
-            )
-            assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
-
-            align_four_cycle(app, peer, 0)
-            first = before_start + skipped + 1
-            for i in range(4):
-                expose_and_archive(first + i, skipped + i + 1)
-                if i == 0:
-                    until(
-                        lambda: bool(
-                            (s := app.reporting_snapshot())
-                            and s.batch_observations
-                            and s.batch_observations[0].reads
-                        )
-                    )
-            until(
-                lambda: bool(
-                    (s := app.reporting_snapshot()) and s.acknowledged_count == 1
-                )
-            )
-            app.stop().result(3)
-            final = app.reporting_snapshot()
-            assert (
-                final and not final.phase_issue and len(final.batch_observations) == 1
-            )
-            assert final.batch_observations[0].cycles == tuple(range(first, first + 4))
-            assert final.last_acknowledged and final.last_acknowledged.sequence == 0
-            assert final.initial_counter == 65535
-            assert app.snapshot().pilot_counters.batches_completed == 1
-            assert [
-                int.from_bytes(p[13:15])
-                for p in peer.packets
-                if p[10:12] == b"\x01\x02"
-            ] == [base + 1, base]
-            frames = startup.frames.snapshot().frames
-            assert len(frames) == 6 and all(
-                f.frame_id.cycle_id == first + 3 for f in frames
-            )
-            rows = app.history.query().result(3).records
-            assert [(r.cycle_id, r.group_slot) for r in reversed(rows)] == [
-                (c, c - first + 1 if c >= first else None)
-                for c in range(before_start + 1, first + 4)
-            ]
-            images = list(archive.rglob("*.png"))
-            assert len(images) == (skipped + 4) * 6
-            assert {int(p.stem.split("_")[-1]) for p in images} == {
-                r.cycle_id for r in rows
-            }
-        finally:
-            close(startup)
-
-
-@pytest.mark.parametrize("ending", ["stop", "close", "plc_error"])
-def test_startup_read_shutdown_and_failure_leave_no_pending_reporting(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ending: str
-) -> None:
-    data = saved_data(tmp_path)
-    save_basler(data.sources)
-    backend = PassiveBackend()
-    monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
-    engine = Engine()
-    engine.release_warm.set()
-    with TcpPeer() as peer:
-        startup = authenticated_startup(data, engine_factory=lambda _: engine)
-        app = startup.application
-        assert isinstance(app, SourceProductionApplication)
-        try:
-            app.set_reporting_selection(
-                ReportingSelection(
-                    True,
-                    ReportingSettings(
-                        FinsTcpEndpoint(port=peer.port, timeout=2),
-                        mode=ReportingMode.FOUR_CYCLE,
-                    ),
-                )
-            )
-            peer.hold_next("read")
-            if ending == "plc_error":
-                peer.fail_next("read", "plc")
-            app.start().result(3)
-            assert peer.entered.wait(3)
-            if ending == "plc_error":
-                peer.release.set()
-                until(
-                    lambda: bool(
-                        (s := app.reporting_snapshot())
-                        and s.failure_issue
-                        and s.phase_issue
-                    )
-                )
-                backend.expose(1)
-                until(lambda: app.snapshot().counters.cycles_completed == 1)
-                assert app.snapshot().state is ApplicationState.RUNNING
-                assert app.snapshot().pilot_counters.batches_completed == 0
-                app.stop().result(3)
-            else:
-                stopped = app.stop() if ending == "stop" else app.close()
-                assert not stopped.done()
-                peer.release.set()
-                stopped.result(3)
-            report = app.reporting_snapshot()
-            assert report and not report.thread_alive
-            assert bool(report.phase_issue) == (ending == "plc_error")
-            assert not report.waiting_for_sync and not report.batch_observations
-            assert len(peer.packets) == 1 and peer.packets[0][10:12] == b"\x01\x01"
-        finally:
-            peer.release.set()
-            close(startup)
 
 
 @pytest.mark.parametrize("mode", ["w48_observe", "w48_active"])
@@ -400,7 +171,7 @@ def test_selected_register_range_protected_until_reporting_owner_exits(
             assert not peer.packets and peer.connections == 0
             engine.release_warm.set()
             started.result(3)
-            align_four_cycle(app, peer, 73)
+            peer.set_words(base - 1, (73,))
             peer.hold_next("sequence")
             for cycle in range(1, 5):
                 backend.expose(cycle, tuple(range(cameras)))
@@ -546,7 +317,7 @@ def test_normal_authorization_warmup_controls_and_stop(
                 assert not engine.calls and not peer.packets
                 return
             app.start().result(3)
-            assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
+            assert not peer.packets and peer.connections == 0
             for action in (app.pause_source, app.step_source, app.resume_source):
                 with pytest.raises(ApplicationStateError, match="Four-cycle"):
                     action()
@@ -562,7 +333,7 @@ def test_normal_authorization_warmup_controls_and_stop(
                                 endpoint=selection.settings.endpoint,
                             )
                         )
-            align_four_cycle(app, peer, 38)
+            peer.set_words(base - 1, (38,))
             for cycle in range(1, 5):
                 backend.expose(cycle)
                 until(
@@ -792,7 +563,7 @@ def test_four_trigger_burst_latency_and_unchanged_native_ownership(
             )
             app.connect_source()
             app.start().result(3)
-            align_four_cycle(app, peer, 44)
+            peer.set_words(48, (44,))
             start = perf_counter()
             for index in range(4):
                 Event().wait(max(0, start + index * 0.060 - perf_counter()))

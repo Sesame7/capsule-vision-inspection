@@ -1447,8 +1447,6 @@ class MainWindow(QMainWindow):
                 )
             ):
                 plc_key = "technical_error"
-            elif report.waiting_for_sync:
-                plc_key = "plc_sync_wait"
             elif report.thread_alive:
                 plc_key = "web_running"
         plc = text(plc_key, self.language)

@@ -12,7 +12,6 @@ from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import close_window, until
 from tests.support.startup import (
     TEST_PASSWORD,
-    align_four_cycle,
     authenticated_startup,
     close,
     saved_data,
@@ -63,9 +62,8 @@ def test_unbatched_basler_run_keeps_its_cycles_and_eligible_group(
                 FinsTcpEndpoint(port=peer.port), mode=mode or ReportingMode.FOUR_CYCLE
             )
             app.set_reporting_selection(ReportingSelection(mode is not None, settings))
+            peer.set_words(48, (7,))
             app.start().result(WAIT)
-            if mode is ReportingMode.FOUR_CYCLE:
-                align_four_cycle(app, peer, 7)
             snapshot = app.snapshot()
             run = snapshot.run_id
             assert run and snapshot.batch_id is None and snapshot.batch_uuid is None

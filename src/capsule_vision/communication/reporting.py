@@ -358,9 +358,6 @@ class ReportingSnapshot:
     phase_issue: str | None = None
     batch_observations: tuple[BatchReportObservation, ...] = ()
     group_progress: ReportingGroupProgress | None = None
-    waiting_for_sync: bool = False
-    initial_counter: int | None = None
-    startup_read: CounterRead | None = None
 
 
 @runtime_checkable

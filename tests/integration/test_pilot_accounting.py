@@ -16,12 +16,7 @@ from tests.support.business import mixed_result
 from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import screen as screen
 from tests.support.qt import until
-from tests.support.startup import (
-    align_four_cycle,
-    authenticated_startup,
-    close,
-    saved_data,
-)
+from tests.support.startup import authenticated_startup, close, saved_data
 
 from capsule_vision.application import ApplicationError, ProductionCounters, _basler_sdk
 from capsule_vision.application.models import PilotCounters, PreparedConfiguration
@@ -99,7 +94,6 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             app.set_reporting_selection(ReportingSelection(True, settings))
             app.connect_source()
             app.start().result(3)
-            align_four_cycle(app, peer, 1)
             expose(3, pilot=True)
             assert app.snapshot().pilot_counters == PilotCounters()
             assert not startup.frames.snapshot().frames
@@ -107,7 +101,6 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             app.stop().result(3)
             assert not events  # Partial batches never resume in the next session.
             app.start().result(3)
-            align_four_cycle(app, peer, 2)
             expose(4, pilot=True)
             until(lambda: app.snapshot().pilot_counters.batches_completed == 1)
             until(lambda: len(startup.frames.snapshot().frames) == cameras)
@@ -174,9 +167,9 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
                     True, replace(settings, mode=ReportingMode.FOUR_CYCLE)
                 )
             )
+            peer.set_words(48, (12,))
             peer.fail_next("sequence", "drop_after")
             app.start().result(3)
-            align_four_cycle(app, peer, 12)
             observe(events[0])  # Stale generation in a new pilot session.
             assert app.snapshot().pilot_counters == counts
             expose(4, pilot=True)

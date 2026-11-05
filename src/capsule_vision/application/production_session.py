@@ -152,8 +152,6 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         self._source_stop.set()
         if self.basler_control is not None:
             self.basler_control.stop()
-        if isinstance(self.reporting, FourCycleReportingWorker):
-            self.reporting.stop_startup_wait()
         if self.replay_control is not None:
             self.replay_control.stop()
         if self.reporting is not None and self._continuous_source is None:
@@ -174,22 +172,18 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 archive.complete(cycle_id, None)
             raise
         if self.reporting is not None:
-            report_cycle = True
             if isinstance(self.reporting, FourCycleReportingWorker):
                 try:
-                    report_cycle = self.reporting.admit_cycle(cycle_id)
-                    if report_cycle and self.reporting.is_fourth_cycle(cycle_id):
+                    self.reporting.admit_cycle(cycle_id)
+                    if self.reporting.is_fourth_cycle(cycle_id):
                         self._store.select_fourth(self.generation, cycle_id)
                 except (ReportingCapacityError, ReportingStateError) as exc:
                     self.reporting.note_skipped(
                         ReportIdentity(self.generation, cycle_id), exc
                     )
-            if report_cycle:
-                cycle.result.add_done_callback(
-                    lambda future: self._report_result(cycle_id, future)
-                )
-            elif self.basler_control is not None:
-                self.basler_control.reported(cycle_id)
+            cycle.result.add_done_callback(
+                lambda future: self._report_result(cycle_id, future)
+            )
         if retained:
             cycle.result.add_done_callback(
                 lambda future: self._archive_result(cycle_id, future)
@@ -483,9 +477,6 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 not self._source_stop.is_set()
                 and self._application.snapshot().state is ApplicationState.RUNNING
             ),
-            self.reporting.startup_boundary
-            if isinstance(self.reporting, FourCycleReportingWorker)
-            else None,
         )
         try:
             source.command(binding, attach=True).result()

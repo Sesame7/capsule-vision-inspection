@@ -1,4 +1,4 @@
-"""Attributed four-cycle reporting with startup counter sampling on one socket owner."""
+"""Attributed four-cycle reporting. One socket owner, no retries or polling."""
 
 from collections import deque
 from collections.abc import Callable
@@ -79,7 +79,7 @@ class FourCycleReportingWorker:
     """Admission only copies scalar identities; this thread owns every socket call.
 
     A lost association latches for this generation. Subsequent cycles remain
-    inspectable, but produce local diagnostics until a fresh Start synchronizes.
+    inspectable, but produce local diagnostics until Stop and a known-phase Start.
     """
 
     def __init__(
@@ -104,11 +104,6 @@ class FourCycleReportingWorker:
         self._recent: deque[BatchReportObservation] = deque(maxlen=16)
         self._last_cycle: CycleId | None = None
         self._last_counter: int | None = None
-        self._source_frames: int | None = None
-        self._candidate_frames: int | None = None
-        self._startup_read: CounterRead | None = None
-        self._initial_counter: int | None = None
-        self._synchronized = False
         self._phase_issue: str | None = None
         self._progress: ReportingGroupProgress | None = None
         self._started = self._stopping = self._drain = False
@@ -177,37 +172,7 @@ class FourCycleReportingWorker:
                     *(batch.observation() for batch in self._batches),
                 ),
                 group_progress=self._progress,
-                waiting_for_sync=self._source_frames is not None
-                and not (self._synchronized or self._stopping or self._phase_issue),
-                startup_read=self._startup_read,
-                initial_counter=self._initial_counter,
             )
-
-    def startup_boundary(self, frames: int, clean: Callable[[], bool]) -> bool:
-        """SDK owner only, between retrieval sweeps in RUNNING. True ends sampling."""
-        with self._condition:
-            if self._stopping or self._phase_issue or self._synchronized:
-                return True
-            first = self._source_frames is None
-            self._source_frames = frames
-            candidate = self._candidate_frames
-            if first:
-                self._condition.notify_all()
-            if candidate is None:
-                return False
-        # Only the SDK owner checks partial ordinals and actual SDK queues. The
-        # PLC owner waits for this candidate's decision, without holding a lock.
-        aligned = candidate == frames and clean()
-        with self._condition:
-            self._synchronized = aligned and not self._stopping
-            self._candidate_frames = None
-            self._condition.notify_all()
-            return self._synchronized or self._stopping
-
-    def stop_startup_wait(self) -> None:
-        with self._condition:
-            if not self._synchronized:
-                self.request_stop()
 
     def is_fourth_cycle(self, cycle: CycleId) -> bool:
         """Display admission uses this owner's membership, never CycleId modulo."""
@@ -248,11 +213,9 @@ class FourCycleReportingWorker:
                 self._publish_progress(batch)
         self._condition.notify_all()
 
-    def admit_cycle(self, cycle: CycleId) -> bool:
+    def admit_cycle(self, cycle: CycleId) -> None:
         ReportIdentity(self.generation, cycle)
         with self._condition:
-            if self._started and not self._synchronized:
-                return False  # Inspection retains this Cycle; reporting owns no token.
             if not self._started or self._stopping:
                 raise ReportingStateError("Four-cycle owner is not accepting cycles")
             if self._last_cycle is not None and cycle != self._last_cycle + 1:
@@ -280,7 +243,6 @@ class FourCycleReportingWorker:
             batch.cycles.append(cycle)
             self._last_cycle = cycle
             self._condition.notify_all()
-            return True
 
     def submit_cycle(
         self, report: FirstStationReport, status: CycleStatus
@@ -334,7 +296,7 @@ class FourCycleReportingWorker:
             self._thread.join(timeout)
         return not self._thread.is_alive()
 
-    def _read(self, batch: _Batch | None, stage: str) -> int:
+    def _read(self, batch: _Batch, stage: str) -> int:
         started = perf_counter()
         value: int | None = None
         try:
@@ -344,49 +306,9 @@ class FourCycleReportingWorker:
             return value
         finally:
             with self._condition:
-                read = CounterRead(
-                    stage, started, perf_counter(), value, self._base - 1
+                batch.reads.append(
+                    CounterRead(stage, started, perf_counter(), value, self._base - 1)
                 )
-                if batch is None:
-                    self._startup_read = read
-                    if self._initial_counter is None:
-                        self._initial_counter = value
-                else:
-                    batch.reads.append(read)
-
-    def _synchronize(self) -> None:
-        # A clean SDK sweep after a changed value alone could be *after* the
-        # first exposure. Fence from before the preceding (old-value) request.
-        previous_value = previous_frames = None
-        with self._condition:
-            self._condition.wait_for(
-                lambda: self._source_frames is not None or self._stopping
-            )
-        while True:
-            with self._condition:
-                if self._stopping:
-                    return
-                frames = self._source_frames
-            try:
-                value = self._read(None, "startup")
-            except Exception as exc:
-                with self._condition:
-                    self._failure_issue = ReportingIssue.from_error(exc)
-                    self._lose_phase(
-                        f"PLC startup counter read failed: {str(exc)[:300]}"
-                    )
-                return
-            with self._condition:
-                if previous_value is not None and value != previous_value:
-                    self._candidate_frames = previous_frames
-                    self._condition.wait_for(
-                        lambda: self._candidate_frames is None or self._stopping
-                    )
-                    if self._synchronized or self._stopping:
-                        return
-                previous_value, previous_frames = value, frames
-                if self._condition.wait_for(lambda: self._stopping, timeout=0.010):
-                    return
 
     def _check(self, batch: _Batch, retained: int) -> None:
         if any(
@@ -446,12 +368,6 @@ class FourCycleReportingWorker:
                         )
                     if retained == self._last_counter:
                         self._lose_phase("Stale PLC counter at next group admission")
-                    if (
-                        self._last_counter is None
-                        and self._startup_read
-                        and retained != self._startup_read.value
-                    ):
-                        self._lose_phase("PLC counter changed after startup alignment")
                     self._last_counter = retained
             with self._condition:
                 self._condition.wait_for(
@@ -605,7 +521,6 @@ class FourCycleReportingWorker:
 
     def _run(self) -> None:
         try:
-            self._synchronize()
             while True:
                 with self._condition:
                     self._condition.wait_for(

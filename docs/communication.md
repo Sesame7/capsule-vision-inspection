@@ -232,13 +232,9 @@ not migrated or interpreted. Invalid files remain untouched with recovery feedba
 Formal reporting still depends on the established external attribution conditions;
 its product name does **not** establish independent hardware trigger identity:
 
-- After all four exposures and transfers of the preceding group finish, the
-  PLC holds the counter through the inter-group gap (approximately 200 ms on
-  the intended equipment). It advances the unsigned 16-bit counter before the
-  new group's first exposure, with sufficient lead for the counter read and SDK
-  boundary check, and holds it across four triggers and through reporting ACK.
-  All preceding frames must have reached the SDK by that boundary. An empty
-  SDK queue cannot detect an earlier exposure still in transit.
+- Production reaches RUNNING before the first trigger of a new physical group.
+- PLC advances the unsigned 16-bit counter before that trigger and holds it across
+  exactly four triggers and until reporting completes, including its ACK.
 - Every trigger reaches every configured camera; no complete electrical trigger
   is silently missed by all cameras.
 - No unobserved counter reset/reuse occurs while the session runs.
@@ -251,27 +247,8 @@ missing groups. A repeated counter in the next group is rejected; hidden full
 reuse/reset remains undetectable. The [retained offline evaluation](plc-batch-proposal.md)
 explains these limits and is not the current register contract.
 
-`FourCycleReportingWorker` is the generation's sole reporting socket owner.
-Each activated session starts **awaiting sync**. Once the bound SDK owner
-observes RUNNING, the communication owner reads base−1 and waits 10 ms before
-requesting each subsequent sample. The first value establishes a baseline.
-On a change, the SDK owner checks that its observed frame count has stayed
-constant since before the preceding old-value request, the camera ordinal is
-complete (or no ordinal has started), and every camera FIFO is empty. A late
-reply, partial ordinal or queued frame disqualifies that transition. The next
-transition can qualify after fresh stable observations. Neither the expected
-inter-group gap nor inspection completion times are used to infer phase.
-
-Until alignment, inspected Cycles still count as occurrences and follow the
-ordinary History and archive paths. They acquire no reporting slot, group
-progress or physical-group totals and cause no result writes. A steady counter
-is a neutral wait. A counter read error latches a visible reporting failure.
-Stop wakes the wait and joins the communication owner after any in-flight,
-timeout-bounded socket operation returns.
-
-The first SDK admission after alignment begins a group. Its admission read must
-confirm the observed transition value. As in subsequent groups, the first
-cycle queues a read at base−1, without socket work on camera,
+`FourCycleReportingWorker` is the generation's sole reporting socket owner. The
+first observed cycle queues a read at base−1, without socket work on camera,
 inference, Qt or result-callback threads. This read must finish before the second
 observed cycle is admitted; otherwise phase is lost. Four distinct attributable
 terminal results are required. Their existing `FirstStationReport.reject_words`
@@ -315,12 +292,12 @@ sequence is not atomic; an in-flight commit cannot be recalled after association
 
 A changed/stale counter, late initial read, duplicate/gapped CycleId, missing
 terminal evidence, mixed layout or source ambiguity latches phase loss for the
-generation after alignment. A next group arriving before the previous group
-settles also suppresses the late report. A commit already in flight remains
-explicitly uncertain. Inspection may continue, but reporting stays suppressed
-until Stop and a new Start with fresh synchronization. There is no mid-run
-resynchronization, guessed replacement counter, fabricated all-NG group, PLC
-stop or W10.7 command. Existing source fault/overload handling remains separate.
+generation. A next group arriving before the previous group settles also suppresses
+the late report; a commit already in flight remains explicitly uncertain.
+Inspection may continue, but reporting stays suppressed until Stop and a new
+known-phase Start. There is no polling, guessed replacement counter, fabricated
+all-NG group, PLC stop or W10.7 command. Existing source fault/overload handling
+remains separate.
 
 Pause/Step/Resume are rejected for an enabled four-cycle session; Stop/Close remain
 available regardless of role. Stop settles source/runtime work, drains complete

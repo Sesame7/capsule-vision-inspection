@@ -584,13 +584,7 @@ class StatusBar(QFrame):
             (
                 self.plc,
                 "PLC · ",
-                (
-                    "service_off",
-                    "service_next_start",
-                    "plc_sync_wait",
-                    "web_running",
-                    "technical_error",
-                ),
+                ("service_off", "service_next_start", "web_running", "technical_error"),
             ),
             (
                 self.web,
