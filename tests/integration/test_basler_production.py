@@ -1633,7 +1633,7 @@ def test_source_lifetime_idle_discard_restart_recipe_and_batch(
                     )
                 )
                 assert app.source_snapshot().state is ConnectionState.CONNECTED
-        app.start_batch("new-batch")
+        app.start_batch("new-batch").result(5)
         assert app.history is not None
         records = app.history.query().result(WAIT).records
         assert [r.cycle_id for r in records] == [

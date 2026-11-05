@@ -293,7 +293,7 @@ Cancelling the import can remove its staging directory after logout.
 
 Normal startup creates the history owner independently of configuration readiness.
 Both Folder and Basler terminal Production results are eligible. The database
-uses internal schema version 1 and may have SQLite `-wal`/`-shm` sidecars. Preserve
+uses internal schema version 2 and may have SQLite `-wal`/`-shm` sidecars. Preserve
 these files with other local assets; do not copy an active database without its
 SQLite consistency requirements. An unsupported schema, corrupt database or
 unwritable path is reported as unavailable, never silently reset or replaced.
@@ -306,10 +306,18 @@ payloads are unsupported and follow the existing corrupt-record query error
 behavior. A current null name remains valid and displays the existing missing-name
 Recipe ID presentation. History never looks up a current file to invent a name.
 
-Records expire incrementally after 30 days by their host completion observation,
-not camera exposure time. This does not remove archived images, link filenames or
-restore Batch labels/counters on launch. History has no retention settings or JSON
-preferences. In-memory diagnostic/fake compositions may omit persistence. See
+The same database stores the selected Production Batch, Run lifecycle and cumulative
+totals. Startup restores the selection by UUID. Labels are unique per IPC after
+trimming, with case-sensitive matching. Explicit End clears selection while
+preserving the Batch for later continuation. The owner holds the database
+exclusively until Close. Use the History page while running and close the
+application before offline SQLite access. Version 1 has no automatic migration.
+
+Cycle and physical-group detail expire incrementally after 30 days by their host
+observations. Batch/Run identities, end events, summaries and completeness flags
+persist independently of this window. Archived images have separate ownership.
+History has no retention settings or JSON preferences. Isolated demonstration
+compositions may omit persistence. See
 [ownership and bounds](architecture.md#production-history) for shutdown, loss
 observations and query limits.
 

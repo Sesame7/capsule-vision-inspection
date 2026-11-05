@@ -3,6 +3,7 @@
 import json
 import sqlite3
 import zlib
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, get_ident
@@ -133,7 +134,7 @@ def test_persisted_evidence_is_exact_compact_and_survives_restart(
         assert "execution_error" in record.channels[3].reasons
     finally:
         finish(owner)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         payload = json.loads(
             zlib.decompress(
                 connection.execute("SELECT detail FROM cycles").fetchone()[0]
@@ -174,7 +175,7 @@ def test_application_batch_run_and_exactly_once_identities(tmp_path: Path) -> No
     app = ProductionApplication(factory, history=history)
     try:
         app.configure(config)
-        app.start_batch("same")
+        app.start_batch("same").result(WAIT)
         assert not history.query().result(WAIT).records
         for _ in range(2):
             app.start().result(WAIT)
@@ -187,8 +188,8 @@ def test_application_batch_run_and_exactly_once_identities(tmp_path: Path) -> No
         records = history.query().result(WAIT).records
         assert records[0].context.batch_segment == records[1].context.batch_segment
         assert records[0].context.run_id != records[1].context.run_id
-        app.start_batch("same")
-        assert app.snapshot().counters.cycles_completed == 0
+        app.start_batch("same").result(WAIT)
+        assert app.snapshot().counters.cycles_completed == 2
         pending = replace(
             config, configuration=replace(config.configuration, recipe_id="next")
         )
@@ -204,7 +205,7 @@ def test_application_batch_run_and_exactly_once_identities(tmp_path: Path) -> No
             == history.snapshot().persisted
             == 3
         )
-        assert records[0].context.batch_segment != records[1].context.batch_segment
+        assert records[0].context.batch_segment == records[1].context.batch_segment
         assert records[0].context.active.recipe_id == "next"
         assert records[1].context.active == ConfigurationIdentity.from_prepared(config)
     finally:
@@ -213,8 +214,9 @@ def test_application_batch_run_and_exactly_once_identities(tmp_path: Path) -> No
     history = ProductionHistory(path)
     restarted = ProductionApplication(factory, history=history)
     try:
-        assert restarted.snapshot().batch_id is None
-        assert restarted.snapshot().counters.cycles_completed == 0
+        history.query().result(WAIT)  # Startup restoration precedes queued work.
+        assert restarted.snapshot().batch_id == "same"
+        assert restarted.snapshot().counters.cycles_completed == 3
         restarted.configure(config)
         restarted.start().result(WAIT)
         completed(restarted)
@@ -224,10 +226,8 @@ def test_application_batch_run_and_exactly_once_identities(tmp_path: Path) -> No
             == len({r.context.run_id for r in rows})
             == 4
         )
-        assert rows[0].context.batch_label is None
-        assert rows[0].context.batch_segment not in {
-            r.context.batch_segment for r in rows[1:]
-        }
+        assert rows[0].context.batch_label == "same"
+        assert len({r.context.batch_segment for r in rows}) == 1
     finally:
         close(restarted)
 
@@ -309,11 +309,11 @@ def test_bounded_slow_persistence_never_blocks_accounting_or_terminal_delivery(
     class SlowHistory(ProductionHistory):
         def _write(
             self, connection: sqlite3.Connection, item: HistorySubmission
-        ) -> None:
+        ) -> bool:
             owner_thread.append(get_ident())
             entered.set()
             assert release.wait(WAIT)
-            super()._write(connection, item)
+            return super()._write(connection, item)
 
     history = SlowHistory(tmp_path / "history.sqlite3", max_pending=1)
     session = FakeSession()
@@ -359,7 +359,7 @@ def test_write_failure_and_initial_unavailability_are_observable_without_fault(
     class DiskFull(ProductionHistory):
         def _write(
             self, connection: sqlite3.Connection, item: HistorySubmission
-        ) -> None:
+        ) -> bool:
             raise sqlite3.OperationalError("controlled disk full")
 
     history = DiskFull(tmp_path / "history.sqlite3")
@@ -486,7 +486,7 @@ def test_fatal_history_owner_exits_and_accounts_for_accepted_work(
     class FailedOwner(ProductionHistory):
         def _write(
             self, connection: sqlite3.Connection, item: HistorySubmission
-        ) -> None:
+        ) -> bool:
             entered.set()
             assert release.wait(WAIT)
             raise SystemExit("controlled history owner exit")
@@ -593,7 +593,7 @@ def test_unsupported_detail_shape_is_observable(
         assert len(owner.query().result(WAIT).records) == 1
     finally:
         finish(owner)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         payload = json.loads(
             zlib.decompress(
                 connection.execute("SELECT detail FROM cycles").fetchone()[0]
@@ -605,7 +605,7 @@ def test_unsupported_detail_shape_is_observable(
             "UPDATE cycles SET detail = ?",
             (zlib.compress(json.dumps(invalid).encode()),),
         )
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
     owner = ProductionHistory(path)
     try:
         with pytest.raises(ValueError, match="Invalid History detail payload"):
@@ -614,5 +614,5 @@ def test_unsupported_detail_shape_is_observable(
         assert owner.snapshot().persisted == 0
     finally:
         finish(owner)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         assert connection.execute("SELECT count(*) FROM cycles").fetchone()[0] == 1

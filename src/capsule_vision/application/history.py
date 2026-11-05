@@ -12,8 +12,14 @@ from threading import Lock, Thread
 from time import time
 from typing import Literal, cast
 
+from capsule_vision.communication.reporting import (
+    CompletedReportingBatch,
+    ReportingSettings,
+)
 from capsule_vision.inspection.production import ProductionInspectionResult
 
+from . import batch_records
+from .batch_records import BatchSelection
 from .models import ConfigurationIdentity
 
 type ResultFilter = Literal["all", "OK", "NG", "ERROR", "EMPTY", "UNKNOWN"]
@@ -59,6 +65,8 @@ class HistoryRecord:
     judgment: str
     channels: tuple[HistoryChannel, ...]
     cameras: tuple[HistoryCamera, ...]
+    group_first_cycle: int | None = None
+    group_slot: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +119,18 @@ class _Read:
     future: Future[HistoryPageData]
 
 
+@dataclass(frozen=True, slots=True)
+class _Operation:
+    execute: Callable[[sqlite3.Connection], None]
+    failed: Callable[[BaseException], None]
+
+
+@dataclass(frozen=True, slots=True)
+class _Fact:
+    run: str
+    write: Callable[[sqlite3.Connection], object]
+
+
 def _items(value: object) -> list[object]:
     if not isinstance(value, list):
         raise ValueError("Invalid History detail array")
@@ -146,11 +166,20 @@ class ProductionHistory:
         self.path = path
         self.clock = clock
         self.retention_batch = retention_batch
-        self._queue: Queue[HistorySubmission | _Read | None] = Queue(max_pending)
+        self._capacity = max_pending
+        # One reserved slot lets the lifecycle owner close a Run behind all admitted facts.
+        self._queue: Queue[HistorySubmission | _Read | _Operation | _Fact | None] = (
+            Queue(max_pending + 1)
+        )
         self._lock = Lock()
         self._accepting, self._ready = True, False
         self._accepted = self._persisted = self._dropped = self._failed = 0
         self._error = ""
+        self.initial_selection: Future[BatchSelection | None] = Future()
+        self.initial_selection.set_running_or_notify_cancel()
+        self._expired_batch: str | None = None
+        self._loss_run: str | None = None
+        self._loss_persisted = False
         self._thread = Thread(target=self._run, name="ProductionHistory", daemon=False)
         self._thread.start()
 
@@ -161,6 +190,8 @@ class ProductionHistory:
         with self._lock:
             if self._accepting:
                 try:
+                    if self._queue.qsize() >= self._capacity:
+                        raise Full
                     self._queue.put_nowait(HistorySubmission(context, result))
                 except Full:
                     self._error = "History capacity reached; record not admitted"
@@ -168,7 +199,88 @@ class ProductionHistory:
                     self._accepted += 1
                     return True
             self._dropped += 1
+            self._loss_run, self._loss_persisted = context.run_id, False
             return False
+
+    def _command[T](self, action: Callable[[sqlite3.Connection], T]) -> Future[T]:
+        future: Future[T] = Future()
+        future.set_running_or_notify_cancel()
+
+        def execute(db: sqlite3.Connection) -> None:
+            with db:
+                value = action(db)
+            future.set_result(value)
+
+        with self._lock:
+            try:
+                if not self._accepting:
+                    raise RuntimeError(self._error or "History is closed")
+                self._queue.put_nowait(_Operation(execute, future.set_exception))
+            except Full:
+                future.set_exception(RuntimeError("Batch storage capacity reached"))
+            except RuntimeError as exc:
+                future.set_exception(RuntimeError(f"Batch storage unavailable: {exc}"))
+        return future
+
+    def select_batch(self, label: str | None) -> Future[BatchSelection | None]:
+        return self._command(lambda db: batch_records.select(db, label, self.clock()))
+
+    def start_run(
+        self,
+        batch: str,
+        run: str,
+        recipe: ConfigurationIdentity,
+        reporting: ReportingSettings | None,
+    ) -> Future[None]:
+        observed = self.clock()
+        return self._command(
+            lambda db: batch_records.start_run(
+                db, batch, run, observed, recipe, reporting
+            )
+        )
+
+    def finish_run(self, run: str, outcome: str, uncertain: bool) -> Future[None]:
+        observed = self.clock()
+        return self._command(
+            lambda db: batch_records.finish_run(
+                db, run, observed, outcome, uncertain or self.run_uncertain(run)
+            )
+        )
+
+    def run_uncertain(self, run: str) -> bool:
+        with self._lock:
+            return self._loss_run == run or not self._accepting
+
+    def expired_for(self, batch: str) -> bool:
+        with self._lock:
+            return self._expired_batch == batch
+
+    def missing_terminal(self, run: str) -> None:
+        with self._lock:
+            self._loss_run, self._loss_persisted = run, False
+            self._error = "Admitted Cycle has no confirmed terminal result"
+
+    def _offer_fact(self, item: _Fact) -> None:
+        with self._lock:
+            if self._accepting and self._queue.qsize() < self._capacity:
+                self._queue.put_nowait(item)
+            else:
+                self._loss_run, self._loss_persisted = item.run, False
+                self._dropped += 1
+                self._error = (
+                    "Batch storage unavailable or full; accounting fact not confirmed"
+                )
+
+    def admitted(self, run: str, cycle: int) -> None:
+        self._offer_fact(
+            _Fact(run, lambda db: batch_records.occurrence(db, run, cycle))
+        )
+
+    def offer_group(self, run: str, group: CompletedReportingBatch) -> None:
+        observed = self.clock()
+        self._offer_fact(
+            _Fact(run, lambda db: batch_records.group(db, run, group, observed))
+        )
 
     def query(self, query: HistoryQuery | None = None) -> Future[HistoryPageData]:
         future: Future[HistoryPageData] = Future()
@@ -177,6 +289,8 @@ class ProductionHistory:
             try:
                 if not self._accepting:
                     raise RuntimeError(self._error or "History is closed")
+                if self._queue.qsize() >= self._capacity:
+                    raise Full
                 self._queue.put_nowait(_Read(query or HistoryQuery(), future))
             except Full:
                 future.set_exception(
@@ -228,10 +342,19 @@ class ProductionHistory:
         connection = sqlite3.connect(self.path, timeout=0.2)
         try:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 2) or (
+                version == 0
+                and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
+                ).fetchone()
+            ):
                 raise ValueError("Unsupported History database version")
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA locking_mode=EXCLUSIVE")
             connection.execute("PRAGMA journal_mode=WAL")
-            connection.executescript("""
+            if version == 0:
+                connection.executescript(
+                    """
                 BEGIN;
                 CREATE TABLE IF NOT EXISTS cycles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -245,15 +368,18 @@ class ProductionHistory:
                 );
                 CREATE INDEX IF NOT EXISTS history_time ON cycles(completed_at DESC, id DESC);
                 CREATE INDEX IF NOT EXISTS history_batch ON cycles(batch_segment, completed_at DESC, id DESC);
-                PRAGMA user_version=1;
-                COMMIT;
-            """)
+            """
+                    + batch_records.SCHEMA
+                    + "PRAGMA user_version=2; COMMIT;"
+                )
+            with connection:
+                batch_records.recover(connection, self.clock())
             return connection
         except BaseException:
             connection.close()
             raise
 
-    def _write(self, connection: sqlite3.Connection, item: HistorySubmission) -> None:
+    def _write(self, connection: sqlite3.Connection, item: HistorySubmission) -> bool:
         result, context = item.result, item.context
         channels: list[tuple[str, int, int, str, str, str, tuple[str, ...]]] = []
         for (
@@ -294,6 +420,13 @@ class ProductionHistory:
         )
         assessment = result.assessment
         with connection:
+            if connection.execute(
+                "SELECT 1 FROM runs WHERE uuid=?", (context.run_id,)
+            ).fetchone():
+                if not batch_records.occurrence(
+                    connection, context.run_id, result.cycle_id, result
+                ):
+                    return False
             connection.execute(
                 "INSERT INTO cycles (completed_at,batch_segment,batch_label,run_id,cycle_id,"
                 "recipe_id,model_id,model_sha,status,technical,judgment,empty_count,unknown_count,detail) "
@@ -316,13 +449,32 @@ class ProductionHistory:
                 ),
             )
 
+        return True
+
     def _retain(self, connection: sqlite3.Connection) -> None:
+        expired = False
         with connection:
-            connection.execute(
-                "DELETE FROM cycles WHERE id IN (SELECT id FROM cycles WHERE completed_at < ? "
-                "ORDER BY completed_at,id LIMIT ?)",
-                (self.clock() - 30 * 86400, self.retention_batch),
-            )
+            cutoff = self.clock() - 30 * 86400
+            for table, column, run_column in (
+                ("cycles", "completed_at", "run_id"),
+                ("plc_groups", "observed", "run"),
+            ):
+                removed = connection.execute(
+                    f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {column} < ? "
+                    f"ORDER BY {column},rowid LIMIT ?) RETURNING {run_column}",
+                    (cutoff, self.retention_batch),
+                ).fetchall()
+                connection.executemany(
+                    "UPDATE runs SET detail_expired=1 WHERE uuid=?", set(removed)
+                )
+                expired |= bool(removed)
+        if expired:
+            row = connection.execute(
+                "SELECT uuid FROM batches WHERE selected=1 AND EXISTS "
+                "(SELECT 1 FROM runs WHERE batch=batches.uuid AND detail_expired)"
+            ).fetchone()
+            with self._lock:
+                self._expired_batch = row[0] if row else None
 
     def _read(
         self, connection: sqlite3.Connection, query: HistoryQuery
@@ -370,7 +522,8 @@ class ProductionHistory:
             list[tuple[object, ...]],
             connection.execute(
                 "SELECT id,completed_at,batch_segment,batch_label,run_id,cycle_id,recipe_id,model_id,model_sha,"
-                "status,technical,judgment,detail FROM cycles"
+                "status,technical,judgment,detail,m.first_cycle,m.slot FROM cycles "
+                "LEFT JOIN group_members m ON m.run=cycles.run_id AND m.cycle=cycles.cycle_id"
                 + where
                 + f" ORDER BY completed_at {order},id {order} LIMIT ?",
                 [*args, query.limit + 1],
@@ -429,16 +582,20 @@ class ProductionHistory:
             str(row[11]),
             channels,
             cameras,
+            int(str(row[13])) if row[13] is not None else None,
+            cast(int | None, row[14]),
         )
 
     def _run(self) -> None:
         connection: sqlite3.Connection | None = None
-        item: HistorySubmission | _Read | None = None
-        writing = False
+        item: HistorySubmission | _Read | _Operation | _Fact | None = None
         try:
             connection = self._open()
+            self._retain(connection)
+            selection = batch_records.selected(connection)
             with self._lock:
                 self._ready = True
+            self.initial_selection.set_result(selection)
             while True:
                 try:
                     item = self._queue.get(
@@ -446,22 +603,48 @@ class ProductionHistory:
                     )  # Idle retention, interruptible by Stop.
                 except Empty:
                     item = None
-                writing = isinstance(item, HistorySubmission)
                 try:
                     self._retain(connection)
+                    with self._lock:
+                        loss = None if self._loss_persisted else self._loss_run
+                    if loss is not None:
+                        with connection:
+                            connection.execute(
+                                "UPDATE runs SET uncertain=1 WHERE uuid=?", (loss,)
+                            )
+                        with self._lock:
+                            self._loss_persisted = self._loss_run == loss
                 except Exception as exc:
                     self._failure(exc)
                 if isinstance(item, HistorySubmission):
                     try:
-                        self._write(connection, item)
+                        inserted = self._write(connection, item)
                     except Exception as exc:
                         self._failure(exc)
                         with self._lock:
                             self._failed += 1
+                            self._loss_run, self._loss_persisted = (
+                                item.context.run_id,
+                                False,
+                            )
                     else:
                         with self._lock:
-                            self._persisted += 1
-                    writing = False
+                            self._persisted += int(inserted)
+                elif isinstance(item, _Fact):
+                    try:
+                        with connection:
+                            item.write(connection)
+                    except Exception as exc:
+                        self._failure(exc)
+                        with self._lock:
+                            self._failed += 1
+                            self._loss_run, self._loss_persisted = item.run, False
+                elif isinstance(item, _Operation):
+                    try:
+                        item.execute(connection)
+                    except Exception as exc:
+                        self._failure(exc)
+                        item.failed(exc)
                 elif isinstance(item, _Read):
                     try:
                         item.future.set_result(self._read(connection, item.query))
@@ -473,11 +656,21 @@ class ProductionHistory:
                         break
         except BaseException as exc:
             self._failure(exc)
-            if writing:
+            if not self.initial_selection.done():
+                self.initial_selection.set_exception(RuntimeError(self._error))
+            if isinstance(item, (HistorySubmission, _Fact)):
                 with self._lock:
                     self._failed += 1
+                    self._loss_run = (
+                        item.context.run_id
+                        if isinstance(item, HistorySubmission)
+                        else item.run
+                    )
+                    self._loss_persisted = False
             elif isinstance(item, _Read) and not item.future.done():
                 item.future.set_exception(RuntimeError(self._error))
+            elif isinstance(item, _Operation):
+                item.failed(RuntimeError(self._error))
         finally:
             with self._lock:
                 self._accepting = False
@@ -486,13 +679,15 @@ class ProductionHistory:
                     pending = self._queue.get_nowait()
                 except Empty:
                     break
-                if isinstance(pending, HistorySubmission):
+                if isinstance(pending, (HistorySubmission, _Fact)):
                     with self._lock:
                         self._failed += 1
                 elif isinstance(pending, _Read):
                     pending.future.set_exception(
                         RuntimeError(self._error or "History stopped")
                     )
+                elif isinstance(pending, _Operation):
+                    pending.failed(RuntimeError(self._error or "History stopped"))
             if connection is not None:
                 try:
                     connection.close()

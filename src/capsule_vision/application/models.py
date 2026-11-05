@@ -14,6 +14,7 @@ from capsule_vision.configuration import (
 )
 from capsule_vision.inspection.production import (
     ChannelBusinessStatus,
+    ChannelId,
     ProductionInspectionResult,
     ProductJudgment,
     TechnicalStatus,
@@ -148,9 +149,12 @@ class PilotCounters:
     channel_empty: int = 0
     channel_unknown: int = 0
 
-    def completed(self, batch: CompletedReportingBatch) -> PilotCounters:
+    @staticmethod
+    def final_channels(
+        batch: CompletedReportingBatch,
+    ) -> dict[ChannelId, ChannelBusinessStatus]:
         statuses = [dict(report.statuses) for report in batch.reports]
-        counts = dict.fromkeys(ChannelBusinessStatus, 0)
+        finals: dict[ChannelId, ChannelBusinessStatus] = {}
         for channel in statuses[0]:
             observed = tuple(row[channel] for row in statuses)
             word, bit = divmod(channel - 1, 16)
@@ -167,6 +171,12 @@ class PilotCounters:
                 final = ChannelBusinessStatus.OK
             else:
                 final = ChannelBusinessStatus.UNKNOWN
+            finals[channel] = final
+        return finals
+
+    def completed(self, batch: CompletedReportingBatch) -> PilotCounters:
+        counts = dict.fromkeys(ChannelBusinessStatus, 0)
+        for final in self.final_channels(batch).values():
             counts[final] += 1
         return replace(
             self,
@@ -197,6 +207,11 @@ class ProductionApplicationSnapshot:
     pilot_counting: bool = False
     group_progress: ReportingGroupProgress | None = None
     batch_duration_ms: float | None = None
+    batch_uuid: str | None = None
+    run_id: str | None = None
+    batch_uncertain: bool = False
+    detail_expired: bool = False
+    batch_pending: bool = False
 
     @property
     def has_pending_configuration(self) -> bool:

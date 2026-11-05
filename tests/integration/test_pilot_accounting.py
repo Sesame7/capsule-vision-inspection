@@ -178,7 +178,13 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             assert app.snapshot().counters.cycles_completed == 12
             app.stop().result(3)
 
-            app.start_batch("New operator batch")
+            label = app.snapshot().batch_id
+            assert label is not None
+            app.start_batch(label).result(5)
+            assert app.snapshot().pilot_counters.batches_completed == 2
+            assert app.snapshot().counters.cycles_completed == 12
+
+            app.start_batch("New operator batch").result(5)
             assert app.snapshot().pilot_counters == PilotCounters()
             assert app.snapshot().counters == ProductionCounters()
             assert app.snapshot().group_progress is None

@@ -91,7 +91,7 @@ def test_production_role_boundaries(
             with pytest.raises(StaleSessionError):
                 app.install_recipe_selection(first, candidate)
             app.install_recipe_selection(second, candidate)
-            app.start_batch("Batch")
+            app.start_batch("Batch").result(5)
             assert app.snapshot().batch_id == "Batch"
             with pytest.raises(ApplicationStateError):  # READY, no fault to reset
                 app.reset_fault()

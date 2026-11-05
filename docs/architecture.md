@@ -463,8 +463,8 @@ Recipe Save accepts incomplete definitions without activation; Production prepar
 requires resolved identities and verified artifacts before preparing a stopped candidate. Start creates a disposable session and warm-up with
 zero production results/counters. Only successful Start promotes the candidate;
 failed activation preserves last-known-good active identity and returns READY if
-cleanup is safe. Stop/Start or a Recipe change retains counters; explicit Batch
-resets them. `ProductionCounters` describe cycle/channel occurrences, not physical
+cleanup is safe. Stop/Start or a Recipe change retains the selected Batch's totals.
+`ProductionCounters` describe cycle/channel occurrences, not physical
 products; enabled four-cycle reporting's separate conditional channel-position totals are
 described above.
 
@@ -492,21 +492,41 @@ native calls are never forcibly cancelled. Qt Close stays asynchronous.
 
 Normal startup owns one `application.history.ProductionHistory` for
 `data/history.sqlite3`, including when the shell is UNCONFIGURED. Application
-accounting hands off each authoritative terminal Production result with its host
-wall-clock completion observation, active Recipe/Model identity, Run and Batch
-segment. A successful Start creates a fresh Run UUID; Stop/Start retains the
-segment. Every successful explicit Batch creates a new segment UUID, even for
-the same label. A new application starts fresh identities and counters; browsing
-old records never restores current state. Warm-up, previews, idle captures and
-manual communication requests create no records.
+restores the selected Batch UUID and its cumulative totals before Start. In READY
+an Operator can select a trimmed, nonempty, case-sensitive label or confirm End
+Batch. The same label always resumes its original Batch on this IPC. Switching
+labels deselects the previous Batch. End records an event and clears selection.
+
+Each successful Start under a Batch has its own Run UUID, start observation,
+activated Recipe/Model identity and reporting mode, base and endpoint when
+enabled. After warm-up the lifecycle owner waits for the Run transaction before
+publishing RUNNING. Formal Basler Start requires a selected Batch and available
+storage. Folder Replay and identity-free engineering sessions may run unbatched.
+Stop records termination after session cleanup, including for zero-Cycle Runs,
+and preserves the Batch selection. Exclusive owner startup marks any abandoned
+open Run interrupted and uncertain, with the recovery time as its termination
+observation. Warm-up and preview contribute no production evidence.
 
 One background owner performs all SQLite access, projection, compression and
-retention. Its non-waiting inbox holds at most 128 pending writes/queries, plus
-one active operation. Stored rows have independent persistent IDs and unique
+retention. The normal inbox admits up to 128 pending facts or queries, with one
+additional slot for a Batch/Run command. Only the lifecycle worker waits for
+Run confirmation. Stored Cycle rows have independent persistent IDs and unique
 `(run_id, cycle_id)` identities. Compact details retain configured camera/slot/
 channel identities, business/technical/judgment states and existing abnormal
 reason codes. Images, masks, raw outputs, measurements and full snapshots are
 excluded. Neither judgments nor PLC delivery depend on storage success.
+
+Accepted Cycle admissions, terminal results and eligible four-Cycle completions
+enter this owner through bounded non-waiting handoffs. A transaction updates the
+Batch summary once per source fact. The owner retains deduplication keys for
+the lifetime of the open Run so detail expiry cannot allow a duplicate. The
+eligible group stores its Run and first
+Cycle identity, PLC counter, four actual member CycleIds in slot order, timing
+and final channel outcomes. Joining on Run/Cycle works in either arrival order.
+PLC ACK has no effect on these totals. Separate per-Run flags record possible
+loss and expired detail. When storage becomes writable, a dropped or failed
+fact marks that Run uncertain. A crash with an open Run also prevents a clean
+completeness claim. Startup loads the saved summaries directly.
 
 Recipe display names come from the application's immutable resolved configuration:
 Production presents the active name separately from the prepared candidate, and
@@ -523,7 +543,7 @@ blocked write keeps Close pending; no timeout abandons the owner or force-cancel
 I/O. Failed database initialization remains unavailable until a new owner is
 created; it does not replace the database or retry automatically.
 
-Retention removes at most 256 rows strictly older than 30 days before each
+Retention removes at most 256 Cycle and 256 group rows strictly older than 30 days before each
 operation and on interruptible 60-second idle observations. Backlogs expire
 incrementally. This uses recorded host wall-clock times, so clock adjustments
 affect ordering and retention. SQLite can reuse deleted space; there is no
@@ -675,6 +695,10 @@ Reset remains a separate icon control in its reserved, state-dependent slot.
 Batch has its localized label above a prominent value, with Edit to their right.
 Its text budget follows ordinary content and is capped for long values; elision
 never changes the underlying Batch identity or its full tooltip/accessibility text.
+The editor shows the current Batch ID and a separate input. Enter or **Set Batch ID**
+submits a nonempty value. Escape and the window close button discard the edit.
+**End Batch** opens a confirmation with **Keep Open** as the default. Dismissing
+that confirmation returns to the editor with its input intact.
 The stacked player and Batch fit the existing ordinary-font header height, leaving
 the metrics row and camera grid geometry unchanged. The Production identity has two
 rows: state with conditional inline active/requested identity, then the saved-Recipe
@@ -726,7 +750,7 @@ cycles, channel occurrences and last inspection duration. Counts come directly
 from the application business counters; unavailable
 timing displays `--`. Whole metric groups wrap when their text cannot fit one row.
 These are cumulative occurrences, retained by Stop/Start and Recipe changes and
-reset only by explicit Batch, not physical capsule counts.
+scoped to the selected Batch.
 
 An enabled four-cycle session instead presents completed **Batches** and
 separate cumulative channel-position OK, NG and EMPTY totals. Final NG includes
@@ -742,10 +766,9 @@ The last successfully activated session determines the displayed counting unit,
 including after Stop; editing future reporting settings or a failed Start cannot
 relabel retained facts. A successful per-cycle/reporting-disabled/Folder Start uses
 the original occurrence counters. Both cumulative stores survive Stop/Start and
-Recipe changes, remain separate across mode changes, and reset only on explicit
-operator Batch. No physical totals or new identities are persisted in History.
-Explicit Batch also clears current group progress, result overlays and duration;
-retained pixels do not carry the cleared judgments.
+Recipe changes and remain separate across mode changes. Selecting a Batch loads
+its summaries and last eligible group duration and clears current result overlays
+and group progress. Retained pixels do not carry the cleared judgments.
 
 History uses short Time, `#`, Batch and `CAM` headings. Full identities remain in
 stored records. The Time heading tooltip retains clock semantics, and elided

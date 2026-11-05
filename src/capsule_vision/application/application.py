@@ -7,10 +7,12 @@ from dataclasses import dataclass, replace
 from threading import Condition, Thread, current_thread
 from uuid import uuid4
 
+from capsule_vision.communication.reporting import ReportingSettings
 from capsule_vision.configuration import CameraSources, MachineLayoutDefinition
 from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
 
+from .batch_records import BatchSelection
 from .history import HistoryContext, ProductionHistory
 from .identity import LocalIdentity
 from .identity_models import Role, SessionSnapshot, StaleSessionError
@@ -30,6 +32,7 @@ from .models import (
     ApplicationState,
     ApplicationStateError,
     ConfigurationIdentity,
+    PilotCounters,
     PreparedConfiguration,
     ProductionApplicationSnapshot,
     ProductionCounters,
@@ -83,6 +86,13 @@ class ProductionApplication:
         self._selection: RecipeSelection | None = None
         self._batch_segment = uuid4().hex
         self._run_id: str | None = None
+        self._durable_run: str | None = None
+        self._batch_pending = False
+        self._restoring = history is not None
+        self._batch_uncertain = self._detail_expired = False
+        self._pilot_counters = PilotCounters()
+        self._pilot_counting = False
+        self._batch_duration_ms: float | None = None
         self._preparation_factory = preparation_factory
         self._model_management = False
         self._preparation: ModelPreparation | None = None
@@ -111,6 +121,8 @@ class ProductionApplication:
         )
         if initial_candidate is not None:
             self._install_candidate(initial_candidate)
+        if history is not None:
+            history.initial_selection.add_done_callback(self._restored)
         self._thread.start()
 
     @property
@@ -173,6 +185,20 @@ class ProductionApplication:
                 self._active,
                 self._candidate,
                 self._candidate_requires_preparation,
+                pilot_counters=self._pilot_counters,
+                pilot_counting=self._pilot_counting,
+                batch_duration_ms=self._batch_duration_ms,
+                batch_uuid=self._batch_segment if self._batch is not None else None,
+                run_id=self._run_id,
+                batch_uncertain=self._batch_uncertain
+                or bool(
+                    self.history
+                    and self._durable_run
+                    and self.history.run_uncertain(self._durable_run)
+                ),
+                detail_expired=self._detail_expired
+                or bool(self.history and self.history.expired_for(self._batch_segment)),
+                batch_pending=self._batch_pending or self._restoring,
             )
 
     def configure(self, candidate: PreparedConfiguration) -> None:
@@ -217,15 +243,71 @@ class ProductionApplication:
             ):
                 self._candidate_requires_preparation = True
 
-    def start_batch(self, batch_id: str | None) -> None:
-        with self._condition, self._admission(Role.OPERATOR):
+    def _install_batch(self, selection: BatchSelection | None) -> None:
+        self._batch = selection.label if selection else None
+        self._batch_segment = selection.uuid if selection else uuid4().hex
+        self._counters = selection.counters if selection else ProductionCounters()
+        self._pilot_counters = selection.groups if selection else PilotCounters()
+        if selection and selection.four_cycle is not None:
+            self._pilot_counting = selection.four_cycle
+        self._batch_duration_ms = selection.duration_ms if selection else None
+        self._batch_uncertain = selection.uncertain if selection else False
+        self._detail_expired = selection.detail_expired if selection else False
+        self._latest = None
+
+    def _restored(self, future: Future[BatchSelection | None]) -> None:
+        with self._condition:
+            if future.exception() is None:
+                self._install_batch(future.result())
+            self._restoring = False
+            self._condition.notify_all()
+
+    def start_batch(
+        self, batch_id: str, *, revision: int | None = None
+    ) -> Future[None]:
+        return self._change_batch(batch_id.strip(), revision)
+
+    def end_batch(
+        self, *, revision: int | None = None, expected_batch: str | None = None
+    ) -> Future[None]:
+        return self._change_batch(None, revision, expected_batch)
+
+    def _change_batch(
+        self, label: str | None, revision: int | None, expected_batch: str | None = None
+    ) -> Future[None]:
+        with self._condition, self._admission(Role.OPERATOR, revision):
             self._require(ApplicationState.READY)
-            if batch_id is not None and not batch_id.strip():
-                raise ApplicationError("batch_id must be nonempty or None")
-            self._batch = batch_id
-            self._batch_segment = uuid4().hex
-            self._counters = ProductionCounters()
-            self._latest = None
+            if expected_batch is not None and self._batch_segment != expected_batch:
+                raise ApplicationStateError(
+                    "The selected Batch changed before confirmation"
+                )
+            if self._batch_pending or (label is None and self._batch is None):
+                raise ApplicationStateError("Batch selection is unavailable")
+            if label == "":
+                raise ApplicationError("Batch label must be nonempty")
+            done: Future[None] = _promise(Future())
+            if self.history is None:
+                if label != self._batch:
+                    self._install_batch(None)
+                    self._batch = label
+                done.set_result(None)
+                return done
+            self._batch_pending = True
+            change = self.history.select_batch(label)
+
+        def confirmed(future: Future[BatchSelection | None]) -> None:
+            error = future.exception()
+            with self._condition:
+                if error is None:
+                    self._install_batch(future.result())
+                self._batch_pending = False
+            if error is None:
+                done.set_result(None)
+            else:
+                done.set_exception(error)
+
+        change.add_done_callback(confirmed)
+        return done
 
     def _require(self, *states: ApplicationState) -> None:
         if self._closing or self._model_management or self._state not in states:
@@ -238,6 +320,10 @@ class ProductionApplication:
     def _admit_start(self) -> Future[None]:
         with self._condition:
             self._require(ApplicationState.READY)
+            if self._batch_pending:
+                raise ApplicationStateError(
+                    "Batch change awaiting storage confirmation"
+                )
             if self._candidate_requires_preparation:
                 raise ApplicationStateError(
                     "Vision requires re-preparation; reselect the saved Recipe"
@@ -490,6 +576,8 @@ class ProductionApplication:
                 return
             pending.admitted = True
             self._counters = self._counters.admitted()
+            if self._durable_run and self.history:
+                self.history.admitted(self._durable_run, pending.cycle_id)
         pending.public.accepted.set_result(None)
         if pending.source.result.done():
             self._completed(token)
@@ -529,6 +617,8 @@ class ProductionApplication:
                     )
             except BaseException as exc:
                 error = exc
+                if self.history and self._durable_run:
+                    self.history.missing_terminal(self._durable_run)
                 if isinstance(exc, ApplicationError) or (
                     self._session is not None and self._session.failure is not None
                 ):
@@ -561,6 +651,12 @@ class ProductionApplication:
 
     def _settle_startup(self) -> None:
         """Settle canceled pre-session work on the lifecycle owner before Stop completes."""
+
+    def _requires_batch(self) -> bool:
+        return False  # Identity-free engineering sessions and Folder Replay may run unbatched.
+
+    def _run_reporting(self) -> ReportingSettings | None:
+        return None
 
     def _close_resources(self) -> None:
         """Application-lifetime resources; called only by the lifecycle owner."""
@@ -603,6 +699,16 @@ class ProductionApplication:
                     assert prepared is not None
                     if prepared.vision_dependencies is not None:
                         prepared.vision_dependencies.validate_current()
+                    with self._condition:
+                        self._condition.wait_for(lambda: not self._restoring)
+                        if self._requires_batch() and (
+                            self._batch is None
+                            or self.history is None
+                            or not self.history.snapshot().accepting
+                        ):
+                            raise ApplicationStateError(
+                                "Select a Production Batch with available History storage before Start"
+                            )
                     session = self._factory(prepared, generation)
                     with self._condition:
                         self._session = session
@@ -614,13 +720,24 @@ class ProductionApplication:
                         session.request_stop()
                         raise ApplicationStateError("Stopped before runtime startup")
                     session.start().result()
+                    run_id = uuid4().hex
+                    durable_run = None
+                    if self._batch is not None and self.history is not None:
+                        self.history.start_run(
+                            self._batch_segment,
+                            run_id,
+                            ConfigurationIdentity.from_prepared(prepared),
+                            self._run_reporting(),
+                        ).result()
+                        durable_run = run_id
                     with self._condition:
+                        self._durable_run = durable_run
                         if self._stop_requested or session.finished.done():
                             raise ApplicationStateError(
                                 "Startup stopped before activation"
                             )
                         self._active = prepared
-                        self._run_id = uuid4().hex
+                        self._run_id = run_id
                         self._state = ApplicationState.RUNNING
                     assert startup is not None
                     startup.set_result(None)
@@ -639,6 +756,7 @@ class ProductionApplication:
             cleanup_error: BaseException | None = None
             resource_error = False
             resources_checked = False
+            session_settled = session is None
             try:
                 self._settle_startup()
                 if self._preparation is not None:
@@ -665,11 +783,41 @@ class ProductionApplication:
                         cleanup_error = lifecycle_error(
                             "Runtime failed", session.failure
                         )
-                    with self._condition:
-                        self._session = None
+                    session_settled = True
             except BaseException as exc:
                 cleanup_error = exc
-            if self._closing and self._session is None and self._preparation is None:
+            if session_settled:
+                with self._condition:
+                    run, active = self._durable_run, self._run_id
+                    faulty = (
+                        self._state is ApplicationState.FAULT
+                        or cleanup_error is not None
+                        or bool(self._pending)
+                    )
+                if run and self.history:
+                    outcome = (
+                        "unactivated"
+                        if active is None
+                        else "fault"
+                        if faulty
+                        else "stopped"
+                    )
+                    try:
+                        self.history.finish_run(run, outcome, faulty).result()
+                        with self._condition:
+                            self._batch_uncertain |= (
+                                faulty or self.history.run_uncertain(run)
+                            )
+                    except Exception as exc:
+                        with self._condition:
+                            self._batch_uncertain = True
+                            self._issue = ApplicationIssue(
+                                "history",
+                                "run_end_unconfirmed",
+                                type(exc).__name__,
+                                str(exc),
+                            )
+            if self._closing and session_settled and self._preparation is None:
                 resources_checked = True
                 try:
                     self._close_resources()
@@ -677,6 +825,9 @@ class ProductionApplication:
                     cleanup_error = exc
                     resource_error = True
             with self._condition:
+                if session_settled:
+                    self._session = None
+                    self._durable_run = self._run_id = None
                 if self._pending:
                     cleanup_error = cleanup_error or ApplicationError(
                         "Runtime terminated with unresolved cycle observations"

@@ -111,7 +111,7 @@ def test_start_rejects_changed_or_unreadable_vision_before_factory(
             monkeypatch.setattr(dependencies_module, "read_sources", unreadable_sources)
     try:
         app.configure(prepared)
-        app.start_batch("Existing Batch")
+        app.start_batch("Existing Batch").result(5)
         before = app.snapshot()
         with pytest.raises(ApplicationError):
             app.start().result(WAIT)
@@ -389,7 +389,7 @@ def test_missing_captured_sources_never_fall_back_and_repreparation_recovers(
             save_camera_sources(sources_file, available)
 
     try:
-        app.start_batch("Existing Batch")
+        app.start_batch("Existing Batch").result(5)
         before = app.snapshot()
         with monkeypatch.context() as patch:
             patch.setattr(VisionDependencies, "validate_current", checked_then_created)

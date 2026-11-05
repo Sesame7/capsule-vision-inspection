@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QPushButton,
@@ -51,7 +50,7 @@ from capsule_vision.application import (
 from capsule_vision.application.basler_connection import ConnectionState
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.folder_replay import FolderSourceError
-from capsule_vision.application.identity_models import Role, StaleSessionError
+from capsule_vision.application.identity_models import Role
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
@@ -68,6 +67,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language, is_language
 from capsule_vision.web.runtime import WebRuntime, WebState
 
+from .batch_dialog import BatchDialog
 from .camera_card import CameraCard
 from .communication_page import CommunicationPage
 from .editing import EditingCoordinator
@@ -765,6 +765,9 @@ class MainWindow(QMainWindow):
         )
         app = self.bridge.application
         basler = isinstance(app, SourceProductionApplication) and app.basler_available
+        needs_batch = (
+            basler and app.identity is not None and self.snapshot.batch_uuid is None
+        )
         operator = permits(app, Role.OPERATOR)
         demo_start = (
             not operator
@@ -786,6 +789,8 @@ class MainWindow(QMainWindow):
         )
         identity = (
             basler,
+            needs_batch,
+            self.snapshot.batch_pending,
             source_state,
             source_ready,
             operator,
@@ -808,7 +813,11 @@ class MainWindow(QMainWindow):
             button = self.buttons[key]
             enabled = action is not None and not self._closing
             if action == "start":
-                enabled = enabled and source_ready and not draft_locked
+                enabled = (
+                    enabled
+                    and source_ready
+                    and not (draft_locked or needs_batch or self.snapshot.batch_pending)
+                )
             permitted = (
                 operator
                 or action is None
@@ -833,6 +842,8 @@ class MainWindow(QMainWindow):
             button.setToolTip(
                 text("permission_operator", self.language)
                 if not permitted
+                else text("batch_required", self.language)
+                if action == "start" and needs_batch
                 else text(
                     "source_connecting"
                     if source_state is ConnectionState.CONNECTING
@@ -985,16 +996,16 @@ class MainWindow(QMainWindow):
         ):
             return
         revision = self.bridge.application.session_revision
-        value, accepted = QInputDialog.getText(
-            self,
-            text("batch", self.language),
-            text("batch_prompt", self.language),
-            text=self.snapshot.batch_id or "",
-        )
-        if accepted and revision != self.bridge.application.session_revision:
-            self._command_failed("batch", StaleSessionError())
-        elif accepted:
-            self.bridge.start_batch(value.strip() or None)
+        selection = self.snapshot
+        dialog = BatchDialog(selection, self.language, self)
+        try:
+            if dialog.exec():
+                if dialog.end_requested:
+                    self.bridge.end_batch(revision, selection.batch_uuid)
+                else:
+                    self.bridge.start_batch(dialog.label.text(), revision)
+        finally:
+            dialog.deleteLater()
 
     @Slot(object)
     def _snapshot_changed(self, snapshot: object) -> None:
@@ -1146,7 +1157,10 @@ class MainWindow(QMainWindow):
         self._render_operations()
         operator = permits(self.bridge.application, Role.OPERATOR)
         self.buttons["batch"].setEnabled(
-            operator and availability.batch and not self._closing
+            operator
+            and availability.batch
+            and not snapshot.batch_pending
+            and not self._closing
         )
         self.buttons["batch"].setToolTip(
             text("batch" if operator else "permission_operator", language)
@@ -1263,6 +1277,8 @@ class MainWindow(QMainWindow):
         snapshot, language = self.snapshot, self.language
         result = snapshot.latest_production_result
         event_key = snapshot.state.name
+        if snapshot.batch_uncertain:
+            event_key = "batch_uncertain"
         if result and result.assessment.technical_status is TechnicalStatus.ERROR:
             event_key = "technical_note"
         if snapshot.last_issue:
@@ -1282,6 +1298,7 @@ class MainWindow(QMainWindow):
         if self._closing:
             event_key = "close_wait" if self._command_issue else "closing"
         warning = event_key in {
+            "batch_uncertain",
             "technical_note",
             "issue_note",
             "command_error",
@@ -1632,6 +1649,8 @@ class MainWindow(QMainWindow):
         batch_caption = text("batch_id", language)
         batch_value = snapshot.batch_id or "—"
         batch = f"{batch_caption} {batch_value}"
+        if snapshot.batch_uncertain:
+            batch += "\n" + text("batch_uncertain", language)
         self.batch_label.ensurePolished()
         self.batch_caption.ensurePolished()
         batch_padding = 16 + 2 * self.batch_group.frameWidth()

@@ -6,7 +6,7 @@ import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QFontMetricsF
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QInputDialog, QWidget
+from PySide6.QtWidgets import QApplication
 from tests.support.application import FakeSession
 from tests.support.qt import screen as screen
 from tests.support.qt import until
@@ -15,6 +15,7 @@ from capsule_vision.application import ApplicationState
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.ui import main_window
+from capsule_vision.ui.batch_dialog import BatchDialog
 from capsule_vision.ui.main_window import MainWindow, PlayerButton
 
 
@@ -199,13 +200,11 @@ def test_elided_batch_editor_receives_the_full_identity(
     assert window.batch_label.accessibleName().endswith(full)
     initial: list[str] = []
 
-    def dialog(
-        _parent: QWidget, _title: str, _prompt: str, *, text: str
-    ) -> tuple[str, bool]:
-        initial.append(text)
-        return text, False
+    def dialog(editor: BatchDialog) -> int:
+        initial.append(editor.label.text())
+        return 0
 
-    monkeypatch.setattr(QInputDialog, "getText", dialog)
+    monkeypatch.setattr(BatchDialog, "exec", dialog)
     window.buttons["batch"].click()
     assert initial == [full]
     assert window.snapshot.batch_id == full

@@ -50,7 +50,6 @@ from .models import (
     ApplicationError,
     ApplicationState,
     ApplicationStateError,
-    PilotCounters,
     PreparedConfiguration,
     ProductionApplicationSnapshot,
 )
@@ -93,10 +92,7 @@ class SourceProductionApplication(ProductionApplication):
         self._reporting_generation = 0
         self._session_reporting: ReportingSettings | None = None
         self._session_reporting_words = 4
-        self._pilot_counters = PilotCounters()
-        self._pilot_counting = False
         self._last_pilot_cycle: CycleId | None = None
-        self._batch_duration_ms: float | None = None
         self._guest_demo_generation: int | None = None
         self._replay_lock = Lock()
         self.replay_controls = replay_controls
@@ -121,23 +117,18 @@ class SourceProductionApplication(ProductionApplication):
             reporting = self.reporting_snapshot()
             return replace(
                 super().snapshot(),
-                pilot_counters=self._pilot_counters,
-                pilot_counting=self._pilot_counting,
                 group_progress=reporting.group_progress
                 if reporting is not None
                 and reporting.generation == self._generation
                 and self._latest is not None
                 else None,
-                batch_duration_ms=self._batch_duration_ms,
             )
 
-    def start_batch(self, batch_id: str | None) -> None:
-        with self._condition:
-            super().start_batch(
-                batch_id
-            )  # Existing authorization/state/reset boundary.
-            self._pilot_counters = PilotCounters()
-            self._batch_duration_ms = None
+    def _requires_batch(self) -> bool:
+        return self.identity is not None and self.basler_available
+
+    def _run_reporting(self) -> ReportingSettings | None:
+        return self._session_reporting
 
     def observe_pilot_batch(self, batch: CompletedReportingBatch) -> None:
         """Trusted reporting completion, independent of Qt, History and PLC ACK."""
@@ -163,6 +154,8 @@ class SourceProductionApplication(ProductionApplication):
             self._pilot_counters = self._pilot_counters.completed(batch)
             self._last_pilot_cycle = batch.reports[-1].identity.cycle_id
             self._batch_duration_ms = batch.duration_ms
+            if self._durable_run and self.history:
+                self.history.offer_group(self._durable_run, batch)
             if self._display_store is not None:
                 self._display_store.complete_group(batch)
 

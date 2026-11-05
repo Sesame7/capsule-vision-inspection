@@ -10,6 +10,9 @@ from threading import enumerate as threads
 
 from capsule_vision.application import PreparedConfiguration
 from capsule_vision.application.account_maintenance import initialize_administrator
+from capsule_vision.application.production_application import (
+    SourceProductionApplication,
+)
 from capsule_vision.application.session import EngineFactory, real_engine
 from capsule_vision.application.source_control import (
     SourceControlCommands,
@@ -78,6 +81,7 @@ def authenticated_startup(
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
+    select_basler_batch: bool = True,
 ) -> Startup:
     """Run existing privileged workflows against a real disposable account."""
     if not data.security.exists():
@@ -89,6 +93,15 @@ def authenticated_startup(
         owner = startup.application.identity
         assert owner is not None
         owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        if (
+            select_basler_batch
+            and startup.prepared is not None
+            and isinstance(startup.application, SourceProductionApplication)
+            and startup.application.basler_available
+            and startup.application.history is not None
+            and startup.application.history.initial_selection.result(WAIT) is None
+        ):
+            startup.application.start_batch("Basler test Batch").result(WAIT)
     except BaseException:
         close(startup)
         raise

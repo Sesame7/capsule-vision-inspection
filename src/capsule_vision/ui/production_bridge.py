@@ -143,7 +143,7 @@ class QtProductionBridge(QObject):
         self.refresh()
 
     def _immediate(self, name: str, command: Callable[[], None]) -> None:
-        # Reset/batch are cheap locked application operations;
+        # Reset is a cheap locked application operation;
         # no parsing, artifact IO, engine construction or waiting occurs here.
         def perform() -> Future[None]:
             command()
@@ -180,8 +180,18 @@ class QtProductionBridge(QObject):
     def reset(self) -> None:
         self._immediate("reset", self.application.reset_fault)
 
-    def start_batch(self, batch_id: str | None) -> None:
-        self._immediate("batch", lambda: self.application.start_batch(batch_id))
+    def start_batch(self, batch_id: str, revision: int | None = None) -> None:
+        self._command(
+            "batch", lambda: self.application.start_batch(batch_id, revision=revision)
+        )
+
+    def end_batch(self, revision: int | None, expected_batch: str | None) -> None:
+        self._command(
+            "batch",
+            lambda: self.application.end_batch(
+                revision=revision, expected_batch=expected_batch
+            ),
+        )
 
     @Slot()
     def close(self) -> None:

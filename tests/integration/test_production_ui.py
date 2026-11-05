@@ -10,7 +10,14 @@ from numpy.typing import NDArray
 from PySide6.QtCore import QObject, QPoint, QSize, Qt, QTimer, Slot
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QLabel, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QWidget,
+)
 from tests.support.application import WAIT, FakeSession, close, prepared, production
 from tests.support.business import channel, mixed_result
 from tests.support.production import source_frame
@@ -42,6 +49,7 @@ from capsule_vision.inspection.production import (
 )
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.ui.batch_dialog import BatchDialog
 from capsule_vision.ui.camera_card import CameraCard
 from capsule_vision.ui.main_window import MainWindow, PlayerButton
 from capsule_vision.ui.production_bridge import QtProductionBridge
@@ -935,15 +943,27 @@ def test_activated_display_name_uses_application_and_available_header_width(
 
 
 @pytest.mark.parametrize(
-    "accepted, value", [(False, "cancelled"), (True, ""), (True, "batch-Y")]
+    "action",
+    [
+        "enter",
+        "set",
+        "escape",
+        "close",
+        "keep_open",
+        "confirm_enter",
+        "confirm_escape",
+        "confirm_close",
+    ],
 )
-def test_batch_edit_confirmation_resets_only_when_accepted(
+def test_batch_dialog_applies_only_submitted_input(
     screen: tuple[MainWindow, FakeSession],
     monkeypatch: pytest.MonkeyPatch,
-    accepted: bool,
-    value: str,
+    action: str,
 ) -> None:
     window, session = screen
+    language = "zh" if action == "set" else "ja" if action == "close" else "en"
+    window.set_language(language)
+    window.bridge.start_batch("batch-X")
     session.ready.set_result(None)
     window.bridge.start()
     until(lambda: window.snapshot.state is ApplicationState.RUNNING)
@@ -957,29 +977,83 @@ def test_batch_edit_confirmation_resets_only_when_accepted(
     window.bridge.stop()
     until(lambda: window.snapshot.state is ApplicationState.READY)
     assert window.snapshot.counters == counts
-    prompts: list[str] = []
+    batch_uuid = window.snapshot.batch_uuid
 
-    def answer(
-        _parent: QWidget, _title: str, prompt: str, *, text: str
-    ) -> tuple[str, bool]:
-        prompts.append(prompt)
-        return value, accepted
+    handled: list[str] = []
 
-    monkeypatch.setattr(QInputDialog, "getText", answer)
+    def dismiss(prompt: QMessageBox) -> int:
+        prompt.show()
+        safe = prompt.defaultButton()
+        assert safe is not None and safe.text() == "Keep Open"
+        assert prompt.escapeButton() is safe
+        if action == "keep_open":
+            safe.click()
+        elif action == "confirm_enter":
+            QTest.keyClick(prompt, Qt.Key.Key_Return)
+        elif action == "confirm_escape":
+            QTest.keyClick(prompt, Qt.Key.Key_Escape)
+        else:
+            prompt.close()
+        assert not prompt.isVisible()
+        handled.append("confirmation")
+        return prompt.result()
+
+    monkeypatch.setattr(QMessageBox, "exec", dismiss)
+
+    def answer(editor: BatchDialog) -> int:
+        editor.open()
+        current, field, submit, end = {
+            "zh": ("当前批号", "批号", "设置批号", "结束批次"),
+            "en": ("Current Batch ID", "Batch ID", "Set Batch ID", "End Batch"),
+            "ja": ("Current Batch ID", "ロット", "Set Batch ID", "End Batch"),
+        }[language]
+        assert {w.text() for w in editor.findChildren(QLabel)} == {current, field}
+        assert {w.text() for w in editor.findChildren(QPushButton)} == {end, submit}
+        assert editor.label.accessibleName() == field and editor.select.isDefault()
+        assert editor.end.geometry().right() < editor.select.geometry().left()
+        if action == "enter":
+            editor.label.setText("  ")
+            QTest.keyClick(editor.label, Qt.Key.Key_Return)
+            assert editor.isVisible() and not editor.select.isEnabled()
+        editor.label.setText("batch-Y")
+        if action == "enter":
+            QTest.keyClick(editor.label, Qt.Key.Key_Return)
+        elif action == "set":
+            editor.select.click()
+        elif action == "escape":
+            QTest.keyClick(editor.label, Qt.Key.Key_Escape)
+        else:
+            if action != "close":
+                editor.end.click()
+                assert editor.isVisible() and not editor.end_requested
+                assert editor.label.text() == "batch-Y"
+            editor.close()
+        assert not editor.isVisible()
+        handled.append("editor")
+        return editor.result()
+
+    monkeypatch.setattr(BatchDialog, "exec", answer)
     window.buttons["batch"].click()
     window.bridge.refresh()
-    assert prompts == [text("batch_prompt", window.language)]
-    assert "归档" in prompts[0] or "not archived" in prompts[0]
-    if accepted:
+    assert handled == (
+        ["confirmation", "editor"]
+        if action.startswith("confirm_") or action == "keep_open"
+        else ["editor"]
+    )
+    if action in {"enter", "set"}:
         assert window.snapshot.counters == ProductionCounters()
         assert window.snapshot.latest_production_result is None
-        assert window.snapshot.batch_id == (value or None)
+        assert window.snapshot.batch_id == "batch-Y"
         assert all(
             window.metrics[key][0].text() == "0"
             for key in ("cycles", "channel_ok", "channel_ng", "channel_empty")
         )
         assert window.metrics["processing"][0].text() == "--"
     else:
+        assert (
+            window.snapshot.batch_id == "batch-X"
+            and window.snapshot.batch_uuid == batch_uuid
+        )
         assert window.snapshot.counters == counts
         assert window.snapshot.latest_production_result is not None
 

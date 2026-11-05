@@ -265,9 +265,11 @@ claim a confirmed defect in every rejected position. Incomplete or initially una
 groups do not count. This checkpoint precedes result writes: later transport
 failure, commit uncertainty or attribution loss does not retract an already
 eligible inspection completion. These totals are neither delivered-group counts
-nor proof of physical traceability. Application retains cumulative totals and a
-generation-local CycleId high-water mark; Stop/Start and Recipe changes retain
-totals, while explicit operator Batch resets them. History remains per-Cycle.
+nor proof of physical traceability. Application retains a generation-local CycleId
+high-water mark and offers the eligible group to its History owner without waiting.
+The selected Production Batch accumulates these totals across Runs and restarts.
+Cycle History retains per-exposure evidence and joins it to group membership by
+Run and Cycle identity. See [Production history](architecture.md#production-history).
 
 Batch Duration uses the worker's monotonic clock and runs from first Cycle
 admission until the last of the four distinct terminal results arrives,

@@ -64,8 +64,8 @@ for interactive-desktop evidence, normal launch/Close and protected-asset checks
   caches and keep artifact hashing outside GUI dispatch.
 - Start warm-up has zero production side effects. Only successful Start promotes
   a candidate; failed startup preserves active identity. Keep occurrence counters
-  separate from conditional four-cycle channel-position totals; explicit Batch
-  resets both. ERROR, NG and FAULT differ.
+  separate from conditional four-cycle channel-position totals. Selecting the
+  same Production Batch label continues both totals. ERROR, NG and FAULT differ.
 - Preserve strict configuration validation, atomic persistence, hidden Recipe
   settings and Save/preparation/activation separation. Saved MachineLayout is
   authoritative; opening an editor never repairs or reinitializes geometry.

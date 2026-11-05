@@ -59,8 +59,8 @@ prescribe a new service, database or framework.
 - Normal production: Operator selects an existing saved Recipe and an operator-defined production Batch, then clicks **Start** before the relevant PLC batch's first trigger. Production passively receives hardware triggers; it never commands the machine to mechanically start, stop, or pause.
 - For Basler, **Start automatically connects required cameras if needed** and performs Start preparation/warm-up. Reuse an already valid connection. This does not merge Recipe Save, candidate preparation and activation. Vision retains manual Connect all / Disconnect for engineering use under the existing admission rules. Stop stops inspection but does **not** disconnect cameras. Connection/start failures remain visible and do not fabricate production results.
 - Basler Production exposes **Start / Stop** (and fault Reset when needed), not Pause / Resume / Step. Folder Replay retains appropriate playback controls.
-- Stop/Start preserves the selected operator Batch and cumulative batch statistics while assigning a new **Run identity** on each successful Start. An explicit *new batch* action creates a new production batch and resets its counters.
-- A production Batch can **continue across application restarts**. A successful Start after restart creates a new Run, not an automatic new Batch. Same Batch ID text alone must not silently merge distinct production batches: the operator must be able to distinguish **continue existing batch** from **start new batch**, with durable identity sufficient for accurate historical export.
+- Each IPC identifies a Production Batch by its trimmed, nonempty, case-sensitive label and retains a stable internal UUID. Selecting a new label starts its own totals. Selecting a previously used label continues its original Batch and totals, including after an explicit End.
+- Switching labels changes the selection. End Batch records an end event and clears the selection after confirmation. Startup restores the last selection and totals and waits for an explicit Start. Each successful Start under that Batch creates a distinct Run, including Runs that stop before the first Cycle. Formal Basler production requires a selected Batch and a durable Run record.
 - Switching Recipe does not itself reset the operator Batch's cumulative quantities. Exact constraints on changing Recipe while running remain subject to the current lifecycle contract unless deliberately changed in a later Phase.
 
 ## 3. PLC reporting, result semantics and display
@@ -167,7 +167,7 @@ for an explicitly approved change. The product requirements are:
 ### 6.1 Inspection History
 
 - **One History record per Cycle** remains the storage and detail unit. Keep the existing camera/channel detail matrix, per-Cycle reasons, time filtering and result lookup.
-- Add **minimal physical-group association** so four Cycle records can be recognized as one attributable PLC batch. The exact persisted field representation and write ordering belong to the implementation Phase. Avoid a new batch-record hierarchy and avoid deriving batch identity from four consecutive CycleIds alone.
+- Associate the four observed Run/Cycle identities with their eligible physical group regardless of History arrival order. Retain group timing and final outcomes for the same 30-day detail window.
 - Persist enough association to distinguish the production Batch, Run, PLC group and Cycle identities defined above; PLC counter text alone is not a group key.
 - Do not convert a lack of verified physical association into a fictitious group. Where a reporting mode does not establish that association, keep Cycle records without an invented physical-group identity.
 - Existing inspection History records/old database format need **no migration compatibility**. The owner will manually clear affected old History data during an approved upgrade. This decision does not cover account storage or authorize cleanup now. The application must **not** silently delete the user's database or other assets during normal startup.
@@ -183,7 +183,7 @@ for an explicitly approved change. The product requirements are:
 - **Manual export only**. Neither Stop nor production Batch change automatically writes a report.
 - Target export is an ordinary **Excel (.xlsx)** file with a concise production summary and PLC-group results sheet; final presentation and format detail may be refined in the scoped export Phase. Do not embed all photos or duplicate the complete per-Cycle History as an extra sheet.
 - Summarize a **single explicitly identified production Batch** across all its Runs, including Runs after application restart. Include Run start/stop observations, Recipe identity where relevant, and one final OK/NG/EMPTY result per channel per attributable completed PLC group.
-- Existing History is best-effort and may have dropped/expired rows. Export must **not label a partial or unverified aggregate as complete**. Any durable batch/Run summary needed to satisfy cross-restart totals without extending the 30-day detail retention must be explicitly designed and validated in its own Phase; current data do not already guarantee this property.
+- Retain Batch and Run identities and cumulative occurrence and physical-group totals across restarts and detail expiry. Export must distinguish uncertain totals (including an interrupted Run or lost facts) from expired detail. Best-effort Cycle rows alone cannot establish completeness.
 
 ## 7. Audit Trail and alarms
 
@@ -247,11 +247,8 @@ above or authorize choosing a convenient implementation silently.
   how existing disabled Recipes will be handled before enforcing the target
   every-exposure inspection policy; this document does not reinterpret their
   saved settings or authorize an implicit enablement change.
-- **Durable Batch and export completeness:** define continuation after interrupted
-  Runs, the minimal durable summaries needed across restarts and 30-day detail
-  expiry, and how missing/dropped evidence is disclosed. Keep a new Batch distinct
-  from continuation even when its label repeats; do not promise complete exports
-  from best-effort Cycle rows alone.
+- **Export completeness:** determine how the workbook presents interrupted Runs,
+  uncertain totals and expired detail for the selected Batch.
 - **Audit and alarms:** decide retention, querying and role access; 30 days is a
   proposal for these records, not an approved requirement. Define authorization
   for saved startup monitoring while Guest or after logout, independently of
