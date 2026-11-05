@@ -185,6 +185,7 @@ def test_save_and_selection_keep_editor_candidate_and_preferences_independent(
         session.camera_sources.set_loop(not session.camera_sources.definition.loop)
         session.draft.display_name = "Saved latest"
         window.recipe_page.save()
+        until(lambda: not window.editing.busy)
         assert not session.dirty
         assert load_recipe(session.entry.path).display_name == "Saved latest"
         assert startup.application.snapshot() == initial

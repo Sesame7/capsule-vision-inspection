@@ -124,7 +124,8 @@ def test_history_filters_pagination_selection_and_presentation(
         window.navigate(3)
         page = window.history
         until(lambda: not page.busy)
-        assert window.pages.currentWidget() is page
+        assert window.pages.currentWidget() is window.history_tabs
+        assert window.history_tabs.currentWidget() is page
         assert page.cycles.rowCount() == 50 and page.channels.rowCount() == 6
         assert page.channels.columnCount() == 7
         assert (

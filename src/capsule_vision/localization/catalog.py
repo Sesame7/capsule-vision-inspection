@@ -4,6 +4,66 @@ from .languages import Language
 from .translations import EXTRA_STRINGS
 
 STRINGS: dict[str, tuple[str, str]] = {
+    "session.login": ("登录", "Login"),
+    "session.logout": ("退出登录", "Logout"),
+    "account.create": ("创建用户", "Create account"),
+    "account.enabled": ("更改账户启用状态", "Change account status"),
+    "account.role": ("更改角色", "Change role"),
+    "account.reset_password": ("重置密码", "Reset password"),
+    "account.change_password": ("修改密码", "Change password"),
+    "security.storage": ("账户存储", "Account storage"),
+    "security.admission": ("操作授权", "Command authorization"),
+    "history.storage": ("生产历史存储", "Production History storage"),
+    "production.start": ("启动检测", "Start inspection"),
+    "production.stop": ("停止检测", "Stop inspection"),
+    "production.recipe": ("选择生产配方", "Select Production Recipe"),
+    "batch.select": ("设置批号", "Set Batch ID"),
+    "batch.end": ("结束批次", "End Batch"),
+    "recipe.save": ("保存配方", "Save Recipe"),
+    "recipe.delete": ("删除配方", "Delete Recipe"),
+    "model.stage": ("检查模型导入", "Stage Model import"),
+    "model.publish": ("发布模型", "Publish Model"),
+    "model.import": ("取消模型导入", "Cancel Model import"),
+    "model.rename": ("重命名模型", "Rename Model"),
+    "model.delete": ("删除模型", "Delete Model"),
+    "model.cache": ("准备模型缓存", "Prepare Model cache"),
+    "vision.sources": ("保存相机源", "Save camera sources"),
+    "vision.layout": ("保存相机布局", "Save machine layout"),
+    "communication.save": ("保存通讯设置", "Save communication settings"),
+    "communication.web_power": ("保存 Web 启用状态", "Save Web enablement"),
+    "plc.write": ("手动 PLC 写入", "Manual PLC write"),
+    "preferences.save": ("保存应用首选项", "Save application preferences"),
+    "audit_trail": ("审计追踪", "Audit Trail"),
+    "audit_inspection": ("检测历史", "Inspection History"),
+    "audit_time": ("时间 (UTC)", "Time (UTC)"),
+    "audit_actor": ("操作人", "Actor"),
+    "audit_action": ("操作", "Action"),
+    "audit_all_actions": ("所有操作", "All actions"),
+    "audit_outcome": ("结果", "Outcome"),
+    "audit_target": ("目标", "Target"),
+    "audit_before": ("变更前", "Before"),
+    "audit_after": ("变更后", "After"),
+    "audit_requested": ("请求值", "Requested value"),
+    "audit_remarks": ("备注", "Remarks"),
+    "audit_id": ("操作 ID", "Operation ID"),
+    "audit_completed": ("完成时间 (UTC)", "Completed (UTC)"),
+    "audit_details": ("操作详情", "Operation details"),
+    "audit_required": (
+        "审计记录不可用，操作未执行",
+        "Audit unavailable · operation blocked",
+    ),
+    "audit_no_matches": ("没有匹配的审计记录", "No matching audit records"),
+    "audit_warning": (
+        "审计存储异常 · 未确认记录 {count}",
+        "Audit storage issue · unconfirmed records {count}",
+    ),
+    "audit_success": ("成功", "Succeeded"),
+    "audit_failed": ("失败", "Failed"),
+    "audit_cancelled": ("已取消", "Cancelled"),
+    "audit_stale": ("身份或请求已变更", "Superseded"),
+    "audit_denied": ("权限不足", "Denied"),
+    "audit_unresolved": ("结果待确认", "Unresolved"),
+    "audit_uncertain": ("执行结果不确定", "Execution uncertain"),
     "plc_mode": ("上报模式", "Reporting mode"),
     "plc_mode_per_cycle": ("逐周期上报", "Per-cycle reporting"),
     "plc_mode_four_cycle": ("四周期上报", "Four-cycle reporting"),
@@ -883,6 +943,10 @@ STRINGS: dict[str, tuple[str, str]] = {
     "simulation": ("模拟输入 · 非硬件检测", "SIMULATED INPUT · no hardware"),
     "channel": ("通道", "Channel"),
 }
+
+
+# Dotted keys are the durable audit action identifiers shown by the event filter.
+AUDIT_ACTIONS = tuple(key for key in STRINGS if "." in key)
 
 
 def text(key: str, language: Language) -> str:

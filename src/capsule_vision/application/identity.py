@@ -8,10 +8,12 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from queue import Full, Queue
-from threading import Lock, Thread, current_thread
+from threading import Event, Lock, Thread, current_thread
+from uuid import uuid4
 
 from ._account_store import AccountStore
 from ._security_lock import SecurityLease
+from .audit import AuditOperation, AuditQuery, AuditRecord, AuditTrail, error_outcome
 from .identity_models import (
     Account,
     AuthenticationError,
@@ -67,6 +69,7 @@ class LocalIdentity:
         self._accepting = True
         self._session = SessionSnapshot()
         self._authentication: Future[SessionSnapshot] | None = None
+        self._login_cancelled = Event()
         self._storage = SecurityStorageSnapshot()
         self._store: AccountStore | None = None
         self._dummy = PasswordVerifier(
@@ -76,8 +79,16 @@ class LocalIdentity:
         self.ready.set_running_or_notify_cancel()
         self._thread = Thread(target=self._run, name="LocalIdentity", daemon=False)
         try:
+            self.audit = AuditTrail(
+                self.path.with_name("audit.sqlite3"), self._review_revision
+            )
+        except BaseException:
+            self._lease.close()
+            raise
+        try:
             self._thread.start()
         except BaseException:
+            self.audit.close()
             self._lease.close()
             raise
 
@@ -85,17 +96,78 @@ class LocalIdentity:
         with self._lock:
             return self._session
 
+    def audit_page(
+        self, query: AuditQuery, revision: int | None = None
+    ) -> Future[tuple[AuditRecord, ...]]:
+        return self.audit.page(query, revision)
+
+    def _review_revision(self, revision: int | None) -> int:
+        with self.admission(Role.ENGINEER, revision):
+            return self._session.revision
+
+    @contextmanager
+    def change(
+        self,
+        action: str,
+        target: str,
+        revision: int | None,
+        before: str = "",
+        after: str = "",
+        *,
+        role: Role = Role.ENGINEER,
+        uncertain: Callable[[BaseException], bool] = lambda _: False,
+    ) -> Generator[None]:
+        """Worker-only. Never wait for audit IO while holding the identity lock."""
+        with self.admission(role, revision, action=action, target=target) as actor:
+            op = AuditOperation.by(actor, action, target, before, after)
+        self.audit.intent(op).result()
+        try:
+            with self.admission(role, actor.revision, action=""):
+                pass
+            yield
+        except BaseException as exc:
+            self.audit.complete(
+                op,
+                "uncertain" if uncertain(exc) else error_outcome(exc),
+                type(exc).__name__,
+            )
+            raise
+        else:
+            self.audit.complete(op, "success")
+
     @contextmanager
     def admission(
-        self, minimum: Role, revision: int | None = None
+        self,
+        minimum: Role,
+        revision: int | None = None,
+        *,
+        action: str = "security.admission",
+        target: str = "",
     ) -> Generator[SessionSnapshot]:
         """Linearize a command with logout, login and committed account changes."""
         with self._lock:
             if not self._accepting or (
                 revision is not None and self._session.revision != revision
             ):
+                if action:
+                    # A revision alone cannot identify a superseded caller. The
+                    # present user did not initiate that request.
+                    self.audit.record(
+                        AuditOperation(
+                            "system", "System", action, target or minimum.name
+                        ),
+                        "stale",
+                        f"Requested revision {revision}; current revision {self._session.revision}",
+                    )
                 raise StaleSessionError("Session decision was superseded")
             if self._session.role < minimum:
+                if action:
+                    self.audit.record(
+                        AuditOperation.by(
+                            self._session, action, target or minimum.name
+                        ),
+                        "denied",
+                    )
                 raise AuthorizationError(f"{minimum.name.title()} required")
             yield self._session
 
@@ -110,7 +182,16 @@ class LocalIdentity:
 
     def logout(self) -> SessionSnapshot:
         with self._lock:
-            return self._publish(None)
+            actor = self._session
+            session = self._publish(None)
+            if actor.account:
+                self.audit.record(
+                    AuditOperation.by(
+                        actor, "session.logout", actor.account.account_id
+                    ),
+                    "success",
+                )
+            return session
 
     def _admission(self) -> None:
         if not self._accepting:
@@ -128,6 +209,13 @@ class LocalIdentity:
                 value = work()
             except (sqlite3.Error, OSError, SecurityStorageError) as exc:
                 with self._lock:
+                    self.audit.record(
+                        AuditOperation.by(
+                            self._session, "security.storage", "security.sqlite3"
+                        ),
+                        "failed",
+                        type(exc).__name__,
+                    )
                     issue = self._storage.issue or _storage_issue(exc)
                     if self._storage.state is StorageState.READY:
                         self._storage = SecurityStorageSnapshot(
@@ -167,6 +255,8 @@ class LocalIdentity:
         with self._lock:
             self._admission()
             revision = self._session.revision
+            initiator = self._session
+            cancelled = Event()
 
             def authenticate() -> SessionSnapshot:
                 try:
@@ -183,7 +273,21 @@ class LocalIdentity:
                         account = self._available().record_login(
                             record[0].account_id, datetime.now(UTC)
                         )
-                        return self._publish(account)
+                        session = self._publish(account)
+                        self.audit.record(
+                            AuditOperation.by(
+                                session, "session.login", account.account_id
+                            ),
+                            "success",
+                        )
+                        return session
+                except Exception as exc:
+                    self.audit.record(
+                        AuditOperation.by(initiator, "session.login", username),
+                        "cancelled" if cancelled.is_set() else error_outcome(exc),
+                        type(exc).__name__,
+                    )
+                    raise
                 finally:
                     with self._lock:
                         if self._authentication is attempt:
@@ -191,6 +295,7 @@ class LocalIdentity:
 
             attempt = self._enqueue(authenticate)
             self._authentication = attempt
+            self._login_cancelled = cancelled
             return attempt
 
     def _check_authentication(
@@ -213,6 +318,7 @@ class LocalIdentity:
         with self._lock:
             if self._authentication is not attempt:
                 return False
+            self._login_cancelled.set()
             self._authentication = None
             return True
 
@@ -235,8 +341,15 @@ class LocalIdentity:
     def create_account(
         self, username: str, role: Role, password: str
     ) -> Future[Account]:
-        return self._password_admin(
-            password, lambda store, verifier: store.create(username, role, verifier)
+        account_id = uuid4().hex
+        return self._mutate(
+            "account.create",
+            account_id,
+            f"{username} · {role.name} · enabled",
+            password,
+            lambda store, verifier: store.create(
+                username, role, self._verifier(verifier), account_id=account_id
+            ),
         )
 
     def _changed(self, account: Account, *, reset: bool = False) -> Account:
@@ -246,39 +359,92 @@ class LocalIdentity:
         return account
 
     def set_enabled(self, account_id: str, enabled: bool) -> Future[Account]:
-        return self._admin(
-            lambda store: self._changed(store.update(account_id, enabled=enabled))
+        return self._mutate(
+            "account.enabled",
+            account_id,
+            str(enabled),
+            None,
+            lambda store, _: self._changed(store.update(account_id, enabled=enabled)),
         )
 
     def set_role(self, account_id: str, role: Role) -> Future[Account]:
-        return self._admin(
-            lambda store: self._changed(store.update(account_id, role=role))
+        return self._mutate(
+            "account.role",
+            account_id,
+            role.name,
+            None,
+            lambda store, _: self._changed(store.update(account_id, role=role)),
         )
 
     def reset_password(self, account_id: str, password: str) -> Future[Account]:
-        return self._password_admin(
+        return self._mutate(
+            "account.reset_password",
+            account_id,
+            "",
             password,
             lambda store, verifier: self._changed(
-                store.update(account_id, verifier=verifier), reset=True
+                store.update(account_id, verifier=self._verifier(verifier)), reset=True
             ),
         )
 
-    def _password_admin[T](
-        self, password: str, operation: Callable[[AccountStore, PasswordVerifier], T]
-    ) -> Future[T]:
-        password_bytes(password)
+    @staticmethod
+    def _verifier(value: PasswordVerifier | None) -> PasswordVerifier:
+        assert value is not None
+        return value
+
+    def _mutate(
+        self,
+        action: str,
+        target: str,
+        after: str,
+        password: str | None,
+        operation: Callable[[AccountStore, PasswordVerifier | None], Account],
+    ) -> Future[Account]:
+        if password is not None:
+            password_bytes(password)
         with self._lock:
             self._admission()
             revision = self._session.revision
-            self._actor(revision, administrator=True)
+            try:
+                self._actor(revision, administrator=True)
+            except IdentityError as exc:
+                self.audit.record(
+                    AuditOperation.by(self._session, action, target), error_outcome(exc)
+                )
+                raise
+            initiator = self._session
 
-            def execute() -> T:
-                with self._lock:
-                    self._actor(revision, administrator=True)
-                verifier = hash_password(password)
-                with self._lock:
-                    self._actor(revision, administrator=True)
-                    return operation(self._available(), verifier)
+            def execute() -> Account:
+                try:
+                    with self._lock:
+                        self._actor(revision, administrator=True)
+                    before = ""
+                    if action in ("account.role", "account.enabled"):
+                        previous, _ = self._available().by_id(target)
+                        before = (
+                            previous.role.name
+                            if action == "account.role"
+                            else str(previous.enabled)
+                        )
+                except Exception as exc:
+                    self.audit.record(
+                        AuditOperation.by(initiator, action, target),
+                        error_outcome(exc),
+                        type(exc).__name__,
+                    )
+                    raise
+                op = AuditOperation.by(initiator, action, target, before, after)
+                self.audit.intent(op).result()
+                try:
+                    verifier = hash_password(password) if password is not None else None
+                    with self._lock:
+                        self._actor(revision, administrator=True)
+                        result = operation(self._available(), verifier)
+                except Exception as exc:
+                    self.audit.complete(op, error_outcome(exc), type(exc).__name__)
+                    raise
+                self.audit.complete(op, "success", result.username)
+                return result
 
             return self._enqueue(execute)
 
@@ -297,13 +463,21 @@ class LocalIdentity:
                     self._actor(revision)
                 store = self._available()
                 current, previous = store.by_id(account.account_id)
-                if not current.enabled or not verify_password(old_password, previous):
-                    raise AuthenticationError("Invalid username or password")
-                verifier = hash_password(new_password)
-                with self._lock:
-                    self._actor(revision)
-                    updated = store.update(account.account_id, verifier=verifier)
-                    return self._publish(updated)
+                with self.change(
+                    "account.change_password",
+                    account.account_id,
+                    revision,
+                    role=Role.OPERATOR,
+                ):
+                    if not current.enabled or not verify_password(
+                        old_password, previous
+                    ):
+                        raise AuthenticationError("Invalid username or password")
+                    verifier = hash_password(new_password)
+                    with self._lock:
+                        self._actor(revision)
+                        updated = store.update(account.account_id, verifier=verifier)
+                        return self._publish(updated)
 
             return self._enqueue(execute)
 
@@ -339,6 +513,13 @@ class LocalIdentity:
                 else:
                     state = SecurityStorageSnapshot(StorageState.MISSING)
             except (sqlite3.Error, OSError, SecurityStorageError) as exc:
+                self.audit.record(
+                    AuditOperation(
+                        "system", "System", "security.storage", "security.sqlite3"
+                    ),
+                    "failed",
+                    type(exc).__name__,
+                )
                 state = SecurityStorageSnapshot(
                     StorageState.UNAVAILABLE,
                     _storage_issue(exc),
@@ -358,6 +539,7 @@ class LocalIdentity:
                 if self._store is not None:
                     self._store.close()
             finally:
+                self.audit.close()
                 self._lease.close()
                 with self._lock:
                     self._storage = SecurityStorageSnapshot(

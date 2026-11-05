@@ -5,10 +5,12 @@ from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from capsule_vision.application.audit import AuditOperation
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.folder_replay import FolderReplay, FolderSourceError
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity import LocalIdentity, admit_engineering
+from capsule_vision.application.identity_models import Role
 from capsule_vision.application.session import EngineFactory
 from capsule_vision.configuration import (
     ConfigurationError,
@@ -67,6 +69,10 @@ class ApplicationData:
     @property
     def history(self) -> Path:
         return self.root / "history.sqlite3"
+
+    @property
+    def audit(self) -> Path:
+        return self.root / "audit.sqlite3"
 
     @property
     def security(self) -> Path:
@@ -220,6 +226,11 @@ def _load_startup(
     entry = None
     if registry is not None:
 
+        def on_cancel(digest: str, revision: int | None) -> Callable[[], None]:
+            with identity.admission(Role.ENGINEER, revision) as actor:
+                operation = AuditOperation.by(actor, "model.import", digest)
+            return lambda: identity.audit.record(operation, "cancelled")
+
         def model_catalog() -> tuple[ModelRegistry, tuple[str, ...]]:
             snapshot = discover_models(data.models)
             return snapshot.registry, tuple(
@@ -240,6 +251,17 @@ def _load_startup(
             managed_models=ManagedModels(
                 data.models,
                 authorize=lambda revision: admit_engineering(identity, revision),
+                change=lambda action, target, revision, before, after: identity.change(
+                    action,
+                    target,
+                    revision,
+                    before,
+                    after,
+                    uncertain=lambda error: (
+                        action == "model.delete" and isinstance(error, OSError)
+                    ),
+                ),
+                on_cancel=on_cancel,
             ),
             identity=identity,
         )
@@ -325,9 +347,17 @@ def _load_startup(
                     "startup_communication", communication_error, blocking=False
                 )
             )
+
+    def history_error(kind: str) -> None:
+        identity.audit.record(
+            AuditOperation("system", "System", "history.storage", data.history.name),
+            "failed",
+            kind,
+        )
+
     if editor is None or editor.camera_sources is None:
         application = unconfigured_application(
-            ProductionHistory(data.history),
+            ProductionHistory(data.history, on_failure=history_error),
             identity=identity,
             initial_reporting=communication.reporting,
         )
@@ -344,7 +374,7 @@ def _load_startup(
             engine_factory=engine_factory,
             observe_source=observe_source,
             reporting_editable=True,
-            history=ProductionHistory(data.history),
+            history=ProductionHistory(data.history, on_failure=history_error),
             identity=identity,
             replay_controls=True,
             initial_candidate=prepared,

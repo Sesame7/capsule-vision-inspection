@@ -435,6 +435,7 @@ def test_normal_paused_reporting_ack_and_overload_use_genuine_stop(
         panel.timeout.setValue(2)
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         selected = panel.controller.reporting_selection()
         panel.controller.set_reporting_selection(
             replace(selected, settings=replace(selected.settings, max_pending=1))

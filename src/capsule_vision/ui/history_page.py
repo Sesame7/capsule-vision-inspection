@@ -1214,14 +1214,32 @@ class HistoryPage(QWidget):
         warning = observation is not None and (
             observation.dropped or observation.failed or observation.error
         )
-        self.warning.setVisible(bool(warning))
-        self.warning.setText(
+        identity = self.application.identity if self.application else None
+        lost, issue = identity.audit.observation() if identity else (0, "")
+        self.warning.setVisible(bool(warning or issue))
+        history_text = (
             text("history_warning", self.language).format(
                 lost=observation.dropped + observation.failed if observation else 0,
                 saved=observation.persisted if observation else 0,
             )
+            if warning
+            else ""
         )
-        self.warning.setToolTip(observation.error if observation else "")
+        self.warning.setText(
+            "\n".join(
+                x
+                for x in (
+                    history_text,
+                    text("audit_warning", self.language).format(count=lost)
+                    if issue
+                    else "",
+                )
+                if x
+            )
+        )
+        self.warning.setToolTip(
+            "\n".join(x for x in (observation.error if observation else "", issue) if x)
+        )
         self.warning.setStyleSheet(f"color: {theme_colors(self).warning};")
 
     def dispose(self) -> None:

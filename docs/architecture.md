@@ -186,6 +186,38 @@ Operator Recipe selection path shares the file ownership fence and retains its
 own selection ticket. Import cancellation and actual worker shutdown are
 independent of the current account.
 
+## Audit Trail
+
+Normal Application composition attaches one serialized audit owner to LocalIdentity.
+It accepts up to 128 waiting requests plus one active request. Its SQLite connection
+stays on that worker. History, accounts and JSON files retain their respective
+transaction owners. Explicit identity-free engineering compositions have no local
+account audit owner.
+
+Account changes, Recipe publication/deletion, Model staging/publication/rename/
+deletion/cache preparation, each Vision file save, communication settings and
+manual PLC writes require a committed intent. An intent freezes the actor, target,
+requested values, UTC time and a unique operation ID. The business worker waits
+for that commit outside the session lock, checks the initiating revision again,
+and executes the existing command. Successful publication and failed or uncertain
+execution append separate terminal evidence. Repeating the same fact for the same
+operation is idempotent. A crash between the intent and completion leaves the
+operation unresolved. An audit finalization error leaves the business result intact.
+
+Authentication, logout, actual Start/Stop, Batch changes, saved Recipe selection
+and important security or persistence failures submit observations without waiting.
+The audit writer exposes a separate storage issue and count of unconfirmed writes
+for its lifetime. An abrupt process exit can lose queued best-effort observations.
+Inspection, automatic reporting and Stop continue through audit loss. Close drains
+account work and accepted audit records and joins their owners.
+
+History has Inspection History and Audit Trail tabs. Engineer and Administrator
+sessions can query audit records by UTC date, exact username or account ID, and
+action. The SQLite owner pages by stable insertion order. Qt shows up to 50 rows
+and clears private details on session change. Review access is checked by the
+service as well as the tab. Ordinary navigation, refreshes, per-exposure results
+and automatic PLC transactions do not produce entries.
+
 ## Inference
 
 Recipe Model management reuses this window-owned slot. A short Application

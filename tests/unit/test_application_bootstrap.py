@@ -278,6 +278,8 @@ def test_missing_data_does_not_generate_configurations(tmp_path: Path) -> None:
         assert set(tmp_path.rglob("*")) <= {
             data.root,
             data.history,
+            data.audit,
+            Path(f"{data.audit}-journal"),
             Path(f"{data.history}-wal"),
             Path(f"{data.history}-shm"),
             data.security.with_suffix(".lock"),

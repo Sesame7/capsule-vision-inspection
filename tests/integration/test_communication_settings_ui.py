@@ -203,6 +203,7 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     port = available_port()
     panel.port.setValue(port)
     page.persist_settings()
+    until(lambda: not page.busy)
     saved = load_communication_preferences(startup.data.communication)
     original_reporting = (
         page.reporting_panel.controller.reporting_selection()
@@ -226,6 +227,7 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     page.reporting_panel.enabled.setChecked(True)
     assert page.dirty and panel.power.isEnabled() and panel.apply_changes.isHidden()
     panel.power.click()
+    until(lambda: not page.busy)
     until(lambda: panel.available)
     saved = replace(saved, web=replace(saved.web, enabled=True))
     QApplication.processEvents()
@@ -253,6 +255,7 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     page.reload_settings()
     panel.port.setValue(draft_port)
     page.persist_settings()
+    until(lambda: not page.busy)
     assert runtime.snapshot().configuration == saved.web  # Save is not Apply.
     assert panel.apply_changes.isVisible() and panel.apply_changes.isEnabled()
     panel.host.setText("0.0.0.0")
@@ -268,6 +271,7 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     panel.host.setText("0.0.0.0")
     page.port.setValue(19602)
     panel.power.click()
+    until(lambda: not page.busy)
     until(lambda: not panel.available)
     until(lambda: runtime.snapshot().state is WebState.STOPPED)
     assert runtime.snapshot().state is WebState.STOPPED
@@ -290,6 +294,7 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
         assert restored.application.join(5)
     until(lambda: panel.power.isEnabled())
     panel.power.click()
+    until(lambda: not page.busy)
     until(lambda: panel.available)
     assert runtime.snapshot().configuration == replace(saved.web, port=draft_port)
     assert load_communication_preferences(startup.data.communication).web.enabled
@@ -306,6 +311,7 @@ def test_unavailable_ip_refresh_and_discard_preserve_saved_identity(
     monkeypatch.setattr("capsule_vision.web.hosts.local_interfaces", lambda: ())
     panel.host.setText("192.0.2.10")
     page.persist_settings()
+    until(lambda: not page.busy)
     assert not page.dirty
     panel.refresh_addresses()
     assert (
@@ -322,6 +328,7 @@ def test_unavailable_ip_refresh_and_discard_preserve_saved_identity(
     )
     window.bind_web_runtime(runtime)
     panel.power.click()
+    until(lambda: not page.busy)
     until(lambda: not runtime.snapshot().busy)
     until(lambda: runtime.snapshot().state is WebState.FAILED)
     assert runtime.snapshot().state is WebState.FAILED
@@ -342,6 +349,7 @@ def test_web_power_save_failure_preserves_running_service_and_drafts(
     page, panel = window.communication, window.communication.web_panel
     panel.port.setValue(available_port())
     page.persist_settings()
+    until(lambda: not page.busy)
     runtime = WebRuntime(
         lambda settings: ProductionSnapshotService(
             startup.application, startup.frames, host=settings.host, port=settings.port
@@ -349,6 +357,7 @@ def test_web_power_save_failure_preserves_running_service_and_drafts(
     )
     window.bind_web_runtime(runtime)
     panel.power.click()
+    until(lambda: not page.busy)
     until(lambda: panel.available)
     saved = startup.data.communication.read_bytes()
     actual = runtime.snapshot().configuration
@@ -360,6 +369,7 @@ def test_web_power_save_failure_preserves_running_service_and_drafts(
 
     monkeypatch.setattr("capsule_vision.configuration._io.os.replace", denied)
     panel.power.click()
+    until(lambda: not page.busy)
     assert startup.data.communication.read_bytes() == saved
     assert panel.saved.enabled and runtime.snapshot().state is WebState.RUNNING
     assert runtime.snapshot().configuration == actual
@@ -387,10 +397,12 @@ def test_web_power_bind_failure_keeps_saved_enablement_and_reports_actual_failur
         occupied.listen()
         panel.port.setValue(occupied.getsockname()[1])
         page.persist_settings()
+        until(lambda: not page.busy)
         panel.port.setValue(
             available_port()
         )  # This draft must never be used as fallback.
         panel.power.click()
+        until(lambda: not page.busy)
         until(lambda: runtime.snapshot().state is WebState.FAILED)
         until(lambda: runtime.snapshot().state is WebState.FAILED)
         assert load_communication_preferences(startup.data.communication).web.enabled
@@ -407,6 +419,7 @@ def test_web_power_only_changes_enable_bit_in_actual_file(
     startup, window = settings_window
     page, panel = window.communication, window.communication.web_panel
     page.persist_settings()
+    until(lambda: not page.busy)
     old = load_communication_preferences(startup.data.communication)
     actual = replace(
         old,
@@ -432,6 +445,7 @@ def test_web_power_only_changes_enable_bit_in_actual_file(
     )
     window.bind_web_runtime(runtime)
     panel.power.click()
+    until(lambda: not page.busy)
     until(lambda: panel.available)
     assert load_communication_preferences(startup.data.communication) == replace(
         actual, web=replace(actual.web, enabled=True)
@@ -461,6 +475,7 @@ def test_web_power_first_use_defaults_or_invalid_file_preserve_drafts(
     )
     window.bind_web_runtime(runtime)
     panel.power.click()
+    until(lambda: not page.busy)
     if invalid_file:
         assert (
             startup.data.communication.read_text(encoding="utf-8")
@@ -603,6 +618,7 @@ def test_reporting_segments_keyboard_draft_save_discard_and_header_slots(
     QTest.keyClick(four_cycle, Qt.Key.Key_Left)
     assert per_cycle.hasFocus() and per_cycle.isChecked()
     page.save_settings.click()
+    until(lambda: not page.busy)
     assert not page.dirty
     assert (
         load_communication_preferences(
@@ -649,6 +665,7 @@ def test_reporting_segments_permissions_and_runtime_locks(
     per_cycle.click()
     assert per_cycle.isChecked() is (role >= Role.ENGINEER)
     window.communication.persist_settings()
+    until(lambda: not window.communication.busy)
     assert startup.data.communication.exists() is (role >= Role.ENGINEER)
     for theme in ("light", "dark"):
         window.set_theme(theme)
@@ -713,6 +730,7 @@ def test_reporting_base_draft_save_discard_and_protocol_visibility(
         )
         assert panel.base_address.accessibleName() == text("plc_base_address", language)
     page.persist_settings()
+    until(lambda: not page.busy)
     assert not page.dirty
     stored = json.loads(startup.data.communication.read_text(encoding="utf-8"))
     assert stored["reporting"] == {"protocol": "fins_tcp", "base_address": 120}
@@ -761,6 +779,7 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     page.web_panel.interval.setCurrentIndex(2)
     assert not startup.data.communication.exists()
     page.save_settings.click()
+    until(lambda: not page.busy)
     saved = load_communication_preferences(startup.data.communication)
     assert (
         saved.reporting.enabled
@@ -810,9 +829,11 @@ def test_invalid_web_bind_and_atomic_failure_keep_previous_settings(
     startup, window = settings_window
     page = window.communication
     page.save_settings.click()
+    until(lambda: not page.busy)
     before = startup.data.communication.read_bytes()
     page.web_panel.host.setText("0.0.0.0")
     page.save_settings.click()
+    until(lambda: not page.busy)
     assert startup.data.communication.read_bytes() == before
     assert (
         page.preferences_status.text() and "IPv4" in page.preferences_status.toolTip()
@@ -820,6 +841,7 @@ def test_invalid_web_bind_and_atomic_failure_keep_previous_settings(
     page.web_panel.host.setText("192.0.2.10")
     monkeypatch.setattr("capsule_vision.web.hosts.local_interfaces", lambda: ())
     page.save_settings.click()
+    until(lambda: not page.busy)
     # Preserve unavailable saved IPs; assignment is checked by actual startup.
     assert (
         load_communication_preferences(startup.data.communication).web.host
@@ -833,6 +855,7 @@ def test_invalid_web_bind_and_atomic_failure_keep_previous_settings(
     monkeypatch.setattr("capsule_vision.configuration._io.os.replace", denied)
     page.web_panel.port.setValue(9000)
     page.save_settings.click()
+    until(lambda: not page.busy)
     assert startup.data.communication.read_bytes() == before
     assert "controlled save failure" in page.preferences_status.toolTip()
 
@@ -860,6 +883,7 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
             window.communication.reporting_panel.controller.reporting_snapshot() is None
         )
         window.communication.save_settings.click()  # Explicit repair; no silent overwrite.
+        until(lambda: not window.communication.busy)
         assert (
             load_communication_preferences(data.communication) == startup.communication
         )
@@ -926,6 +950,7 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         )
         panel.enabled.setChecked(False)
         page.persist_settings()  # Explicitly establish neutral disabled settings.
+        until(lambda: not page.busy)
         payload = data.communication.read_bytes()
         assert json.loads(payload) == {
             "reporting": {"protocol": "fins_tcp", "mode": "four_cycle"},
@@ -1010,6 +1035,7 @@ def test_drafts_do_not_redirect_diagnostic_writes_or_reporting(
     panel = page.reporting_panel
     assert panel is not None
     page.persist_settings()
+    until(lambda: not page.busy)
     saved = load_communication_preferences(startup.data.communication)
     requests: list[CommunicationRequest] = []
 
@@ -1029,6 +1055,7 @@ def test_drafts_do_not_redirect_diagnostic_writes_or_reporting(
     until(lambda: not page.busy)
     assert requests[-1].endpoint.port == 9600
     page.persist_settings()
+    until(lambda: not page.busy)
     assert panel.controller.reporting_selection().enabled
     assert panel.controller.reporting_selection().settings.endpoint.port == 19601
     assert not page.dirty and not page.discard_settings.isEnabled()
@@ -1046,6 +1073,7 @@ def test_failed_save_preserves_draft_file_and_effective_reporting(
     panel = page.reporting_panel
     assert panel is not None
     page.persist_settings()
+    until(lambda: not page.busy)
     before = startup.data.communication.read_bytes()
     original = panel.controller.reporting_selection()
     panel.enabled.setChecked(True)
@@ -1056,6 +1084,7 @@ def test_failed_save_preserves_draft_file_and_effective_reporting(
 
     monkeypatch.setattr("capsule_vision.configuration._io.os.replace", denied)
     page.persist_settings()
+    until(lambda: not page.busy)
     assert startup.data.communication.read_bytes() == before
     assert panel.controller.reporting_selection() is original
     assert panel.enabled.isChecked() and panel.port.value() == 19601 and page.dirty
@@ -1067,6 +1096,7 @@ def test_discard_confirmation_and_reload_actual_persisted_definitions(
     startup, window = settings_window
     page = window.communication
     page.persist_settings()
+    until(lambda: not page.busy)
     saved = load_communication_preferences(startup.data.communication)
     page.port.setValue(19600)
     page.request_discard()
@@ -1108,6 +1138,7 @@ def test_reload_failure_preserves_entire_draft(
     startup, window = settings_window
     page = window.communication
     page.persist_settings()
+    until(lambda: not page.busy)
     page.port.setValue(19600)
     page.web_panel.port.setValue(8766)
     panel = page.reporting_panel
@@ -1131,6 +1162,7 @@ def test_discard_does_not_undo_observed_write(
     startup, window = settings_window
     page = window.communication
     page.persist_settings()
+    until(lambda: not page.busy)
     calls: list[CommunicationRequest] = []
 
     def execute(request: CommunicationRequest) -> CommunicationResponse:
@@ -1674,6 +1706,7 @@ def test_reporting_power_edits_only_draft_until_save_or_discard(
     panel = page.reporting_panel
     assert panel is not None
     page.persist_settings()
+    until(lambda: not page.busy)
     original = load_communication_preferences(startup.data.communication)
     web_runtime = page.web_panel.runtime
     assert not panel.enabled.isChecked() and panel.enabled.isCheckable()
@@ -1690,6 +1723,7 @@ def test_reporting_power_edits_only_draft_until_save_or_discard(
     assert not panel.enabled.isChecked() and not page.dirty
     panel.enabled.click()
     page.persist_settings()
+    until(lambda: not page.busy)
     assert load_communication_preferences(startup.data.communication).reporting.enabled
     assert panel.service_status.text() == text("service_next_start", window.language)
     assert panel.service_status.accessibleName() == text("plc_enabled", window.language)
@@ -1726,12 +1760,14 @@ def test_modbus_reporting_required_base_save_discard_and_protocol_fields(
         "plc_modbus_base_required", language
     )
     page.persist_settings()  # Disabled, explicitly incomplete definition is valid.
+    until(lambda: not page.busy)
     saved = startup.data.communication
     before = saved.read_bytes()
     assert not panel.controller.reporting_selection().enabled
     assert panel.controller.reporting_selection().settings.base_address is None
     panel.enabled.click()
     page.persist_settings()
+    until(lambda: not page.busy)
     assert saved.read_bytes() == before and page.dirty
     assert text("comm_settings_failed", language) in page.preferences_status.text()
     panel.base_address.setValue(0)
@@ -1739,6 +1775,7 @@ def test_modbus_reporting_required_base_save_discard_and_protocol_fields(
     assert panel.modbus_advanced.isVisible() and not panel.advanced.isVisible()
     panel.unit_id.setValue(7)
     page.persist_settings()
+    until(lambda: not page.busy)
     selected = panel.controller.reporting_selection()
     assert selected == ReportingSelection(
         True, ReportingSettings(base_address=0, endpoint=ModbusSettings(unit_id=7))
@@ -1764,12 +1801,14 @@ def test_modbus_reporting_required_base_save_discard_and_protocol_fields(
     assert panel.base_address.value() == 49 and not panel.modbus_advanced.isVisible()
     assert not panel.advanced.isVisible() and not panel.advanced_button.isVisible()
     page.persist_settings()
+    until(lambda: not page.busy)
     panel.port.setValue(1502)
     panel.protocol.setCurrentIndex(2)
     assert panel.port.value() == 1502 and panel.base_address.value() == -1
     panel.base_address.setValue(65532)
     panel.unit_id.setValue(255)
     page.persist_settings()
+    until(lambda: not page.busy)
     assert (
         load_communication_preferences(saved).reporting.settings.endpoint.port == 1502
     )

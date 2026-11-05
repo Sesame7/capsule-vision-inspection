@@ -161,10 +161,12 @@ class ProductionHistory:
         max_pending: int = 128,
         clock: Callable[[], float] = time,
         retention_batch: int = 256,
+        on_failure: Callable[[str], None] | None = None,
     ) -> None:
         if max_pending < 1 or retention_batch < 1:
             raise ValueError("History bounds must be positive")
         self.path = path
+        self._on_failure = on_failure
         self.clock = clock
         self.retention_batch = retention_batch
         self._capacity = max_pending
@@ -176,6 +178,7 @@ class ProductionHistory:
         self._accepting, self._ready = True, False
         self._accepted = self._persisted = self._dropped = self._failed = 0
         self._error = ""
+        self._reported_loss = False
         self.initial_selection: Future[BatchSelection | None] = Future()
         self.initial_selection.set_running_or_notify_cancel()
         self._expired_batch: str | None = None
@@ -195,7 +198,7 @@ class ProductionHistory:
                         raise Full
                     self._queue.put_nowait(HistorySubmission(context, result))
                 except Full:
-                    self._error = "History capacity reached; record not admitted"
+                    self._record_loss("History capacity reached; record not admitted")
                 else:
                     self._accepted += 1
                     return True
@@ -283,7 +286,14 @@ class ProductionHistory:
     def missing_terminal(self, run: str) -> None:
         with self._lock:
             self._loss_run, self._loss_persisted = run, False
-            self._error = "Admitted Cycle has no confirmed terminal result"
+            self._record_loss("Admitted Cycle has no confirmed terminal result")
+
+    def _record_loss(self, detail: str) -> None:
+        # Called under the handoff lock. Notify once, without waiting on a write.
+        self._error = detail
+        if not self._reported_loss and self._on_failure is not None:
+            self._reported_loss = True
+            self._on_failure(detail)
 
     def _offer_fact(self, item: _Fact) -> None:
         with self._lock:
@@ -292,7 +302,7 @@ class ProductionHistory:
             else:
                 self._loss_run, self._loss_persisted = item.run, False
                 self._dropped += 1
-                self._error = (
+                self._record_loss(
                     "Batch storage unavailable or full; accounting fact not confirmed"
                 )
 
@@ -360,7 +370,10 @@ class ProductionHistory:
     def _failure(self, error: BaseException) -> None:
         detail = f"{type(error).__name__}: {error}"[:2000]
         with self._lock:
+            changed = self._error != detail
             self._error = detail
+        if changed and self._on_failure is not None:
+            self._on_failure(type(error).__name__)
 
     def _open(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)

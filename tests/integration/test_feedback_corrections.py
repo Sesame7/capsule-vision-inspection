@@ -243,6 +243,7 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
     snapshot = window.bridge.application.snapshot()
     edit(page.metadata["display_name"], "")
     page.save()
+    until(lambda: not page.busy)
     assert page.status.text() == text("recipe_validation_error", language)
     assert "display_name" in page.status.toolTip()
     assert session.dirty and session.entry.path.read_bytes() == original
@@ -262,6 +263,7 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
         patch.setattr(session, "save", fail_save)
         edit(page.metadata["display_name"], "Unsaved")
         page.save()
+        until(lambda: not page.busy)
     assert page.status.text() == text("recipe_save_error", language)
     assert page.status.toolTip() == detail and detail not in page.status.text()
     assert session.dirty and session.entry.path.read_bytes() == original

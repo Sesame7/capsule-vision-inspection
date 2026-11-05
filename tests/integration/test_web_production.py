@@ -151,6 +151,7 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
             port = probe.getsockname()[1]
         page.web_panel.port.setValue(port)
         page.persist_settings()
+        until(lambda: not page.busy)
         effective = panel.controller.reporting_selection()
         runtime = WebRuntime(
             lambda value: ProductionSnapshotService(

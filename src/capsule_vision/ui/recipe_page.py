@@ -1047,17 +1047,29 @@ class RecipePage(QWidget):
         def delete() -> None:
             if not self.editable() or session.entry != entry:
                 return
-            try:
-                session.delete(
+
+            def finished(_: object, error: BaseException | None) -> None:
+                if error is None:
+                    self._entries = tuple(
+                        e for e in self._entries if e.path != entry.path
+                    )
+                    self.recipes.clear()
+                    self.recipes.addItems(
+                        [e.recipe.display_name for e in self._entries]
+                    )
+                    self._error = self._feedback = ""
+                else:
+                    self._report_error(error, "recipe_delete_error")
+                self.show_draft()
+
+            if not self.editing.run_model_io(
+                lambda: session.delete(
                     protected_ids=self._protected_recipes(), revision=revision
-                )
-                self._entries = tuple(e for e in self._entries if e.path != entry.path)
-                self.recipes.clear()
-                self.recipes.addItems([e.recipe.display_name for e in self._entries])
-                self._error = self._feedback = ""
-            except (IdentityError, ConfigurationError) as exc:
-                self._report_error(exc, "recipe_delete_error")
-            self.show_draft()
+                ),
+                finished,
+                revision=revision,
+            ):
+                finished(None, ConfigurationError("Recipe deletion is unavailable"))
 
         self._confirm_recipe_action("delete_recipe", lambda: self.leave_preview(delete))
 
@@ -1365,27 +1377,39 @@ class RecipePage(QWidget):
     ) -> None:
         if not self.editable() or self.session is None:
             return
+        session = self.session
+        changed = session.dirty or session.entry is None
+
+        def finished(_: object, error: BaseException | None) -> None:
+            if error is not None:
+                self._report_error(
+                    error,
+                    "recipe_validation_error"
+                    if isinstance(error, ValueError)
+                    and not isinstance(error, ConfigurationIOError)
+                    else "recipe_save_error",
+                )
+            else:
+                if changed:
+                    self.reload()
+                self._error = ""
+                self._feedback = "saved"
+            self.refresh_state()
+            if error is None and after is not None:
+                after()
+
         try:
             revision = self.bridge.application.authorize_engineering(revision)
-            if self.session.dirty or self.session.entry is None:
-                self.session.save(revision)
-                self.reload()
-            # A clean Save never overwrites an externally changed definition.
-        except (IdentityError, ConfigurationError, ValueError) as exc:
-            self._report_error(
-                exc,
-                "recipe_save_error"
-                if isinstance(exc, (IdentityError, ConfigurationIOError))
-                else "recipe_validation_error",
-            )
-            self.refresh_state()
+        except IdentityError as exc:
+            finished(None, exc)
             return
-
-        self._error = ""
-        self._feedback = "saved"
-        self.refresh_state()
-        if after is not None:
-            after()
+        if changed:
+            if not self.editing.run_model_io(
+                lambda: session.save(revision), finished, revision=revision
+            ):
+                finished(None, RuntimeError("Recipe save is unavailable"))
+        else:
+            finished(None, None)
 
     def _select(self, index: int) -> None:
         if not 0 <= index < len(self._entries) or self.busy:

@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from capsule_vision.application.audit import AuditUnavailable
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
     Account,
@@ -64,6 +65,7 @@ FormKind = Literal["login", "change", "create", "reset"]
 def _feedback(error: object) -> str:
     # Never echo exception messages, passwords, SQLite text or paths into widgets.
     for kind, key in (
+        (AuditUnavailable, "audit_required"),
         (AuthenticationError, "identity_invalid"),
         (LastAdministratorError, "identity_last_admin"),
         (AccountConflictError, "identity_conflict"),

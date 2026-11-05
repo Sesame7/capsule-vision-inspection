@@ -35,10 +35,19 @@ from PySide6.QtWidgets import (
 )
 
 from capsule_vision.application import ProductionApplication
+from capsule_vision.application.audit import (
+    AuditOperation,
+    AuditUnavailable,
+    differences,
+)
 from capsule_vision.application.identity_models import (
     IdentityError,
     Role,
     StaleSessionError,
+)
+from capsule_vision.application.manual_plc import execute_manual, manual_target
+from capsule_vision.application.production_application import (
+    SourceProductionApplication,
 )
 from capsule_vision.communication import (
     FinsAddress,
@@ -143,6 +152,9 @@ class CommunicationPage(QWidget):
         self.reporting_panel: ReportingPanel | None = None
         self._thread: Thread | None = None
         self._completion: tuple[object, object] | None = None
+        self._file_finished: Callable[[object, BaseException | None], None] | None = (
+            None
+        )
         self._request: CommunicationRequest | None = None
         self._sequence = 0
         self._closing = False
@@ -817,11 +829,14 @@ class CommunicationPage(QWidget):
             self.web_panel.dirty = True
         engineer = permits(self._application, Role.ENGINEER)
         if self.reporting_panel is not None:
-            if self.reporting_panel.can_manage != engineer:
-                self.reporting_panel.can_manage = engineer
+            can_edit = engineer and self._file_finished is None
+            if self.reporting_panel.can_manage != can_edit:
+                self.reporting_panel.can_manage = can_edit
                 self.reporting_panel.refresh()
         self.web_panel.can_manage = engineer
-        self.web_panel.editable = not (self._closing or self._disposed)
+        self.web_panel.editable = not (
+            self._closing or self._disposed or self._file_finished is not None
+        )
         self.web_panel.refresh()
         key = self._settings_message or (
             "comm_settings_dirty"
@@ -839,6 +854,7 @@ class CommunicationPage(QWidget):
             )
         )
         failed = self._settings_message in (
+            "audit_required",
             "comm_settings_failed",
             "comm_reload_failed",
             "web_power_failed",
@@ -907,17 +923,76 @@ class CommunicationPage(QWidget):
         ):
             return
         try:
+            revision = self._authorize(None) if self._authorize else None
             value = self._draft_preferences()
             path = self._preferences_path
+            owner = self._reporting
+            identity = self._application.identity if self._application else None
+            if identity is not None:
+                defaults = self._preferences
+
+                def store() -> None:
+                    try:
+                        old = load_communication_preferences(path)
+                    except ConfigurationError as exc:
+                        # Explicit Save also repairs invalid or missing settings.
+                        before = (
+                            "Missing file"
+                            if isinstance(exc.__cause__, FileNotFoundError)
+                            else "Unreadable configuration"
+                        )
+                        changes = (
+                            before,
+                            differences(defaults, value)[1] or "Saved defaults",
+                        )
+                    else:
+                        changes = differences(old, value)
+
+                    def persist() -> None:
+                        save_communication_preferences(path, value)
+
+                    if (
+                        isinstance(owner, SourceProductionApplication)
+                        and owner.identity is identity
+                    ):
+                        owner.persist_reporting_selection(
+                            value.reporting, persist, revision=revision, changes=changes
+                        )
+                    else:
+                        with identity.change(
+                            "communication.save", path.name, revision, *changes
+                        ):
+                            if owner is None:
+                                persist()
+                            else:
+                                owner.persist_reporting_selection(
+                                    value.reporting, persist
+                                )
+
+                self._file_work(
+                    store, lambda _, error: self._saved_settings(value, error)
+                )
+                return
             self._commit_preferences(
-                value, lambda: save_communication_preferences(path, value)
+                value, lambda: save_communication_preferences(path, value), revision
             )
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
-            self._settings_message, self._settings_detail = (
-                failure_key(exc, "comm_settings_failed"),
-                str(exc),
-            )
+            self._saved_settings(None, exc)
         else:
+            self._saved_settings(value, None)
+
+    def _saved_settings(
+        self, value: CommunicationPreferences | None, error: BaseException | None
+    ) -> None:
+        if error is not None:
+            self._settings_message, self._settings_detail = (
+                failure_key(error, "comm_settings_failed"),
+                str(error),
+            )
+        elif value is not None:
+            if value.diagnostic != self._preferences.diagnostic:
+                self._watch_fresh.clear()
+            self._preferences = value
             self._settings_missing = False
             self.web_panel.saved_available = True
             self._settings_message, self._settings_detail = "comm_settings_saved", ""
@@ -925,6 +1000,38 @@ class CommunicationPage(QWidget):
         self._refresh()
         if self.reporting_panel is not None:
             self.reporting_panel.refresh()
+
+    def _file_work(
+        self,
+        work: Callable[[], object],
+        finished: Callable[[object, BaseException | None], None],
+    ) -> None:
+        """Share the diagnostic page's one admitted job and actual Close/join ownership."""
+        if self.busy or self._closing:
+            raise RuntimeError("Communication operation pending")
+        self._file_finished = finished
+        self._sequence += 1
+        self._completion = None
+        future: Future[object] = Future()
+
+        def run() -> None:
+            try:
+                value = work()
+            except BaseException as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(value)
+
+        self._delivery.watch(str(self._sequence), future)
+        self._thread = Thread(target=run, name="CommunicationSettings", daemon=False)
+        try:
+            self._thread.start()
+        except RuntimeError:
+            self._thread = None
+            self._file_finished = None
+            raise
+        self._monitor.start()
+        self._refresh()
 
     def request_discard(self) -> None:
         if (
@@ -1040,6 +1147,7 @@ class CommunicationPage(QWidget):
             runtime is None
             or self._closing
             or self._disposed
+            or self._file_finished is not None
             or runtime.snapshot().busy
             or runtime.snapshot().closing
         ):
@@ -1056,27 +1164,62 @@ class CommunicationPage(QWidget):
                     raise ConfigurationError("No communication settings path")
                 target = not runtime.snapshot().owned
                 path = self._preferences_path
-                # Read the actual file; never serialize any UI draft here. A missing
-                # first-use file can be established from effective startup defaults.
-                saved = (
-                    self._preferences
-                    if self._settings_missing and not path.exists()
-                    else load_communication_preferences(path)
-                )
-                value = replace(saved, web=replace(saved.web, enabled=target))
-                if self._authorize is not None:
-                    self._authorize(revision)
-                save_communication_preferences(path, value)
-                self._preferences = replace(self._preferences, web=value.web)
-                self._settings_missing = False
-                self.web_panel.saved_available = True
-                self._settings_message = self._settings_detail = ""
-                if target:
-                    runtime.apply(
-                        value.web, revision=revision
-                    )  # Includes safe cleanup of failed owners.
+                defaults, missing = self._preferences, self._settings_missing
+                identity = self._application.identity if self._application else None
+
+                def power_save() -> CommunicationPreferences:
+                    saved = (
+                        defaults
+                        if missing and not path.exists()
+                        else load_communication_preferences(path)
+                    )
+                    value = replace(saved, web=replace(saved.web, enabled=target))
+                    if identity is not None:
+                        with identity.change(
+                            "communication.web_power",
+                            path.name,
+                            revision,
+                            str(saved.web.enabled),
+                            str(target),
+                        ):
+                            save_communication_preferences(path, value)
+                    else:
+                        save_communication_preferences(path, value)
+                    return value
+
+                def power_saved(value: object, error: BaseException | None) -> None:
+                    try:
+                        if error is not None:
+                            raise error
+                        assert isinstance(value, CommunicationPreferences)
+                        self._preferences = replace(self._preferences, web=value.web)
+                        self._settings_missing = False
+                        self.web_panel.saved_available = True
+                        self._settings_message = self._settings_detail = ""
+                        if not self._closing:
+                            if target:
+                                runtime.apply(value.web, revision=revision)
+                            else:
+                                runtime.stop(revision=revision)
+                    except (
+                        ConfigurationError,
+                        ValueError,
+                        OSError,
+                        RuntimeError,
+                    ) as exc:
+                        self.web_panel.operation_error = f"{type(exc).__name__}: {exc}"[
+                            :2000
+                        ]
+                        self._settings_message, self._settings_detail = (
+                            failure_key(exc, "web_power_failed"),
+                            self.web_panel.operation_error,
+                        )
+                    self._render_preferences()
+
+                if identity is not None:
+                    self._file_work(power_save, power_saved)
                 else:
-                    runtime.stop(revision=revision)
+                    power_saved(power_save(), None)
             elif action == "apply":
                 observed = runtime.snapshot()
                 if (
@@ -1498,9 +1641,21 @@ class CommunicationPage(QWidget):
         if QThread.currentThread() != self.thread():
             raise RuntimeError("Communication dispatch requires the GUI thread")
         authorize = self._authorize
+        identity = self._application.identity if self._application else None
+        write_actor = (
+            identity.snapshot()
+            if identity and requests[0].kind is RequestKind.WRITE
+            else None
+        )
         try:
             revision = (
-                authorize(self._monitor_revision if self._auto_refresh else None)
+                authorize(
+                    write_actor.revision
+                    if write_actor
+                    else self._monitor_revision
+                    if self._auto_refresh
+                    else None
+                )
                 if authorize is not None
                 else None
             )
@@ -1511,6 +1666,18 @@ class CommunicationPage(QWidget):
                 if self._reporting is not None:
                     self._reporting.validate_manual_request(request)
         except (IdentityError, ValueError, PermissionError) as exc:
+            if (
+                identity
+                and write_actor
+                and isinstance(exc, ReportingWriteProtectedError)
+            ):
+                identity.audit.record(
+                    AuditOperation.by(
+                        write_actor, "plc.write", manual_target(requests[0])
+                    ),
+                    "denied",
+                    str(exc),
+                )
             self._error(exc, requests[0])
             if watch:
                 self._watch_state = "comm_watch_failed"
@@ -1535,9 +1702,7 @@ class CommunicationPage(QWidget):
         def execute_admitted(request: CommunicationRequest) -> CommunicationResponse:
             if authorize is not None:
                 authorize(revision)
-            if guard is not None:
-                guard(request)
-            return execute(request)
+            return execute_manual(request, execute, guard, identity, revision)
 
         def run() -> None:
             # No widgets or page reference: all socket work/cleanup stays here.
@@ -1604,6 +1769,12 @@ class CommunicationPage(QWidget):
         self._monitor.stop()
         value, error = self._completion
         self._completion = None
+        if self._file_finished is not None:
+            finish, self._file_finished = self._file_finished, None
+            finish(value, error if isinstance(error, BaseException) else None)
+            self._refresh()
+            self._check_closed()
+            return
         request, self._request = self._request, None
         was_watch, self._watch_pass = self._watch_pass, False
         self._watch_stop = None
@@ -1671,7 +1842,7 @@ class CommunicationPage(QWidget):
     ) -> None:
         if isinstance(error, ReportingWriteProtectedError):
             key = "plc_reporting_write_protected"
-        elif isinstance(error, IdentityError):
+        elif isinstance(error, (IdentityError, AuditUnavailable)):
             key = failure_key(error, "permission_engineer")
         elif isinstance(error, PermissionError):
             key = "comm_permission"

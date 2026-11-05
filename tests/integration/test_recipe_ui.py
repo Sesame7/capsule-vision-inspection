@@ -1083,6 +1083,7 @@ def test_recipe_delete_confirmation_identity_and_live_protection(
         monkeypatch.setattr(session, "delete", denied)
     caption = text("cancel" if outcome == "cancel" else "delete_recipe", page.language)
     next(b for b in dialog.buttons() if b.text() == caption).click()
+    until(lambda: not page.busy)
     if outcome == "delete":
         assert not entry.path.exists() and session.entry is None
         assert page.recipes.currentIndex() == -1 and not session.dirty
@@ -1307,6 +1308,7 @@ def test_invalid_save_blocks_navigation(
 
     monkeypatch.setattr(page, "confirm_dirty", confirm)
     page.buttons["new_recipe"].click()
+    until(lambda: not page.busy)
     assert session.entry == original and session.dirty
     assert page.status.text() == text("recipe_validation_error", page.language)
     assert "display_name" in page.status.toolTip()
@@ -1532,6 +1534,7 @@ def test_save_failure_keeps_draft_file_and_application(
     page = window.recipe_page
     edit(page.metadata["display_name"], "Keep draft")
     page.save()
+    until(lambda: not page.busy)
     assert page.status.text() == text("recipe_save_error", page.language)
     assert "read-only" in page.status.toolTip() and session.dirty and not page.busy
     assert session.entry.path.read_bytes() == original

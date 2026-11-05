@@ -214,9 +214,10 @@ class AccountStore:
         verifier: PasswordVerifier,
         *,
         first: bool = False,
+        account_id: str | None = None,
     ) -> Account:
         role, key = account_role(role), username_key(username)
-        account = Account(uuid4().hex, username, role, True)
+        account = Account(account_id or uuid4().hex, username, role, True)
         with self.transaction():
             if (
                 first

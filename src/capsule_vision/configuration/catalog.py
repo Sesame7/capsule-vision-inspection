@@ -2,6 +2,7 @@
 
 import stat
 from base64 import b32encode
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -163,10 +164,15 @@ class RecipeCatalog:
             raise
         return RecipeEntry(path, recipe)
 
-    def save_generated(self, recipe: RecipeDefinition) -> RecipeEntry:
+    def save_generated(
+        self,
+        recipe: RecipeDefinition,
+        *,
+        publish: Callable[[RecipeDefinition], RecipeEntry] | None = None,
+    ) -> RecipeEntry:
         for _ in range(32):
             try:
-                return self.save(recipe, original=None)
+                return publish(recipe) if publish else self.save(recipe, original=None)
             except RecipeIdentityCollision:
                 recipe = replace(recipe, recipe_id=self.new_identity())
         raise RecipeIdentityCollision("Could not reserve an unused Recipe target")

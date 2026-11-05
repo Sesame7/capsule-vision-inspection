@@ -373,13 +373,23 @@ presentation; an empty watch list has no empty table viewport. Write ACK/error/u
 execution appears beside writing. Detailed errors remain in the existing bounded
 observations, without runtime error tooltips. Typed READ and WRITE requests support
 diagnostics; a single-word read uses READ with count 1. Register groups and current
-read/write observations are session-only; no operation history is retained.
+read/write panel observations are session-local. Manual writes also pass through
+the [Audit Trail](architecture.md#audit-trail). Before sending, the diagnostic
+worker obtains a durable intent for the initiating actor, endpoint, register
+range and requested words, rechecks authorization and checks the current
+reporting reservation. A matching protocol acknowledgment completes the audited
+write. A PLC rejection records failure. A lost or malformed acknowledgment
+leaves execution uncertain and never triggers a retry. Reads, watches and
+automatic reporting transactions remain outside this trail.
 TCP node negotiation remains with the serial network owner. Late responses cannot
 replace a newer request's presentation.
 
 **Save settings** atomically writes definitions for all three sections; failed
 validation/write preserves the entire draft and effective settings. Unsaved fields
 never change reporting admission. An active session retains its frozen selection.
+The settings save and the Web power preference write each require their own
+durable audit intent. Power records the saved enable bit independently of the
+subsequent service start or stop.
 Unchanged reporting allows independent Web/diagnostic settings to be saved during
 Production; changed reporting is rejected while its editing lock applies.
 

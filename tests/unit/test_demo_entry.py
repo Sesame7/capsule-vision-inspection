@@ -232,6 +232,7 @@ def drive(*_ignored):
         page.model.activated.emit(alternate)
         until(lambda: not page.labels_loading and bool(page.label_checks))
         page.buttons['save'].click()
+        until(lambda: not window.editing.busy)
         window.navigate(0)
         window.production_recipes.select(window.production_recipes.recipes.findData(page.session.entry.recipe.recipe_id))
         until(lambda: not window.editing.busy)

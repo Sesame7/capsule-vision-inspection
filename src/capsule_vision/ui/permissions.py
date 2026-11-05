@@ -1,6 +1,7 @@
 """Presentation hints for commands protected by the existing Application owner."""
 
 from capsule_vision.application import ProductionApplication
+from capsule_vision.application.audit import AuditUnavailable
 from capsule_vision.application.identity_models import (
     AuthorizationError,
     Role,
@@ -16,6 +17,8 @@ def permits(application: ProductionApplication | None, minimum: Role) -> bool:
 def failure_key(
     error: object, fallback: str, required: str = "permission_engineer"
 ) -> str:
+    if isinstance(error, AuditUnavailable):
+        return "audit_required"
     if isinstance(error, StaleSessionError):
         return "identity_stale"
     if isinstance(error, AuthorizationError):

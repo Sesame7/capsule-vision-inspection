@@ -13,6 +13,7 @@ from PySide6.QtCore import QLoggingCategory, QObject, QSize, Slot
 from PySide6.QtWidgets import QApplication, QWidget
 
 from capsule_vision.application import PreparedConfiguration
+from capsule_vision.application.audit import AuditOperation
 from capsule_vision.application.startup import (
     ApplicationData,
     Startup,
@@ -133,6 +134,15 @@ class PreferenceNotifications(QObject):
             save_preferences(self.path, value)
         except ConfigurationError as exc:
             traceback.print_exception(exc)
+            identity = self.window.bridge.application.identity
+            if identity is not None:
+                identity.audit.record(
+                    AuditOperation.by(
+                        identity.snapshot(), "preferences.save", self.path.name
+                    ),
+                    "failed",
+                    type(exc).__name__,
+                )
             self.window.bridge.command_failed.emit("preferences", exc)
         else:
             self.preferences = value

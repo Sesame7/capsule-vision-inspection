@@ -25,6 +25,7 @@ from capsule_vision.communication.simulator import FinsUdpSimulator
 from capsule_vision.ui import bootstrap
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
+from tests.support.qt import until
 from tests.support.startup import authenticated_startup
 
 
@@ -173,8 +174,10 @@ def install() -> None:
                 window.communication.protocol.setCurrentIndex(0)
                 window.communication.port.setValue(simulator.port)
                 window.communication.persist_settings()
+                until(lambda: not window.communication.busy)
                 window.communication.timeout.setValue(0.15)
                 window.communication.persist_settings()
+                until(lambda: not window.communication.busy)
                 if scenario in ("success", "switch"):
                     peer = Thread(
                         target=lambda: simulator.serve(stop) if simulator else None,

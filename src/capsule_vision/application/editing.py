@@ -1,6 +1,7 @@
 """Stopped Recipe editing and preparation; persistence and activation stay distinct."""
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -27,9 +28,10 @@ from capsule_vision.configuration.drafts import (
 from capsule_vision.configuration.managed_models import ManagedModels
 from capsule_vision.configuration.preferences import load_preferences
 
+from .audit import AuditOperation, AuditUnavailable, differences, error_outcome
 from .basler_connection import ConnectionState, SourceConnectionSnapshot
 from .identity import LocalIdentity, admit_engineering
-from .identity_models import IdentityError
+from .identity_models import IdentityError, Role
 from .models import PreparedConfiguration, prepare_configuration
 from .vision_dependencies import VisionDependencies, read_sources
 
@@ -131,7 +133,7 @@ class RecipeEditorSession:
     def delete(
         self, *, protected_ids: frozenset[str], revision: int | None = None
     ) -> None:
-        admit_engineering(self.identity, revision)
+        revision = admit_engineering(self.identity, revision)
         if self.entry is None:
             raise ConfigurationError("Select a saved Recipe before Delete")
         if self.preferences_path is not None:
@@ -140,7 +142,14 @@ class RecipeEditorSession:
             persisted = load_preferences(self.preferences_path).last_applied_recipe_id
             if persisted is not None:
                 protected_ids = protected_ids | {persisted}
-        self.catalog.delete(self.entry, protected_ids=protected_ids)
+        with self._change(
+            "recipe.delete",
+            self.entry.recipe.recipe_id,
+            revision,
+            self.entry.recipe,
+            None,
+        ):
+            self.catalog.delete(self.entry, protected_ids=protected_ids)
         self.entry = None
         self.draft = RecipeDraft("", "")
 
@@ -154,15 +163,49 @@ class RecipeEditorSession:
         )
 
     def save(self, revision: int | None = None) -> None:
-        admit_engineering(self.identity, revision)
-        recipe = self.draft.to_recipe()
+        admission = (
+            self.identity.admission(Role.ENGINEER, revision)
+            if self.identity
+            else nullcontext(None)
+        )
+        with admission as actor:
+            revision = actor.revision if actor else None
+            try:
+                recipe = self.draft.to_recipe()
+            except ValueError as exc:
+                if actor and self.identity:
+                    self.identity.audit.record(
+                        AuditOperation.by(actor, "recipe.save", self.draft.recipe_id),
+                        "failed",
+                        type(exc).__name__,
+                    )
+                raise
+        original = self.entry
+
+        def publish(value: RecipeDefinition) -> RecipeEntry:
+            with self._change(
+                "recipe.save",
+                value.recipe_id,
+                revision,
+                original.recipe if original else None,
+                value,
+            ):
+                return self.catalog.save(value, original=original)
+
         entry = (
-            self.catalog.save_generated(recipe)
-            if self.entry is None
-            else self.catalog.save(recipe, original=self.entry)
+            self.catalog.save_generated(recipe, publish=publish)
+            if original is None
+            else publish(recipe)
         )
         self.entry = entry
         self.draft = RecipeDraft.from_recipe(entry.recipe)
+
+    def _change(
+        self, action: str, target: str, revision: int | None, old: object, new: object
+    ) -> AbstractContextManager[None]:
+        if self.identity is None:
+            return nullcontext()
+        return self.identity.change(action, target, revision, *differences(old, new))
 
     def read_vision(self) -> SavedVision:
         """Read and validate both definitions without replacing either draft."""
@@ -246,23 +289,42 @@ class RecipeEditorSession:
         revision: int | None = None,
     ) -> VisionSaveResult:
         """Independent file outcomes; failed validation never discards unsaved drafts."""
-        revision = admit_engineering(self.identity, revision)
+        if self.identity:
+            with self.identity.admission(Role.ENGINEER, revision) as actor:
+                revision = actor.revision
+                if validation_error is not None:
+                    path = self.machine_editor.path
+                    self.identity.audit.record(
+                        AuditOperation.by(
+                            actor,
+                            "vision.layout",
+                            path.name if path else "MachineLayout",
+                        ),
+                        error_outcome(validation_error),
+                        type(validation_error).__name__,
+                    )
         errors: list[str] = []
         permission_error = None
         machine_saved = sources_saved = False
         if self.camera_sources is not None:
             try:
-                if (
-                    connection is not None
-                    and connection.locked
-                    and self.camera_sources.dirty
+                draft = self.camera_sources
+                with self._change(
+                    "vision.sources",
+                    draft.path.name,
+                    revision,
+                    draft.saved if draft.persisted else None,
+                    draft.definition,
                 ):
-                    raise ConfigurationError(
-                        "Disconnect before changing camera sources"
-                    )
-                self.camera_sources.save()
+                    if connection is not None and connection.locked and draft.dirty:
+                        raise ConfigurationError(
+                            "Disconnect before changing camera sources"
+                        )
+                    draft.save()
                 sources_saved = True
-            except (ValueError, OSError) as exc:
+            except (IdentityError, AuditUnavailable, ValueError, OSError) as exc:
+                if isinstance(exc, IdentityError):
+                    permission_error = exc
                 errors.append(f"CameraSources: {type(exc).__name__}: {exc}")
         if validation_error is not None:
             errors.append(
@@ -271,9 +333,17 @@ class RecipeEditorSession:
         elif self.machine_editor.complete:
             try:
                 admit_engineering(self.identity, revision)
-                self.machine_editor.save()
+                machine = self.machine_editor
+                with self._change(
+                    "vision.layout",
+                    machine.path.name if machine.path else "MachineLayout",
+                    revision,
+                    machine.saved_definition,
+                    machine.definition,
+                ):
+                    machine.save()
                 machine_saved = True
-            except (IdentityError, ValueError, OSError) as exc:
+            except (IdentityError, AuditUnavailable, ValueError, OSError) as exc:
                 if isinstance(exc, IdentityError):
                     permission_error = exc
                 errors.append(f"MachineLayout: {type(exc).__name__}: {exc}")

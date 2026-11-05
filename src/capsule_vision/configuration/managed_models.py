@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NoReturn
@@ -74,10 +75,18 @@ class ManagedModels:
         directory: Path,
         *,
         authorize: Callable[[int | None], int | None] = lambda _: None,
+        change: Callable[
+            [str, str, int | None, str, str], AbstractContextManager[None]
+        ] = lambda _a, _t, _r, _b, _v: nullcontext(),
+        on_cancel: Callable[[str, int | None], Callable[[], None]] = lambda _d, _r: (
+            lambda: None
+        ),
     ) -> None:
         self.directory = directory.absolute()
         self._authorize = authorize
-        self._imports: dict[Path, int | None] = {}
+        self._change = change
+        self._on_cancel = on_cancel
+        self._imports: dict[Path, tuple[int | None, Callable[[], None]]] = {}
 
     def _paths(self) -> tuple[Path, ...]:
         _safe(self.directory)
@@ -120,13 +129,20 @@ class ManagedModels:
             raise ConfigurationError("Select an existing .vimosln file")
         digest = _digest(source)
         self._check_duplicate(digest)
+        with self._change("model.stage", digest, revision, "", source.name):
+            return self._stage(source, digest, revision)
+
+    def _stage(
+        self, source: Path, digest: str, revision: int | None
+    ) -> PendingModelImport:
         self._authorize(revision)
+        cancelled = self._on_cancel(digest, revision)
         _safe(self.directory.parent)
         self.directory.parent.mkdir(parents=True, exist_ok=True)
         work = Path(
             tempfile.mkdtemp(prefix=".model-import-", dir=self.directory.parent)
         )
-        self._imports[work] = revision
+        self._imports[work] = revision, cancelled
         try:
             target = work / "model.vimosln"
             with source.open("rb") as original, target.open("xb") as copied:
@@ -160,13 +176,15 @@ class ManagedModels:
         ):
             raise ConfigurationError("Import directory is outside its owner")
         _remove_tree(pending.directory)
-        self._imports.pop(pending.directory)
+        _, cancelled = self._imports.pop(pending.directory)
+        cancelled()
 
     def publish_import(
         self, pending: PendingModelImport, module_id: str, name: str
     ) -> ModelDefinition:
-        revision = self._authorize(self._imports.get(pending.directory))
-        if pending.directory not in self._imports:
+        ownership = self._imports.get(pending.directory)
+        revision = self._authorize(ownership[0] if ownership else None)
+        if ownership is None:
             raise ConfigurationError("Import staging is not owned by this catalog")
         if module_id not in {m.module_id for m in pending.modules}:
             raise ConfigurationError("Select one inspected segmentation module")
@@ -189,24 +207,34 @@ class ManagedModels:
         _safe(source)
         if _digest(source) != pending.digest:
             raise ConfigurationError("Copied model checksum changed before publication")
-        # Build a complete owning directory outside discovery, then publish once.
-        self._authorize(revision)
-        prepared = pending.directory / identity
-        prepared.mkdir()
-        source.rename(prepared / "model.vimosln")
-        model = ModelDefinition(
-            identity, name, str(prepared / "model.vimosln"), pending.digest, module_id
-        )
-        save_model_definition(prepared / "model.json", model)
-        load_model_definition(prepared / "model.json")
-        self._authorize(revision)
-        self.directory.mkdir(parents=True, exist_ok=True)
-        _safe(self.directory)
         target = self.directory / identity
-        if any(p.name.casefold() == identity for p in self._paths()):
-            raise ConfigurationError("Model directory appeared before publication")
-        # Windows rename fails on an existing destination; never replace it.
-        os.rename(prepared, target)
+        with self._change(
+            "model.publish",
+            identity,
+            revision,
+            "",
+            f"{name} · {module_id} · {pending.digest}",
+        ):
+            # Build outside discovery, then recheck admission before atomic publication.
+            self._authorize(revision)
+            prepared = pending.directory / identity
+            prepared.mkdir()
+            source.rename(prepared / "model.vimosln")
+            model = ModelDefinition(
+                identity,
+                name,
+                str(prepared / "model.vimosln"),
+                pending.digest,
+                module_id,
+            )
+            save_model_definition(prepared / "model.json", model)
+            load_model_definition(prepared / "model.json")
+            self._authorize(revision)
+            self.directory.mkdir(parents=True, exist_ok=True)
+            _safe(self.directory)
+            if any(p.name.casefold() == identity for p in self._paths()):
+                raise ConfigurationError("Model directory appeared before publication")
+            os.rename(prepared, target)
         pending.directory.rmdir()
         self._imports.pop(pending.directory)
         return load_model_definition(target / "model.json")
@@ -237,7 +265,10 @@ class ManagedModels:
         directory = self.current(model)
         updated = replace(model, display_name=name)
         self._authorize(revision)
-        save_model_definition(directory / "model.json", updated)
+        with self._change(
+            "model.rename", model.model_id, revision, model.display_name, name
+        ):
+            save_model_definition(directory / "model.json", updated)
         return updated
 
     def delete(
@@ -255,4 +286,11 @@ class ManagedModels:
             if load_recipe_model_reference(path) == model.model_id:
                 raise ConfigurationError(f"Model is referenced by Recipe {path}")
         self._authorize(revision)
-        _remove_tree(directory)
+        with self._change(
+            "model.delete",
+            model.model_id,
+            revision,
+            f"{model.display_name} · {model.expected_sha256}",
+            "",
+        ):
+            _remove_tree(directory)

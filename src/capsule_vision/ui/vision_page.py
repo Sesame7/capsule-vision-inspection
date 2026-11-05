@@ -39,7 +39,7 @@ from capsule_vision.application.basler_connection import (
     ConnectionState,
     SourceConnectionCommands,
 )
-from capsule_vision.application.editing import SavedVision
+from capsule_vision.application.editing import SavedVision, VisionSaveResult
 from capsule_vision.application.folder_replay import (
     FolderSourceError,
     decode_image,
@@ -2131,11 +2131,21 @@ class VisionPage(QWidget):
                 self._report_error(text("read_only", self.language), "read_only")
                 self.refresh()
                 return
-            try:
-                result = self.session.save_vision(connection, error, revision)
-            except IdentityError as exc:
+            self._preparing = True
+            if not self.editing.run_model_io(
+                lambda: self.session.save_vision(connection, error, revision),
+                saved_files,
+                revision=revision,
+            ):
+                saved_files(None, RuntimeError("Vision save is unavailable"))
+
+        def saved_files(result: object, error: BaseException | None) -> None:
+            self._preparing = False
+            if not isinstance(result, VisionSaveResult) or error is not None:
                 self._save_failed = True
-                self._report_error(exc, "vision_error")
+                self._report_error(
+                    error or RuntimeError("Missing Vision save result"), "vision_error"
+                )
                 self.refresh()
                 return
             errors, machine_saved, source_saved = (

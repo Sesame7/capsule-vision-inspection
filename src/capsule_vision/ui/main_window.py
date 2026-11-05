@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOptionButton,
     QStylePainter,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -67,6 +68,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language, is_language
 from capsule_vision.web.runtime import WebRuntime, WebState
 
+from .audit_page import AuditPage
 from .batch_dialog import BatchDialog
 from .camera_card import CameraCard
 from .communication_page import CommunicationPage
@@ -414,6 +416,14 @@ class MainWindow(QMainWindow):
         self.communication = CommunicationPage(application=bridge.application)
         self.identity_controls.session_changed.connect(self._session_changed)
         self.history = HistoryPage(bridge.application.history, bridge.application)
+        self.audit_page = AuditPage(bridge.application.identity)
+        self.history.timer.timeout.connect(self.audit_page.refresh_status)
+        self.history_tabs = QTabWidget()
+        self.history_tabs.setObjectName("historyTabs")
+        self.history_tabs.addTab(self.history, "")
+        self.history_tabs.addTab(self.audit_page, "")
+        self.history_tabs.currentChanged.connect(self._history_tab_changed)
+        self._history_access()
         if self.communication.reporting_panel is not None:
             self.communication.reporting_panel.update_state(self.snapshot.state)
             bridge.reporting_changed.connect(self.communication.reporting_panel.refresh)
@@ -428,7 +438,7 @@ class MainWindow(QMainWindow):
                 self.pages.addWidget(self.communication)
                 continue
             if name == "page_history":
-                self.pages.addWidget(self.history)
+                self.pages.addWidget(self.history_tabs)
         self.event_frame = StatusBar()
         self.event_icon = self.event_frame.event_icon
         self.event_label = self.event_frame.event_label
@@ -539,7 +549,29 @@ class MainWindow(QMainWindow):
             self.vision_workspace.identity_changed()
         self.communication.identity_changed()
         self.history.identity_changed()
+        self._history_access()
         self._render()
+
+    def _history_access(self) -> None:
+        self.audit_page.clear()
+        identity = self.bridge.application.identity
+        allowed = identity is not None and identity.snapshot().role >= Role.ENGINEER
+        if not allowed:
+            self.history_tabs.setCurrentIndex(0)
+        self.history_tabs.setTabEnabled(1, allowed)
+        if allowed and self.history_tabs.currentIndex() == 1:
+            self.audit_page.refresh()
+
+    def _history_tab_changed(self, index: int) -> None:
+        if index == 1:
+            self.audit_page.refresh()
+        else:
+            self.history.activate()
+
+    def _history_language(self) -> None:
+        self.history_tabs.setTabText(0, text("audit_inspection", self.language))
+        self.history_tabs.setTabText(1, text("audit_trail", self.language))
+        self.audit_page.set_language(self.language)
 
     def _refresh_vision(self) -> None:
         if self.vision_workspace is not None:
@@ -575,7 +607,7 @@ class MainWindow(QMainWindow):
         if index == 4:
             self.open_vision()
         if index == 3:
-            self.history.activate()
+            self._history_tab_changed(self.history_tabs.currentIndex())
         if index == 0:
             self.production_recipes.reload()
         self.pages.setCurrentIndex(index)
@@ -600,6 +632,7 @@ class MainWindow(QMainWindow):
         self._refresh_theme_icons()
         self.communication.set_language(self.language)
         self.history.set_language(self.language)
+        self._history_language()
         self._render()
 
     def _refresh_theme_icons(self) -> None:
@@ -647,6 +680,7 @@ class MainWindow(QMainWindow):
             self.vision_workspace.set_language(language)
         self.communication.set_language(language)
         self.history.set_language(language)
+        self._history_language()
         self._refresh_theme_icons()
         self.buttons["batch"].setToolTip(text("batch", language))
         self.buttons["batch"].setAccessibleName(text("batch", language))
@@ -1852,6 +1886,7 @@ class MainWindow(QMainWindow):
             self.identity_controls.dispose()
             self.communication.dispose()
             self.history.dispose()
+            self.audit_page.dispose()
             self.recipe_page.dispose()
             self.editing.dispose()
             event.accept()

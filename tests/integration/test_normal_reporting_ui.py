@@ -1,7 +1,8 @@
 """Normal bootstrap reporting preferences, loopback observations and ownership."""
 
+import sqlite3
 from collections.abc import Generator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import Event, Thread, get_ident
@@ -13,7 +14,7 @@ from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication
 from tests.support.cycles import image_result
 from tests.support.fins_tcp import TcpPeer
-from tests.support.qt import close_window, until
+from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.reporting import WAIT, readback, seed, server
 from tests.support.source_inputs import input_files
 from tests.support.startup import authenticated_startup, close, saved_data
@@ -23,6 +24,7 @@ from capsule_vision.application import (
     ApplicationState,
     ApplicationStateError,
 )
+from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.composition import compose
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
@@ -156,6 +158,41 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
     assert engine.closed
 
 
+def test_automatic_reporting_and_stop_continue_when_audit_cannot_write(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    engine = Engine()
+    with server() as peer, normal_window(tmp_path, engine) as (startup, window, panel):
+        page = window.communication
+        panel.protocol.setCurrentIndex(0)
+        panel.port.setValue(peer.port)
+        panel.mode_buttons[ReportingMode.PER_CYCLE].click()
+        panel.enabled.setChecked(True)
+        page.persist_settings()
+        until(lambda: not page.busy)
+        with closing(sqlite3.connect(startup.data.audit)) as db, db:
+            db.execute(
+                "CREATE TRIGGER offline BEFORE INSERT ON operations BEGIN SELECT RAISE(ABORT,'audit unavailable'); END"
+            )
+        startup.application.start().result(WAIT)
+        until(
+            lambda: (
+                (s := panel.controller.reporting_snapshot()) is not None
+                and s.acknowledged_count >= 1
+            )
+        )
+        assert startup.application.snapshot().counters.cycles_completed >= 1
+        assert readback(peer)[0] > 0
+        engine.release.set()
+        startup.application.stop().result(WAIT)
+        identity = startup.application.identity
+        assert (
+            identity and startup.application.snapshot().state is ApplicationState.READY
+        )
+        until(lambda: identity.audit.observation()[0] >= 2)
+        assert engine.closed
+
+
 def test_unconfigured_reporting_preferences_do_not_invent_assets(
     qapp: QApplication, tmp_path: Path
 ) -> None:
@@ -176,6 +213,8 @@ def test_unconfigured_reporting_preferences_do_not_invent_assets(
         assert set(tmp_path.rglob("*")) <= {
             startup.data.root,
             startup.data.history,
+            startup.data.audit,
+            Path(f"{startup.data.audit}-journal"),
             Path(f"{startup.data.history}-wal"),
             Path(f"{startup.data.history}-shm"),
             startup.data.security.with_suffix(".lock"),
@@ -224,6 +263,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         selected = panel.controller.reporting_selection()
         window.bridge.start()
         until(lambda: startup.application.snapshot().state is ApplicationState.RUNNING)
@@ -285,6 +325,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         page.protocol.setCurrentIndex(0)
         page.port.setValue(peer.port)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         page.area.setCurrentIndex(1)  # W, independent from automatic settings.
         page.write_values.setText("7")
         counters = startup.application.snapshot().counters
@@ -299,6 +340,10 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
                 in page.status.text()
             )
         page.address.setValue(49)
+        identity = startup.application.identity
+        assert identity
+        refused = identity.audit_page(AuditQuery(action="plc.write")).result(WAIT)
+        assert len(refused) == 3 and all(row.outcome == "denied" for row in refused)
         assert page.dispatch(RequestKind.READ, count=4)
         until(lambda: not page.busy)
         assert page.last_response is not None and page.last_response.values == readback(
@@ -336,6 +381,7 @@ def test_settings_locked_starting_stopping_then_restart_has_new_generation(
         ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         selected = panel.controller.reporting_selection()
         future = startup.application.start()
         assert first.entered.wait(WAIT)
@@ -383,6 +429,7 @@ def test_settings_locked_starting_stopping_then_restart_has_new_generation(
 def test_reporting_failure_feedback_does_not_fault_production(
     qapp: QApplication, tmp_path: Path
 ) -> None:
+    ensure_test_fonts()
     with (
         server() as peer,
         normal_window(tmp_path, Engine()) as (startup, window, panel),
@@ -395,6 +442,7 @@ def test_reporting_failure_feedback_does_not_fault_production(
         ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         window.bridge.start()
         until(
             lambda: (
@@ -410,6 +458,7 @@ def test_reporting_failure_feedback_does_not_fault_production(
         assert snapshot.latest_production_result is not None
         assert snapshot.counters.cycles_completed == 1
         window.navigate(2)
+        until(lambda: "ERR 1" in panel.summary.text())
         assert "ACK --" in panel.summary.text()
         assert not panel.summary.toolTip()
         assert not panel.summary.toolTip()
@@ -441,6 +490,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         startup.application.start().result(WAIT)
         assert peer.entered.wait(WAIT)
         stop = startup.application.stop()
@@ -456,6 +506,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         page.protocol.setCurrentIndex(0)
         page.port.setValue(peer.port)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         page.area.setCurrentIndex(1)
         page.address.setValue(49)
         page.write_values.setText("7")
@@ -480,6 +531,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         assert not panel.summary.toolTip()
         panel.timeout.setValue(0.2)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         startup.application.start().result(WAIT)
         assert second.entered.wait(WAIT)
         until(
@@ -499,6 +551,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         window.bridge.refresh()
         panel.enabled.setChecked(False)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         before = len(peer.packets)
         startup.application.start().result(WAIT)
         assert disabled.entered.wait(WAIT)
@@ -518,6 +571,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
         ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         guard = panel.controller.validate_manual_request
         caller = get_ident()
         entered, release = Event(), Event()
@@ -533,6 +587,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
         page.protocol.setCurrentIndex(0)
         page.port.setValue(peer.port)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         page.area.setCurrentIndex(1)
         page.address.setValue(49)
         page.write_values.setText("7")
@@ -601,6 +656,7 @@ def test_internal_composition_keeps_fixed_settings_and_paused_lock(
                 local.application.set_reporting_selection(ReportingSelection())
             window.communication.port.setValue(peer.port)
             window.communication.persist_settings()
+            until(lambda: not window.communication.busy)
             window.communication.area.setCurrentIndex(1)
             window.communication.address.setValue(49)
             window.communication.write_values.setText("7")
@@ -625,6 +681,7 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
             ].click()  # Explicit per-cycle protocol exercise.
             panel.enabled.setChecked(True)
             window.communication.persist_settings()
+            until(lambda: not window.communication.busy)
             try:
                 window.bridge.step_source()
                 assert peer.entered.wait(WAIT)
@@ -642,6 +699,7 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
                 page = window.communication
                 page.port.setValue(peer.port)
                 window.communication.persist_settings()
+                until(lambda: not window.communication.busy)
                 page.area.setCurrentIndex(1)
                 page.address.setValue(49)
                 page.write_values.setText("7")
@@ -671,6 +729,7 @@ def test_fault_and_closed_keep_preferences_locked(
         ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         startup.application.start().result(WAIT)
         until(lambda: startup.application.snapshot().state is ApplicationState.FAULT)
         window.bridge.refresh()
@@ -718,6 +777,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         )
         page.port.setValue(manual.port)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         panel.source[1].setValue(3)
         panel.protocol.setCurrentIndex(
             1 if automatic_endpoint_type is FinsTcpEndpoint else 0
@@ -729,6 +789,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         ].click()  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         selected = panel.controller.reporting_selection()
         assert selected.settings.endpoint.protocol == (
             "fins_tcp" if automatic_endpoint_type is FinsTcpEndpoint else "fins_udp"
@@ -847,6 +908,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         window.bridge.refresh()
         panel.protocol.setCurrentIndex(1 - panel.protocol.currentIndex())
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         assert (
             panel.controller.reporting_selection().settings.endpoint.protocol
             is not automatic_endpoint_type
@@ -871,6 +933,7 @@ def test_reporting_host_editor_preserves_invalid_draft_and_saved_endpoint(
             panel.controller.reporting_selection().settings.endpoint.host == "127.0.0.1"
         )
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         assert (
             panel.controller.reporting_selection().settings.endpoint.host
             == "192.0.2.42"
@@ -878,6 +941,7 @@ def test_reporting_host_editor_preserves_invalid_draft_and_saved_endpoint(
         assert text("plc_next_start", panel.language) in panel.enabled.toolTip()
         panel.host.setText("not-an-ip")
         window.communication.persist_settings()
+        until(lambda: not window.communication.busy)
         assert panel.host.text() == "not-an-ip"
         assert (
             panel.controller.reporting_selection().settings.endpoint.host
@@ -895,6 +959,7 @@ def test_unsaved_reporting_draft_does_not_admit_or_change_active_session(
     with normal_window(tmp_path, engine) as (startup, window, panel):
         page = window.communication
         page.persist_settings()
+        until(lambda: not page.busy)
         before = startup.data.communication.read_bytes()
         original = panel.controller.reporting_selection()
         panel.mode_buttons[
@@ -914,12 +979,14 @@ def test_unsaved_reporting_draft_does_not_admit_or_change_active_session(
         assert panel.controller.reporting_snapshot() is None
         page.web_panel.port.setValue(8766)
         page.persist_settings()  # Changed reporting is locked, including Save/Start races.
+        until(lambda: not page.busy)
         assert startup.data.communication.read_bytes() == before
         assert page.dirty and panel.enabled.isChecked()
         engine.release.set()
         startup.application.stop().result(WAIT)
         window.bridge.refresh()
         page.persist_settings()
+        until(lambda: not page.busy)
         assert panel.controller.reporting_selection().enabled
         assert panel.controller.reporting_selection().settings.endpoint.port == 19600
         assert panel.controller.reporting_snapshot() is None

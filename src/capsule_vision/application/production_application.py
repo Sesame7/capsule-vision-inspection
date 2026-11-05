@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import Future
+from contextlib import nullcontext
 from dataclasses import replace
 from threading import Lock
 
@@ -44,7 +45,8 @@ from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CameraId, CycleId
 
 from .application import ProductionApplication
-from .identity_models import AuthorizationError, Role
+from .audit import differences
+from .identity_models import AuthorizationError, Role, SessionSnapshot
 from .model_preparation import ModelPreparationFactory, real_preparation_engine
 from .models import (
     ApplicationError,
@@ -328,21 +330,27 @@ class SourceProductionApplication(ProductionApplication):
             return self._guest_demo_generation == generation
 
     def _start_replay(self, *, single_step: bool) -> Future[None]:
-        self._require(ApplicationState.READY)
         with self._admission(Role.GUEST) as actor:
             demo = actor is not None and actor.role is Role.GUEST
-            if demo and not self.guest_replay_available:
-                raise AuthorizationError(
-                    "Guest requires prepared Folder Replay with automatic reporting disabled"
-                )
-            startup = self._admit_replay(single_step=single_step)
+            try:
+                self._require(ApplicationState.READY)
+                if demo and not self.guest_replay_available:
+                    raise AuthorizationError(
+                        "Guest requires prepared Folder Replay with automatic reporting disabled"
+                    )
+                startup = self._admit_replay(single_step=single_step, actor=actor)
+            except Exception as exc:
+                self._rejected_start(actor, exc)
+                raise
             self._guest_demo_generation = self._generation if demo else None
         # Cancelling an idle capture runs user callbacks synchronously. The
         # generation is already admitted and the identity lock must be free.
         self.connection.cancel_capture()
         return startup
 
-    def _admit_replay(self, *, single_step: bool) -> Future[None]:
+    def _admit_replay(
+        self, *, single_step: bool, actor: SessionSnapshot | None
+    ) -> Future[None]:
         selection = self.reporting_selection()
         if selection.enabled and selection.settings.mode is not ReportingMode.PER_CYCLE:
             selection.settings.validate_four_cycle()
@@ -362,7 +370,7 @@ class SourceProductionApplication(ProductionApplication):
                         "Source connection is busy or requires explicit recovery in Vision"
                     )
                 control = BaslerAdmissionControl(self.snapshot().generation + 1)
-                startup = self._start_reporting_session()
+                startup = self._start_reporting_session(actor)
                 self._basler_control = control
             startup.add_done_callback(
                 lambda future: (
@@ -373,12 +381,12 @@ class SourceProductionApplication(ProductionApplication):
         if not self._folder_controls_available:
             if single_step:
                 raise ApplicationStateError("Folder replay controls are not enabled")
-            return self._start_reporting_session()
+            return self._start_reporting_session(actor)
         with self._replay_lock:
             generation = self.snapshot().generation + 1
             control = FolderReplayControl(generation, single_step=single_step)
             step = control.step() if single_step else None
-            startup = self._start_reporting_session()
+            startup = self._start_reporting_session(actor)
             self._replay_control = control
 
         def ready(future: Future[None]) -> None:
@@ -389,9 +397,9 @@ class SourceProductionApplication(ProductionApplication):
         startup.add_done_callback(ready)
         return step if step is not None else startup
 
-    def _start_reporting_session(self) -> Future[None]:
+    def _start_reporting_session(self, actor: SessionSnapshot | None) -> Future[None]:
         with self._condition:
-            startup = self._admit_start()  # Same authoritative readiness/activation.
+            startup = self._admit_start(actor)
             prepared = self._candidate or self._active
             assert prepared is not None
             with self._reporting_lock:
@@ -437,16 +445,36 @@ class SourceProductionApplication(ProductionApplication):
                 self._reporting_selection = selection
 
     def persist_reporting_selection(
-        self, selection: ReportingSelection, persist: Callable[[], None]
+        self,
+        selection: ReportingSelection,
+        persist: Callable[[], None],
+        *,
+        revision: int | None = None,
+        changes: tuple[str, str] | None = None,
     ) -> None:
         """Publish saved preferences under the same lock that freezes Start.
 
         Unchanged reporting permits saving independent Web/diagnostic preferences
         during Production. Failed persistence never changes next-Start admission.
         """
-        with self._condition:
+        revision = self.authorize_engineering(revision)
+        scope = (
+            self.identity.change(
+                "communication.save",
+                "communication.json",
+                revision,
+                *(
+                    changes
+                    if changes is not None
+                    else differences(self.reporting_selection(), selection)
+                ),
+            )
+            if self.identity
+            else nullcontext()
+        )
+        with scope, self._condition:
             changed = selection != self.reporting_selection()
-            with self._admission(Role.ENGINEER):
+            with self._admission(Role.ENGINEER, revision):
                 if changed:
                     self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
                     if not self.reporting_editable:

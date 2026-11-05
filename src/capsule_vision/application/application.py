@@ -14,6 +14,7 @@ from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
 from capsule_vision.localization.languages import Language
 
+from .audit import AuditOperation, error_outcome
 from .batch_records import BatchSelection, ReportBatches
 from .history import HistoryContext, ProductionHistory
 from .identity import LocalIdentity
@@ -61,6 +62,7 @@ class _Pending:
 class RecipeSelection:
     revision: int | None
     generation: int
+    operation: AuditOperation | None = None
 
 
 class ProductionApplication:
@@ -90,6 +92,7 @@ class ProductionApplication:
         self._selection: RecipeSelection | None = None
         self._batch_segment = uuid4().hex
         self._run_id: str | None = None
+        self._start_operation: AuditOperation | None = None
         self._durable_run: str | None = None
         self._batch_pending = False
         self._restoring = history is not None
@@ -134,13 +137,18 @@ class ProductionApplication:
         return self._identity
 
     def _admission(
-        self, minimum: Role, revision: int | None = None
+        self,
+        minimum: Role,
+        revision: int | None = None,
+        *,
+        action: str = "security.admission",
+        target: str = "",
     ) -> AbstractContextManager[SessionSnapshot | None]:
         if self._closing:
             raise ApplicationStateError(f"Command unavailable in {self._state.name}")
         if self.identity is None:  # Explicit identity-free engineering composition.
             return nullcontext(None)
-        return self.identity.admission(minimum, revision)
+        return self.identity.admission(minimum, revision, action=action, target=target)
 
     def authorize_engineering(self, revision: int | None = None) -> int | None:
         with self._condition, self._admission(Role.ENGINEER, revision) as actor:
@@ -150,21 +158,53 @@ class ProductionApplication:
     def session_revision(self) -> int | None:
         return self.identity.snapshot().revision if self.identity is not None else None
 
-    def begin_recipe_selection(self) -> RecipeSelection:
-        with self._condition, self._admission(Role.OPERATOR) as actor:
+    def begin_recipe_selection(self, recipe_id: str = "") -> RecipeSelection:
+        with (
+            self._condition,
+            self._admission(
+                Role.OPERATOR, action="production.recipe", target=recipe_id
+            ) as actor,
+        ):
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
             self._selection = RecipeSelection(
-                actor.revision if actor else None, self._generation
+                actor.revision if actor else None,
+                self._generation,
+                AuditOperation.by(actor, "production.recipe", recipe_id)
+                if actor
+                else None,
             )
             return self._selection
 
     def install_recipe_selection(
         self, request: RecipeSelection, candidate: PreparedConfiguration
     ) -> None:
-        with self._condition, self._admission(Role.OPERATOR, request.revision):
-            if self._selection is not request or self._generation != request.generation:
-                raise StaleSessionError("Production selection was superseded")
-            self._install_candidate(candidate)
+        with self._condition:
+            try:
+                with self._admission(Role.OPERATOR, request.revision):
+                    if (
+                        self._selection is not request
+                        or self._generation != request.generation
+                    ):
+                        raise StaleSessionError("Production selection was superseded")
+                    self._install_candidate(candidate)
+            except Exception as exc:
+                self.recipe_selection_failed(request, exc)
+                raise
+            if self.identity and request.operation:
+                self.identity.audit.record(
+                    replace(
+                        request.operation, target=candidate.configuration.recipe_id
+                    ),
+                    "success",
+                )
+
+    def recipe_selection_failed(
+        self, request: RecipeSelection, error: BaseException
+    ) -> None:
+        if self.identity and request.operation:
+            self.identity.audit.record(
+                request.operation, error_outcome(error), type(error).__name__
+            )
 
     @property
     def thread_name(self) -> str:
@@ -207,8 +247,18 @@ class ProductionApplication:
             )
 
     def configure(self, candidate: PreparedConfiguration) -> None:
-        with self._condition, self._admission(Role.OPERATOR):
+        recipe = candidate.configuration.recipe_id
+        with (
+            self._condition,
+            self._admission(
+                Role.OPERATOR, action="production.recipe", target=recipe
+            ) as actor,
+        ):
             self._install_candidate(candidate)
+            if actor and self.identity:
+                self.identity.audit.record(
+                    AuditOperation.by(actor, "production.recipe", recipe), "success"
+                )
 
     def _install_candidate(self, candidate: PreparedConfiguration) -> None:
         """Cheap installation of an already resolved/artifact-checked candidate."""
@@ -341,21 +391,53 @@ class ProductionApplication:
     def _change_batch(
         self, label: str | None, revision: int | None, expected_batch: str | None = None
     ) -> Future[None]:
-        with self._condition, self._admission(Role.OPERATOR, revision):
-            self._require(ApplicationState.READY)
-            if expected_batch is not None and self._batch_segment != expected_batch:
-                raise ApplicationStateError(
-                    "The selected Batch changed before confirmation"
+        action = "batch.select" if label is not None else "batch.end"
+        with (
+            self._condition,
+            self._admission(
+                Role.OPERATOR,
+                revision,
+                action=action,
+                target=label or self._batch_segment,
+            ) as actor,
+        ):
+            operation = (
+                AuditOperation.by(
+                    actor,
+                    action,
+                    self._batch_segment,
+                    self._batch or "",
+                    label or "",
                 )
-            if self._batch_pending or (label is None and self._batch is None):
-                raise ApplicationStateError("Batch selection is unavailable")
-            if label == "":
-                raise ApplicationError("Batch label must be nonempty")
+                if actor
+                else None
+            )
+            try:
+                self._require(ApplicationState.READY)
+                if expected_batch is not None and self._batch_segment != expected_batch:
+                    raise ApplicationStateError(
+                        "The selected Batch changed before confirmation"
+                    )
+                if self._batch_pending or (label is None and self._batch is None):
+                    raise ApplicationStateError("Batch selection is unavailable")
+                if label == "":
+                    raise ApplicationError("Batch label must be nonempty")
+            except ApplicationError as exc:
+                if operation and self.identity:
+                    self.identity.audit.record(operation, "failed", str(exc))
+                raise
             done: Future[None] = _promise(Future())
             if self.history is None:
                 if label != self._batch:
                     self._install_batch(None)
                     self._batch = label
+                if operation and self.identity:
+                    self.identity.audit.record(
+                        replace(operation, target=self._batch_segment)
+                        if label
+                        else operation,
+                        "success",
+                    )
                 done.set_result(None)
                 return done
             self._batch_pending = True
@@ -363,9 +445,19 @@ class ProductionApplication:
 
         def confirmed(future: Future[BatchSelection | None]) -> None:
             error = future.exception()
+            completed = operation
             with self._condition:
                 if error is None:
-                    self._install_batch(future.result())
+                    selection = future.result()
+                    self._install_batch(selection)
+                    if selection and operation:
+                        completed = replace(operation, target=selection.uuid)
+                if completed and self.identity:
+                    self.identity.audit.record(
+                        completed,
+                        error_outcome(error) if error else "success",
+                        type(error).__name__ if error else "",
+                    )
                 self._batch_pending = False
             if error is None:
                 done.set_result(None)
@@ -380,10 +472,30 @@ class ProductionApplication:
             raise ApplicationStateError(f"Command unavailable in {self._state.name}")
 
     def start(self) -> Future[None]:
-        with self._condition, self._admission(Role.OPERATOR):
-            return self._admit_start()
+        with (
+            self._condition,
+            self._admission(Role.OPERATOR, action="production.start") as actor,
+        ):
+            try:
+                return self._admit_start(actor)
+            except Exception as exc:
+                self._rejected_start(actor, exc)
+                raise
 
-    def _admit_start(self) -> Future[None]:
+    def _rejected_start(self, actor: SessionSnapshot | None, error: Exception) -> None:
+        if actor and self.identity:
+            recipe = self._candidate or self._active
+            self.identity.audit.record(
+                AuditOperation.by(
+                    actor,
+                    "production.start",
+                    recipe.configuration.recipe_id if recipe else "",
+                ),
+                error_outcome(error),
+                type(error).__name__,
+            )
+
+    def _admit_start(self, actor: SessionSnapshot | None) -> Future[None]:
         with self._condition:
             self._require(ApplicationState.READY)
             if self._batch_pending:
@@ -401,6 +513,11 @@ class ProductionApplication:
             self._latest = None
             self._issue = None
             self._startup = _promise(Future())
+            prepared = self._candidate or self._active
+            recipe = prepared.configuration.recipe_id if prepared else ""
+            self._start_operation = (
+                AuditOperation.by(actor, "production.start", recipe) if actor else None
+            )
             self._stopped = None
             self._start_requested = True
             self._stop_requested = False
@@ -469,11 +586,12 @@ class ProductionApplication:
         self, request: ModelPreparationRequest
     ) -> Future[ModelPreparationResult]:
         """Admit one explicit model identity, without sources/Recipe activation."""
-        with self._condition, self._admission(Role.ENGINEER):
+        with self._condition, self._admission(Role.ENGINEER) as actor:
             self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
             if self._preparation is not None or self._session is not None:
                 raise ApplicationStateError("An engine owner is already admitted")
             self._preparation = ModelPreparation(request, self._preparation_factory)
+            self._cache_revision = actor.revision if actor else None
             self._preparation_future = _promise(Future())
             self._preparation_snapshot = ModelPreparationSnapshot(
                 ModelPreparationState.PREPARING, request, owns_resources=True
@@ -483,7 +601,24 @@ class ProductionApplication:
             return self._preparation_future
 
     def _prepare_model(self, operation: ModelPreparation) -> None:
-        result, error = operation.run()
+        result = ModelPreparationResult(operation.request, False, True)
+        try:
+            scope = (
+                self.identity.change(
+                    "model.cache",
+                    operation.request.model.model_id,
+                    self._cache_revision,
+                    after=f"device {operation.request.device_id}",
+                )
+                if self.identity
+                else nullcontext()
+            )
+            with scope:
+                result, error = operation.run()
+                if error is not None:
+                    raise error
+        except BaseException as exc:
+            error = exc
         with self._condition:
             future = self._preparation_future
             if result.cleanup_complete:
@@ -539,6 +674,20 @@ class ProductionApplication:
             ):
                 future.set_result(None)
                 return future
+            if self.identity:
+                self.identity.audit.observe(
+                    AuditOperation.by(
+                        self.identity.snapshot(),
+                        "production.stop",
+                        self._run_id
+                        or (
+                            f"Start {self._start_operation.id}"
+                            if self._start_operation
+                            else ""
+                        ),
+                    ),
+                    future,
+                )
             self._stop_requested = True
             if self._state is not ApplicationState.FAULT:
                 self._state = ApplicationState.STOPPING
@@ -733,10 +882,6 @@ class ProductionApplication:
             self.history.request_stop()
             if not self.history.join():
                 raise ApplicationError("History persistence owner remains alive")
-        if self.identity is not None:
-            self.identity.request_stop()
-            if not self.identity.join():
-                raise ApplicationError("Local identity owner remains alive")
 
     def _run(self) -> None:
         while True:
@@ -757,6 +902,7 @@ class ProductionApplication:
                 prepared = self._candidate or self._active
                 generation = self._generation
                 startup = self._startup if starting else None
+                start_operation = self._start_operation if starting else None
                 preparation = self._preparation if self._prepare_requested else None
                 self._prepare_requested = False
             if preparation is not None:
@@ -828,6 +974,15 @@ class ProductionApplication:
                             self._batch_segment = run_id
                             self._batch_uncertain |= durable_run is None
                         self._state = ApplicationState.RUNNING
+                    if start_operation and self.identity:
+                        self.identity.audit.record(
+                            replace(
+                                start_operation,
+                                target=run_id,
+                                after=prepared.configuration.recipe_id,
+                            ),
+                            "success",
+                        )
                     assert startup is not None
                     startup.set_result(None)
                 except BaseException as exc:
@@ -945,19 +1100,24 @@ class ProductionApplication:
                     or self._preparation is not None
                 )
                 closed = self._closed
-                if (
-                    closing
-                    and self._session is None
+                can_close = (
+                    self._session is None
                     and self._preparation is None
                     and not resource_error
-                ):
-                    self._state = ApplicationState.CLOSED
-                elif closing:
+                )
+                if closing and not can_close:
                     self._closing = False
                     self._closed = (
                         None  # Permit an explicit later cleanup/close attempt.
                     )
             if startup is not None and not startup.done():
+                if start_operation and self.identity:
+                    cause = startup_error or cleanup_error
+                    self.identity.audit.record(
+                        start_operation,
+                        error_outcome(cause) if cause else "cancelled",
+                        type(cause).__name__ if cause else "Stopped",
+                    )
                 startup.set_exception(
                     lifecycle_error(
                         "Startup did not activate candidate",
@@ -972,13 +1132,25 @@ class ProductionApplication:
                 else:
                     stopped.set_result(None)
             if closing and closed is not None:
-                if (
-                    self._session is None
-                    and self._preparation is None
-                    and not resource_error
-                ):
-                    closed.set_result(None)
-                    return
+                if can_close:
+                    # Pending Start/Stop outcomes above must reach audit before its final drain.
+                    try:
+                        if self.identity:
+                            self.identity.request_stop()
+                            if not self.identity.join():
+                                raise ApplicationError(
+                                    "Local identity owner remains alive"
+                                )
+                    except BaseException as exc:
+                        cleanup_error = exc
+                        with self._condition:
+                            self._fault("shutdown", exc)
+                            self._closing, self._closed = False, None
+                    else:
+                        with self._condition:
+                            self._state = ApplicationState.CLOSED
+                        closed.set_result(None)
+                        return
                 closed.set_exception(
                     lifecycle_error(
                         "Close failed",

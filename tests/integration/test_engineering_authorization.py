@@ -18,6 +18,7 @@ from tests.support.startup import (
     saved_data,
 )
 
+from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.basler import BaslerDevice
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
@@ -150,6 +151,25 @@ def test_engineering_files_and_native_commands(
         models.delete(updated, data.recipes)
         assert len(calls) == 1 and not (data.models / imported.model_id).exists()
         assert app.prepare_model_cache(cache).result(WAIT).initialized and engine.closed
+        records = owner.audit_page(AuditQuery()).result(WAIT)
+        successful = {r.operation.action: r for r in records if r.outcome == "success"}
+        actor = owner.snapshot().account
+        assert actor
+        for action in (
+            "recipe.save",
+            "recipe.delete",
+            "vision.sources",
+            "vision.layout",
+            "model.stage",
+            "model.publish",
+            "model.rename",
+            "model.delete",
+            "model.cache",
+        ):
+            assert successful[action].operation.actor_id == actor.account_id
+        assert successful["model.rename"].operation.before == "Imported"
+        assert successful["model.rename"].operation.after == "Revised"
+        assert "loop" in successful["vision.sources"].operation.after
 
 
 @pytest.mark.parametrize("transition", ["switch", "disable", "demote", "logout"])
@@ -235,6 +255,7 @@ def test_communication_and_injected_web_commands(
         assert page.write_button.isEnabled() == engineer
         page.write_values.setText("123")
         page.persist_settings()
+        until(lambda: not page.busy)
         if not engineer:
             assert page.preferences_status.text() == text(
                 "permission_engineer", page.language
@@ -344,6 +365,7 @@ def test_pending_recipe_delete_does_not_follow_a_role_change(
             if dialog.buttonRole(b) == QMessageBox.ButtonRole.AcceptRole
         )
         button.click()
+        until(lambda: not page.busy)
         assert spare.path.exists() and editor.entry == spare
         assert "superseded" in page.status.toolTip()
     finally:
@@ -377,6 +399,7 @@ def test_web_power_rechecks_actor_between_save_and_service_admission(
     page.bind_web_runtime(runtime)
     try:
         page.web_panel.power.click()
+        until(lambda: not page.busy)
         assert engineering.data.communication.exists() and page.web_panel.saved.enabled
         assert runtime.snapshot().state is WebState.STOPPED
         assert "StaleSessionError" in page.web_panel.operation_error
@@ -498,6 +521,7 @@ def test_recipe_labels_show_saved_policy_and_only_engineers_can_edit(
         assert editor.dirty == allowed
         if allowed:
             page.save()
+            until(lambda: not page.busy)
             assert load_recipe(path).defaults.vimo.disabled_labels == ("Retired",)
         else:
             with pytest.raises(AuthorizationError):

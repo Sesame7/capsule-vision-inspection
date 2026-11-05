@@ -13,6 +13,7 @@ fallback, automatic repair of saved geometry or fake inference is used for recov
 | `data/communication.json` | optional global Production reporting, diagnostic endpoint and Web preferences |
 | `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
 | `data/security.sqlite3` | optional local accounts and versioned password verifiers; independent of History |
+| `data/audit.sqlite3` | append-only application audit records with their own schema and writer |
 | `data/security.lock` | application/offline-maintenance ownership lock; file presence does not mean it is held |
 | `data/models/<model_id>/model.json` | Model definition: `display_name`, `expected_sha256`, `module_id` |
 | `data/models/<model_id>/model.vimosln` | Managed Model artifact, verified by SHA-256 |
@@ -192,6 +193,15 @@ does not restore an earlier session snapshot.
 SQLite account data has its own schema/application identity, no History retention
 and no audit/event storage. Local filesystem access and the maintenance environment
 remain OS-level trust boundaries.
+
+Normal account management records the acting account, target account ID, changed
+role or enabled state, and the outcome. Password operations identify the action
+without storing passwords or verifier material. Engineering saves record bounded
+field differences. The [Audit Trail contract](architecture.md#audit-trail) defines
+intent, completion, authorization and observable write loss. Audit records have
+no automatic expiry or application deletion API. Offline Administrator setup
+and recovery operate outside this trail. Protection against direct filesystem
+or SQLite modification rests with the operating system.
 
 First Administrator initialization and credential recovery are explicit offline
 commands. Stop the application first, select the directory containing its entry

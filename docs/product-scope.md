@@ -194,7 +194,7 @@ for an explicitly approved change. The product requirements are:
 - Alarm monitoring is **independent of PLC detection-result reporting**. When configured and enabled, it can run after software startup while Production is READY, RUNNING, or stopped; unavailable communication is an **unknown/unavailable monitor state**, not proof that all PLC alarms cleared.
 - PLC retains responsibility for equipment/mechanical safety response. Software displays actual PLC alarm signals and important software faults, recording alarm occurrence and recovery transitions rather than every poll. Preserve current application FAULT/cleanup semantics for serious software failures. Do not add alarm acknowledgment, complex severity editors, sound systems, or remote notifications in the first implementation.
 - PLC alarm observation/reads must not disturb the timing or ownership of critical four-Cycle reporting reads and writes. The concrete transport/scheduling integration needs its own design and validation.
-- Retention, access policy and equipment signal mapping remain [open below](#10-open-decisions-and-audit-boundaries). Independent alarm monitoring must have an explicit authorization/ownership contract; existing session-bound diagnostic watches are not implicit permission for startup alarm reads.
+- Engineer and Administrator can review the initial Audit Trail by date, actor and action. It has no automatic retention deletion. Alarm retention, access and equipment signal mapping remain [open below](#10-open-decisions-and-audit-boundaries). Independent alarm monitoring requires an explicit authorization and ownership contract.
 
 ## 8. Global UI and multilingual quality contract
 
@@ -248,8 +248,8 @@ above or authorize choosing a convenient implementation silently.
   how existing disabled Recipes will be handled before enforcing the target
   every-exposure inspection policy; this document does not reinterpret their
   saved settings or authorize an implicit enablement change.
-- **Audit and alarms:** decide retention, querying and role access; 30 days is a
-  proposal for these records, not an approved requirement. Define authorization
+- **Alarms:** decide retention, querying and role access. Thirty days remains a
+  proposal for alarm records. Define authorization
   for saved startup monitoring while Guest or after logout, independently of
   session-bound manual watches. Verify alarm addresses/bit semantics against the
   approved equipment signal table before implementation.

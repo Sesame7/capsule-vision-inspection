@@ -103,6 +103,7 @@ class EditingCoordinator(QObject):
         deleting: bool = False,
         revision: int | None = None,
     ) -> bool:
+        """Keep the stopped file-management slot through native work or publication."""
         if not self.editable():
             return False
 
@@ -122,13 +123,17 @@ class EditingCoordinator(QObject):
             completed(ConfigurationError("Production selection is unavailable"))
             return
         try:
-            request = self.bridge.application.begin_recipe_selection()
+            request = self.bridge.application.begin_recipe_selection(recipe_id)
         except RuntimeError as exc:
             completed(exc)
             return
         preparation = self.session.production_preparation()
 
         def prepared(value: object, error: BaseException | None) -> None:
+            if error is not None or self.closing:
+                self.bridge.application.recipe_selection_failed(
+                    request, error or RuntimeError("Closing")
+                )
             try:
                 if isinstance(error, IdentityError):
                     raise error
