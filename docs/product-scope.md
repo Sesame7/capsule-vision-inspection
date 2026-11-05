@@ -182,9 +182,9 @@ for an explicitly approved change. The product requirements are:
 ### 6.3 Manual production export
 
 - **Manual export only**. Neither Stop nor production Batch change automatically writes a report.
-- Target export is an ordinary **Excel (.xlsx)** file with a concise production summary and PLC-group results sheet; final presentation and format detail may be refined in the scoped export Phase. Do not embed all photos or duplicate the complete per-Cycle History as an extra sheet.
+- Operators and higher roles can export an ordinary **Excel (.xlsx)** file with a concise production summary and a PLC-group results sheet. Photos and individual Cycle details stay in their existing stores. The [History contract](architecture.md#production-history) defines the workbook fields and counting basis.
 - Summarize a **single explicitly identified production Batch** across all its Runs, including Runs after application restart. Include Run start/stop observations, Recipe identity where relevant, and one final OK/NG/EMPTY result per channel per attributable completed PLC group.
-- Retain Batch and Run identities and cumulative occurrence and physical-group totals across restarts and detail expiry. Export must distinguish uncertain totals (including an interrupted Run or lost facts) from expired detail. Best-effort Cycle rows alone cannot establish completeness.
+- Retain Batch and Run identities and cumulative occurrence and physical-group totals across restarts and detail expiry. Date each snapshot, identify interrupted Runs and uncertain totals, and distinguish retained group detail from durable completed groups.
 
 ## 7. Audit Trail and alarms
 
@@ -248,17 +248,14 @@ above or authorize choosing a convenient implementation silently.
   how existing disabled Recipes will be handled before enforcing the target
   every-exposure inspection policy; this document does not reinterpret their
   saved settings or authorize an implicit enablement change.
-- **Export completeness:** determine how the workbook presents interrupted Runs,
-  uncertain totals and expired detail for the selected Batch.
 - **Audit and alarms:** decide retention, querying and role access; 30 days is a
   proposal for these records, not an approved requirement. Define authorization
   for saved startup monitoring while Guest or after logout, independently of
   session-bound manual watches. Verify alarm addresses/bit semantics against the
   approved equipment signal table before implementation.
-- **Feature acceptance details:** settle Excel layout, deterministic best-effort
-  photo matching, and representative readable minima/geometry criteria for each
-  changed table in their respective scoped Phases. The `.xlsx` format, manual-only
-  export, no image index and content-aware table requirements are already decided.
+- **Feature acceptance details:** settle deterministic best-effort photo
+  matching and representative readable minima/geometry criteria for each changed
+  table in their respective scoped Phases.
 
 The next code-level audit should trace existing owners and alternate entry paths
 for session switching, Start/connection/Close, reporting attribution and counters,

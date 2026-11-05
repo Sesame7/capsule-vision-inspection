@@ -89,6 +89,46 @@ IDENTITY_UI_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "history_group",
+    "report_export",
+    "report_search",
+    "previous_page",
+    "next_page",
+    "report_no_batches",
+    "report_writing",
+    "report_saved",
+    "report_failed",
+    "report_cancelled",
+    "report_summary",
+    "report_groups",
+    "report_created",
+    "report_as_of",
+    "report_generated",
+    "report_data",
+    "report_recorded",
+    "report_partial",
+    "report_completed_groups",
+    "report_retained_groups",
+    "report_inspected",
+    "report_passed",
+    "report_rejected",
+    "report_empty",
+    "report_pass_rate",
+    "report_reject_rate",
+    "report_occurrences",
+    "report_started_cycles",
+    "report_ng_cycles",
+    "report_err_cycles",
+    "report_runs",
+    "report_started",
+    "report_end_observed",
+    "report_retained_cycles",
+    "report_in_progress",
+    "report_stopped",
+    "report_interrupted",
+    "run_uncertain_totals",
+    "report_counter",
+    "report_duration",
     "batch_current",
     "batch_input",
     "batch_keep_open",
@@ -1283,7 +1323,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 490
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 530
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

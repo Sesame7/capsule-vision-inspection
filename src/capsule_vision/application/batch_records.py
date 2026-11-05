@@ -2,7 +2,10 @@
 
 import json
 import sqlite3
+from concurrent.futures import CancelledError
 from dataclasses import asdict, dataclass
+from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
 from capsule_vision.communication.reporting import (
@@ -24,6 +27,79 @@ class BatchSelection:
     duration_ms: float | None
     uncertain: bool
     detail_expired: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ReportBatches:
+    choices: tuple[tuple[str, str], ...]  # UUID and operator label
+    more: bool
+
+
+def report_batches(
+    db: sqlite3.Connection, prefix: str, cursor: str | None, previous: bool
+) -> ReportBatches:
+    where = ["label >= ? AND substr(label, 1, length(?)) = ?"]
+    args = [prefix, prefix, prefix]
+    if cursor is not None:
+        where.append("label < ?" if previous else "label > ?")
+        args.append(cursor)
+    order = "DESC" if previous else "ASC"
+    rows = db.execute(
+        "SELECT uuid,label FROM batches WHERE "
+        + " AND ".join(where)
+        + f" ORDER BY label {order} LIMIT 51",
+        args,
+    ).fetchall()
+    page = rows[:50]
+    return ReportBatches(tuple(reversed(page) if previous else page), len(rows) > 50)
+
+
+def capture_report(
+    db: sqlite3.Connection,
+    batch: str,
+    snapshot: Path,
+    now: float,
+    loss_run: str | None,
+    cancel: Event,
+) -> None:
+    """Copy only this Batch's export columns at one point on the serial History owner."""
+    if cancel.is_set():
+        raise CancelledError()
+    db.execute("ATTACH DATABASE ? AS report", (str(snapshot),))
+    try:
+        with db:
+            db.execute("BEGIN")
+            db.set_progress_handler(lambda: int(cancel.is_set()), 4096)
+            try:
+                db.execute(
+                    "CREATE TABLE report.batch AS SELECT uuid,label,created,occurrences,positions,"
+                    "? AS observed FROM main.batches WHERE uuid=?",
+                    (now, batch),
+                )
+                if db.execute("SELECT 1 FROM report.batch").fetchone() is None:
+                    raise ValueError("Production Batch unavailable")
+                db.execute(
+                    "CREATE TABLE report.runs AS SELECT uuid,started,terminated,outcome,recipe,"
+                    "reporting_mode,uncertain OR uuid IS ? AS uncertain,detail_expired,"
+                    "(SELECT count(*) FROM main.cycles c WHERE c.run_id=r.uuid) AS retained_cycles "
+                    "FROM main.runs r WHERE batch=?",
+                    (loss_run, batch),
+                )
+                # Both detail tables have a leading Run key. Copy the actual
+                # members; Run/Cycle identities can repeat across different Runs.
+                for table in ("plc_groups", "group_members"):
+                    db.execute(
+                        f"CREATE TABLE report.{table} AS SELECT d.* FROM main.{table} d "
+                        "WHERE d.run IN (SELECT uuid FROM report.runs)"
+                    )
+            finally:
+                db.set_progress_handler(None, 0)
+    except sqlite3.OperationalError:
+        if cancel.is_set():
+            raise CancelledError() from None
+        raise
+    finally:
+        db.execute("DETACH DATABASE report")
 
 
 SCHEMA = """

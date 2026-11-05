@@ -512,9 +512,10 @@ and preserves the Batch selection. Exclusive owner startup marks any abandoned
 open Run interrupted and uncertain, with the recovery time as its termination
 observation. Warm-up and preview contribute no production evidence.
 
-One background owner performs all SQLite access, projection, compression and
-retention. The normal inbox admits up to 128 pending facts or queries, with one
-additional slot for a Batch/Run command. Only the lifecycle worker waits for
+One background owner handles every access to the live History database, along
+with projection, compression and retention. The normal inbox admits up to 128
+pending facts or queries, with one additional slot for a Batch/Run command.
+Only the lifecycle worker waits for
 Run confirmation. Stored Cycle rows have independent persistent IDs and unique
 `(run_id, cycle_id)` identities. Compact details retain configured camera/slot/
 channel identities, business/technical/judgment states and existing abnormal
@@ -570,7 +571,27 @@ the independent business/technical/judgment states and reason codes; NG and ERRO
 can coexist. List summaries count channel OK/NG/EMPTY, adding UNKNOWN and independent
 technical ERR counts when present. Cycle-level anomalies absent from those counts
 remain explicit; routine COMPLETE/SUCCESS is implicit in the presentation only.
-Query failures remain explicit. There is no image association, export or Web history API.
+Query failures remain explicit. History has no image association or Web API.
+
+Operators and higher roles can manually export any saved named Production Batch,
+including an ended Batch, from History. The picker pages through durable Batch
+identities independently of the Cycle filters. The SQLite owner captures one
+dated snapshot of the selected Batch, its Runs and retained group detail. A
+single export worker streams two Excel sheets from that private copy. Production
+continues during export. Close requests cancellation and joins the worker.
+Publication requires the initiating session revision and atomically replaces
+the destination only after the workbook is complete.
+
+Production Summary shows cumulative completed groups, Passed (final OK),
+Rejected (final NG) and Empty. Inspected is Passed plus Rejected. Both rates
+use Inspected as their denominator and show `—` when it is zero. Separate Cycle
+observations include per-cycle and reporting-disabled Runs. Run rows record
+start/end observations, outcome, Recipe and reporting mode. Data status flags
+active Runs, uncertain totals and expired detail. Group Results contains one
+row per retained eligible group with its recorded completion observation, Run,
+PLC counter, four stored CycleIds in exposure order, duration and channel
+outcomes. When the retained count differs from the durable completed total, the
+detail sheet also shows the two counts above its table.
 
 ## Image archiving
 
@@ -775,8 +796,10 @@ Recipe changes and remain separate across mode changes. Selecting a Batch loads
 its summaries and last eligible group duration and clears current result overlays
 and group progress. Retained pixels do not carry the cleared judgments.
 
-History uses short Time, `#`, Batch and `CAM` headings. Full identities remain in
-stored records. The Time heading tooltip retains clock semantics, and elided
+The History Cycle table shows Time, `#`, Group, Batch, Recipe and Result. Group
+shows the first CycleId and the Cycle's stored slot (for example, `2265 · 2/4`),
+or `—` when there is no persisted association. Its tooltip and accessible
+description include the full Run identity. The Time heading tooltip retains clock semantics, and elided
 Batch/Recipe names retain their full-value tooltips. Result filters show the original status codes with
 their independent product/technical/business meanings in localized tooltips.
 Selecting a History channel shows its details below the matrix; cells do not

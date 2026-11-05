@@ -1,18 +1,20 @@
 """One bounded application owner; lifecycle work never runs on the caller thread."""
 
 from collections.abc import Callable, Generator
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
-from threading import Condition, Thread, current_thread
+from pathlib import Path
+from threading import Condition, Event, Thread, current_thread
 from uuid import uuid4
 
 from capsule_vision.communication.reporting import ReportingSettings
 from capsule_vision.configuration import CameraSources, MachineLayoutDefinition
 from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
+from capsule_vision.localization.languages import Language
 
-from .batch_records import BatchSelection
+from .batch_records import BatchSelection, ReportBatches
 from .history import HistoryContext, ProductionHistory
 from .identity import LocalIdentity
 from .identity_models import Role, SessionSnapshot, StaleSessionError
@@ -82,6 +84,8 @@ class ProductionApplication:
             raise ValueError("max_pending_cycles must be positive")
         self._factory = session_factory
         self.history = history
+        self._export_thread: Thread | None = None
+        self._export_cancel = Event()
         self._identity = identity
         self._selection: RecipeSelection | None = None
         self._batch_segment = uuid4().hex
@@ -262,6 +266,67 @@ class ProductionApplication:
                 self._install_batch(future.result())
             self._restoring = False
             self._condition.notify_all()
+
+    def report_batches(
+        self,
+        prefix: str = "",
+        cursor: str | None = None,
+        previous: bool = False,
+        *,
+        revision: int | None = None,
+    ) -> Future[ReportBatches]:
+        with self._condition, self._admission(Role.OPERATOR, revision):
+            if self.history is None:
+                raise ApplicationStateError("History unavailable")
+            return self.history.report_batches(prefix, cursor, previous)
+
+    def export_report(
+        self,
+        batch: str,
+        path: Path,
+        language: Language,
+        *,
+        revision: int | None = None,
+        cancel: Event | None = None,
+    ) -> Future[Path]:
+        with self._condition, self._admission(Role.OPERATOR, revision) as actor:
+            history = self.history
+            if history is None:
+                raise ApplicationStateError("History unavailable")
+            if self._export_thread is not None and self._export_thread.is_alive():
+                raise ApplicationStateError(
+                    "A production report is already being exported"
+                )
+            if path.suffix.lower() != ".xlsx":
+                raise ValueError("Select an .xlsx file")
+            actor_revision = actor.revision if actor else None
+            stop = cancel if cancel is not None else Event()
+            future = _promise(Future[Path]())
+
+            def admit_publication() -> None:
+                with self._condition, self._admission(Role.OPERATOR, actor_revision):
+                    if stop.is_set():
+                        raise CancelledError()
+
+            def export() -> None:
+                try:
+                    # The optional operation loads the spreadsheet library on its own worker.
+                    from .production_report import write_report
+
+                    write_report(
+                        history, batch, path, language, stop, admit_publication
+                    )
+                except BaseException as exc:
+                    future.set_exception(exc)
+                else:
+                    future.set_result(path)
+
+            self._export_cancel = stop
+            self._export_thread = Thread(
+                target=export, name="ProductionReport", daemon=False
+            )
+            self._export_thread.start()
+            return future
 
     def start_batch(
         self, batch_id: str, *, revision: int | None = None
@@ -492,6 +557,7 @@ class ProductionApplication:
                 return self._closed
             self._closed = _promise(Future())
             self._closing = True
+            self._export_cancel.set()
             self._stop_requested = True
             if self._state is not ApplicationState.FAULT:
                 self._state = ApplicationState.STOPPING
@@ -661,6 +727,8 @@ class ProductionApplication:
 
     def _close_resources(self) -> None:
         """Application-lifetime resources; called only by the lifecycle owner."""
+        if self._export_thread is not None:
+            self._export_thread.join()
         if self.history is not None:
             self.history.request_stop()
             if not self.history.join():

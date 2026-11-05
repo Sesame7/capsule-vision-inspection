@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         bridge.frames_changed.connect(self._refresh_vision)
         self.communication = CommunicationPage(application=bridge.application)
         self.identity_controls.session_changed.connect(self._session_changed)
-        self.history = HistoryPage(bridge.application.history)
+        self.history = HistoryPage(bridge.application.history, bridge.application)
         if self.communication.reporting_panel is not None:
             self.communication.reporting_panel.update_state(self.snapshot.state)
             bridge.reporting_changed.connect(self.communication.reporting_panel.refresh)
@@ -538,6 +538,7 @@ class MainWindow(QMainWindow):
         if self.vision_workspace is not None:
             self.vision_workspace.identity_changed()
         self.communication.identity_changed()
+        self.history.identity_changed()
         self._render()
 
     def _refresh_vision(self) -> None:

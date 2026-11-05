@@ -8,7 +8,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Full, Queue
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from time import time
 from typing import Literal, cast
 
@@ -19,7 +19,7 @@ from capsule_vision.communication.reporting import (
 from capsule_vision.inspection.production import ProductionInspectionResult
 
 from . import batch_records
-from .batch_records import BatchSelection
+from .batch_records import BatchSelection, ReportBatches
 from .models import ConfigurationIdentity
 
 type ResultFilter = Literal["all", "OK", "NG", "ERROR", "EMPTY", "UNKNOWN"]
@@ -123,6 +123,7 @@ class _Read:
 class _Operation:
     execute: Callable[[sqlite3.Connection], None]
     failed: Callable[[BaseException], None]
+    read_only: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,7 +203,9 @@ class ProductionHistory:
             self._loss_run, self._loss_persisted = context.run_id, False
             return False
 
-    def _command[T](self, action: Callable[[sqlite3.Connection], T]) -> Future[T]:
+    def _command[T](
+        self, action: Callable[[sqlite3.Connection], T], *, read_only: bool = False
+    ) -> Future[T]:
         future: Future[T] = Future()
         future.set_running_or_notify_cancel()
 
@@ -215,12 +218,34 @@ class ProductionHistory:
             try:
                 if not self._accepting:
                     raise RuntimeError(self._error or "History is closed")
-                self._queue.put_nowait(_Operation(execute, future.set_exception))
+                if read_only and self._queue.qsize() >= self._capacity:
+                    raise Full
+                self._queue.put_nowait(
+                    _Operation(execute, future.set_exception, read_only)
+                )
             except Full:
                 future.set_exception(RuntimeError("Batch storage capacity reached"))
             except RuntimeError as exc:
                 future.set_exception(RuntimeError(f"Batch storage unavailable: {exc}"))
         return future
+
+    def report_batches(
+        self, prefix: str, cursor: str | None, previous: bool
+    ) -> Future[ReportBatches]:
+        return self._command(
+            lambda db: batch_records.report_batches(db, prefix, cursor, previous),
+            read_only=True,
+        )
+
+    def capture_report(self, batch: str, snapshot: Path, cancel: Event) -> Future[None]:
+        def capture(db: sqlite3.Connection) -> None:
+            with self._lock:
+                loss_run = self._loss_run
+            batch_records.capture_report(
+                db, batch, snapshot, self.clock(), loss_run, cancel
+            )
+
+        return self._command(capture, read_only=True)
 
     def select_batch(self, label: str | None) -> Future[BatchSelection | None]:
         return self._command(lambda db: batch_records.select(db, label, self.clock()))
@@ -643,7 +668,8 @@ class ProductionHistory:
                     try:
                         item.execute(connection)
                     except Exception as exc:
-                        self._failure(exc)
+                        if not item.read_only:
+                            self._failure(exc)
                         item.failed(exc)
                 elif isinstance(item, _Read):
                     try:

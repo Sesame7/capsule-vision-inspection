@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from capsule_vision.application import ProductionApplication
 from capsule_vision.application.history import (
     HistoryChannel,
     HistoryPageData,
@@ -59,11 +60,14 @@ from capsule_vision.application.history import (
     ProductionHistory,
     ResultFilter,
 )
+from capsule_vision.application.identity_models import Role
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
 
 from .future_delivery import FutureDelivery
 from .image_tools import image_icon
+from .permissions import permits
+from .report_dialog import ReportDialog
 from .style import Style, theme_colors
 
 
@@ -208,9 +212,15 @@ class _ChannelDelegate(QStyledItemDelegate):
 
 
 class HistoryPage(QWidget):
-    def __init__(self, owner: ProductionHistory | None) -> None:
+    def __init__(
+        self,
+        owner: ProductionHistory | None,
+        application: ProductionApplication | None = None,
+    ) -> None:
         super().__init__()
         self.owner = owner
+        self.application = application
+        self.report_dialog: ReportDialog | None = None
         self.language: Language = "zh"
         self.busy = False
         self._revision = 0
@@ -285,6 +295,10 @@ class HistoryPage(QWidget):
             button.setMinimumHeight(Style.touch)
             actions.addWidget(button)
         actions.addWidget(self.refresh_button)
+        self.export_button = QPushButton()
+        self.export_button.setMinimumHeight(Style.touch)
+        self.export_button.clicked.connect(self._open_export)
+        actions.addWidget(self.export_button)
         root.addWidget(self.toolbar)
         self.warning = QLabel()
         self.warning.setTextFormat(Qt.TextFormat.PlainText)
@@ -293,11 +307,11 @@ class HistoryPage(QWidget):
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         root.addWidget(self.status)
-        self.cycles = self._table(5, "historyCycles")
+        self.cycles = self._table(6, "historyCycles")
         self.cycles.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Fixed
         )
-        self.cycles.setItemDelegateForColumn(4, _ResultDelegate(self.cycles))
+        self.cycles.setItemDelegateForColumn(5, _ResultDelegate(self.cycles))
         root.addWidget(self.cycles, 1)
         self.channels = self._table(7, "historyChannels")
         self.channels.setSelectionBehavior(
@@ -455,11 +469,32 @@ class HistoryPage(QWidget):
                 ),
             )
             + padding
-            for column, key in ((2, "batch_id"), (3, "page_recipe"))
+            for column, key in ((3, "batch_id"), (4, "page_recipe"))
         ]
+        group_min = (
+            max(
+                metrics.horizontalAdvance("2265 · 4/4"),
+                *(
+                    metrics.horizontalAdvance(text("history_group", lang))
+                    for lang in ("zh", "en", self.language)
+                ),
+            )
+            + padding
+        )
+        group_preferred = min(
+            max(
+                (
+                    metrics.horizontalAdvance(self._group_caption(r)) + padding
+                    for r in self._data.records
+                ),
+                default=group_min,
+            ),
+            metrics.horizontalAdvance("99999999 · 4/4") + padding,
+        )
         minimums = [
             time_width,
             cycle_width,
+            group_min,
             max(
                 max(
                     metrics.horizontalAdvance(text("batch_id", lang))
@@ -478,13 +513,19 @@ class HistoryPage(QWidget):
             + padding,
             counts_width + padding,
         ]
-        preferred = [time_width, cycle_width, *names, result_width + padding]
+        preferred = [
+            time_width,
+            cycle_width,
+            group_preferred,
+            *names,
+            result_width + padding,
+        ]
         preferred = [max(a, b) for a, b in zip(preferred, minimums, strict=True)]
         available = self.cycles.viewport().width()
         if available >= sum(preferred):
             widths = preferred
             # Surplus benefits every column; results get the largest share.
-            weights = [2, 1, 3, 3, 4]
+            weights = [2, 1, 1, 3, 3, 5]
         else:
             widths = minimums
             weights = [p - m for p, m in zip(preferred, minimums, strict=True)]
@@ -610,10 +651,18 @@ class HistoryPage(QWidget):
         desired_row = (
             self.date.width() + desired_dates + 2 * desired_filter + 3 * Style.small
         )
-        wrapped = self.workspace.width() < desired_row + 3 * width + 3 * Style.small
-        available = self.workspace.width() - (
-            0 if wrapped else 3 * width + 3 * Style.small
+        self.export_button.setFixedWidth(
+            max(
+                self.export_button.fontMetrics().horizontalAdvance(
+                    text("report_export", lang)
+                )
+                for lang in ("zh", "en", self.language)
+            )
+            + 4 * Style.small
         )
+        action_width = 3 * width + self.export_button.width() + 4 * Style.small
+        wrapped = self.workspace.width() < desired_row + action_width
+        available = self.workspace.width() - (0 if wrapped else action_width)
         dates_width = min(
             desired_dates,
             max(0, available - self.date.width() - 2 * filter_width - 3 * Style.small),
@@ -754,6 +803,10 @@ class HistoryPage(QWidget):
         self.date.setAccessibleName(text("history_date", language))
         self.batch.setAccessibleName(text("history_batch", language))
         self.result.setAccessibleName(text("history_result", language))
+        self.export_button.setText(text("report_export", language))
+        self.identity_changed()
+        if self.report_dialog is not None:
+            self.report_dialog.set_language(language)
         for index, key in enumerate(
             (
                 "history_all",
@@ -789,6 +842,7 @@ class HistoryPage(QWidget):
                 for k in (
                     "history_time",
                     "history_cycle",
+                    "history_group",
                     "history_batch",
                     "page_recipe",
                     "history_result",
@@ -799,6 +853,7 @@ class HistoryPage(QWidget):
             (
                 "history_time",
                 "history_cycle",
+                "history_group",
                 "history_batch",
                 "page_recipe",
                 "history_result",
@@ -824,6 +879,41 @@ class HistoryPage(QWidget):
     def activate(self) -> None:
         if not self._loaded:
             self.refresh()
+
+    def identity_changed(self) -> None:
+        app = self.application
+        allowed = app is not None and permits(app, Role.OPERATOR)
+        self.export_button.setEnabled(self.owner is not None and allowed)
+        self.export_button.setToolTip(
+            text(
+                "history_unavailable"
+                if self.owner is None or app is None
+                else "report_export"
+                if allowed
+                else "permission_operator",
+                self.language,
+            )
+        )
+        if (
+            self.report_dialog is not None
+            and app is not None
+            and self.report_dialog.revision != app.session_revision
+        ):
+            self.report_dialog.reject()
+
+    def _open_export(self) -> None:
+        if self.application is None or not self.export_button.isEnabled():
+            return
+        if self.report_dialog is None:
+            self.report_dialog = ReportDialog(self.application, self.language, self)
+            self.report_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            self.report_dialog.finished.connect(self._report_closed)
+        self.report_dialog.show()
+        self.report_dialog.raise_()
+        self.report_dialog.activateWindow()
+
+    def _report_closed(self) -> None:
+        self.report_dialog = None
 
     @Slot()
     def refresh(self) -> None:
@@ -986,23 +1076,28 @@ class HistoryPage(QWidget):
                     "%m-%d %H:%M:%S.%f"
                 )[:-3],
                 str(record.cycle_id),
+                self._group_caption(record),
                 record.context.batch_label or "—",
                 record.context.recipe_name or f"ID: {record.context.active.recipe_id}",
                 self._summary(record),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if column == 2:
+                if column == 3:
                     item.setToolTip(value)
+                if column == 2:
+                    description = f"Run ID: {record.context.run_id}\n{text('history_group', language)}: {value}"
+                    item.setToolTip(description)
+                    item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, description)
                 if column == 1:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if column == 4:
+                if column == 5:
                     item.setData(Qt.ItemDataRole.UserRole, record)
                     item.setData(
                         _ResultDelegate.warnings_role,
                         " · ".join(self._cycle_warnings(record)),
                     )
-                if column == 3:
+                if column == 4:
                     item.setToolTip(
                         (
                             record.context.recipe_name
@@ -1017,6 +1112,12 @@ class HistoryPage(QWidget):
         self._selected()
         self._size_content()
         self._observe()
+
+    @staticmethod
+    def _group_caption(record: HistoryRecord) -> str:
+        if record.group_first_cycle is None or record.group_slot is None:
+            return "—"
+        return f"{record.group_first_cycle} · {record.group_slot}/4"
 
     def _summary(self, record: HistoryRecord) -> str:
         parts = [f"{state} {count}" for state, count in _ResultDelegate.counts(record)]
@@ -1124,5 +1225,7 @@ class HistoryPage(QWidget):
         self.warning.setStyleSheet(f"color: {theme_colors(self).warning};")
 
     def dispose(self) -> None:
+        if self.report_dialog is not None:
+            self.report_dialog.reject()
         self.timer.stop()
         self._delivery.detach()

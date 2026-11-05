@@ -281,9 +281,10 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
     QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
     QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
-    QTableWidget#accounts {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; }}
-    QTableWidget#accounts::item {{ min-height: 32px; }}
-    QTableWidget#accounts::item:selected {{ background: {c.selected}; color: {c.primary}; }}
+    QTableWidget#accounts, QListWidget#reportBatches {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; }}
+    QTableWidget#accounts::item, QListWidget#reportBatches::item {{ min-height: 32px; }}
+    QTableWidget#accounts::item:selected, QListWidget#reportBatches::item:selected {{ background: {c.selected}; color: {c.primary}; }}
+    QListWidget#reportBatches:focus {{ border-color: {c.accent}; }}
     QTableWidget#historyCycles, QTableWidget#historyChannels {{ border-radius: {Style.radius}px; }}
     QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}

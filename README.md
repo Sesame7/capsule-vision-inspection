@@ -28,7 +28,7 @@ accuracy remain separate commissioning responsibilities.
 | Recipe | Edit and save Recipe definitions, models and inspection rules |
 | Vision | Configure sources, camera layouts and channel ROIs |
 | Communication | Configure PLC diagnostics, reporting and Web observer |
-| History | Browse terminal Production results and channel observations |
+| History | Browse Cycles, group membership and channel observations. Operators can export a named Production Batch to Excel. |
 
 ## Quick Start
 

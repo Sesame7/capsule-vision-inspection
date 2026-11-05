@@ -75,7 +75,7 @@ def channel_at(page: HistoryPage, row: int, position: int) -> HistoryChannel:
 
 
 def cycle_record(page: HistoryPage, row: int = 0) -> HistoryRecord:
-    item = page.cycles.item(row, 4)
+    item = page.cycles.item(row, 5)
     assert item is not None
     record = item.data(Qt.ItemDataRole.UserRole)
     assert isinstance(record, HistoryRecord)
@@ -268,9 +268,9 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         assert margins.left() == margins.right() == 0
         assert page.workspace.width() == page.width() - margins.left() - margins.right()
         assert page.cycles.width() == page.channels.width() == page.workspace.width()
-        assert content(page.cycles, 2, 4) == "OK 20 · NG 2 · EMPTY 14"
-        assert content(page.cycles, 1, 4) == "OK 6 · NG 2 · EMPTY 28"
-        widths = [page.cycles.columnWidth(i) for i in range(5)]
+        assert content(page.cycles, 2, 5) == "OK 20 · NG 2 · EMPTY 14"
+        assert content(page.cycles, 1, 5) == "OK 6 · NG 2 · EMPTY 28"
+        widths = [page.cycles.columnWidth(i) for i in range(6)]
         viewport = page.cycles.viewport().width()
         print(
             f"History {language}/{theme}, page {page.width()}, viewport {viewport}, columns {widths}"
@@ -280,18 +280,18 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         assert all(
             page.cycles.horizontalHeader().sectionResizeMode(i)
             == QHeaderView.ResizeMode.Fixed
-            for i in range(5)
+            for i in range(6)
         )
         metrics = page.cycles.fontMetrics()
         for row in range(3):
-            for col in range(5):
+            for col in range(6):
                 item = page.cycles.item(row, col)
                 assert item is not None
                 assert metrics.horizontalAdvance(item.text()) + 12 <= widths[col]
-                assert bool(item.toolTip()) == (col in (2, 3))
-        assert widths[1] < widths[0] < min(widths[2:4])
-        assert max(widths[2:4]) < 1.25 * min(widths[2:4])
-        assert widths[4] >= max(widths[2:4])
+                assert bool(item.toolTip()) == (col in (2, 3, 4))
+        assert widths[1] < widths[0] < min(widths[3:5])
+        assert max(widths[3:5]) < 1.25 * min(widths[3:5])
+        assert widths[5] >= max(widths[3:5])
         camera_width = page.channels.columnWidth(0)
         if size[0] == 1080:
             assert 80 <= camera_width <= 100
@@ -329,7 +329,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             )
         if viewport >= 1800:
             assert widths[0] > 0.12 * viewport and widths[1] > 0.05 * viewport
-            assert widths[4] >= 0.25 * viewport
+            assert widths[5] >= 0.25 * viewport
 
         # Exercise the real delegate with a painter: count fields have equal
         # pixel widths/right edges even when values change from one to two digits.
@@ -342,15 +342,15 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             drawn.append((QRect(rect), flags, value))
             original(painter, rect, flags, value)
 
-        delegate = page.cycles.itemDelegateForColumn(4)
+        delegate = page.cycles.itemDelegateForColumn(5)
         assert isinstance(delegate, QStyledItemDelegate)
         model = page.cycles.model()
         assert model is not None
         option = QStyleOptionViewItem()
         option.initFrom(page.cycles)
         option.widget = page.cycles
-        option.rect = QRect(0, 0, widths[4], 36)
-        pixmap = QPixmap(widths[4], 36)
+        option.rect = QRect(0, 0, widths[5], 36)
+        pixmap = QPixmap(widths[5], 36)
         right_edges: list[list[int]] = []
         with monkeypatch.context() as patch:
             patch.setattr(QPainter, "drawText", draw_text)
@@ -358,7 +358,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
                 drawn.clear()
                 painter = QPainter(pixmap)
                 try:
-                    delegate.paint(painter, option, model.index(row, 4))
+                    delegate.paint(painter, option, model.index(row, 5))
                 finally:
                     painter.end()
                 numbers = [
@@ -379,7 +379,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         page.resize(1920 if size[0] == 1080 else 1080, size[1])
         page.set_language("en" if language == "zh" else "zh")
         qapp.processEvents()
-        resized = [page.cycles.columnWidth(i) for i in range(5)]
+        resized = [page.cycles.columnWidth(i) for i in range(6)]
         assert sum(resized) == page.cycles.viewport().width() and resized != widths
         assert not page.cycles.horizontalScrollBar().isVisible()
         assert (
@@ -405,17 +405,17 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         page.refresh()
         until(lambda: not page.busy)
         for col, value in (
-            (2, long_context.batch_label),
-            (3, long_context.recipe_name),
+            (3, long_context.batch_label),
+            (4, long_context.recipe_name),
         ):
             item = page.cycles.item(0, col)
             assert item is not None and item.text() == value
             assert item.toolTip() == item.text() + (
-                "\nID: recipe-a" if col == 3 else ""
+                "\nID: recipe-a" if col == 4 else ""
             )
             assert metrics.horizontalAdvance(item.text()) > page.cycles.columnWidth(col)
         assert (
-            sum(page.cycles.columnWidth(i) for i in range(5))
+            sum(page.cycles.columnWidth(i) for i in range(6))
             == page.cycles.viewport().width()
         )
         assert history.snapshot().accepted == history.snapshot().persisted == 4
@@ -484,9 +484,9 @@ def test_stored_recipe_names_missing_names_and_content_sized_channel_details(
         )
         page.activate()
         until(lambda: not page.busy)
-        assert content(page.cycles, 0, 3) == context.recipe_name
-        name_item = page.cycles.item(0, 3)
-        missing_name_item = page.cycles.item(1, 3)
+        assert content(page.cycles, 0, 4) == context.recipe_name
+        name_item = page.cycles.item(0, 4)
+        missing_name_item = page.cycles.item(1, 4)
         assert (
             name_item is not None
             and name_item.toolTip() == f"{context.recipe_name}\nID: recipe-internal-id"
@@ -631,9 +631,9 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
         )
         page.activate()
         until(lambda: not page.busy)
-        assert content(page.cycles, 0, 4) == expected
+        assert content(page.cycles, 0, 5) == expected
         qapp.processEvents()
-        result_item = page.cycles.item(0, 4)
+        result_item = page.cycles.item(0, 5)
         assert result_item is not None
         assert (
             page.cycles.viewport()
@@ -647,7 +647,7 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             : 5 if scenario == "mixed" else 4 if scenario == "unknown" else 3
         ]
         assert (
-            page.cycles.columnWidth(4)
+            page.cycles.columnWidth(5)
             >= page.cycles.fontMetrics().horizontalAdvance(" · ".join(counts)) + 12
         )
         stored = history.query().result(WAIT).records[0]
@@ -660,7 +660,7 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
         )
         assert stored.technical == result.assessment.technical_status.name
         texts = [
-            content(page.cycles, 0, 4),
+            content(page.cycles, 0, 5),
             page.channels.toolTip(),
             page.channel_detail.toPlainText(),
         ]
@@ -691,11 +691,11 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             item = page.channels.item(0, 0)
             assert item is not None
             assert (
-                "周期 NG" in content(page.cycles, 0, 4)
+                "周期 NG" in content(page.cycles, 0, 5)
                 and "unassigned_defect" in stored.cameras[0].unassigned_labels
             )
         elif scenario in ("cycle_error", "timed_out"):
-            assert "周期 ERR" in content(page.cycles, 0, 4)
+            assert "周期 ERR" in content(page.cycles, 0, 5)
         if scenario == "cycle_error":
             item = page.channels.item(0, 0)
             assert (
@@ -704,8 +704,8 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             )
         if scenario in ("cycle_error", "timed_out", "cycle_ng"):
             page.set_language("en")
-            assert content(page.cycles, 0, 4) == expected.replace("周期", "Cycle")
-            assert "Cycle" in content(page.cycles, 0, 4)
+            assert content(page.cycles, 0, 5) == expected.replace("周期", "Cycle")
+            assert "Cycle" in content(page.cycles, 0, 5)
     finally:
         page.dispose()
         page.close()
@@ -907,7 +907,7 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         matrix_body_height = (
             page.channels.height() - page.channels.horizontalHeader().height()
         )
-        columns = tuple(page.cycles.columnWidth(i) for i in range(5))
+        columns = tuple(page.cycles.columnWidth(i) for i in range(6))
         matrix_columns = tuple(page.channels.columnWidth(i) for i in range(7))
         assert page.batch.width() == page.result.width()
         assert (
@@ -959,7 +959,7 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         )
         assert page.channels.y() == page.cycles.y() + page.cycles.height() + Style.small
         assert all(page.rect().contains(rect) for rect in localized_geometry)
-        assert columns == tuple(page.cycles.columnWidth(i) for i in range(5))
+        assert columns == tuple(page.cycles.columnWidth(i) for i in range(6))
         assert matrix_columns == tuple(page.channels.columnWidth(i) for i in range(7))
         assert filters == (
             page.date.date(),

@@ -320,6 +320,8 @@ application before offline SQLite access. Version 1 has no automatic migration.
 Cycle and physical-group detail expire incrementally after 30 days by their host
 observations. Batch/Run identities, end events, summaries and completeness flags
 persist independently of this window. Archived images have separate ownership.
+The manual [production report](architecture.md#production-history) reads these
+records for one saved Batch and writes an operator-selected `.xlsx` file.
 History has no retention settings or JSON preferences. Isolated demonstration
 compositions may omit persistence. See
 [ownership and bounds](architecture.md#production-history) for shutdown, loss
