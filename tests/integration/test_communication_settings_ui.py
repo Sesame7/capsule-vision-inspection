@@ -169,6 +169,11 @@ def test_global_reporting_state_and_communication_details(
         check("service_next_start", None)
         check("service_next_start", report)
         live = replace(report, thread_alive=True, accepting=True)
+        check(
+            "plc_sync_wait",
+            replace(live, mode=ReportingMode.FOUR_CYCLE, waiting_for_sync=True),
+        )
+        assert panel.service_status.text() == text("plc_sync_wait", language)
         check("web_running", live)
         check("web_running", replace(live, last_acknowledged=replace(ack, sequence=43)))
         controller.set_reporting_selection(replace(selected, enabled=False))

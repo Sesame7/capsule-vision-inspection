@@ -384,6 +384,7 @@ class ReportingPanel(QFrame):
                             "STOPPING",
                             "state_RUNNING",
                             "plc_report_failed",
+                            "plc_sync_wait",
                         )
                     ),
                 )
@@ -539,6 +540,8 @@ class ReportingPanel(QFrame):
                 if self.state is ApplicationState.STARTING
                 else "plc_stopping"
                 if not snapshot.accepting
+                else "plc_sync_wait"
+                if snapshot.waiting_for_sync
                 else "plc_active"
             )
         elif snapshot is not None and (

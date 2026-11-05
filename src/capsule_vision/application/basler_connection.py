@@ -70,6 +70,7 @@ class InspectionBinding:
     submit: Callable[[Frame], None]
     failed: Callable[[BaseException], None]
     admitting: Callable[[], bool]
+    startup_boundary: Callable[[int, Callable[[], bool]], bool] | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -117,6 +118,8 @@ class BaslerConnection:
         self._thread: Thread | None = None
         self._source: ContinuousBaslerSource | None = None
         self._binding: InspectionBinding | None = None
+        self._startup_boundary: Callable[[int, Callable[[], bool]], bool] | None = None
+        self._awaiting_clean_start = False
         self._stop, self._retry_cleanup = Event(), Event()
         self._cleanup_observed = Event()
         self._ready: Future[None] = Future()
@@ -336,7 +339,7 @@ class BaslerConnection:
             try:
                 command = self._commands.get_nowait()
             except Empty:
-                return changed
+                break
             try:
                 if command.attach:
                     self.cancel_capture()
@@ -347,7 +350,7 @@ class BaslerConnection:
                             raise ApplicationStateError(
                                 "Inspection binding is unavailable"
                             )
-                        if not clean():
+                        if command.binding.startup_boundary is None and not clean():
                             raise ApplicationStateError(
                                 "Basler Start requires an idle complete SDK boundary"
                             )
@@ -360,9 +363,13 @@ class BaslerConnection:
                         if not command.attach:
                             control.stop()
                         self._source.control = control
+                        self._startup_boundary = (
+                            command.binding.startup_boundary if command.attach else None
+                        )
+                        self._awaiting_clean_start = self._startup_boundary is not None
                         self._source.admission_ready = (
                             command.binding.admitting
-                            if command.attach
+                            if command.attach and not self._awaiting_clean_start
                             else lambda: False
                         )
                         changed = True
@@ -371,6 +378,24 @@ class BaslerConnection:
                 command.completed.set_exception(exc)
             finally:
                 self._commands.task_done()
+        binding = self._binding
+        if binding is None or binding.stop.is_set():
+            return changed
+        if self._awaiting_clean_start:
+            if not binding.admitting():
+                return changed
+            if clean():
+                assert self._source is not None
+                self._source.admission_ready = binding.admitting
+                self._awaiting_clean_start = False
+        if self._startup_boundary is not None:
+            assert self._source is not None
+            # Continue baseline reads while draining pre-session frames. Only
+            # an inspection-ready source can acknowledge a changed counter.
+            fence = (lambda: False) if self._awaiting_clean_start else clean
+            if self._startup_boundary(self._source.received_frames, fence):
+                self._startup_boundary = None
+        return changed
 
     def _begin(self, cycle: CycleId) -> None:
         binding = self._binding
@@ -440,6 +465,8 @@ class BaslerConnection:
                 error = error or ApplicationStateError("Camera cleanup unresolved")
             with self._lock:
                 binding, self._binding = self._binding, None
+                self._startup_boundary = None
+                self._awaiting_clean_start = False
                 self._state = (
                     ConnectionState.FAULT if error else ConnectionState.DISCONNECTING
                 )

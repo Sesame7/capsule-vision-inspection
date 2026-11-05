@@ -326,10 +326,11 @@ observations.
 Basler Start establishes or reuses a matching CONNECTED source, checks every saved
 ROI against current camera Width/Height and warms one ViMo worker with black uint8
 BGR inputs, twice per distinct shape. Folder references are optional. Only after
-warm-up and an idle,
-complete SDK boundary is the session bound; production admission additionally
-requires RUNNING. Start inspection before external triggering: mid-stream takeover
-is unsupported. Buffered/partial pre-session frames are never retroactively admitted.
+warm-up can the session bind. Per-cycle and reporting-disabled sessions require
+an idle, complete SDK boundary at binding. Enabled four-cycle sessions may bind
+while triggers are arriving. Their SDK owner drains pre-session buffers and any
+partial ordinal, and opens inspection admission at a clean RUNNING boundary.
+The original camera readiness, pre-ARMED and serial continuity checks still apply.
 Each admitted frame is copied before SDK buffer Release and immediately enters
 early serial inspection without waiting for its peers. Production never writes W10.7.
 
@@ -351,11 +352,13 @@ Reporting settlement may be ACK or an explicit failure; it is not PLC consumptio
 
 The explicitly enabled [four-cycle reporting mode](communication.md#four-cycle-reporting)
 uses an alternative serial communication worker under the same generation/session
-owner. Camera admission queues scalar CycleIds; terminal callbacks hand off the
-existing reject projection. Only the communication thread reads the selected
-W48/W148 counter or writes bitmap/commit words derived from W49/W149. Four observed
-cycles are associated under external phase assumptions, without changing
-scheduling, judgments, occurrence accounting or History.
+owner. During startup the communication thread observes a W48/W148 transition
+and the SDK owner confirms a clean boundary with no intervening frames.
+Inspection, History and archiving proceed while reporting waits. Only aligned
+admissions queue scalar CycleIds and hand off terminal reject projections.
+Only the communication thread reads the counter or writes bitmap/commit words
+derived from W49/W149. See the reporting contract for the required equipment
+timing and latched phase-loss behavior.
 At the existing successful pre-write attribution check, the worker publishes one
 immutable four-result completion to Application. Separate `PilotCounters` classify
 each ChannelId once using those business statuses and the already merged reject

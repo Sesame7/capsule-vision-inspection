@@ -174,6 +174,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "preview_measuring": ("正在测量冻结参考图…", "Measuring frozen reference…"),
     "service_next_start": ("待启动", "Next Start"),
+    "plc_sync_wait": ("等待同步", "Awaiting sync"),
     "service_ack": ("上次 ACK", "Last ACK"),
     "service_off": ("未启用", "Off"),
     "history_all_dates": ("所有日期", "All dates"),

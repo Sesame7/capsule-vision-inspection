@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import enumerate as threads
+from time import perf_counter
 
 from capsule_vision.application import PreparedConfiguration
 from capsule_vision.application.account_maintenance import initialize_administrator
@@ -36,8 +37,34 @@ from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
 from tests.support.application import WAIT, ReplayEngine
-from tests.support.qt import close_window
+from tests.support.fins_tcp import TcpPeer
+from tests.support.qt import close_window, until
 from tests.support.source_inputs import input_files, replay_files
+
+
+def align_four_cycle(
+    app: SourceProductionApplication, peer: TcpPeer, counter: int
+) -> None:
+    """Hold the simulated counter stable for a fresh sample, then advance it before exposing."""
+    after = perf_counter()
+    until(
+        lambda: bool(
+            (s := app.reporting_snapshot())
+            and s.waiting_for_sync
+            and s.startup_read
+            and s.startup_read.started_at >= after
+        )
+    )
+    assert peer.words(peer.base_address - 1) != (counter,)
+    peer.set_words(peer.base_address - 1, (counter,))
+    until(lambda: bool((s := app.reporting_snapshot()) and not s.waiting_for_sync))
+    snapshot = app.reporting_snapshot()
+    assert (
+        snapshot
+        and snapshot.phase_issue is None
+        and snapshot.startup_read
+        and snapshot.startup_read.value == counter
+    )
 
 
 def saved_data(root: Path, *, camera_count: int = 6) -> ApplicationData:
