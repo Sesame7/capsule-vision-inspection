@@ -193,8 +193,8 @@ for an explicitly approved change. The product requirements are:
 - Each audit entry should have time, actor, action, target, result, and a short informative description. For material configuration changes, use meaningful before/after values when affordable; never record passwords or sensitive secrets. Audit is locally persistent, with no dedicated export feature initially.
 - Alarm monitoring is **independent of PLC detection-result reporting**. When configured and enabled, it can run after software startup while Production is READY, RUNNING, or stopped; unavailable communication is an **unknown/unavailable monitor state**, not proof that all PLC alarms cleared.
 - PLC retains responsibility for equipment/mechanical safety response. Software displays actual PLC alarm signals and important software faults, recording alarm occurrence and recovery transitions rather than every poll. Preserve current application FAULT/cleanup semantics for serious software failures. Do not add alarm acknowledgment, complex severity editors, sound systems, or remote notifications in the first implementation.
-- PLC alarm observation/reads must not disturb the timing or ownership of critical four-Cycle reporting reads and writes. The concrete transport/scheduling integration needs its own design and validation.
-- Engineer and Administrator can review the initial Audit Trail by date, actor and action. It has no automatic retention deletion. Alarm retention, access and equipment signal mapping remain [open below](#10-open-decisions-and-audit-boundaries). Independent alarm monitoring requires an explicit authorization and ownership contract.
+- PLC alarm reads must preserve the timing and ownership of critical four-Cycle reporting reads and writes. Enabling both on the same PLC requires field confirmation that it can serve two independent FINS/TCP connections concurrently and meet reporting deadlines.
+- Engineer and Administrator can review the initial Audit Trail by date, actor and action. It has no automatic retention deletion. All roles can observe current alarms. Operator and above can review 30 days of alarm observations by date, category and Batch. Engineer and above can save the independent monitor selection. See [PLC alarm monitoring](communication.md#plc-alarm-monitoring) for activation and equipment acceptance.
 
 ## 8. Global UI and multilingual quality contract
 
@@ -248,11 +248,6 @@ above or authorize choosing a convenient implementation silently.
   how existing disabled Recipes will be handled before enforcing the target
   every-exposure inspection policy; this document does not reinterpret their
   saved settings or authorize an implicit enablement change.
-- **Alarms:** decide retention, querying and role access. Thirty days remains a
-  proposal for alarm records. Define authorization
-  for saved startup monitoring while Guest or after logout, independently of
-  session-bound manual watches. Verify alarm addresses/bit semantics against the
-  approved equipment signal table before implementation.
 - **Feature acceptance details:** settle deterministic best-effort photo
   matching and representative readable minima/geometry criteria for each changed
   table in their respective scoped Phases.

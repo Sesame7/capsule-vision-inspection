@@ -27,8 +27,8 @@ accuracy remain separate commissioning responsibilities.
 | Production | Select and prepare saved Recipes, run inspection and review results |
 | Recipe | Edit and save Recipe definitions, models and inspection rules |
 | Vision | Configure sources, camera layouts and channel ROIs |
-| Communication | Configure PLC diagnostics, reporting and Web observer |
-| History | All roles can browse inspection records. Operators and higher roles can export named Batches to Excel. Engineers and Administrators can review the local Audit Trail. |
+| Communication | Configure PLC diagnostics, reporting, read-only alarm monitoring and the Web observer |
+| History | All roles can browse inspection records. Operators and higher roles can review Alarm History and export named Batches to Excel. Engineers and Administrators can review the local Audit Trail. |
 
 ## Quick Start
 

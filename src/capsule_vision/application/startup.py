@@ -336,7 +336,17 @@ def _load_startup(
     communication = CommunicationPreferences()
     communication_error = ""
     try:
-        communication = load_communication_preferences(data.communication)
+        alarm_errors: list[str] = []
+        communication = load_communication_preferences(
+            data.communication, alarm_error=alarm_errors.append
+        )
+        if alarm_errors:
+            communication_error = alarm_errors[0]
+            issues.append(
+                StartupIssue(
+                    "startup_communication", communication_error, blocking=False
+                )
+            )
     except ConfigurationError as exc:
         if not isinstance(exc.__cause__, FileNotFoundError):
             # Preserve the bad file; safe in-memory recovery is visible and only
@@ -355,11 +365,19 @@ def _load_startup(
             kind,
         )
 
+    def alarm_access(revision: int | None) -> int:
+        with identity.admission(Role.OPERATOR, revision) as actor:
+            return actor.revision
+
+    history = ProductionHistory(
+        data.history, on_failure=history_error, alarm_access=alarm_access
+    )
     if editor is None or editor.camera_sources is None:
         application = unconfigured_application(
-            ProductionHistory(data.history, on_failure=history_error),
+            history,
             identity=identity,
             initial_reporting=communication.reporting,
+            initial_alarm=communication.alarm,
         )
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
         cameras = (
@@ -374,11 +392,12 @@ def _load_startup(
             engine_factory=engine_factory,
             observe_source=observe_source,
             reporting_editable=True,
-            history=ProductionHistory(data.history, on_failure=history_error),
+            history=history,
             identity=identity,
             replay_controls=True,
             initial_candidate=prepared,
             initial_reporting=communication.reporting,
+            initial_alarm=communication.alarm,
         )
     return Startup(
         data,

@@ -211,12 +211,40 @@ for its lifetime. An abrupt process exit can lose queued best-effort observation
 Inspection, automatic reporting and Stop continue through audit loss. Close drains
 account work and accepted audit records and joins their owners.
 
-History has Inspection History and Audit Trail tabs. Engineer and Administrator
+History includes an Inspection History tab and an Audit Trail tab. Engineer and Administrator
 sessions can query audit records by UTC date, exact username or account ID, and
 action. The SQLite owner pages by stable insertion order. Qt shows up to 50 rows
 and clears private details on session change. Review access is checked by the
 service as well as the tab. Ordinary navigation, refreshes, per-exposure results
 and automatic PLC transactions do not produce entries.
+
+## Alarm monitoring and history
+
+Normal Application composition owns one independent, read-only monitor for
+the [saved alarm selection](communication.md#plc-alarm-monitoring). Its worker
+captures definitions at activation and holds one observation and one connection
+at a time. A first active signal is recorded as observed active. Subsequent
+successful reads record changes only. During communication loss the last known
+active set remains available and is marked stale. The first valid reading after
+a gap reconciles differences as observed active or observed recovered. All
+timestamps are host observations. Pulses entirely between reads can be missed.
+A new activation starts a fresh observation baseline.
+
+One nonblocking handoff carries all transitions from a word to the existing
+History SQLite owner. Its bounded queue retains the lifecycle slot for Run
+closure. An additive alarm table is created on the first event. Each row freezes
+the signal ID, both display labels, category, endpoint, station, word/bit,
+definition origin/version/digest and the selected Batch UUID and label when
+available. Actual Production FAULT entry and explicit fault reset use a
+separate application source and carry no PLC address. Storage loss is visible
+in Alarm History. Bounded retention removes alarm observations older than 30
+days and leaves Batch totals and the independent Audit Trail intact.
+
+All roles can see the PLC alarm status in the existing 44-pixel strip. Operator,
+Engineer and Administrator can review the third History tab by UTC date, signal
+category and exact Batch label or UUID. Pages contain up to 50 observations and
+private rows are cleared on identity change. Close waits for the actual monitor
+worker before draining History.
 
 ## Inference
 
@@ -675,14 +703,14 @@ DPR-aware vector icons. Normal startup maximizes the native framed window, keepi
 taskbar clearance; portrait Production retains two columns and three rows. Theme
 switching is presentation-only and is not persisted. Language retains its existing
 preference behavior. The fixed bottom strip preserves source identification and
-connection counts, summarizes observed PLC worker and Web lifecycle states, and
+connection counts, summarizes observed PLC worker, alarm monitor and Web states, and
 retains current feedback. The three service groups have no runtime tooltips;
 actionable failures use the existing visible feedback. Reporting retains its
 visible lifecycle and ACK/success/ERR summary without runtime diagnostic tooltips;
 detailed observations stay with their existing owners.
 ACK is not connectivity, PLC consumption or physical rejection. It
 reuses bridge refresh/notifications without another timer or network request.
-The three persistent groups reserve compact role widths measured across each
+The persistent groups reserve compact role widths measured across each
 language's concise states, recalculated on language/font changes rather than status
 updates. This avoids both English-only clipping and reserving other languages'
 longest captions at the expense of feedback. Longer source observations elide with

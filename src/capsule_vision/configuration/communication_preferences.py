@@ -1,6 +1,7 @@
 """Operator communication preferences, separate from live owners/observations."""
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 from pathlib import Path
@@ -11,6 +12,7 @@ from capsule_vision.communication.endpoints import (
     Endpoint,
     FinsTcpEndpoint,
     FinsUdpEndpoint,
+    validate_endpoint,
 )
 from capsule_vision.communication.modbus_tcp import ModbusSettings
 from capsule_vision.communication.reporting import (
@@ -52,6 +54,29 @@ class WebPreferences:
 
 
 @dataclass(frozen=True, slots=True)
+class AlarmPreferences:
+    enabled: bool = False
+    station: int = 1
+    endpoint: FinsTcpEndpoint = FinsTcpEndpoint()
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.enabled) is not bool
+            or type(self.station) is not int
+            or self.station not in (1, 2)
+        ):
+            raise ValueError("Expected alarm enabled flag and station 1 or 2")
+        if not isinstance(validate_endpoint(self.endpoint), FinsTcpEndpoint):
+            raise ValueError("Alarm monitoring requires FINS/TCP")
+        if self.endpoint.timeout > 1.0:
+            raise ValueError("Alarm monitor timeout must be at most one second")
+
+    @property
+    def address(self) -> int:
+        return 18 if self.station == 1 else 118
+
+
+@dataclass(frozen=True, slots=True)
 class CommunicationPreferences:
     """Initial editing values; persisted omissions retain their legacy defaults."""
 
@@ -62,6 +87,7 @@ class CommunicationPreferences:
     )
     diagnostic: Endpoint = FinsTcpEndpoint()
     web: WebPreferences = WebPreferences(enabled=False)
+    alarm: AlarmPreferences = AlarmPreferences()
 
 
 # Existing documents, including {}, must keep their original UDP interpretation.
@@ -161,11 +187,34 @@ def _reporting(value: dict[str, object]) -> ReportingSettings:
     )
 
 
-def load_communication_preferences(path: Path) -> CommunicationPreferences:
+def _alarm(value: object) -> AlarmPreferences:
+    alarm = _object(
+        value,
+        {"enabled", "station", "protocol", "host", "port", "timeout"},
+        "alarm",
+    )
+    endpoint = _endpoint(
+        {
+            "protocol": "fins_tcp",
+            **{k: v for k, v in alarm.items() if k not in ("enabled", "station")},
+        }
+    )
+    if not isinstance(endpoint, FinsTcpEndpoint):
+        raise ValueError("Alarm monitoring requires FINS/TCP")
+    return AlarmPreferences(
+        _boolean(alarm.get("enabled", False), "alarm.enabled"),
+        _integer(alarm.get("station", 1), "alarm.station"),
+        endpoint,
+    )
+
+
+def load_communication_preferences(
+    path: Path, *, alarm_error: Callable[[str], None] | None = None
+) -> CommunicationPreferences:
     """Missing/invalid files are reported; the startup owner chooses recovery."""
     try:
         raw = read_json(path, duplicate_message="Duplicate field: {key}")
-        obj = _object(raw, {"reporting", "diagnostic", "web"}, "communication")
+        obj = _object(raw, {"reporting", "diagnostic", "web", "alarm"}, "communication")
         reporting = _object(
             obj.get("reporting", {}),
             {
@@ -185,6 +234,13 @@ def load_communication_preferences(path: Path) -> CommunicationPreferences:
         web = _object(
             obj.get("web", {}), {"enabled", "host", "port", "interval_ms"}, "web"
         )
+        try:
+            alarm = _alarm(obj.get("alarm", {}))
+        except (ValueError, TypeError) as exc:
+            if alarm_error is None:
+                raise
+            alarm_error(f"Invalid alarm settings {path}: {exc}")
+            alarm = AlarmPreferences()
         defaults = _PERSISTED_DEFAULTS
         return CommunicationPreferences(
             ReportingSelection(
@@ -200,6 +256,7 @@ def load_communication_preferences(path: Path) -> CommunicationPreferences:
                     web.get("interval_ms", defaults.web.interval_ms), "web.interval_ms"
                 ),
             ),
+            alarm,
         )
     except OSError as exc:
         raise ConfigurationIOError(
@@ -265,6 +322,12 @@ def save_communication_preferences(path: Path, value: CommunicationPreferences) 
     }
     if web:
         payload["web"] = web
+    if value.alarm != defaults.alarm:
+        payload["alarm"] = {
+            **_endpoint_json(value.alarm.endpoint),
+            "station": value.alarm.station,
+            "enabled": value.alarm.enabled,
+        }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

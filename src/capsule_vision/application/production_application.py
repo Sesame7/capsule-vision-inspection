@@ -40,6 +40,7 @@ from capsule_vision.configuration import (
     CameraSources,
     load_camera_sources,
 )
+from capsule_vision.configuration.communication_preferences import AlarmPreferences
 from capsule_vision.configuration.drafts import CameraSourceDraft
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CameraId, CycleId
@@ -78,6 +79,7 @@ class SourceProductionApplication(ProductionApplication):
         identity: LocalIdentity | None = None,
         initial_candidate: PreparedConfiguration | None = None,
         initial_reporting: ReportingSelection | None = None,
+        initial_alarm: AlarmPreferences | None = None,
     ) -> None:
         self.replay_cache = cache
         self._display_store = store
@@ -112,6 +114,7 @@ class SourceProductionApplication(ProductionApplication):
             history=history,
             identity=identity,
             initial_candidate=initial_candidate,
+            initial_alarm=initial_alarm,
         )
 
     def snapshot(self) -> ProductionApplicationSnapshot:
@@ -451,6 +454,7 @@ class SourceProductionApplication(ProductionApplication):
         *,
         revision: int | None = None,
         changes: tuple[str, str] | None = None,
+        alarm: AlarmPreferences | None = None,
     ) -> None:
         """Publish saved preferences under the same lock that freezes Start.
 
@@ -482,6 +486,8 @@ class SourceProductionApplication(ProductionApplication):
                             "Reporting settings are fixed by this launcher"
                         )
                 persist()
+                if self._alarms is not None and alarm is not None:
+                    self._alarms.apply_saved(alarm)
             if changed:
                 with self._reporting_lock:
                     self._reporting_selection = selection

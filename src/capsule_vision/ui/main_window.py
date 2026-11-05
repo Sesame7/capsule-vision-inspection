@@ -68,6 +68,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language, is_language
 from capsule_vision.web.runtime import WebRuntime, WebState
 
+from .alarm_page import AlarmPage
 from .audit_page import AuditPage
 from .batch_dialog import BatchDialog
 from .camera_card import CameraCard
@@ -417,11 +418,14 @@ class MainWindow(QMainWindow):
         self.identity_controls.session_changed.connect(self._session_changed)
         self.history = HistoryPage(bridge.application.history, bridge.application)
         self.audit_page = AuditPage(bridge.application.identity)
+        self.alarm_page = AlarmPage(bridge.application)
+        self.history.timer.timeout.connect(self.alarm_page.refresh_status)
         self.history.timer.timeout.connect(self.audit_page.refresh_status)
         self.history_tabs = QTabWidget()
         self.history_tabs.setObjectName("historyTabs")
         self.history_tabs.addTab(self.history, "")
         self.history_tabs.addTab(self.audit_page, "")
+        self.history_tabs.addTab(self.alarm_page, "")
         self.history_tabs.currentChanged.connect(self._history_tab_changed)
         self._history_access()
         if self.communication.reporting_panel is not None:
@@ -554,23 +558,34 @@ class MainWindow(QMainWindow):
 
     def _history_access(self) -> None:
         self.audit_page.clear()
+        self.alarm_page.clear()
         identity = self.bridge.application.identity
-        allowed = identity is not None and identity.snapshot().role >= Role.ENGINEER
-        if not allowed:
+        role = identity.snapshot().role if identity else Role.GUEST
+        allowed = role >= Role.ENGINEER
+        alarms = role >= Role.OPERATOR
+        index = self.history_tabs.currentIndex()
+        if (index == 1 and not allowed) or (index == 2 and not alarms):
             self.history_tabs.setCurrentIndex(0)
         self.history_tabs.setTabEnabled(1, allowed)
+        self.history_tabs.setTabEnabled(2, alarms)
         if allowed and self.history_tabs.currentIndex() == 1:
             self.audit_page.refresh()
+        if alarms and self.history_tabs.currentIndex() == 2:
+            self.alarm_page.refresh()
 
     def _history_tab_changed(self, index: int) -> None:
         if index == 1:
             self.audit_page.refresh()
+        elif index == 2:
+            self.alarm_page.refresh()
         else:
             self.history.activate()
 
     def _history_language(self) -> None:
         self.history_tabs.setTabText(0, text("audit_inspection", self.language))
         self.history_tabs.setTabText(1, text("audit_trail", self.language))
+        self.history_tabs.setTabText(2, text("alarm_history", self.language))
+        self.alarm_page.set_language(self.language)
         self.audit_page.set_language(self.language)
 
     def _refresh_vision(self) -> None:
@@ -1498,6 +1513,7 @@ class MainWindow(QMainWindow):
                 WebState.FAILED: "technical_error",
             }[observed.state]
         web = text(web_key, self.language)
+        alarms = self.bridge.application.alarm_snapshot()
         web_color = (
             colors.warning
             if observed is not None
@@ -1567,6 +1583,7 @@ class MainWindow(QMainWindow):
             plc,
             web,
             web_color,
+            alarms,
         )
         if identity == self._service_presentation:
             return
@@ -1578,6 +1595,31 @@ class MainWindow(QMainWindow):
         bar.plc.setText(f"PLC · {plc}")
         bar.web.setText(f"Web · {web}")
         bar.web.setStyleSheet(f"color: {web_color};")
+        alarm_key = (
+            "alarm_count"
+            if alarms.state == "online" and alarms.active
+            else "alarm_" + alarms.state
+        )
+        alarm_text = text(alarm_key, self.language).format(count=len(alarms.active))
+        bar.alarm.setText(alarm_text)
+        alarm_detail = "\n".join(
+            filter(
+                None,
+                (
+                    f"{text('alarm_monitor', self.language)} · {alarm_text}",
+                    alarms.issue,
+                    text("alarm_last_known", self.language)
+                    if alarms.state == "unavailable" and alarms.active
+                    else "",
+                    *(s.zh if self.language == "zh" else s.en for s in alarms.active),
+                ),
+            )
+        )
+        bar.alarm.setToolTip(alarm_detail)
+        bar.alarm.setAccessibleDescription(alarm_detail)
+        bar.alarm.setStyleSheet(
+            f"color: {colors.warning if alarms.active or alarms.issue else colors.secondary};"
+        )
 
     def _status_message(self, event_key: str, fallback: str) -> str:
         """Describe existing technical evidence; never guess a cause or show raw SDK text."""
@@ -1887,6 +1929,7 @@ class MainWindow(QMainWindow):
             self.communication.dispose()
             self.history.dispose()
             self.audit_page.dispose()
+            self.alarm_page.dispose()
             self.recipe_page.dispose()
             self.editing.dispose()
             event.accept()

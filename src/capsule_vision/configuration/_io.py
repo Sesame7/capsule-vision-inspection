@@ -9,6 +9,12 @@ from pathlib import Path
 def read_json(
     path: Path, *, duplicate_message: str = "Duplicate JSON key: {key!r}"
 ) -> object:
+    return decode_json(path.read_text(encoding="utf-8"), duplicate_message)
+
+
+def decode_json(
+    content: str, duplicate_message: str = "Duplicate JSON key: {key!r}"
+) -> object:
     def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
         for key, value in pairs:
@@ -17,7 +23,7 @@ def read_json(
             result[key] = value
         return result
 
-    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
+    return json.loads(content, object_pairs_hook=unique)
 
 
 def atomic_write(

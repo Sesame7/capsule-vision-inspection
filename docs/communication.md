@@ -204,8 +204,9 @@ in tooltips and accessible names. The selector sits between the title/summary
 and the lifecycle status with its independent Enable/Disable action. Mode edits
 remain drafts until Save; Discard restores the saved selection. A new normal
 installation selects four_cycle, FINS/TCP and W49, with reporting disabled.
-Engineer/Administrator explicitly saves the next-Start selection. Loading settings,
-opening Communication and Start warm-up never contact a PLC. Disabled reporting
+Engineer/Administrator explicitly saves the next-Start selection. Loading reporting
+settings, opening Communication and Start warm-up issue no reporting requests.
+An independently enabled [alarm monitor](#plc-alarm-monitoring) may already be reading. Disabled reporting
 creates no automatic reporting owner: no counter reads, group attribution or result
 writes occur. Inspection and per-Cycle occurrence counters continue normally;
 four consecutive CycleIds alone never establish physical groups. Independent
@@ -328,6 +329,26 @@ engineering tools. Local loopback and offline timing evidence cannot establish
 these guarantees on real equipment. A complete group may still be too late;
 conservative timeout projection does not repair a lost timing window.
 
+## PLC alarm monitoring
+
+A saved enabled monitor reads one WR word on its own negotiated FINS/TCP
+connection, W18 for station 1 or W118 for station 2. The read owner waits one
+second between attempts, including after a failure. It negotiates again after
+a failed exchange. One connect/handshake or active read can run to its bounded
+deadline. Close and saved selection changes wake the interval wait immediately.
+The owner retires the old socket and discards late responses before polling the
+replacement. It sends no writes, triggers, resets or acknowledgments.
+
+Normal launch restores the saved selection under Guest. Logout, navigation and
+Production Start/Stop are independent of it. Faulted monitoring has its own
+unavailable status. Commissioning a shared PLC endpoint requires support for
+separately negotiated, concurrently serviced sessions and sufficient PLC service
+capacity to meet the [four-cycle deadlines](#four-cycle-reporting). The monitor
+never uses the reporting socket, request queue or worker. A serial-only PLC
+endpoint cannot provide this concurrent guarantee. Keep monitoring disabled on
+such an endpoint. Field timing and node/connection capacity require equipment
+validation.
+
 ## Communication workspace
 
 Engineer or Administrator can issue manual PLC reads and writes, read register
@@ -335,7 +356,7 @@ watches, save CommunicationPreferences and control the Web observer. Saving
 requires this role even when automatic reporting is unchanged. A watch retains
 its initiating session revision and checks it on each pass and before each
 group reaches the transport. An admitted request may finish after logout.
-Later requests stop on authorization failure. Any role can stop monitoring,
+Later requests stop on authorization failure. Any role can stop a diagnostic register watch,
 observe results and close the application.
 
 The workspace keeps settings, diagnostic observations and service status visible
@@ -349,8 +370,8 @@ service operation. Start, Stop and Apply/Restart also check authorization at
 the Web owner. Normal startup can restore saved enablement while anonymous,
 and Close drains the existing service regardless of role.
 
-The page has three content-driven sections: **Production reporting**, **Web
-observer**, and **Diagnostics**. Production protocol, endpoint, timeout, base and enabled
+The page groups **Production reporting**, **Web observer** and **Diagnostics**
+with a compact **PLC alarm monitoring** settings row. Production protocol, endpoint, timeout, base and enabled
 selection are inline; UDP FINS routing expands separately. FINS/TCP negotiates
 nodes and hides manual routing. Modbus shows an explicitly required HR base and
 advanced Unit ID, with no FINS routing. Protocol changes use port 502 for Modbus
@@ -384,7 +405,7 @@ automatic reporting transactions remain outside this trail.
 TCP node negotiation remains with the serial network owner. Late responses cannot
 replace a newer request's presentation.
 
-**Save settings** atomically writes definitions for all three sections; failed
+**Save settings** atomically writes the communication preferences; failed
 validation/write preserves the entire draft and effective settings. Unsaved fields
 never change reporting admission. An active session retains its frozen selection.
 The settings save and the Web power preference write each require their own

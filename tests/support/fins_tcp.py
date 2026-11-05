@@ -15,8 +15,11 @@ type Fault = Literal[
 
 
 class TcpPeer:
-    def __init__(self, sequence: int = 0, *, base_address: int = 49) -> None:
+    def __init__(
+        self, sequence: int = 0, *, base_address: int = 49, dual_session: bool = False
+    ) -> None:
         self.base_address = base_address
+        self._dual_session = dual_session
         self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listener.bind(("127.0.0.1", 0))
         self.port: int = self._listener.getsockname()[1]
@@ -92,7 +95,7 @@ class TcpPeer:
             assert self.release.wait(5), "test peer was not released"
         return fault
 
-    def _respond(self, connection: socket.socket) -> None:
+    def _respond(self, connection: socket.socket, client_node: int = 101) -> None:
         node_request = self._receive(connection)
         if node_request is None:
             return
@@ -105,7 +108,7 @@ class TcpPeer:
             return
         connection.sendall(
             bytes.fromhex("46494E53 00000010 00000001")
-            + struct.pack("!III", 0x20 if fault == "reject" else 0, 101, 20)
+            + struct.pack("!III", 0x20 if fault == "reject" else 0, client_node, 20)
         )
         if fault == "reject":
             return
@@ -115,7 +118,7 @@ class TcpPeer:
                 return
             assert envelope[:8] == bytes.fromhex("00000002 00000000")
             packet = envelope[8:]
-            assert packet[:9] == bytes.fromhex("80 00 02 00 14 00 00 65 00")
+            assert packet[:9] == bytes((0x80, 0, 2, 0, 20, 0, 0, client_node, 0))
             command = packet[10:12]
             area, start, bit, count = struct.unpack("!BHBH", packet[12:18])
             assert command in (b"\x01\x01", b"\x01\x02")
@@ -161,6 +164,16 @@ class TcpPeer:
             )
 
     def _serve(self) -> None:
+        clients: dict[int, Thread] = {}
+
+        def session(connection: socket.socket, node: int) -> None:
+            try:
+                with connection:
+                    connection.settimeout(0.05)
+                    self._respond(connection, node)
+            except BaseException as exc:
+                self.errors.append(exc)
+
         try:
             while not self._stop.is_set():
                 try:
@@ -168,11 +181,22 @@ class TcpPeer:
                 except TimeoutError:
                     continue
                 self.connections += 1
-                with connection:
-                    connection.settimeout(0.05)
-                    self._respond(connection)
+                if self._dual_session:
+                    node = next(
+                        n
+                        for n in (101, 102)
+                        if n not in clients or not clients[n].is_alive()
+                    )
+                    clients[node] = Thread(target=session, args=(connection, node))
+                    clients[node].start()
+                else:
+                    session(connection, 101)
         except BaseException as exc:
             self.errors.append(exc)
+        finally:
+            for thread in clients.values():
+                thread.join(3)
+                assert not thread.is_alive()
 
     def __enter__(self) -> TcpPeer:
         self._thread.start()

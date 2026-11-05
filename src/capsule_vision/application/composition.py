@@ -43,6 +43,7 @@ from capsule_vision.configuration import (
     resolve_configuration,
 )
 from capsule_vision.configuration.catalog import RecipeCatalog
+from capsule_vision.configuration.communication_preferences import AlarmPreferences
 from capsule_vision.configuration.drafts import CameraSourceDraft
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inference._validation import uint8_array
@@ -189,6 +190,7 @@ def create_production_application(
     history: ProductionHistory | None = None,
     identity: LocalIdentity | None = None,
     initial_reporting: ReportingSelection | None = None,
+    initial_alarm: AlarmPreferences | None = None,
     initial_candidate: PreparedConfiguration | None = None,
 ) -> tuple[SourceProductionApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
@@ -375,6 +377,7 @@ def create_production_application(
         history=history,
         identity=identity,
         initial_reporting=initial_reporting,
+        initial_alarm=initial_alarm,
         initial_candidate=initial_candidate,
         source_draft=source_draft if not paths else None,
         source_cameras=editor.machine_editor.camera_ids,
@@ -392,6 +395,7 @@ def unconfigured_application(
     *,
     identity: LocalIdentity | None = None,
     initial_reporting: ReportingSelection | None = None,
+    initial_alarm: AlarmPreferences | None = None,
 ) -> ProductionApplication:
     """Normal stopped shell can edit session preferences without inventing inputs."""
 
@@ -407,4 +411,5 @@ def unconfigured_application(
         history=history,
         identity=identity,
         initial_reporting=initial_reporting,
+        initial_alarm=initial_alarm,
     )

@@ -10,7 +10,8 @@ fallback, automatic repair of saved geometry or fake inference is used for recov
 | File | Content |
 | --- | --- |
 | `data/app.json` | optional `last_applied_recipe_id`, `language` (codes below) |
-| `data/communication.json` | optional global Production reporting, diagnostic endpoint and Web preferences |
+| `data/communication.json` | optional Production reporting, Diagnostics, Web and alarm-monitor preferences |
+| `data/alarm_definitions.json` | optional equipment-local replacement for the bundled alarm signal definitions |
 | `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
 | `data/security.sqlite3` | optional local accounts and versioned password verifiers; independent of History |
 | `data/audit.sqlite3` | append-only application audit records with their own schema and writer |
@@ -341,16 +342,16 @@ observations and query limits.
 
 `data/communication.json` is independent from `app.json`, Recipes, MachineLayout
 and CameraSources. Communication's explicit **Save settings** atomically replaces
-this file (same-directory temporary write, fsync, replace); it does not change any
-other asset or start a network owner. Network/reporting fields are drafts until a
-successful Save. The Web header's power action is the specific exception: it
+this file (same-directory temporary write, fsync, replace). A successful Save
+applies a changed alarm-monitor selection. Other network/reporting fields keep
+their existing activation boundaries. The Web header's power action
 persists only `web.enabled` from the actual validated file, then requests runtime
 start/stop using saved Web network settings. It never saves unrelated drafts or
 changes effective reporting selection. An invalid file is not silently replaced;
 first-use defaults can establish a missing file. Unsaved reporting edits never change next-Start admission; diagnostic
 requests continue to use the effective saved endpoint, not draft text. Save and
 reporting publication are serialized with Start under the existing Application
-lock. An unchanged reporting selection permits saving independent Web/diagnostic
+lock. An unchanged reporting selection permits saving independent Web, alarm or diagnostic
 preferences during Production. Active sessions keep their frozen settings.
 
 Confirmed Discard reloads the actual file through this codec, without writing or
@@ -359,11 +360,33 @@ file before the first Save), the complete draft is preserved. Default settings
 can be explicitly saved to establish that initial file. Save/Discard feedback
 and actions remain outside the scrolling content.
 
-The versionless object permits optional `reporting`, `diagnostic` and `web`
+The versionless object permits optional `reporting`, `diagnostic`, `web` and `alarm`
 sections; an existing `{}` means legacy UDP defaults, with reporting and Web
 disabled. Unknown or duplicate fields and invalid present types/ranges are rejected. Superseded
 `endpoint` envelopes, `transport` fields and protocol aliases are not accepted;
 startup reports them without rewriting the file. Explicit Save writes this format.
+
+The flat `alarm` section accepts `enabled` (default false), `station` (1 or 2),
+`protocol` (FINS/TCP only, encoded as `fins_tcp`), numeric IPv4 `host`, `port`
+and `timeout`. The initial endpoint is 127.0.0.1:9600. Its one-second default
+deadline can be shortened to 0.05 seconds. Only Engineer or Administrator can
+publish these settings, through the existing audited Save. At startup, a field
+validation error confined to this section disables monitoring and exposes the
+error while allowing valid reporting, Diagnostics and Web settings to load.
+
+The [bundled JSON template](../src/capsule_vision/configuration/alarm_definitions.json)
+maps bits 0–10 of W18/W118 from the approved equipment signal table dated
+2026-09-05. A local override supplies a complete `version` and `signals` array
+with 1–16 definitions. Each signal has a unique stable `id`, unique word `bit`
+(0–15), `category` (`equipment`, `interlock`, `startup` or `software`), and
+nonempty `zh` and `en` labels. Other UI languages use the English signal label.
+Optional boolean `active_high` defaults to true.
+IDs start with a lowercase ASCII letter and may contain lowercase letters,
+digits, underscores and hyphens (64 characters maximum). The asset is limited
+to 32 KiB. Each activation captures one validated file and its SHA-256 digest.
+An invalid local file leaves the monitor unavailable until a new activation.
+To load an edited file, save monitoring off and then on. Direct file edits have
+file provenance and carry no in-app actor attribution.
 
 The codecs construct the same immutable protocol-specific endpoint values for
 Diagnostics and reporting. Reporting's address/capacity belong to its separate
@@ -461,13 +484,13 @@ also initially uses FINS/TCP at 127.0.0.1:9600 with a one-second timeout, as doe
 the reporting endpoint. Explicit engineering launchers retain their per-cycle
 defaults. Web remains 127.0.0.1:8765 at 500 ms. These are editing defaults,
 not a saved Production destination. Camera source mode never selects a PLC endpoint.
-An existing empty or partially populated document still decodes omitted endpoint
-sections/fields as FINS/UDP; explicit UDP, TCP and Modbus selections are unchanged.
+An existing empty or partially populated document still decodes omitted reporting
+and Diagnostics protocols as FINS/UDP.
 No PLC connection or reporting activity starts merely from loading initial values.
 Explicit Save establishes the file; Discard cannot reload a nonexistent file and
 preserves the draft with feedback. Valid files restore their exact saved
-settings, including Web auto-start when enabled, without rewriting them.
-Invalid files remain unchanged, with visible recovery
+settings, including enabled Web and alarm monitoring, without rewriting them.
+Invalid top-level files remain unchanged, with visible recovery
 feedback; reporting and Web stay disabled in memory until reviewed. An explicit
 Save replaces the invalid file with validated settings. If a saved Web address is
 no longer assigned or its port cannot bind, optional service startup fails visibly

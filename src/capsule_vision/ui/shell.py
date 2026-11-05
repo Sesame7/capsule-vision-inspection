@@ -521,10 +521,13 @@ class StatusBar(QFrame):
         self.setFixedHeight(44)
         row = QHBoxLayout(self)
         row.setContentsMargins(12, 4, 12, 4)
-        row.setSpacing(10)
+        row.setSpacing(8)
         self.state_icon, self.state = self._item(row)
         self.plc_icon, self.plc = self._item(row)
         self.web_icon, self.web = self._item(row)
+        self.alarm = _StatusLabel()
+        self.alarm.setTextFormat(Qt.TextFormat.PlainText)
+        row.addWidget(self.alarm)
         self.event_icon, self.event_label = self._item(row, flexible=True)
 
     @staticmethod
@@ -541,7 +544,7 @@ class StatusBar(QFrame):
         )
         content = QHBoxLayout(group)
         content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(8)
+        content.setSpacing(6)
         icon = QLabel()
         icon.setFixedSize(20, 20)
         content.addWidget(icon)
@@ -563,6 +566,21 @@ class StatusBar(QFrame):
         if self._appearance == appearance:
             return
         self._appearance = appearance
+        self.alarm.setFixedWidth(
+            max(
+                self.alarm.fontMetrics().horizontalAdvance(
+                    text(key, language).format(count=16)
+                )
+                for key in (
+                    "alarm_off",
+                    "alarm_waiting",
+                    "alarm_unavailable",
+                    "alarm_online",
+                    "alarm_count",
+                )
+            )
+            + 2
+        )
         # Reserve this language's concise role captions across states. Using
         # English clips translations; reserving every language's longest caption
         # wastes feedback space. Recalculate on language/font changes, not status.

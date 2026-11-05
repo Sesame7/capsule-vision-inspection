@@ -41,7 +41,7 @@ def test_audit_tab_filters_pages_and_revokes_pending_delivery(
             identity.audit.record(op, "success")
         window.show()
         window.navigate(3)
-        assert window.pages.count() == 5 and window.history_tabs.count() == 2
+        assert window.pages.count() == 5 and window.history_tabs.count() == 3
         window.history_tabs.setCurrentIndex(1)
         until(lambda: len(page.rows) == 50)
         identity.login("Shift", TEST_PASSWORD).result(WAIT)

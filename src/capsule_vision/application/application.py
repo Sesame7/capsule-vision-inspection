@@ -10,10 +10,13 @@ from uuid import uuid4
 
 from capsule_vision.communication.reporting import ReportingSettings
 from capsule_vision.configuration import CameraSources, MachineLayoutDefinition
+from capsule_vision.configuration.communication_preferences import AlarmPreferences
 from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
 from capsule_vision.localization.languages import Language
 
+from .alarm_monitor import AlarmMonitor, AlarmSnapshot
+from .alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
 from .audit import AuditOperation, error_outcome
 from .batch_records import BatchSelection, ReportBatches
 from .history import HistoryContext, ProductionHistory
@@ -81,6 +84,7 @@ class ProductionApplication:
         history: ProductionHistory | None = None,
         identity: LocalIdentity | None = None,
         initial_candidate: PreparedConfiguration | None = None,
+        initial_alarm: AlarmPreferences | None = None,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
             raise ValueError("max_pending_cycles must be positive")
@@ -126,11 +130,44 @@ class ProductionApplication:
         self._thread = Thread(
             target=self._run, name=f"ProductionApplication-{id(self):x}", daemon=False
         )
+        self._alarms = (
+            AlarmMonitor(
+                history.path.with_name("alarm_definitions.json"),
+                history.offer_alarms,
+                self._alarm_context,
+            )
+            if history is not None and initial_alarm is not None
+            else None
+        )
         if initial_candidate is not None:
             self._install_candidate(initial_candidate)
         if history is not None:
             history.initial_selection.add_done_callback(self._restored)
         self._thread.start()
+        if self._alarms is not None and initial_alarm is not None:
+            self._alarms.apply_saved(initial_alarm)
+
+    def _alarm_context(self) -> tuple[float, str | None, str | None]:
+        with self._condition:
+            assert self.history is not None
+            return (
+                self.history.clock(),
+                self._batch_segment if self._batch is not None else None,
+                self._batch,
+            )
+
+    def alarm_snapshot(self) -> AlarmSnapshot:
+        return self._alarms.snapshot() if self._alarms is not None else AlarmSnapshot()
+
+    def alarm_page(
+        self, query: AlarmQuery, revision: int | None = None
+    ) -> Future[tuple[AlarmRecord, ...]]:
+        with self._condition, self._admission(Role.OPERATOR, revision) as actor:
+            ticket = actor.revision if actor is not None else None
+            if self.history is None:
+                raise ApplicationStateError("Alarm history unavailable")
+
+        return self.history.alarm_page(query, ticket)
 
     @property
     def identity(self) -> LocalIdentity | None:
@@ -738,6 +775,7 @@ class ProductionApplication:
                 raise ApplicationStateError(
                     "Runtime ownership must be safely released before reset"
                 )
+            self._record_application_alarm("recovered")
             self._issue = None
             self._state = (
                 ApplicationState.READY
@@ -846,12 +884,39 @@ class ProductionApplication:
             pending.public.result.set_result(result)
 
     def _fault(self, stage: str, error: BaseException) -> None:
+        entered = self._state is not ApplicationState.FAULT
         self._state = ApplicationState.FAULT
         self._issue = ApplicationIssue(
             stage, "lifecycle_failure", type(error).__name__, str(error)
         )
+        if entered:
+            self._record_application_alarm("activated")
         self._stop_requested = True
         self._condition.notify_all()
+
+    def _record_application_alarm(self, state: str) -> None:
+        if self.history is not None and self._issue is not None:
+            observed, batch_id, label = self._alarm_context()
+            self.history.offer_alarms(
+                (
+                    AlarmEvent(
+                        observed,
+                        "production_fault",
+                        state,
+                        "software",
+                        "生产应用故障",
+                        "Production application fault",
+                        "application",
+                        None,
+                        None,
+                        None,
+                        "application/1",
+                        batch_id,
+                        label,
+                        f"{self._issue.stage} · {self._issue.exception_type}",
+                    ),
+                )
+            )
 
     def _session_finished(self, generation: int, session: RuntimeSession) -> None:
         with self._condition:
@@ -878,6 +943,10 @@ class ProductionApplication:
         """Application-lifetime resources; called only by the lifecycle owner."""
         if self._export_thread is not None:
             self._export_thread.join()
+        if self._alarms is not None:
+            self._alarms.request_stop()
+            if not self._alarms.join():
+                raise ApplicationError("Alarm monitoring owner remains alive")
         if self.history is not None:
             self.history.request_stop()
             if not self.history.join():

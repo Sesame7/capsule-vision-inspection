@@ -30,7 +30,7 @@ capsule-vision = "capsule_vision.cli:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-capsule_vision = ["py.typed", "web/static/*"]
+capsule_vision = ["py.typed", "web/static/*", "configuration/alarm_definitions.json"]
 
 [tool.ruff]
 target-version = "py314"

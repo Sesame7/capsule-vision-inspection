@@ -13,6 +13,7 @@ from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QThread, QTimer, S
 from PySide6.QtGui import QColor, QFontMetricsF, QHideEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
@@ -86,6 +87,7 @@ from capsule_vision.communication.reporting import (
 )
 from capsule_vision.configuration import ConfigurationError
 from capsule_vision.configuration.communication_preferences import (
+    AlarmPreferences,
     CommunicationPreferences,
     load_communication_preferences,
     save_communication_preferences,
@@ -229,6 +231,35 @@ class CommunicationPage(QWidget):
         self._web_close_monitor.timeout.connect(self._check_closed)
         self.service_layout.addWidget(self.web_panel, 1, 0)
         layout.addWidget(self.service_cards)
+        self.alarm_strip = QFrame()
+        self.alarm_strip.setObjectName("commPanel")
+        alarm_row = QHBoxLayout(self.alarm_strip)
+        alarm_row.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
+        self.alarm_enabled = QCheckBox()
+        self.alarm_station = QComboBox()
+        self.alarm_station.addItems(["1 · W18", "2 · W118"])
+        self.alarm_host = QLineEdit("127.0.0.1")
+        self.alarm_host.setMaximumWidth(170)
+        self.alarm_port = self._spin(1, 65535, 9600)
+        for field in (
+            self.alarm_enabled,
+            self.alarm_station,
+            self.alarm_host,
+            self.alarm_port,
+        ):
+            field.setMinimumHeight(Style.touch)
+        alarm_row.addWidget(self.alarm_enabled)
+        alarm_row.addSpacing(Style.space)
+        alarm_row.addWidget(self._caption("alarm_station"))
+        alarm_row.addWidget(self.alarm_station)
+        alarm_row.addSpacing(Style.space)
+        alarm_row.addWidget(QLabel("FINS/TCP"))
+        alarm_row.addWidget(self.alarm_host)
+        alarm_row.addWidget(self._caption("comm_port"))
+        alarm_row.addWidget(self.alarm_port)
+        alarm_row.addStretch()
+        layout.addWidget(self.alarm_strip)
+        self.alarm_strip.hide()  # Explicit launchers without saved communication settings.
         diagnostics = self._panel(layout, "comm_diagnostics")
         settings = diagnostics
         self._preferences_path: Path | None = None
@@ -739,6 +770,15 @@ class CommunicationPage(QWidget):
             else self._preferences.reporting,
             self.diagnostic_selection(),
             self.web_panel.preferences(),
+            AlarmPreferences(
+                self.alarm_enabled.isChecked(),
+                self.alarm_station.currentIndex() + 1,
+                FinsTcpEndpoint(
+                    self.alarm_host.text().strip(),
+                    self.alarm_port.value(),
+                    self._preferences.alarm.endpoint.timeout,
+                ),
+            ),
         )
 
     @property
@@ -780,6 +820,10 @@ class CommunicationPage(QWidget):
             if self.reporting_panel is not None:
                 self.reporting_panel.set_selection(value.reporting)
             self.web_panel.set_preferences(value.web)
+            self.alarm_enabled.setChecked(value.alarm.enabled)
+            self.alarm_station.setCurrentIndex(value.alarm.station - 1)
+            self.alarm_host.setText(value.alarm.endpoint.host)
+            self.alarm_port.setValue(value.alarm.endpoint.port)
         finally:
             self._settings_loading = False
         self._refresh()
@@ -792,6 +836,11 @@ class CommunicationPage(QWidget):
         self._preferences_path, self._preferences = path, value
         self._settings_missing = not path.exists()
         self._show_preferences(value)
+        self.alarm_strip.show()
+        self.alarm_enabled.toggled.connect(self._settings_edited)
+        self.alarm_station.currentIndexChanged.connect(self._settings_edited)
+        self.alarm_host.textChanged.connect(self._settings_edited)
+        self.alarm_port.valueChanged.connect(self._settings_edited)
         self.web_panel.saved_available = not (self._settings_missing or error)
         self.web_panel.refresh()
         self._settings_message = "comm_settings_failed" if error else ""
@@ -828,6 +877,9 @@ class CommunicationPage(QWidget):
         except ValueError:
             self.web_panel.dirty = True
         engineer = permits(self._application, Role.ENGINEER)
+        self.alarm_strip.setEnabled(
+            engineer and not (self._closing or self._disposed or self._file_finished)
+        )
         if self.reporting_panel is not None:
             can_edit = engineer and self._file_finished is None
             if self.reporting_panel.can_manage != can_edit:
@@ -956,7 +1008,11 @@ class CommunicationPage(QWidget):
                         and owner.identity is identity
                     ):
                         owner.persist_reporting_selection(
-                            value.reporting, persist, revision=revision, changes=changes
+                            value.reporting,
+                            persist,
+                            revision=revision,
+                            changes=changes,
+                            alarm=value.alarm,
                         )
                     else:
                         with identity.change(
@@ -1245,6 +1301,15 @@ class CommunicationPage(QWidget):
             for selector in (self.area, self.watch_area):
                 selector.setItemText(0, text("comm_holding_registers", language))
         self.web_panel.set_language(language)
+        self.alarm_enabled.setText(text("alarm_monitor", language))
+        for field, key in (
+            (self.alarm_enabled, "alarm_monitor"),
+            (self.alarm_host, "comm_host"),
+            (self.alarm_port, "comm_port"),
+            (self.alarm_station, "alarm_station"),
+        ):
+            field.setAccessibleName(text(key, language))
+            field.setToolTip(text(key, language))
         self.refresh_icons()
         set_button_caption(
             self.save_settings,

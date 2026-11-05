@@ -206,7 +206,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     return f"""
     QWidget {{ color: {c.primary}; font-size: {Style.body}px; }}
     QMainWindow, QWidget#shell, QWidget#recipeEditor, QDialog {{ background: {c.background}; }}
-    QTabWidget#historyTabs::pane, QWidget#auditPage {{ background: {c.background}; border: none; }}
+    QTabWidget#historyTabs::pane, QWidget#auditPage, QWidget#alarmPage {{ background: {c.background}; border: none; }}
     QFrame#summary, QFrame#camera, QFrame#navigation, QFrame#event, QFrame#commPanel {{
         background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px;
     }}
@@ -235,8 +235,8 @@ def stylesheet(theme: Theme = "dark") -> str:
     QWidget#page_production QPushButton#start:focus:enabled {{ border-color: {c.primary}; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
     QPushButton[reportingSegment]:checked:disabled {{ background: {c.selected}; border-color: {c.secondary}; }}
-    QDateEdit#historyDate, QDateEdit#auditDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
-    QDateEdit#historyDate:disabled, QDateEdit#auditDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
+    QDateEdit#historyDate, QDateEdit#auditDate, QDateEdit#alarmDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
+    QDateEdit#historyDate:disabled, QDateEdit#auditDate:disabled, QDateEdit#alarmDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
     QCalendarWidget#historyCalendar {{ background: {c.surface}; color: {c.primary}; }}
     QCalendarWidget#historyCalendar QWidget#qt_calendar_navigationbar {{ background: {c.raised}; }}
     QCalendarWidget#historyCalendar QToolButton {{ background: {c.raised}; color: {c.primary}; padding: 4px 6px; min-height: 24px; }}
@@ -287,7 +287,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QTableWidget#accounts::item:selected, QListWidget#reportBatches::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QListWidget#reportBatches:focus {{ border-color: {c.accent}; }}
     QTableWidget#historyCycles, QTableWidget#historyChannels {{ border-radius: {Style.radius}px; }}
-    QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected, QTableWidget#auditRecords::item:selected {{ background: {c.selected}; color: {c.primary}; }}
+    QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected, QTableWidget#auditRecords::item:selected, QTableWidget#alarmRecords::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
     QTableWidget#historyCycles QHeaderView, QTableWidget#historyChannels QHeaderView {{ background: {c.raised}; }}
     QTableWidget#historyCycles QScrollBar:horizontal, QTableWidget#historyChannels QScrollBar:horizontal {{ background: {c.background}; height: 14px; }}

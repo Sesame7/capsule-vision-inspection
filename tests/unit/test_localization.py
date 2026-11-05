@@ -90,6 +90,29 @@ IDENTITY_UI_KEYS = {
 
 OPTIONAL_UI_KEYS = {
     *base_resources.AUDIT_ACTIONS,
+    "alarm_history",
+    "alarm_monitor",
+    "alarm_all_types",
+    "alarm_type",
+    "alarm_name",
+    "alarm_state",
+    "alarm_details",
+    "alarm_station",
+    "alarm_startup",
+    "alarm_interlock",
+    "alarm_equipment",
+    "alarm_software",
+    "alarm_observed_active",
+    "alarm_activated",
+    "alarm_observed_recovered",
+    "alarm_recovered",
+    "alarm_lost",
+    "alarm_off",
+    "alarm_waiting",
+    "alarm_unavailable",
+    "alarm_online",
+    "alarm_count",
+    "alarm_last_known",
     "audit_trail",
     "audit_inspection",
     "audit_time",
@@ -1349,7 +1372,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 584
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 607
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

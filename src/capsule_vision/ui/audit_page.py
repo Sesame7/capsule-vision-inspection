@@ -4,22 +4,9 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
-from PySide6.QtCore import QDate, QEvent, QObject, Qt, Slot
+from PySide6.QtCore import QEvent, QObject, Qt, Slot
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QCheckBox,
-    QComboBox,
-    QDateEdit,
-    QHBoxLayout,
-    QHeaderView,
-    QLabel,
-    QLineEdit,
-    QPlainTextEdit,
-    QPushButton,
-    QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
 )
 
 from capsule_vision.application.audit import AuditQuery, AuditRecord
@@ -29,15 +16,13 @@ from capsule_vision.localization.catalog import AUDIT_ACTIONS, text
 from capsule_vision.localization.languages import Language
 
 from .future_delivery import FutureDelivery
-from .image_tools import image_icon
-from .style import Style, theme_colors
+from .history_event_table import HistoryEventTable
+from .style import Style
 
 
-class AuditPage(QWidget):
+class AuditPage(HistoryEventTable):
     def __init__(self, identity: LocalIdentity | None) -> None:
-        super().__init__()
-        self.setObjectName("auditPage")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        super().__init__("audit")
         self.identity = identity
         self.language: Language = "zh"
         self.rows: tuple[AuditRecord, ...] = ()
@@ -52,55 +37,7 @@ class AuditPage(QWidget):
         self.destroyed.connect(
             self._delivery.detach, Qt.ConnectionType.DirectConnection
         )
-        root = QVBoxLayout(self)
-        bar = QHBoxLayout()
-        root.addLayout(bar)
-        self.all_dates = QCheckBox()
-        self.all_dates.setChecked(True)
-        today = datetime.now(UTC).date()
-        self.date = QDateEdit(QDate(today.year, today.month, today.day))
-        self.date.setObjectName("auditDate")
-        self.date.setDisplayFormat("yyyy-MM-dd")
-        self.date.setCalendarPopup(True)
-        self.date.calendarWidget().setMinimumSize(8 * Style.touch, 8 * Style.touch)
-        self.date.setEnabled(False)
-        self.actor = QLineEdit()
-        self.actor.setClearButtonEnabled(True)
-        self.action = QComboBox()
-        for w in (self.date, self.all_dates, self.actor, self.action):
-            w.setMinimumHeight(Style.touch)
-            bar.addWidget(w)
-        self.actor.setMaximumWidth(280)
-        bar.addStretch()
-        self.newer, self.older, self.refresh_button = (
-            QPushButton(),
-            QPushButton(),
-            QPushButton(),
-        )
-        for b in (self.newer, self.older, self.refresh_button):
-            b.setFixedSize(Style.touch, Style.touch)
-            bar.addWidget(b)
-        self.message = QLabel()
-        self.message.setTextFormat(Qt.TextFormat.PlainText)
-        self.message.hide()
-        root.addWidget(self.message)
-        self.table = QTableWidget(0, 4)
-        self.table.setObjectName("auditRecords")
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().hide()
-        self.table.horizontalHeader().setDefaultAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        self.table.viewport().installEventFilter(self)
-        root.addWidget(self.table, 1)
-        self.details = QPlainTextEdit()
-        self.details.setReadOnly(True)
-        self.details.setMaximumHeight(160)
-        root.addWidget(self.details)
+        self.actor, self.action = self.search, self.kind
         self.table.itemSelectionChanged.connect(self._details)
         self.refresh_button.clicked.connect(self.refresh)
         self.actor.returnPressed.connect(self.refresh)
@@ -127,8 +64,7 @@ class AuditPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        self.all_dates.setText(text("history_all_dates", language))
-        self.date.setAccessibleName(text("audit_time", language))
+        self.navigation_language(language)
         self.actor.setPlaceholderText(text("audit_actor", language))
         self.actor.setAccessibleName(self.actor.placeholderText())
         action = self.action.currentData()
@@ -138,14 +74,6 @@ class AuditPage(QWidget):
             self.action.addItem(text(key, language), key)
         self.action.setCurrentIndex(max(0, self.action.findData(action)))
         self.action.setAccessibleName(text("audit_action", language))
-        for b, icon, key in (
-            (self.newer, "previous", "previous_page"),
-            (self.older, "next", "next_page"),
-            (self.refresh_button, "refresh", "history_refresh"),
-        ):
-            b.setIcon(image_icon(icon, theme_colors(self).primary))
-            b.setAccessibleName(text(key, language))
-            b.setToolTip(b.accessibleName())
         self.table.setHorizontalHeaderLabels(
             [
                 text(k, language)

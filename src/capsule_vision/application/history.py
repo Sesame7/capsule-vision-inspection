@@ -18,7 +18,8 @@ from capsule_vision.communication.reporting import (
 )
 from capsule_vision.inspection.production import ProductionInspectionResult
 
-from . import batch_records
+from . import alarm_records, batch_records
+from .alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
 from .batch_records import BatchSelection, ReportBatches
 from .models import ConfigurationIdentity
 
@@ -162,11 +163,13 @@ class ProductionHistory:
         clock: Callable[[], float] = time,
         retention_batch: int = 256,
         on_failure: Callable[[str], None] | None = None,
+        alarm_access: Callable[[int | None], int] | None = None,
     ) -> None:
         if max_pending < 1 or retention_batch < 1:
             raise ValueError("History bounds must be positive")
         self.path = path
         self._on_failure = on_failure
+        self._alarm_access = alarm_access
         self.clock = clock
         self.retention_batch = retention_batch
         self._capacity = max_pending
@@ -179,6 +182,10 @@ class ProductionHistory:
         self._accepted = self._persisted = self._dropped = self._failed = 0
         self._error = ""
         self._reported_loss = False
+        self._alarm_table = False  # Accessed exclusively by the SQLite owner.
+        self._next_alarm_retention = float("-inf")
+        self._alarm_loss = 0
+        self._alarm_issue = ""
         self.initial_selection: Future[BatchSelection | None] = Future()
         self.initial_selection.set_running_or_notify_cancel()
         self._expired_batch: str | None = None
@@ -207,7 +214,11 @@ class ProductionHistory:
             return False
 
     def _command[T](
-        self, action: Callable[[sqlite3.Connection], T], *, read_only: bool = False
+        self,
+        action: Callable[[sqlite3.Connection], T],
+        *,
+        read_only: bool = False,
+        reserved: bool = True,
     ) -> Future[T]:
         future: Future[T] = Future()
         future.set_running_or_notify_cancel()
@@ -221,7 +232,9 @@ class ProductionHistory:
             try:
                 if not self._accepting:
                     raise RuntimeError(self._error or "History is closed")
-                if read_only and self._queue.qsize() >= self._capacity:
+                if (
+                    read_only or not reserved
+                ) and self._queue.qsize() >= self._capacity:
                     raise Full
                 self._queue.put_nowait(
                     _Operation(execute, future.set_exception, read_only)
@@ -231,6 +244,49 @@ class ProductionHistory:
             except RuntimeError as exc:
                 future.set_exception(RuntimeError(f"Batch storage unavailable: {exc}"))
         return future
+
+    def offer_alarms(self, events: tuple[AlarmEvent, ...]) -> None:
+        """One nonblocking handoff for an observed word (up to 16 transitions)."""
+        if not 1 <= len(events) <= 16:
+            raise ValueError("Expected one alarm observation with 1..16 transitions")
+
+        def write(db: sqlite3.Connection) -> None:
+            if not self._alarm_table:
+                alarm_records.create(db)
+                self._alarm_table = True
+            alarm_records.append(db, events)
+
+        def finished(result: Future[None]) -> None:
+            if error := result.exception():
+                with self._lock:
+                    self._alarm_loss += len(events)
+                    self._alarm_issue = str(error)
+
+        self._command(write, reserved=False).add_done_callback(finished)
+
+    def alarm_storage(self) -> tuple[int, str]:
+        with self._lock:
+            return self._alarm_loss, self._alarm_issue
+
+    def alarm_page(
+        self, query: AlarmQuery, revision: int | None = None
+    ) -> Future[tuple[AlarmRecord, ...]]:
+        authorize = self._alarm_access
+        if authorize is None:
+            raise RuntimeError("Alarm review requires an authenticated History owner")
+        ticket = authorize(revision)
+
+        def read(db: sqlite3.Connection) -> tuple[AlarmRecord, ...]:
+            authorize(ticket)
+            records = (
+                alarm_records.page(db, query, self.clock() - 30 * 86400)
+                if self._alarm_table
+                else ()
+            )
+            authorize(ticket)
+            return records
+
+        return self._command(read, read_only=True)
 
     def report_batches(
         self, prefix: str, cursor: str | None, previous: bool
@@ -412,6 +468,12 @@ class ProductionHistory:
                 )
             with connection:
                 batch_records.recover(connection, self.clock())
+            self._alarm_table = (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='alarm_events'"
+                ).fetchone()
+                is not None
+            )
             return connection
         except BaseException:
             connection.close()
@@ -491,8 +553,24 @@ class ProductionHistory:
 
     def _retain(self, connection: sqlite3.Connection) -> None:
         expired = False
+        now = self.clock()
+        cutoff = now - 30 * 86400
+        if self._alarm_table and now >= self._next_alarm_retention:
+            self._next_alarm_retention = now + 60
+            try:
+                with connection:
+                    removed_alarms = connection.execute(
+                        "DELETE FROM alarm_events WHERE id IN (SELECT id FROM alarm_events "
+                        "WHERE observed < ? ORDER BY observed LIMIT ?)",
+                        (cutoff, self.retention_batch),
+                    )
+                if removed_alarms.rowcount == self.retention_batch:
+                    self._next_alarm_retention = now
+            except sqlite3.Error as exc:
+                # Alarm maintenance must not prevent Batch restoration or Run admission.
+                with self._lock:
+                    self._alarm_issue = str(exc)
         with connection:
-            cutoff = self.clock() - 30 * 86400
             for table, column, run_column in (
                 ("cycles", "completed_at", "run_id"),
                 ("plc_groups", "observed", "run"),
