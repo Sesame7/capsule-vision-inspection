@@ -359,8 +359,9 @@ scheduling, judgments, occurrence accounting or History.
 At the existing successful pre-write attribution check, the worker publishes one
 immutable four-result completion to Application. Separate `PilotCounters` classify
 each ChannelId once using those business statuses and the already merged reject
-words: confirmed NG first, otherwise any reject bit UNKNOWN, otherwise all verified
-EMPTY, otherwise OK with only OK/verified EMPTY observations. These conditional
+words: every set reject bit means final NG (including conservative rejection),
+otherwise all verified EMPTY means EMPTY, otherwise OK with only OK/verified EMPTY
+observations. Original per-Cycle UNKNOWN/ERROR evidence remains intact. These conditional
 physical-position totals never divide or replace `ProductionCounters`.
 Application consumes the completion outside the reporting lock and without Qt;
 one generation-local CycleId high-water mark prevents duplicate/stale accounting.
@@ -728,10 +729,12 @@ These are cumulative occurrences, retained by Stop/Start and Recipe changes and
 reset only by explicit Batch, not physical capsule counts.
 
 An enabled four-cycle session instead presents completed **Batches** and
-separate cumulative physical-channel OK, NG and EMPTY totals. UNKNOWN remains
-visible inline beside NG and in accessibility text; it is not included in NG.
-The Batches tooltip exposes the original raw inspection-cycle count. `Δt` still
-means the last inspection-cycle duration, not batch duration. The five metric
+separate cumulative channel-position OK, NG and EMPTY totals. Final NG includes
+every authoritative reject bit, including conservative rejection. The Batches
+tooltip exposes the original raw inspection-cycle count. **Batch Duration** runs
+from the first Cycle admission to the arrival of all four terminal results at the reporting
+owner, excluding later attribution checks, writes and ACK. Unavailable timing is
+`--`; per-Cycle timing remains separate in camera diagnostics. The five metric
 groups and their wrapping behavior are unchanged. Chinese/English four-cycle captions
 use the existing English fallback in other languages.
 
@@ -741,6 +744,8 @@ relabel retained facts. A successful per-cycle/reporting-disabled/Folder Start u
 the original occurrence counters. Both cumulative stores survive Stop/Start and
 Recipe changes, remain separate across mode changes, and reset only on explicit
 operator Batch. No physical totals or new identities are persisted in History.
+Explicit Batch also clears current group progress, result overlays and duration;
+retained pixels do not carry the cleared judgments.
 
 History uses short Time, `#`, Batch and `CAM` headings. Full identities remain in
 stored records. The Time heading tooltip retains clock semantics, and elided
@@ -753,6 +758,29 @@ detailed diagnostic evidence remains in the stored record.
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,
 dimensions and source key. Only matching evidence may overlay those pixels.
+In four-cycle mode the same store accepts only the reporting owner's actual fourth
+member: at most one candidate fourth image and one eligible display image per
+camera, plus their matching fourth result evidence. Eligibility promotes only
+matching fourth pixels and clears cameras whose fourth frame is absent or invalid.
+An exact fourth callback arriving late may fill its missing image; an earlier or
+later frame cannot substitute. During the next incomplete group, the previous
+eligible image retains its own fourth result/overlays and identity tooltip. New
+generation/configuration boundaries invalidate compatibility; pending copies are
+released on session cleanup. No four-exposure image cache is created. Independent
+per-exposure archiving and per-Cycle/Folder presentation are unchanged.
+
+The Qt camera header centers six four-cycle channel groups in configured order
+between camera identity and timing. Each 28×28 logical-pixel slot holds a 2×2
+array of 11×11 lamps with 2-pixel gaps. At ordinary font sizes the header takes
+30 logical pixels, leaving the recovered height for the image viewport. Qt and
+Web show only the lamps within each group. Tooltips and accessible names identify
+the camera, channel and all four exposure states.
+Admission order is top-left, top-right, bottom-left, bottom-right. Red means an
+authoritative per-Cycle reject request, green non-reject OK, grey verified EMPTY,
+and neutral pending/unavailable or invalidated unconfirmed progress. These scalar
+indicators are independent of image availability and never become image overlays.
+The reporting owner publishes one bounded latest progress observation; Application
+includes it in its snapshot alongside cumulative accounting and group duration.
 Vision uses temporary browsed/imported/captured images or eligible frozen Runtime
 pixels; no separate persisted reference library exists. Recipe preview retains its
 internal frozen-image contract. Capture uses the same SDK owner, accepts one pending
@@ -796,6 +824,12 @@ its identity. Confirmed service-thread exit releases the publication/cache; an
 incomplete join retains ownership and cache. There is no disk cache or image history.
 Application/display snapshots are sampled separately, not atomic multi-camera capture.
 Publisher ID, revision and source identities prevent old bytes/new evidence aliasing.
+Web four-cycle metadata carries the same group membership, scalar channel lamps,
+metrics and eligible fourth-image identities. Each 28×28 CSS-pixel slot centers
+the 24×24 lamp grid with 2 pixels of padding. The browser displays lamps independently
+of JPEG delivery, including blank cameras, and neutralizes them on stale/unavailable
+metadata. Image failure does not invalidate a fresh eligible group. Missing fourth
+images retire prior encoded delivery URLs through the existing invalidation path.
 Installing a candidate with a changed camera set clears retained display pixels and advances its
 revision; the existing publisher follows that configured set without another Web
 owner. History stores each cycle's own five/six-camera identities and order, so

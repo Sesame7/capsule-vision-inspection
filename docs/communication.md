@@ -256,17 +256,29 @@ are ORed, preserving verified EMPTY projection. Partial/error cycles contribute
 their conservative words. Missing triggers or unavailable results are never invented.
 
 After all four results and the pre-write counter/source attribution check succeed,
-the worker publishes one immutable inspection completion to Application. Existing
-separate channel-position totals remain unchanged: confirmed NG wins, otherwise
-any reject bit means UNKNOWN, then all verified EMPTY means EMPTY, otherwise
-OK/verified EMPTY mixtures mean OK. Each ChannelId counts once using the original
-statuses and authoritative OR bitmap. Incomplete or initially unattributable
+the worker publishes one immutable inspection completion to Application. Each set
+bit in the authoritative OR bitmap counts as final NG, including conservative
+rejection. Clear bits mean EMPTY only for four verified EMPTY observations;
+otherwise OK/verified EMPTY mixtures mean OK. Each ChannelId counts once. Original
+per-Cycle UNKNOWN, technical ERROR and reasons remain unchanged; final NG does not
+claim a confirmed defect in every rejected position. Incomplete or initially unattributable
 groups do not count. This checkpoint precedes result writes: later transport
 failure, commit uncertainty or attribution loss does not retract an already
 eligible inspection completion. These totals are neither delivered-group counts
 nor proof of physical traceability. Application retains cumulative totals and a
 generation-local CycleId high-water mark; Stop/Start and Recipe changes retain
 totals, while explicit operator Batch resets them. History remains per-Cycle.
+
+Batch Duration uses the worker's monotonic clock and runs from first Cycle
+admission until the last of the four distinct terminal results arrives,
+regardless of callback order. It is published only at eligibility
+and excludes subsequent attribution checks, bitmap/commit writes and ACK time.
+The bounded latest group progress contains actual admitted CycleIds and their
+scalar reports in admission order, separately from transport observations. The
+next group's first terminal result replaces progressing indicators; admission alone
+does not. Attribution loss or incomplete settlement invalidates unconfirmed
+progress to neutral, without retracting earlier eligible completions. Qt and Web
+consume these facts; neither reconstructs groups from CycleIds or displayed results.
 
 After the pre-write check, write exactly two bitmap words for 30 channels or three
 for 36 at base+1. After bitmap ACK, confirm the retained counter and source

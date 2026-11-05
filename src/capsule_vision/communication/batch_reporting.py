@@ -19,6 +19,7 @@ from .reporting import (
     FirstStationReport,
     ReportIdentity,
     ReportingCapacityError,
+    ReportingGroupProgress,
     ReportingIssue,
     ReportingMode,
     ReportingSettings,
@@ -104,6 +105,7 @@ class FourCycleReportingWorker:
         self._last_cycle: CycleId | None = None
         self._last_counter: int | None = None
         self._phase_issue: str | None = None
+        self._progress: ReportingGroupProgress | None = None
         self._started = self._stopping = self._drain = False
         self._client: FinsTcpClient | None = None
         self._cleanup_issue: ReportingIssue | None = None
@@ -169,7 +171,35 @@ class FourCycleReportingWorker:
                     *self._recent,
                     *(batch.observation() for batch in self._batches),
                 ),
+                group_progress=self._progress,
             )
+
+    def is_fourth_cycle(self, cycle: CycleId) -> bool:
+        """Display admission uses this owner's membership, never CycleId modulo."""
+        with self._condition:
+            return any(
+                len(batch.cycles) == 4
+                and batch.cycles[-1] == cycle
+                and batch.reason is None
+                for batch in self._batches
+            )
+
+    def _publish_progress(self, batch: _Batch) -> None:
+        # Admission alone must not erase the preceding group's lamps.
+        if not batch.terminals:
+            return
+        if (
+            self._progress is not None
+            and self._progress.identity.cycle_id > batch.cycles[0]
+        ):
+            return
+        self._progress = ReportingGroupProgress(
+            self._identity(batch),
+            tuple(batch.cycles),
+            tuple(batch.reports.get(cycle) for cycle in batch.cycles),
+            eligible=batch.inspection_complete,
+            invalidated=batch.reason is not None and not batch.inspection_complete,
+        )
 
     def _identity(self, batch: _Batch) -> ReportIdentity:
         return ReportIdentity(self.generation, batch.cycles[0])
@@ -180,6 +210,7 @@ class FourCycleReportingWorker:
         for batch in self._batches:
             if not batch.finished:
                 batch.reason = batch.reason or reason
+                self._publish_progress(batch)
         self._condition.notify_all()
 
     def admit_cycle(self, cycle: CycleId) -> None:
@@ -202,7 +233,9 @@ class FourCycleReportingWorker:
                     self._lose_phase(
                         "Next batch admitted before previous batch settled; late report suppressed"
                     )
-                self._batches.append(_Batch(reason=self._phase_issue))
+                self._batches.append(
+                    _Batch(admitted_at=perf_counter(), reason=self._phase_issue)
+                )
                 self._queued += 1
                 self._last_queued = ReportIdentity(self.generation, cycle)
                 self._peak = max(self._peak, len(self._batches) - 1)
@@ -233,8 +266,9 @@ class FourCycleReportingWorker:
             batch.reports[cycle] = report
             batch.terminals[cycle] = status.name
             batch.futures.append(completed)
-            if len(batch.terminals) == 4:
+            if len(batch.reports) == 4:
                 batch.completed_at = perf_counter()
+            self._publish_progress(batch)
             self._condition.notify_all()
         return completed
 
@@ -362,11 +396,19 @@ class FourCycleReportingWorker:
                 else (merged[0], merged[1], merged[2])
             )
             self._check(batch, retained)
-            completion = CompletedReportingBatch(identity, retained, reports, words)
+            assert batch.completed_at is not None
+            completion = CompletedReportingBatch(
+                identity,
+                retained,
+                reports,
+                words,
+                (batch.completed_at - batch.admitted_at) * 1000,
+            )
             with self._condition:
                 if batch.reason is not None:
                     raise ReportingStateError(batch.reason)
                 batch.inspection_complete = True
+                self._publish_progress(batch)
             # Application consumes this immutable inspection fact synchronously,
             # outside the reporting lock and before any result write/ACK. Later
             # reporting failure does not retract completed inspection accounting.
@@ -451,6 +493,7 @@ class FourCycleReportingWorker:
     def _settle(self, batch: _Batch, observation: ReportObservation) -> None:
         with self._condition:
             batch.finished = True
+            self._publish_progress(batch)
             self._last_outcome = observation
             if observation.outcome is ReportOutcome.ACKNOWLEDGED:
                 self._acknowledged += 1

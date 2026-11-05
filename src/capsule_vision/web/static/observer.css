@@ -6,7 +6,7 @@ main, #cameras { height: 100%; }
 .signals { position: fixed; right: 8px; top: 8px; z-index: 2; display: flex; gap: 10px; align-items: center; padding: 4px 7px; background: #111820eb; border-radius: 3px; font-size: 12px; pointer-events: none; }
 #connection { color: #e3bc73; }
 #fault { color: #c7a7e5; }
-.camera { position: relative; min-width: 0; min-height: 96px; display: grid; grid-template-rows: minmax(0, 1fr) 22px; }
+.camera { position: relative; min-width: 0; min-height: 96px; display: grid; grid-template-rows: minmax(0, 1fr) auto; }
 .camera-heading { position: absolute; top: 4px; left: 4px; right: 4px; z-index: 1; display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
 h2 { font-size: 12px; font-weight: 500; margin: 0; padding: 2px 4px; background: #111820cc; border-radius: 2px; }
 .observation { display: grid; place-items: center; width: 20px; height: 20px; color: #a2afbd; background: #111820cc; border-radius: 2px; }
@@ -17,7 +17,7 @@ h2 { font-size: 12px; font-weight: 500; margin: 0; padding: 2px 4px; background:
 [hidden] { display: none !important; }
 .placeholder { display: grid; place-items: center; color: #8392a2; padding: 8px; }
 .placeholder svg { width: 24px; height: 24px; }
-.channels { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); justify-items: center; align-items: center; gap: 2px; }
+.channels { display: grid; min-height: 22px; grid-template-columns: repeat(6, minmax(0, 1fr)); justify-items: center; align-items: center; gap: 2px; }
 .channel { display: grid; place-items: center; position: relative; width: 20px; height: 20px; border: 1px solid transparent; border-radius: 3px; color: #8c9aaa; }
 .channel svg { width: 16px; height: 16px; }
 .channel.ok { color: #92cfa9; }
@@ -26,4 +26,9 @@ h2 { font-size: 12px; font-weight: 500; margin: 0; padding: 2px 4px; background:
 .channel.unknown { color: #e3bc73; }
 .channel.error { border-color: #e3bc73; }
 .channel.error::after { content: "!"; position: absolute; right: -1px; top: -2px; width: 8px; line-height: 10px; text-align: center; font-size: 10px; font-weight: 700; color: #e3bc73; background: #0c1117; border-radius: 3px; }
+.channel.group { width: 28px; height: 28px; padding: 2px; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); gap: 2px; border: 0; }
+.lamp { place-self: stretch; border: 1px solid #394551; border-radius: 2px; }
+.lamp.ok { background: #92cfa9; }
+.lamp.ng { background: #ed9599; }
+.lamp.empty { background: #8392a2; }
 #empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: #8392a2; font-size: 14px; }

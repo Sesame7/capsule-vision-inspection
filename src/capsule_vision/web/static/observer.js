@@ -10,6 +10,7 @@
     retained: ["Retained image", "保留图像"], fault: ["Application fault", "应用故障"],
     last: ["last observed", "最后观察"],
     slot: ["Slot", "槽位"], technical: ["Technical", "技术状态"],
+    batches: ["Batches", "批次"], duration: ["Batch Duration", "批次耗时"],
   };
   const t = key => words[key][zh ? 1 : 0];
   const element = id => document.getElementById(id);
@@ -54,7 +55,7 @@
     if (fault.hidden !== hidden) fault.hidden = hidden;
     const detail = `${t("fault")}${["lost", "stale", "waiting"].includes(key) ? ` · ${t("last")}` : ""}`;
     if (fault.textContent !== detail) fault.textContent = detail;
-    const quiet = !caption && fault.hidden;
+    const quiet = !caption && fault.hidden && element("metrics").hidden;
     if (element("signals").hidden !== quiet) element("signals").hidden = quiet;
   }
   function indicators(card, channels, neutral = null) {
@@ -91,6 +92,7 @@
   function neutralize(card, kind = "stale", channels = []) {
     card.matchedAt = null;
     indicators(card, channels, "unavailable");
+    if (card.group) groupIndicators(card, kind !== "connected");
     observation(card, kind);
   }
   function clearImage(card) {
@@ -149,13 +151,15 @@
     const wall = element("cameras"), count = cameraOrder.length;
     if (!count || stopped) return;
     const width = wall.clientWidth, height = wall.clientHeight;
+    const channelRowHeight = latest?.four_cycle ? 28 : 22;
+    const minCardWidth = latest?.four_cycle ? 6 * channelRowHeight + 5 * 2 : 132;
     let best = -1, columns = 1;
     // At most six uniform grids: score the actual contain-fitted image area.
     for (let candidate = 1; candidate <= count; candidate++) {
       const rows = Math.ceil(count / candidate);
       const w = (width - (candidate - 1) * 4) / candidate;
-      const h = (height - (rows - 1) * 4) / rows - 22;
-      if (candidate > 1 && w < 132) continue;
+      const h = (height - (rows - 1) * 4) / rows - channelRowHeight;
+      if (candidate > 1 && w < minCardWidth) continue;
       const area = cameraOrder.reduce((sum, id) => {
         const ratio = cards.get(id).aspect;
         return sum + Math.min(w, Math.max(0, h) * ratio) * Math.min(Math.max(0, h), w / ratio);
@@ -173,7 +177,34 @@
       channels.every(channel => Number.isSafeInteger(channel?.channel_id) && channel.channel_id > 0 &&
         ["OK", "NG", "EMPTY", "UNKNOWN"].includes(channel.business_status) && ["SUCCESS", "ERROR", "DISABLED"].includes(channel.technical_status));
   }
+  function groupIndicators(card, neutral = false) {
+    const rows = card.group;
+    if (!rows) return;
+    for (let slot = 0; slot < 6; slot++) {
+      const label = card.channels.children[slot], row = rows[slot];
+      const states = row.states.map(state => neutral ? "pending" : state);
+      const identity = `${card.id} · CH${row.channel_id}`;
+      const description = `${identity} · ${states.map((state, index) => `#${card.cycles[index] ?? "—"}: ${state}`).join("; ")}`;
+      label.className = "channel group";
+      label.dataset.channelId = String(row.channel_id);
+      const signature = states.join(",");
+      if (label.dataset.kind !== signature) {
+        label.dataset.kind = signature;
+        const lamps = states.map(state => {
+          const lamp = document.createElement("i"); lamp.className = `lamp ${state}`; return lamp;
+        });
+        label.replaceChildren(...lamps);
+      }
+      described(label, description);
+      label.title = description;
+    }
+  }
   function status(card, row, key, snapshot) {
+    if (snapshot.four_cycle && card.group) {
+      groupIndicators(card, aged(snapshot) || snapshot.group_progress?.generation !== snapshot.generation);
+      observation(card, aged(snapshot) ? "stale" : row.image_status === "retained" ? "retained" : "connected");
+      return;
+    }
     const stale = aged(snapshot) || row.result_status === "stale" || row.image_status === "stale" ||
       row.image_identity && row.image_identity.generation !== 0 && row.image_identity.generation !== snapshot.generation;
     const matched = matching(row);
@@ -234,7 +265,11 @@
     if (Number.isFinite(snapshot.refresh_interval_ms) && snapshot.refresh_interval_ms > 0) {
       refreshIntervalMs = snapshot.refresh_interval_ms;
     }
+    const modeChanged = Boolean(latest?.four_cycle) !== Boolean(snapshot.four_cycle);
     latest = snapshot;
+    const metrics = element("metrics"), counts = snapshot.metrics;
+    metrics.hidden = !snapshot.four_cycle || !counts;
+    if (!metrics.hidden) metrics.textContent = `${t("batches")} ${counts.batches} · OK ${counts.ok} · NG ${counts.ng} · EMPTY ${counts.empty} · ${t("duration")} ${counts.duration_ms == null ? "--" : `${Math.round(counts.duration_ms)} ms`}`;
     const order = snapshot.configured_camera_ids;
     for (const [id, card] of cards) {
       if (!order.includes(id)) { clearImage(card); cards.delete(id); }
@@ -255,6 +290,12 @@
       if (!current(token)) return;
       const card = cards.get(id);
       const row = snapshot.cameras.find(row => row.camera_id === id) ?? { image_status: "unavailable", result_status: "unavailable", channels: [] };
+      const groups = row.group_channels;
+      card.group = snapshot.four_cycle && Array.isArray(groups) && groups.length === 6 &&
+        new Set(groups.map(channel => channel?.channel_id)).size === 6 &&
+        groups.every(channel => Number.isSafeInteger(channel?.channel_id) && channel.channel_id > 0 &&
+          Array.isArray(channel.states) && channel.states.length === 4 && channel.states.every(state => ["ok", "ng", "empty", "pending"].includes(state))) ? groups : null;
+      card.cycles = snapshot.group_progress?.cycles ?? [];
       const key = signature(snapshot, row);
       if (!key || !row.image_url) {
         clearImage(card);
@@ -276,7 +317,7 @@
       if (!matching(row) && !["reference", "retained"].includes(row.image_status)) continue;
       pending.push({ card, row, key, scope });
     }
-    if (changed) arrange();
+    if (changed || modeChanged) arrange();
     const start = imageStart % Math.max(1, pending.length);
     let superseded = false;
     // A superseded batch gives the next camera first chance on the same serial
@@ -287,6 +328,7 @@
       if (!current(token)) return;
       if (!response.ok) {
         if (response.status === 410) { superseded = true; status(card, row, key, snapshot); }
+        else if (snapshot.four_cycle) status(card, row, key, snapshot);
         else neutralize(card);
         continue; // One attempt per poll; 410 waits for fresh metadata.
       }
@@ -300,7 +342,8 @@
         if (decoded.naturalWidth !== row.jpeg_dimensions.width || decoded.naturalHeight !== row.jpeg_dimensions.height) throw new Error("Invalid JPEG dimensions");
         if (aged(snapshot)) { status(card, row, key, snapshot); continue; }
         const previous = card.url;
-        decoded.alt = card.id;
+        decoded.alt = snapshot.four_cycle ? `${card.id} · #${row.image_identity.cycle_id}` : card.id;
+        if (snapshot.four_cycle) decoded.title = `${decoded.alt} · ${row.image_identity.generation}/${row.image_identity.sequence}`;
         card.picture.replaceChild(decoded, card.image);
         card.image = decoded;
         card.url = url;
@@ -312,7 +355,8 @@
         status(card, row, key, snapshot);
       } catch {
         if (current(token)) {
-          neutralize(card);
+          if (snapshot.four_cycle) status(card, row, key, snapshot);
+          else neutralize(card);
         }
       } finally {
         if (!retained) URL.revokeObjectURL(url);

@@ -125,16 +125,16 @@ group attribution must not become a fabricated completed group or guessed PLC
 report. Inspection completion, report delivery and mechanical action remain
 distinct: a result-reporting **ACK does not prove mechanical ejection**.
 
-The [current four-cycle reporting](communication.md#four-cycle-reporting) already ORs
-per-Cycle bitmaps, but its accounting retains conservative rejection as UNKNOWN
-unless confirmed NG exists. The target final NG mapping above is a separate
-implementation change; it does not rewrite that current contract.
+The [four-cycle reporting contract](communication.md#four-cycle-reporting) owns
+implemented attribution, reject projection and completion timing; the
+[architecture contract](architecture.md#display-and-web) owns bounded presentation.
 
 ### 3.3 Production presentation
 
-- In four-Cycle mode, main counters are **Batches, OK, NG, EMPTY, Batch Duration**. Here Batches counts completed attributable PLC groups, not operator production Batches; count each channel once per group. Batch Duration uses the reporting owner's completed-group timing, excluding PLC ACK/delivery time; Cycle diagnostics may remain separate. Its precise timing endpoints require the [decision below](#10-open-decisions-and-audit-boundaries).
+- In four-Cycle mode, main counters are **Batches, OK, NG, EMPTY, Batch Duration**. Here Batches counts completed attributable PLC groups, not operator production Batches; count each channel once per group. Batch Duration runs from first Cycle admission to the fourth terminal result, using the reporting owner's monotonic clock. Publish it only for eligible groups; exclude subsequent attribution checks, writes and ACK. Cycle diagnostics remain separate.
 - Keep 5/6 responsive camera cards and their six channels per camera. In four-Cycle mode each channel is represented by a stable **2 × 2 mini-tile**. Populate one cell per completed attributable Cycle: first top-left, second top-right, third bottom-left, fourth bottom-right. Green OK, red reject/NG, grey confirmed EMPTY, neutral for not-yet-observed. A new group's first completed Cycle resets the tile sequence.
 - In four-Cycle mode, update each camera's displayed image **once per completed group**, using the corresponding **fourth** frame. Overlays apply only to that displayed frame, never aggregate bounding boxes from earlier frames. The image may therefore remain from the preceding group while the new group's mini-tile advances; the UI must not misrepresent its identity.
+- A new eligible group clears any camera lacking its valid matching fourth frame to the startup empty-image state; other cameras display normally. Never substitute another exposure. Incomplete/invalidated groups do not count; phase loss neutralizes unconfirmed progress without retracting prior eligible completions or their retained images.
 - Maintain bounded presentation work; do not add an image cache of all four frames just to animate the UI. Per-Cycle and Folder presentation retain suitable current per-Cycle behavior.
 - Image archiving is separate from presentation: preserve **per-exposure** saving according to Recipe's independent OK/NG/ERROR/EMPTY archive selections.
 
@@ -247,13 +247,6 @@ above or authorize choosing a convenient implementation silently.
   how existing disabled Recipes will be handled before enforcing the target
   every-exposure inspection policy; this document does not reinterpret their
   saved settings or authorize an implicit enablement change.
-- **Completion, timing and display:** define Batch Duration's exact start/end
-  observations and presentation of partial/error Cycles, missing Cycles and later
-  attribution loss within the [group eligibility rules](#32-four-cycle-decision-and-source-of-truth).
-  Preserve the distinction between eligible inspection completion, result
-  delivery and mechanical action. Define how an invalidated group affects the
-  advancing mini-tile and what appears when the fourth camera frame is unavailable;
-  an earlier frame cannot be presented as the fourth.
 - **Durable Batch and export completeness:** define continuation after interrupted
   Runs, the minimal durable summaries needed across restarts and 30-day detail
   expiry, and how missing/dropped evidence is disclosed. Keep a new Batch distinct

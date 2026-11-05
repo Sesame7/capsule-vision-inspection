@@ -96,6 +96,7 @@ class SourceProductionApplication(ProductionApplication):
         self._pilot_counters = PilotCounters()
         self._pilot_counting = False
         self._last_pilot_cycle: CycleId | None = None
+        self._batch_duration_ms: float | None = None
         self._guest_demo_generation: int | None = None
         self._replay_lock = Lock()
         self.replay_controls = replay_controls
@@ -117,10 +118,17 @@ class SourceProductionApplication(ProductionApplication):
 
     def snapshot(self) -> ProductionApplicationSnapshot:
         with self._condition:
+            reporting = self.reporting_snapshot()
             return replace(
                 super().snapshot(),
                 pilot_counters=self._pilot_counters,
                 pilot_counting=self._pilot_counting,
+                group_progress=reporting.group_progress
+                if reporting is not None
+                and reporting.generation == self._generation
+                and self._latest is not None
+                else None,
+                batch_duration_ms=self._batch_duration_ms,
             )
 
     def start_batch(self, batch_id: str | None) -> None:
@@ -129,6 +137,7 @@ class SourceProductionApplication(ProductionApplication):
                 batch_id
             )  # Existing authorization/state/reset boundary.
             self._pilot_counters = PilotCounters()
+            self._batch_duration_ms = None
 
     def observe_pilot_batch(self, batch: CompletedReportingBatch) -> None:
         """Trusted reporting completion, independent of Qt, History and PLC ACK."""
@@ -153,6 +162,9 @@ class SourceProductionApplication(ProductionApplication):
                 return
             self._pilot_counters = self._pilot_counters.completed(batch)
             self._last_pilot_cycle = batch.reports[-1].identity.cycle_id
+            self._batch_duration_ms = batch.duration_ms
+            if self._display_store is not None:
+                self._display_store.complete_group(batch)
 
     def _install_candidate(self, candidate: PreparedConfiguration) -> None:
         with self._condition:
@@ -468,7 +480,7 @@ class SourceProductionApplication(ProductionApplication):
         with self._condition:
             with self._reporting_lock:
                 starting = (
-                    self.snapshot().state is ApplicationState.STARTING
+                    self._state is ApplicationState.STARTING
                     and self._session_reporting is not None
                 )
                 worker = self._reporting_worker

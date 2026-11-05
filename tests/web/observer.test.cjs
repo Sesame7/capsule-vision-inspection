@@ -663,3 +663,113 @@ test("authoritative invalidation and disconnect do not resurrect a quiet old res
   h.value=h.snapshot(5);h.value.cameras[0].result_status="pending";h.handler=()=>h.response();await h.tick();
   h.neutral(0,"unavailable");assert.equal(h.image(0),image);assert.equal(h.observation(0).attributes["aria-label"],"Stale observation");h.stop();
 });
+
+function fourCycle(h, revision = 1) {
+  h.value = h.snapshot(revision);
+  h.value.four_cycle = true;
+  h.value.group_progress = { generation: 1, cycles: [11, 12, 13, 14], eligible: true, invalidated: false };
+  h.value.metrics = { batches: 2, ok: 6, ng: 24, empty: 6, duration_ms: 125 };
+  for (const row of h.value.cameras) {
+    row.group_channels = row.channels.map(channel => ({ channel_id: channel.channel_id, states: ['ok', 'ng', 'empty', 'pending'] }));
+    row.image_identity.cycle_id = 14;
+  }
+  h.updateUrls();
+}
+test('four-cycle lamps survive blank fourth images and use independent group identity', async () => {
+  const h = fixture(); fourCycle(h);
+  const blank = h.value.cameras[0]; blank.image_identity = null; blank.image_url = null; blank.channels = []; blank.result_status = blank.image_status = 'unavailable';
+  await h.start();
+  assert.equal(h.image(0).hidden, true);
+  assert.equal(h.channel(0).dataset.kind, 'ok,ng,empty,pending');
+  for (const [index, label] of h.indicators(0).entries()) {
+    const description = `CAM6 · CH${blank.group_channels[index].channel_id} · #11: ok; #12: ng; #13: empty; #14: pending`;
+    assert.equal(label.getAttribute('aria-label'), description);
+    assert.equal(label.title, description);
+    assert.deepEqual(label.children.map(lamp => lamp.className), ['lamp ok', 'lamp ng', 'lamp empty', 'lamp pending']);
+  }
+  assert.match(h.node('metrics').textContent, /Batches 2.*NG 24.*Batch Duration 125 ms/);
+  assert.equal(h.node('signals').hidden, false);
+  assert.equal(h.channel(0).children.length, 4);
+  assert.equal(h.maxActive, 1);
+  h.stop();
+});
+test('switching modes refits six lamp groups without remounting camera cards', async () => {
+  const h = fixture(); await h.start();
+  h.resize(340, 520);
+  const wall = h.node('cameras'), card = h.card(0);
+  assert.equal(wall.style.gridTemplateColumns, 'repeat(2, minmax(0, 1fr))');
+  fourCycle(h, 2); await h.tick();
+  assert.equal(wall.style.gridTemplateColumns, 'repeat(1, minmax(0, 1fr))');
+  h.value = h.snapshot(3); await h.tick();
+  assert.equal(wall.style.gridTemplateColumns, 'repeat(2, minmax(0, 1fr))');
+  assert.equal(h.card(0), card);
+  h.stop();
+});
+test('four-cycle slot and lamp bounds in the rendered observer stylesheet', async () => {
+  const h = fixture(); fourCycle(h); await h.start();
+  const slot = h.channel(0);
+  const lamps = slot.children.map(lamp => `<i class="${lamp.className}"></i>`).join('');
+  h.stop();
+  const css = fs.readFileSync('src/capsule_vision/web/static/observer.css', 'utf8');
+  const page = `<!doctype html><style>${css}</style>
+    <div class="channels"><span class="${slot.className}">${lamps}</span></div>
+    <script>
+      const slot = document.querySelector('.channel');
+      const box = slot.getBoundingClientRect();
+      const lamps = [...slot.children].map(lamp => {
+        const r = lamp.getBoundingClientRect();
+        return [r.x - box.x, r.y - box.y, r.width, r.height];
+      });
+      document.title = JSON.stringify({slot: [box.width, box.height], lamps});
+    </script>`;
+  const result = require('node:child_process').execFileSync('uv',
+    ['run', '--no-sync', 'python', 'tests/web/measure_indicator.py'], {
+      input: page, encoding: 'utf8', timeout: 10000, windowsHide: true,
+      env: { ...process.env, QT_QPA_PLATFORM: 'offscreen', QT_QUICK_BACKEND: 'software', QTWEBENGINE_CHROMIUM_FLAGS: '--disable-gpu' },
+    });
+  assert.deepEqual(JSON.parse(result), {
+    slot: [28, 28], lamps: [[2, 2, 11, 11], [15, 2, 11, 11], [2, 15, 11, 11], [15, 15, 11, 11]],
+  });
+});
+test('four-cycle phase invalidation, stale generation and freshness neutralize lamps without changing images', async () => {
+  const h = fixture(); fourCycle(h); await h.start();
+  const image = h.image(0);
+  fourCycle(h, 2);
+  h.value.group_progress.invalidated = true;
+  for (const row of h.value.cameras) for (const channel of row.group_channels) channel.states = ['pending', 'pending', 'pending', 'pending'];
+  await h.tick();
+  assert.equal(h.image(0), image);
+  assert.equal(h.channel(0).dataset.kind, 'pending,pending,pending,pending');
+  fourCycle(h, 3); h.value.group_progress.generation = 0; await h.tick();
+  assert.equal(h.channel(0).dataset.kind, 'pending,pending,pending,pending');
+  fourCycle(h, 4); await h.tick();
+  assert.equal(h.channel(0).dataset.kind, 'ok,ng,empty,pending');
+  h.handler = () => h.response(503); await h.tick();
+  assert.equal(h.channel(0).dataset.kind, 'pending,pending,pending,pending');
+  h.stop();
+});
+test('four-cycle missing new fourth clears previous image without clearing eligible lamps', async () => {
+  const h = fixture(); fourCycle(h); await h.start();
+  fourCycle(h, 2);
+  h.value.cameras[0].image_identity = null;
+  h.value.cameras[0].image_url = null;
+  h.value.cameras[0].image_status = 'unavailable';
+  await h.tick();
+  assert.equal(h.image(0).hidden, true);
+  assert.equal(h.channel(0).dataset.kind, 'ok,ng,empty,pending');
+  assert.equal(h.image(1).hidden, false);
+  h.stop();
+});
+test('new group progress retains the preceding fourth image identity', async () => {
+  const h = fixture(); fourCycle(h); await h.start();
+  const image = h.image(0);
+  assert.equal(image.alt, 'CAM6 · #14');
+  assert.equal(image.title, 'CAM6 · #14 · 1/7');
+  fourCycle(h, 2); h.value.group_progress.cycles = [15]; h.value.group_progress.eligible = false;
+  for (const row of h.value.cameras) for (const channel of row.group_channels) channel.states = ['ng', 'pending', 'pending', 'pending'];
+  await h.tick();
+  assert.equal(h.image(0), image);
+  assert.equal(image.alt, 'CAM6 · #14');
+  assert.match(h.channel(0).getAttribute('aria-label'), /#15: ng/);
+  h.stop();
+});

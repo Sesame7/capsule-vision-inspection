@@ -159,6 +159,10 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         super().request_stop()
 
     def begin_cycle(self, cycle_id: CycleId) -> ProductionCycle:
+        self._store.begin_generation(
+            self.generation,
+            four_cycle=isinstance(self.reporting, FourCycleReportingWorker),
+        )
         archive = self.archive
         retained = archive.begin(cycle_id) if archive is not None else False
         try:
@@ -171,6 +175,8 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             if isinstance(self.reporting, FourCycleReportingWorker):
                 try:
                     self.reporting.admit_cycle(cycle_id)
+                    if self.reporting.is_fourth_cycle(cycle_id):
+                        self._store.select_fourth(self.generation, cycle_id)
                 except (ReportingCapacityError, ReportingStateError) as exc:
                     self.reporting.note_skipped(
                         ReportIdentity(self.generation, cycle_id), exc
@@ -217,6 +223,8 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             ):
                 raise ValueError("Ambiguous Basler cycle attribution; no report")
             report = FirstStationReport.from_result(self.generation, result)
+            if isinstance(reporter, FourCycleReportingWorker):
+                self._store.retain_fourth_result(self.generation, result)
         except BaseException as exc:
             reporter.note_skipped(
                 identity, exc
@@ -265,6 +273,8 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 self.archive.request_stop()
             remaining = None if deadline is None else max(0, deadline - monotonic())
             joined = self.archive.join(remaining) and joined
+        if joined:
+            self._store.discard_candidate(self.generation)
         if (
             joined
             and self.cleanup_safe

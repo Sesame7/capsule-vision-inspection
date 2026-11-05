@@ -4,7 +4,10 @@ from dataclasses import dataclass, replace
 from enum import Enum, auto
 from pathlib import Path
 
-from capsule_vision.communication.reporting import CompletedReportingBatch
+from capsule_vision.communication.reporting import (
+    CompletedReportingBatch,
+    ReportingGroupProgress,
+)
 from capsule_vision.configuration import (
     ResolvedInspectionConfiguration,
     validate_model_artifact,
@@ -151,10 +154,8 @@ class PilotCounters:
         for channel in statuses[0]:
             observed = tuple(row[channel] for row in statuses)
             word, bit = divmod(channel - 1, 16)
-            if ChannelBusinessStatus.NG in observed:
+            if batch.reject_words[word] & (1 << bit):
                 final = ChannelBusinessStatus.NG
-            elif batch.reject_words[word] & (1 << bit):
-                final = ChannelBusinessStatus.UNKNOWN
             elif all(status is ChannelBusinessStatus.EMPTY for status in observed):
                 # A clear authoritative bit proves EMPTY was verified in every
                 # cycle; disabled/missing/error evidence alone cannot clear it.
@@ -194,6 +195,8 @@ class ProductionApplicationSnapshot:
     candidate_requires_preparation: bool = False
     pilot_counters: PilotCounters = PilotCounters()
     pilot_counting: bool = False
+    group_progress: ReportingGroupProgress | None = None
+    batch_duration_ms: float | None = None
 
     @property
     def has_pending_configuration(self) -> bool:

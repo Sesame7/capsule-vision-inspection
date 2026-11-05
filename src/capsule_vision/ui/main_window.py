@@ -671,7 +671,7 @@ class MainWindow(QMainWindow):
                     "channel_ok": "OK",
                     "channel_ng": "NG",
                     "channel_empty": "EMPTY",
-                    "processing": "Δt",
+                    "processing": text("batch_duration", language) if pilot else "Δt",
                 }[key]
             )
             caption.setToolTip(full)
@@ -680,11 +680,9 @@ class MainWindow(QMainWindow):
             batches = self.metrics["cycles"][1]
             batches.setToolTip(text("pilot_batches_help", language))
             batches.setAccessibleName(text("pilot_batches_help", language))
-            unknown = text("pilot_unknown", language).format(
-                count=f"{self.snapshot.pilot_counters.channel_unknown:,}"
-            )
-            self.metrics["channel_ng"][1].setText(f"NG · {unknown}")
-            self.metrics["channel_ng"][1].setAccessibleName(f"NG · {unknown}")
+            duration = self.metrics["processing"][1]
+            duration.setToolTip(text("batch_duration_help", language))
+            duration.setAccessibleName(text("batch_duration", language))
         diagnostic = text("pilot_raw_cycles", language).format(
             count=f"{self.snapshot.counters.cycles_completed:,}"
         )
@@ -1246,6 +1244,12 @@ class MainWindow(QMainWindow):
             if result is None or result.inspection_started_at is None
             else f"{(result.result_ready_at - result.inspection_started_at) * 1000:.0f} ms"
         )
+        if snapshot.pilot_counting:
+            duration = (
+                "--"
+                if snapshot.batch_duration_ms is None
+                else f"{snapshot.batch_duration_ms:.0f} ms"
+            )
         self.metrics["processing"][0].setText(duration)
         self.metrics["processing"][0].setAccessibleName(
             f"{self.metrics['processing'][1].text()}: {duration}"

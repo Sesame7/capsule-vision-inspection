@@ -100,6 +100,41 @@ class CameraViewport(QWidget):
         painter.end()
 
 
+class ChannelIndicator(QLabel):
+    """A per-cycle icon or four exposure lamps in admission order."""
+
+    states: tuple[str, ...] | None = None
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if self.states is None:
+            super().paintEvent(event)
+            return
+        colors = theme_colors(self)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        tones = {"ok": colors.ok, "ng": colors.ng, "empty": colors.secondary}
+        lamp_size = 11
+        pitch = lamp_size + 2
+        extent = pitch + lamp_size
+        left, top = (self.width() - extent) / 2, (self.height() - extent) / 2
+        painter.setPen(QPen(QColor(colors.border), 1))
+        for index, state in enumerate(self.states):
+            painter.setBrush(
+                QColor(tones[state]) if state in tones else Qt.BrushStyle.NoBrush
+            )
+            painter.drawRoundedRect(
+                QRectF(
+                    left + (index % 2) * pitch,
+                    top + (index // 2) * pitch,
+                    lamp_size,
+                    lamp_size,
+                ),
+                2,
+                2,
+            )
+        painter.end()
+
+
 class CameraCard(QFrame):
     def __init__(self, layout: CameraLayout, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -133,17 +168,17 @@ class CameraCard(QFrame):
         identity_row.addWidget(self.identity)
         header.addWidget(self.identity_group, 0, 0, Qt.AlignmentFlag.AlignLeft)
         self.indicator_group = QWidget()
-        slots = QHBoxLayout(self.indicator_group)
-        slots.setContentsMargins(0, 0, 0, 0)
-        slots.setSpacing(2)
+        self._slots = QHBoxLayout(self.indicator_group)
+        self._slots.setContentsMargins(0, 0, 0, 0)
+        self._slots.setSpacing(2)
         header.addWidget(self.indicator_group, 0, 1, Qt.AlignmentFlag.AlignCenter)
-        self.indicators: list[QLabel] = []
+        self.indicators: list[ChannelIndicator] = []
         for slot in layout.slots:
-            button = QLabel()
+            button = ChannelIndicator()
             button.setAlignment(Qt.AlignmentFlag.AlignCenter)
             button.setFixedSize(Style.touch, Style.touch)
             button.setAccessibleName(f"{layout.camera_id} CH{slot.channel_id}")
-            slots.addWidget(button)
+            self._slots.addWidget(button)
             self.indicators.append(button)
         self.timing = QLabel("--")
         self.timing.setProperty("role", "secondary")
@@ -161,6 +196,15 @@ class CameraCard(QFrame):
     ) -> None:
         # Generation zero is launcher reference/warm-up data, never production evidence.
         frame = frame if frame is not None and frame.generation > 0 else None
+        was_four_cycle = self._snapshot is not None and self._snapshot.pilot_counting
+        if snapshot.pilot_counting != was_four_cycle:
+            size = 28 if snapshot.pilot_counting else Style.touch
+            padding = 1 if snapshot.pilot_counting else 0
+            self._slots.setContentsMargins(0, padding, 0, padding)
+            self._slots.setSpacing(6 if snapshot.pilot_counting else 2)
+            for indicator in self.indicators:
+                indicator.setFixedSize(size, size)
+            self.indicator_group.updateGeometry()
         self._frame, self._snapshot, self.language = frame, snapshot, language
         # Retain Stop pixels, but hide a previous generation during new runtime work.
         stale = (
@@ -199,6 +243,30 @@ class CameraCard(QFrame):
         for index, (slot, button) in enumerate(
             zip(layout.slots, self.indicators, strict=True)
         ):
+            snapshot = self._snapshot
+            if snapshot is not None and snapshot.pilot_counting:
+                progress = snapshot.group_progress
+                if (
+                    progress is not None
+                    and progress.identity.generation != snapshot.generation
+                ):
+                    progress = None
+                button.states = (
+                    progress.channel_states(slot.channel_id)
+                    if progress
+                    else ("pending",) * 4
+                )
+                detail = "; ".join(
+                    f"#{progress.cycles[i] if progress and i < len(progress.cycles) else '—'}: {text(state, self.language)}"
+                    for i, state in enumerate(button.states)
+                )
+                button.setToolTip(f"{layout.camera_id} CH{slot.channel_id} · {detail}")
+                button.setAccessibleName(button.toolTip())
+                button.setStyleSheet("")
+                self._indicator_styles[index] = None
+                button.update()
+                continue
+            button.states = None
             channel = self.result.channels[index] if self.result else None
             state = channel_indicator(channel)
             error = (
@@ -272,6 +340,11 @@ class CameraCard(QFrame):
         self.viewport.setAccessibleName(
             f"{name} · {text('no_display_frame', self.language)}"
             if self.viewport.image.isNull()
+            else name
+        )
+        self.viewport.setToolTip(
+            f"{name} · #{self._frame.frame_id.cycle_id} · {self._frame.frame_id.sequence}"
+            if self._frame is not None and not self.viewport.image.isNull()
             else name
         )
         self.viewport.update()

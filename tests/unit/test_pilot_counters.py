@@ -38,9 +38,9 @@ def test_one_classification_per_position_from_authoritative_merger(
         # A partial terminal makes all EMPTY evidence conservative, and the last
         # camera's OK uncertain; confirmed NG in another cycle keeps precedence.
         assert counts.channel_ok == cameras - int(partial)
-        assert counts.channel_ng == 2 * cameras
+        assert counts.channel_ng == (5 * cameras + 1 if partial else 4 * cameras)
         assert counts.channel_empty == (0 if partial else cameras)
-        assert counts.channel_unknown == (3 * cameras + 1 if partial else 2 * cameras)
+        assert counts.channel_unknown == 0
         assert (
             sum(
                 (
@@ -95,7 +95,7 @@ def test_ok_and_verified_empty_mixture_is_ok_and_order_is_channel_id() -> None:
         assert future is not None
         future.result(3)
     counts = PilotCounters().completed(events[0])
-    assert counts == PilotCounters(1, 6, 12, 6, 12)
+    assert counts == PilotCounters(1, 6, 24, 6, 0)
     assert (
         raw.cycles_completed == 4 and raw.business_ok == 6 and raw.business_empty == 42
     )

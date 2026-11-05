@@ -388,6 +388,7 @@ def test_duplicate_terminal_and_missing_result_never_fabricate_reports() -> None
         )
         submit(worker, 3, count=2)
         assert first.result(3).outcome is ReportOutcome.SKIPPED
+        assert worker.snapshot().batch_observations[-1].completed_at is None
         assert all(p[10:12] == b"\x01\x01" for p in peer.packets)
 
 

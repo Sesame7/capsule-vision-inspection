@@ -133,6 +133,10 @@ class SnapshotPublisher:
         images: list[EncodedImage] = []
         deliveries: list[_Delivery] = []
         rows: list[dict[str, object]] = []
+        progress = snapshot.group_progress if snapshot.pilot_counting else None
+        if progress is not None and progress.identity.generation != snapshot.generation:
+            progress = None
+        prepared = snapshot.active_prepared or snapshot.candidate_prepared
         for camera_id in cameras:
             frame = frames.get(camera_id)
             row: dict[str, object] = {
@@ -143,6 +147,28 @@ class SnapshotPublisher:
                 "image_url": None,
                 "channels": [],
             }
+            if snapshot.pilot_counting and prepared is not None:
+                layout = next(
+                    (
+                        c
+                        for c in prepared.configuration.layout.cameras
+                        if c.camera_id == camera_id
+                    ),
+                    None,
+                )
+                row["group_channels"] = (
+                    [
+                        {
+                            "channel_id": int(slot.channel_id),
+                            "states": list(progress.channel_states(slot.channel_id))
+                            if progress
+                            else ["pending"] * 4,
+                        }
+                        for slot in layout.slots
+                    ]
+                    if layout is not None
+                    else []
+                )
             if frame is not None:
                 identity: dict[str, object] = {
                     "generation": frame.generation,
@@ -257,7 +283,26 @@ class SnapshotPublisher:
             "display_revision": display.revision,
             "configured_camera_ids": [str(camera) for camera in cameras],
             "cameras": rows,
+            "four_cycle": snapshot.pilot_counting,
+            "group_progress": {
+                "generation": progress.identity.generation,
+                "first_cycle_id": int(progress.identity.cycle_id),
+                "cycles": [int(c) for c in progress.cycles],
+                "eligible": progress.eligible,
+                "invalidated": progress.invalidated,
+            }
+            if progress
+            else None,
         }
+        if snapshot.pilot_counting:
+            counts = snapshot.pilot_counters
+            value["metrics"] = {
+                "batches": counts.batches_completed,
+                "ok": counts.channel_ok,
+                "ng": counts.channel_ng,
+                "empty": counts.channel_empty,
+                "duration_ms": snapshot.batch_duration_ms,
+            }
         publication = Publication(
             self.publisher_id,
             revision,

@@ -650,13 +650,18 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Channel business detection occurrences; repeated observations count again, not physical capsules or products.",
     ),
     "pilot_batches": ("批次", "Batches"),
+    "batch_duration": ("批次耗时", "Batch Duration"),
+    "batch_duration_help": (
+        "首个 Cycle 接收到第四个结果完成的耗时，不含后续 PLC 归属检查、写入和确认。",
+        "First Cycle admission to fourth terminal result; excludes subsequent PLC attribution checks, writes and ACK.",
+    ),
     "pilot_batches_help": (
         "已完成的四周期 PLC 物理批次",
         "Completed four-cycle PLC physical batches",
     ),
     "pilot_channels_help": (
-        "按已完成 PLC 批次累计的物理通道位置；不是检测次数。UNKNOWN 为保守剔除，NG 为确认缺陷。",
-        "Cumulative physical channel positions in completed PLC batches, not inspection occurrences. UNKNOWN is conservative rejection; NG is confirmed defect.",
+        "按已完成 PLC 批次累计的通道位置；NG 包含确认缺陷与保守剔除。",
+        "Cumulative channel positions in completed PLC batches. NG includes confirmed defects and conservative rejection.",
     ),
     "pilot_unknown": ("未知 {count}", "UNKNOWN {count}"),
     "pilot_raw_cycles": ("原始检测周期：{count}", "Raw inspection cycles: {count}"),

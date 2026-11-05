@@ -30,6 +30,7 @@ from capsule_vision.communication.reporting import (
     ReportingSelection,
     ReportingSettings,
 )
+from capsule_vision.display import matching_camera
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.main_window import MainWindow
@@ -95,11 +96,21 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             app.start().result(3)
             expose(3, pilot=True)
             assert app.snapshot().pilot_counters == PilotCounters()
+            assert not startup.frames.snapshot().frames
+            assert app.snapshot().group_progress is not None
             app.stop().result(3)
             assert not events  # Partial batches never resume in the next session.
             app.start().result(3)
             expose(4, pilot=True)
             until(lambda: app.snapshot().pilot_counters.batches_completed == 1)
+            until(lambda: len(startup.frames.snapshot().frames) == cameras)
+            fourth = startup.frames.snapshot().frames
+            assert all(
+                frame.frame_id.cycle_id == events[0].reports[-1].identity.cycle_id
+                for frame in fourth
+            )
+            assert all(frame.result is not None for frame in fourth)
+            assert app.snapshot().batch_duration_ms == events[0].duration_ms
             counts = app.snapshot().pilot_counters
             assert counts.channel_empty + counts.channel_ok == cameras * 6
             assert counts.channel_unknown == counts.channel_ng == 0
@@ -170,6 +181,12 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             app.start_batch("New operator batch")
             assert app.snapshot().pilot_counters == PilotCounters()
             assert app.snapshot().counters == ProductionCounters()
+            assert app.snapshot().group_progress is None
+            assert app.snapshot().batch_duration_ms is None
+            assert all(
+                matching_camera(frame, app.snapshot()) is None
+                for frame in startup.frames.snapshot().frames
+            )
             observe(events[-1])
             assert app.snapshot().pilot_counters == PilotCounters()
             assert len(app.history.query().result(3).records) == 12
@@ -185,7 +202,7 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-def test_pilot_metrics_keep_raw_duration_and_all_language_accessibility(
+def test_four_cycle_metrics_use_group_duration_and_language_accessibility(
     screen: tuple[MainWindow, FakeSession], size: tuple[int, int]
 ) -> None:
     window, _ = screen
@@ -200,7 +217,8 @@ def test_pilot_metrics_keep_raw_duration_and_all_language_accessibility(
     snapshot = replace(
         window.snapshot,
         pilot_counting=True,
-        pilot_counters=PilotCounters(2, 6, 24, 12, 30),
+        pilot_counters=PilotCounters(2, 6, 54, 12, 0),
+        batch_duration_ms=125,
         counters=raw,
         latest_production_result=mixed_result(),
     )
@@ -216,12 +234,13 @@ def test_pilot_metrics_keep_raw_duration_and_all_language_accessibility(
             in window.metrics["cycles"][0].toolTip()
         )
         assert window.metrics["channel_ok"][0].text() == "6"
-        assert window.metrics["channel_ng"][0].text() == "24"
+        assert window.metrics["channel_ng"][0].text() == "54"
         assert window.metrics["channel_empty"][0].text() == "12"
-        unknown = text("pilot_unknown", language).format(count="30")
-        assert unknown in window.metrics["channel_ng"][1].text()
-        assert unknown in window.metrics["channel_ng"][0].accessibleName()
-        assert window.metrics["processing"][0].text() == "25 ms"
+        assert window.metrics["channel_ng"][1].text() == "NG"
+        assert window.metrics["processing"][1].text() == text(
+            "batch_duration", language
+        )
+        assert window.metrics["processing"][0].text() == "125 ms"
         for value, caption in window.metrics.values():
             assert (
                 value.isVisible()

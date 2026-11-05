@@ -197,6 +197,7 @@ class CompletedReportingBatch:
     sequence: int
     reports: tuple[FirstStationReport, ...]
     reject_words: tuple[int, int] | tuple[int, int, int]
+    duration_ms: float | None = None
 
     def __post_init__(self) -> None:
         if len(self.reports) != 4 or any(
@@ -208,6 +209,39 @@ class CompletedReportingBatch:
             raise ValueError(
                 "Completed reporting group requires four consecutive same-generation/layout results"
             )
+
+
+@dataclass(frozen=True, slots=True)
+class ReportingGroupProgress:
+    """Latest observed group, in admission order; no pixels or consumer grouping.
+
+    Invalidated unconfirmed observations retain diagnostics but project neutral
+    lamps. An eligible completion remains valid after a later delivery failure.
+    """
+
+    identity: ReportIdentity
+    cycles: tuple[CycleId, ...]
+    reports: tuple[FirstStationReport | None, ...]
+    eligible: bool = False
+    invalidated: bool = False
+
+    def channel_states(self, channel: ChannelId) -> tuple[str, ...]:
+        states: list[str] = []
+        for report in self.reports:
+            if report is None or self.invalidated:
+                states.append("pending")
+                continue
+            status = dict(report.statuses).get(channel)
+            word, bit = divmod(channel - 1, 16)
+            if status is None or word >= len(report.reject_words):
+                states.append("pending")
+            elif report.reject_words[word] & (1 << bit):
+                states.append("ng")
+            elif status is ChannelBusinessStatus.EMPTY:
+                states.append("empty")
+            else:
+                states.append("ok")
+        return tuple(states + ["pending"] * (4 - len(states)))
 
 
 class ReportOutcome(Enum):
@@ -323,6 +357,7 @@ class ReportingSnapshot:
     mode: ReportingMode = ReportingMode.PER_CYCLE
     phase_issue: str | None = None
     batch_observations: tuple[BatchReportObservation, ...] = ()
+    group_progress: ReportingGroupProgress | None = None
 
 
 @runtime_checkable
