@@ -125,8 +125,8 @@ def test_unavailable_intent_blocks_mutations_but_allows_login_run_stop(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "security.sqlite3"
-    initialize_administrator(path, "Admin", TEST_PASSWORD)
     (tmp_path / "audit.sqlite3").mkdir()
+    initialize_administrator(path, "Admin", TEST_PASSWORD)
     identity = LocalIdentity(path)
     app = ProductionApplication(
         lambda _p, _g: FakeSession(),
@@ -279,8 +279,10 @@ def test_stale_after_durable_intent_cannot_execute_as_next_user(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     entered, release = Event(), Event()
+    data = saved_data(tmp_path)
+    initialize_administrator(data.security, "TestAdmin", TEST_PASSWORD)
     hold_insert(monkeypatch, "account.create", entered, release)
-    startup = authenticated_startup(saved_data(tmp_path))
+    startup = authenticated_startup(data)
     identity = startup.application.identity
     assert identity
     admitted = identity.snapshot()
@@ -295,7 +297,9 @@ def test_stale_after_durable_intent_cannot_execute_as_next_user(
         with pytest.raises(StaleSessionError):
             pending.result(WAIT)
         identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
-        (row,) = identity.audit_page(AuditQuery(action="account.create")).result(WAIT)
+        (row,) = identity.audit_page(
+            AuditQuery(action="account.create", actor=admitted.account.account_id)
+        ).result(WAIT)
         assert (
             row.outcome == "stale"
             and row.operation.actor_id == admitted.account.account_id

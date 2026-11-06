@@ -20,6 +20,10 @@ class IdentityValidationError(IdentityError):
     pass
 
 
+class PasswordReuseError(IdentityValidationError):
+    pass
+
+
 class AuthenticationError(IdentityError):
     pass
 
@@ -76,6 +80,7 @@ class Account:
     role: Role
     enabled: bool
     last_login_utc: datetime | None = None
+    must_change_password: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,12 +90,22 @@ class SessionSnapshot:
 
     @property
     def role(self) -> Role:
-        return self.account.role if self.account is not None else Role.GUEST
+        if self.account is None or self.account.must_change_password:
+            return Role.GUEST
+        return self.account.role
+
+    @property
+    def rotation_required(self) -> bool:
+        return self.account is not None and self.account.must_change_password
+
+    def permits(self, minimum: Role) -> bool:
+        return not self.rotation_required and self.role >= minimum
 
 
 class StorageState(Enum):
     OPENING = "opening"
     MISSING = "missing"
+    EMPTY = "empty"
     READY = "ready"
     UNAVAILABLE = "unavailable"
     CLOSED = "closed"
@@ -100,3 +115,7 @@ class StorageState(Enum):
 class SecurityStorageSnapshot:
     state: StorageState = StorageState.OPENING
     issue: str = ""
+
+    @property
+    def uninitialized(self) -> bool:
+        return self.state in (StorageState.MISSING, StorageState.EMPTY)

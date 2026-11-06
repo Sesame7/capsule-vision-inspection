@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QBoxLayout,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -39,6 +40,7 @@ from capsule_vision.application.identity_models import (
     IdentityError,
     IdentityValidationError,
     LastAdministratorError,
+    PasswordReuseError,
     Role,
     SecurityBusyError,
     SecurityStorageError,
@@ -46,6 +48,7 @@ from capsule_vision.application.identity_models import (
     StaleSessionError,
     StorageState,
 )
+from capsule_vision.application.passwords import weak_password
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
@@ -59,16 +62,17 @@ _ROLES = {
     Role.ENGINEER: "identity_engineer",
     Role.ADMINISTRATOR: "identity_administrator",
 }
-FormKind = Literal["login", "change", "create", "reset"]
+FormKind = Literal["login", "setup", "change", "rotate", "create", "reset", "recover"]
 
 
-def _feedback(error: object) -> str:
+def identity_feedback(error: object) -> str:
     # Never echo exception messages, passwords, SQLite text or paths into widgets.
     for kind, key in (
         (AuditUnavailable, "audit_required"),
         (AuthenticationError, "identity_invalid"),
         (LastAdministratorError, "identity_last_admin"),
         (AccountConflictError, "identity_conflict"),
+        (PasswordReuseError, "identity_rotate"),
         (IdentityValidationError, "identity_validation"),
         (StaleSessionError, "identity_stale"),
         (AuthorizationError, "identity_denied"),
@@ -81,7 +85,7 @@ def _feedback(error: object) -> str:
 
 
 class _AccountDialog(QDialog):
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget | None) -> None:
         super().__init__(parent)
         self.setMinimumWidth(420)
         self.body = QVBoxLayout(self)
@@ -101,29 +105,22 @@ class CredentialDialog(_AccountDialog):
     """Modeless, masked and cleared at submission and dismissal."""
 
     def __init__(
-        self, kind: FormKind, account: Account | None, parent: QWidget
+        self, kind: FormKind, account: Account | None, parent: QWidget | None
     ) -> None:
         super().__init__(parent)
         self.kind, self.account = kind, account
-        self.actor_id: str | None = None
+        self.revision = 0
         self.busy = False
         self.form = QFormLayout()
         self.body.addLayout(self.form)
         self.fields: dict[str, QLineEdit] = {}
-        keys = {
-            "login": ("identity_username", "identity_password"),
-            "change": (
-                "identity_old_password",
-                "identity_new_password",
-                "identity_confirm",
-            ),
-            "create": (
-                "identity_username",
-                "identity_new_password",
-                "identity_confirm",
-            ),
-            "reset": ("identity_new_password", "identity_confirm"),
-        }[kind]
+        keys = ["identity_new_password", "identity_confirm"]
+        if kind == "login":
+            keys = ["identity_username", "identity_password"]
+        elif kind == "change":
+            keys.insert(0, "identity_old_password")
+        elif kind in ("create", "setup", "recover"):
+            keys.insert(0, "identity_username")
         self.labels: dict[str, QLabel] = {}
         if account is not None:
             target = QLabel(account.username)
@@ -153,6 +150,17 @@ class CredentialDialog(_AccountDialog):
         else:
             self.role.hide()
             self.role_label.hide()
+        self.guidance = QLabel()
+        self.guidance.setWordWrap(True)
+        self.guidance.setVisible(kind != "login")
+        self.body.addWidget(self.guidance)
+        self.weak = QCheckBox()
+        self.grant = QCheckBox()
+        for check in (self.weak, self.grant):
+            check.setMinimumHeight(Style.touch)
+            self.body.addWidget(check)
+            check.hide()
+            check.toggled.connect(self._enable_submission)
         self.body.addWidget(self.status)
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -163,6 +171,49 @@ class CredentialDialog(_AccountDialog):
             button.setMinimumHeight(Style.touch)
         self.buttons.rejected.connect(self.reject)
         self.finished.connect(self.clear_secrets)
+        if kind != "login":
+            for key in ("identity_username", "identity_new_password"):
+                if key in self.fields:
+                    self.fields[key].textChanged.connect(self._choices_changed)
+            self.role.currentIndexChanged.connect(self._choices_changed)
+
+    @Slot()
+    def _choices_changed(self) -> None:
+        field = self.fields.get("identity_new_password")
+        name = self.fields.get("identity_username")
+        username = (
+            name.text() if name else self.account.username if self.account else ""
+        )
+        self.weak.setVisible(
+            bool(field and field.text() and weak_password(field.text(), username))
+        )
+        self.grant.setVisible(
+            self.kind == "create" and self.role.currentData() == Role.ADMINISTRATOR
+        )
+        self.weak.setChecked(False)
+        self.grant.setChecked(False)
+        self._enable_submission()
+
+    @Slot()
+    def _enable_submission(self) -> None:
+        self.submit.setEnabled(
+            not self.busy
+            and all(c.isHidden() or c.isChecked() for c in (self.weak, self.grant))
+        )
+
+    def submission(self, language: Language) -> dict[str, str] | None:
+        if self.busy or not self.submit.isEnabled():
+            return None
+        values = {key: field.text() for key, field in self.fields.items()}
+        self.clear_secrets()
+        if (
+            "identity_confirm" in values
+            and values["identity_confirm"] != values["identity_new_password"]
+        ):
+            self.feedback("identity_mismatch", language)
+            return None
+        self.set_busy(True, language)
+        return values
 
     @Slot()
     def clear_secrets(self) -> None:
@@ -171,9 +222,14 @@ class CredentialDialog(_AccountDialog):
                 field.clear()
 
     def present(self, language: Language) -> None:
-        key = f"identity_{self.kind}"
+        key = "identity_reset" if self.kind == "recover" else f"identity_{self.kind}"
         self.setWindowTitle(text(key, language))
-        self.submit.setText(text(key, language))
+        self.submit.setText(
+            text("identity_change" if self.kind == "rotate" else key, language)
+        )
+        self.guidance.setText(text("identity_guidance", language))
+        self.weak.setText(text("identity_weak", language))
+        self.grant.setText(text("identity_grant", language))
         for key, label in self.labels.items():
             label.setText(text(key, language))
             self.fields[key].setAccessibleName(label.text())
@@ -193,7 +249,7 @@ class CredentialDialog(_AccountDialog):
         for field in self.fields.values():
             field.setEnabled(not busy)
         self.role.setEnabled(not busy)
-        self.submit.setEnabled(not busy)
+        self._enable_submission()
         self.feedback("identity_working" if busy else "", language)
 
 
@@ -404,23 +460,11 @@ class UsersDialog(_AccountDialog):
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
         selected = self.selected()
-        last_admin = (
-            selected is not None
-            and selected.enabled
-            and selected.role is Role.ADMINISTRATOR
-            and sum(a.enabled and a.role is Role.ADMINISTRATOR for a in self.accounts)
-            == 1
-        )
+        editable = selected is not None and selected.role is not Role.ADMINISTRATOR
         self.table.setEnabled(not busy)
         for key, button in self.controls.items():
             button.setEnabled(
-                not busy
-                and (
-                    key in ("identity_create", "short_refresh") or selected is not None
-                )
-                and not (
-                    last_admin and key in ("identity_change_role", "identity_disable")
-                )
+                not busy and (key in ("identity_create", "short_refresh") or editable)
             )
         self.controls["identity_disable"].setText(
             text(
@@ -434,8 +478,8 @@ class UsersDialog(_AccountDialog):
             button = self.controls[key]
             button.setAccessibleName(button.text())
             button.setToolTip(
-                text("identity_last_admin", self.language)
-                if last_admin and key != "identity_reset"
+                text("identity_denied", self.language)
+                if selected is not None and not editable
                 else button.text()
             )
         self._queue_layout()
@@ -534,6 +578,9 @@ class RoleDialog(_AccountDialog):
             self.role.addItem("", role)
         self.role.setCurrentIndex(self.role.findData(account.role))
         self.body.addWidget(self.role)
+        self.grant = QCheckBox()
+        self.grant.setMinimumHeight(Style.touch)
+        self.body.addWidget(self.grant)
         self.body.addWidget(self.status)
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
@@ -544,22 +591,36 @@ class RoleDialog(_AccountDialog):
             button.setMinimumHeight(Style.touch)
         self.body.addWidget(self.buttons)
         self.buttons.rejected.connect(self.reject)
-        self.role.currentIndexChanged.connect(self._selection_changed)
+        self.role.currentIndexChanged.connect(self._role_changed)
+        self.grant.toggled.connect(self._selection_changed)
+
+    @Slot()
+    def _role_changed(self) -> None:
+        self.grant.setVisible(self.role.currentData() == Role.ADMINISTRATOR)
+        self.grant.setChecked(False)
+        self._selection_changed()
 
     @Slot()
     def _selection_changed(self) -> None:
         self.submit.setEnabled(
-            not self.busy and self.role.currentData() != self.account.role
+            not self.busy
+            and self.role.currentData() != self.account.role
+            and (
+                self.role.currentData() != Role.ADMINISTRATOR or self.grant.isChecked()
+            )
         )
 
     def set_busy(self, busy: bool, language: Language) -> None:
         self.busy = busy
         self.role.setEnabled(not busy)
+        self.grant.setEnabled(not busy)
         self._selection_changed()
         self.feedback("identity_working" if busy else "", language)
 
     def present(self, language: Language) -> None:
         self.setWindowTitle(text("identity_change_role", language))
+        self.grant.setText(text("identity_grant", language))
+        self.grant.setVisible(self.role.currentData() == Role.ADMINISTRATOR)
         self.role.setAccessibleName(text("identity_role", language))
         for index, role in enumerate(
             (Role.OPERATOR, Role.ENGINEER, Role.ADMINISTRATOR)
@@ -634,6 +695,7 @@ class IdentityControls(QObject):
         navbar.user.setMenu(self.menu)
         self.controls: dict[str, QAction] = {}
         for key, callback in (
+            ("identity_setup", self.offer_setup),
             ("identity_login", self.login),
             ("identity_logout", self.logout),
             ("identity_switch", self.switch_user),
@@ -660,15 +722,16 @@ class IdentityControls(QObject):
             self._presented_revision = snapshot.revision
             self.session_changed.emit()
         account = snapshot.account
-        detail = text(_ROLES[snapshot.role], self.language)
-        state = (
-            self.owner.storage_snapshot().state if self.owner else StorageState.CLOSED
+        detail = text(
+            "identity_rotate" if snapshot.rotation_required else _ROLES[snapshot.role],
+            self.language,
         )
+        storage = self.owner.storage_snapshot() if self.owner else None
+        state = storage.state if storage else StorageState.CLOSED
+        uninitialized = bool(storage and storage.uninitialized)
         if state is not StorageState.READY:
             status = text(
-                "identity_missing"
-                if state is StorageState.MISSING
-                else "identity_storage",
+                "identity_missing" if uninitialized else "identity_storage",
                 self.language,
             )
             detail = f"{detail} · {status}"
@@ -677,10 +740,16 @@ class IdentityControls(QObject):
         for key, action in self.controls.items():
             action.setText(text(key, self.language))
             action.setVisible(
-                (key == "identity_login" and account is None)
+                (key == "identity_setup" and uninitialized)
+                or (key == "identity_login" and account is None and not uninitialized)
                 or (
-                    key in ("identity_logout", "identity_switch", "identity_change")
+                    key in ("identity_logout", "identity_change")
                     and account is not None
+                )
+                or (
+                    key == "identity_switch"
+                    and account is not None
+                    and not snapshot.rotation_required
                 )
                 or (key == "identity_manage" and snapshot.role is Role.ADMINISTRATOR)
             )
@@ -693,17 +762,27 @@ class IdentityControls(QObject):
         form = self.form
         if (
             form is not None
-            and form.kind != "login"
-            and (
-                account is None
-                or account.account_id != form.actor_id
-                or (
-                    form.kind in ("create", "reset")
-                    and snapshot.role is not Role.ADMINISTRATOR
-                )
-            )
+            and form.kind == "login"
+            and state is not StorageState.READY
         ):
-            form.reject()
+            form.submit.setEnabled(False)
+        if (
+            form is not None
+            and form.kind not in ("login", "setup")
+            and form.revision != snapshot.revision
+        ):
+            # A password commit can advance this same session before queued delivery.
+            if not (
+                form.busy
+                and form.kind in ("change", "rotate")
+                and form.account
+                and account
+                and account.account_id == form.account.account_id
+                and not snapshot.rotation_required
+            ):
+                form.reject()
+        if snapshot.rotation_required and self.form is None and not self._closing:
+            self._open_form("rotate", account)
 
     def _invalidate(self) -> None:
         if self._login_attempt is not None and self.owner is not None:
@@ -725,9 +804,9 @@ class IdentityControls(QObject):
     @Slot()
     def logout(self) -> None:
         self._invalidate()
-        self._dismiss()
         if self.owner is not None:
             self.owner.logout()
+        self._dismiss()
         self.refresh()
 
     @Slot()
@@ -735,12 +814,21 @@ class IdentityControls(QObject):
         self._open_form("login")
 
     @Slot()
+    def offer_setup(self) -> None:
+        if self.owner is not None and self.owner.storage_snapshot().uninitialized:
+            self._open_form("setup")
+
+    @Slot()
     def switch_user(self) -> None:
         self.login()
 
     @Slot()
     def change_password(self) -> None:
-        self._open_form("change")
+        if self.owner is not None:
+            snapshot = self.owner.snapshot()
+            self._open_form(
+                "rotate" if snapshot.rotation_required else "change", snapshot.account
+            )
 
     def _open_form(self, kind: FormKind, account: Account | None = None) -> None:
         if self._closing or self.owner is None:
@@ -758,8 +846,9 @@ class IdentityControls(QObject):
         form = self.form = CredentialDialog(kind, account, self.window)
         if self.users is not None:
             self.users.set_busy(True)
-        actor = self.owner.snapshot().account
-        form.actor_id = actor.account_id if actor else None
+        form.revision = self.owner.snapshot().revision
+        if kind == "rotate":
+            form.setWindowModality(Qt.WindowModality.WindowModal)
         form.present(self.language)
         form.buttons.accepted.connect(self._submit)
         form.finished.connect(self._form_finished)
@@ -770,7 +859,7 @@ class IdentityControls(QObject):
             form.submit.setEnabled(False)
             form.feedback(
                 "identity_missing"
-                if self.owner.storage_snapshot().state is StorageState.MISSING
+                if self.owner.storage_snapshot().uninitialized
                 else "identity_storage",
                 self.language,
             )
@@ -784,6 +873,12 @@ class IdentityControls(QObject):
             return
         if form.busy:
             self._invalidate()
+        if (
+            result == QDialog.DialogCode.Rejected
+            and self.owner is not None
+            and (form.kind == "rotate" or (form.kind == "setup" and form.busy))
+        ):
+            self.owner.logout(revision=form.revision)
         form.deleteLater()
         if self.users is not None:
             self.users.set_busy(False)
@@ -794,16 +889,10 @@ class IdentityControls(QObject):
         form, owner = self.form, self.owner
         if form is None or owner is None or form.busy or self._closing:
             return
-        values = {key: field.text() for key, field in form.fields.items()}
-        if (
-            "identity_confirm" in values
-            and values["identity_confirm"] != values["identity_new_password"]
-        ):
-            form.clear_secrets()
-            form.feedback("identity_mismatch", self.language)
+        confirmed = form.grant.isChecked()
+        values = form.submission(self.language)
+        if values is None:
             return
-        form.clear_secrets()
-        form.set_busy(True, self.language)
 
         if form.kind == "login":
 
@@ -814,11 +903,29 @@ class IdentityControls(QObject):
                 return self._login_attempt
 
             self._request("credential", authenticate)
+        elif form.kind == "setup":
+            self._request(
+                "credential",
+                lambda: owner.setup_administrator(
+                    values["identity_username"],
+                    values["identity_new_password"],
+                    revision=form.revision,
+                ),
+            )
+        elif form.kind == "rotate":
+            self._request(
+                "credential",
+                lambda: owner.rotate_password(
+                    values["identity_new_password"], form.revision
+                ),
+            )
         elif form.kind == "change":
             self._request(
                 "credential",
                 lambda: owner.change_password(
-                    values["identity_old_password"], values["identity_new_password"]
+                    values["identity_old_password"],
+                    values["identity_new_password"],
+                    revision=form.revision,
                 ),
             )
         elif form.kind == "create":
@@ -826,7 +933,11 @@ class IdentityControls(QObject):
             self._request(
                 "credential",
                 lambda: owner.create_account(
-                    values["identity_username"], role, values["identity_new_password"]
+                    values["identity_username"],
+                    role,
+                    values["identity_new_password"],
+                    confirm_administrator=confirmed,
+                    revision=form.revision,
                 ),
             )
         elif form.account is not None:
@@ -834,7 +945,7 @@ class IdentityControls(QObject):
             self._request(
                 "credential",
                 lambda: owner.reset_password(
-                    account_id, values["identity_new_password"]
+                    account_id, values["identity_new_password"], revision=form.revision
                 ),
             )
 
@@ -854,13 +965,13 @@ class IdentityControls(QObject):
     def _show_error(self, error: object) -> None:
         if self.role_dialog is not None:
             self.role_dialog.set_busy(False, self.language)
-            self.role_dialog.feedback(_feedback(error), self.language)
+            self.role_dialog.feedback(identity_feedback(error), self.language)
         elif self.form is not None:
             self.form.set_busy(False, self.language)
-            self.form.feedback(_feedback(error), self.language)
+            self.form.feedback(identity_feedback(error), self.language)
         elif self.users is not None:
             self.users.set_busy(False)
-            self.users.feedback(_feedback(error), self.language)
+            self.users.feedback(identity_feedback(error), self.language)
 
     @Slot()
     def manage_users(self) -> None:
@@ -906,7 +1017,7 @@ class IdentityControls(QObject):
     @Slot()
     def _reset_password(self) -> None:
         account = self.users.selected() if self.users else None
-        if account is not None:
+        if account is not None and account.role is not Role.ADMINISTRATOR:
             self._open_form("reset", account)
 
     @Slot()
@@ -917,6 +1028,7 @@ class IdentityControls(QObject):
             users is not None
             and owner is not None
             and account is not None
+            and account.role is not Role.ADMINISTRATOR
             and not users.busy
         ):
             dialog = self.role_dialog = RoleDialog(
@@ -938,10 +1050,18 @@ class IdentityControls(QObject):
             self.refresh()
             return
         role = Role(dialog.role.currentData())
-        if role == dialog.account.role:
+        if role == dialog.account.role or not dialog.submit.isEnabled():
             return
         dialog.set_busy(True, self.language)
-        self._request("role", lambda: owner.set_role(dialog.account.account_id, role))
+        self._request(
+            "role",
+            lambda: owner.set_role(
+                dialog.account.account_id,
+                role,
+                confirm_administrator=dialog.grant.isChecked(),
+                revision=dialog.revision,
+            ),
+        )
 
     @Slot(int)
     def _role_finished(self, result: int) -> None:
@@ -961,6 +1081,7 @@ class IdentityControls(QObject):
             users is not None
             and owner is not None
             and account is not None
+            and account.role is not Role.ADMINISTRATOR
             and not users.busy
         ):
             users.set_busy(True)
@@ -992,7 +1113,8 @@ class IdentityControls(QObject):
             and revision == owner.snapshot().revision
         ):
             self._request(
-                "update", lambda: owner.set_enabled(account.account_id, False)
+                "update",
+                lambda: owner.set_enabled(account.account_id, False, revision=revision),
             )
         else:
             users.set_busy(False)

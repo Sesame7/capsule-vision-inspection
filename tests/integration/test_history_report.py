@@ -12,7 +12,12 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 from tests.support.application import WAIT
 from tests.support.business import mixed_result
 from tests.support.qt import close_window, until
-from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    provision_account,
+    saved_data,
+)
 from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_history import finish
 from tests.unit.test_production_report import FOUR_CYCLE, record_group
@@ -111,8 +116,8 @@ def test_export_picker_reaches_ended_batches_and_enforces_session(
         page = window.history
         until(lambda: not page.busy)
         assert page.batch.count() == 1  # None of these Batches has a Cycle row.
-        owner.create_account("Worker", Role.OPERATOR, TEST_PASSWORD).result(WAIT)
-        owner.create_account("Process", Role.ENGINEER, TEST_PASSWORD).result(WAIT)
+        provision_account(owner, "Worker", Role.OPERATOR, TEST_PASSWORD)
+        provision_account(owner, "Process", Role.ENGINEER, TEST_PASSWORD)
         owner.logout()
         until(lambda: not page.export_button.isEnabled())
         target = tmp_path / "operator.xlsx"

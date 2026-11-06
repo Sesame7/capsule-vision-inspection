@@ -161,9 +161,20 @@ STRINGS: dict[str, tuple[str, str]] = {
         "账号存储不可用；请联系维护人员。",
         "Account storage unavailable; contact maintenance.",
     ),
+    "identity_setup": ("设置首位管理员", "Set up the first Administrator"),
+    "identity_rotate": ("请设置不同的新密码", "Choose a different password"),
+    "identity_guidance": ("建议使用较长且独有的密码。", "Use a long, unique password."),
+    "identity_weak": ("仍使用这个弱密码", "Use this weak password anyway"),
+    "identity_grant": ("确认授予管理员权限", "Confirm Administrator access"),
+    "identity_maintenance": ("离线账户维护", "Offline account maintenance"),
+    "identity_stop_app": (
+        "请先关闭胶囊检测主程序。",
+        "Close Capsule Vision Inspection before running maintenance.",
+    ),
+    "identity_audit_incomplete": ("审计记录不完整", "Audit evidence is incomplete"),
     "identity_missing": (
-        "尚未初始化账号；请先离线创建管理员。",
-        "Accounts are not initialized; initialize an Administrator offline.",
+        "尚未设置首位管理员。",
+        "The first Administrator has not been set up.",
     ),
     "identity_error": (
         "账号操作未完成，请重试。",

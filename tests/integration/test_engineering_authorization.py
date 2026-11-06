@@ -15,6 +15,7 @@ from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
     close,
+    provision_account,
     saved_data,
 )
 
@@ -69,7 +70,7 @@ def sign_in(owner: LocalIdentity, role: Role) -> None:
     if role is Role.GUEST:
         owner.logout()
     elif role is not Role.ADMINISTRATOR:
-        owner.create_account("Actor", role, TEST_PASSWORD).result(WAIT)
+        provision_account(owner, "Actor", role, TEST_PASSWORD)
         owner.login("Actor", TEST_PASSWORD).result(WAIT)
     assert owner.snapshot().role is role
 
@@ -180,9 +181,8 @@ def test_staged_import_cannot_publish_under_a_later_session(
     assert (
         owner is not None and editor is not None and editor.managed_models is not None
     )
-    admin = owner.snapshot().account
-    assert admin is not None
-    owner.create_account("Backup", Role.ADMINISTRATOR, TEST_PASSWORD).result(WAIT)
+    author = provision_account(owner, "Author", Role.ENGINEER, TEST_PASSWORD)
+    owner.login("Author", TEST_PASSWORD).result(WAIT)
     models = editor.managed_models
     source = engineering.data.root.parent / "test.vimosln"
     source.write_bytes(b"new model")
@@ -194,14 +194,14 @@ def test_staged_import_cannot_publish_under_a_later_session(
         "capsule_vision.configuration.managed_models.read_model_modules", inspect
     )
     pending = models.inspect_import(source)
-    if transition == "switch":
-        owner.login("Backup", TEST_PASSWORD).result(WAIT)
-    elif transition == "disable":
-        owner.set_enabled(admin.account_id, False).result(WAIT)
-    elif transition == "demote":
-        owner.set_role(admin.account_id, Role.ENGINEER).result(WAIT)
-    else:
+    if transition == "logout":
         owner.logout()
+    else:
+        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        if transition == "disable":
+            owner.set_enabled(author.account_id, False).result(WAIT)
+        elif transition == "demote":
+            owner.set_role(author.account_id, Role.OPERATOR).result(WAIT)
     with pytest.raises(StaleSessionError):
         models.publish_import(pending, "2", "Stale")
     assert {p.name for p in models.directory.iterdir()} == {"general"}
@@ -306,7 +306,7 @@ def test_monitoring_rechecks_between_reads_and_timer_passes(
     app = engineering.application
     owner = app.identity
     assert owner is not None
-    owner.create_account("OtherEngineer", Role.ENGINEER, TEST_PASSWORD).result(WAIT)
+    provision_account(owner, "OtherEngineer", Role.ENGINEER, TEST_PASSWORD)
     entered, release = Event(), Event()
     calls: list[int] = []
 
@@ -341,9 +341,8 @@ def test_pending_recipe_delete_does_not_follow_a_role_change(
 ) -> None:
     owner, editor = engineering.application.identity, engineering.editor
     assert owner is not None and editor is not None
-    admin = owner.snapshot().account
-    assert admin is not None
-    owner.create_account("Backup", Role.ADMINISTRATOR, TEST_PASSWORD).result(WAIT)
+    author = provision_account(owner, "Author", Role.ENGINEER, TEST_PASSWORD)
+    owner.login("Author", TEST_PASSWORD).result(WAIT)
     delivery = FutureDelivery()
     window = create_window(engineering, delivery)
     try:
@@ -358,7 +357,8 @@ def test_pending_recipe_delete_does_not_follow_a_role_change(
         page.request_delete()
         dialog = page.findChild(QMessageBox)
         assert dialog is not None
-        owner.set_role(admin.account_id, Role.ENGINEER).result(WAIT)
+        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        owner.set_role(author.account_id, Role.OPERATOR).result(WAIT)
         button = next(
             b
             for b in dialog.buttons()
@@ -539,7 +539,7 @@ def test_label_catalog_survives_identity_changes_and_preserves_engineering_draft
     owner, editor = engineering.application.identity, engineering.editor
     assert owner is not None and editor is not None and editor.entry is not None
     assert not editor.draft.defaults.vimo.disabled_labels
-    owner.create_account("Engineer", Role.ENGINEER, TEST_PASSWORD).result(WAIT)
+    provision_account(owner, "Engineer", Role.ENGINEER, TEST_PASSWORD)
     entered, release = Event(), Event()
     reads: list[Path] = []
 

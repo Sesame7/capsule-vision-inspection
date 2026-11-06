@@ -20,6 +20,7 @@ from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
     close,
+    provision_account,
     saved_data,
 )
 
@@ -296,7 +297,7 @@ def test_normal_authorization_warmup_controls_and_stop(
             if role is Role.GUEST:
                 identity.logout()
             elif role is not Role.ADMINISTRATOR:
-                identity.create_account("Actor", role, TEST_PASSWORD).result(3)
+                provision_account(identity, "Actor", role, TEST_PASSWORD)
                 identity.login("Actor", TEST_PASSWORD).result(3)
             if role < Role.ENGINEER:
                 with pytest.raises(AuthorizationError):

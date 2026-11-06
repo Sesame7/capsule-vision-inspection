@@ -97,6 +97,10 @@ def test_normal_bootstrap_window_state_size_and_close(
         (window,) = windows
         qapp.processEvents()
         assert window.isVisible()
+        setup = window.identity_controls.form
+        assert setup is not None and setup.kind == "setup" and setup.isVisible()
+        setup.reject()
+        assert not (tmp_path / "data/security.sqlite3").exists()
         assert window.isMaximized() == (size is None)
         if size is not None:
             assert window.size() == QSize(*size)

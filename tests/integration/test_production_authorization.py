@@ -13,6 +13,7 @@ from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
     close,
+    provision_account,
     saved_data,
 )
 
@@ -46,7 +47,7 @@ def test_production_role_boundaries(
         if role is Role.GUEST:
             owner.logout()
         elif role is not Role.ADMINISTRATOR:
-            owner.create_account("Actor", role, TEST_PASSWORD).result(WAIT)
+            provision_account(owner, "Actor", role, TEST_PASSWORD)
             owner.login("Actor", TEST_PASSWORD).result(WAIT)
         assert owner.snapshot().role is role
         before, connection = app.snapshot(), app.source_snapshot()
@@ -177,9 +178,7 @@ def test_running_controls_follow_generation_across_identity_changes(
     owner = app.identity
     assert owner is not None
     try:
-        admin = owner.snapshot().account
-        assert admin is not None
-        owner.create_account("Backup", Role.ADMINISTRATOR, TEST_PASSWORD).result(WAIT)
+        worker = provision_account(owner, "Worker", Role.OPERATOR, TEST_PASSWORD)
         starting = app.start()
         assert engine.entered.wait(WAIT)
         owner.logout()
@@ -188,14 +187,11 @@ def test_running_controls_follow_generation_across_identity_changes(
         for command in (app.pause_source, app.resume_source, app.step_source):
             with pytest.raises(AuthorizationError):
                 command()
-        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
-        owner.set_role(admin.account_id, Role.OPERATOR).result(WAIT)
+        owner.login("Worker", TEST_PASSWORD).result(WAIT)
         app.pause_source().result(WAIT)
-        owner.login("Backup", TEST_PASSWORD).result(WAIT)
-        backup = owner.snapshot().account
-        assert backup is not None
-        owner.set_role(admin.account_id, Role.ADMINISTRATOR).result(WAIT)
-        owner.set_enabled(backup.account_id, False).result(WAIT)
+        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        owner.set_enabled(worker.account_id, False).result(WAIT)
+        owner.logout()
         with pytest.raises(AuthorizationError):
             app.resume_source()
         assert app.snapshot().state is ApplicationState.RUNNING

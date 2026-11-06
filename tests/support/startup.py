@@ -10,6 +10,8 @@ from threading import enumerate as threads
 
 from capsule_vision.application import PreparedConfiguration
 from capsule_vision.application.account_maintenance import initialize_administrator
+from capsule_vision.application.identity import LocalIdentity
+from capsule_vision.application.identity_models import Account, Role
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
@@ -74,6 +76,24 @@ def saved_data(root: Path, *, camera_count: int = 6) -> ApplicationData:
 
 
 TEST_PASSWORD = "isolated production test password"
+
+
+def provision_account(
+    owner: LocalIdentity, username: str, role: Role, password: str
+) -> Account:
+    """Create a usable test actor via the real temporary-password workflow."""
+    administrator = owner.snapshot().account
+    assert administrator and administrator.role is Role.ADMINISTRATOR
+    temporary = "temporary fixture credential"
+    owner.create_account(
+        username, role, temporary, confirm_administrator=role is Role.ADMINISTRATOR
+    ).result(WAIT)
+    restricted = owner.login(username, temporary).result(WAIT)
+    assert restricted.rotation_required
+    account = owner.rotate_password(password, restricted.revision).result(WAIT).account
+    assert account is not None
+    owner.login(administrator.username, TEST_PASSWORD).result(WAIT)
+    return account
 
 
 def authenticated_startup(

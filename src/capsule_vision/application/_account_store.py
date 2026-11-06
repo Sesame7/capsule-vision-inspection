@@ -21,7 +21,8 @@ from .passwords import PasswordVerifier
 
 APPLICATION_ID = 0x43564953
 _COLUMNS_V1 = "account_id, username, username_key, role, enabled, password_version, iterations, salt, digest"
-_COLUMNS = _COLUMNS_V1 + ", last_login_utc"
+_COLUMNS_V2 = _COLUMNS_V1 + ", last_login_utc"
+_COLUMNS = _COLUMNS_V2 + ", must_change_password"
 _SCHEMA_V1 = """
 CREATE TABLE accounts (
     account_id TEXT PRIMARY KEY NOT NULL,
@@ -35,8 +36,12 @@ CREATE TABLE accounts (
     digest BLOB NOT NULL
 );
 """
-_SCHEMA = _SCHEMA_V1.replace(
+_SCHEMA_V2 = _SCHEMA_V1.replace(
     "digest BLOB NOT NULL", "digest BLOB NOT NULL,\n    last_login_utc TEXT"
+)
+_ROTATION_COLUMN = "must_change_password INTEGER NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1))"
+_SCHEMA = _SCHEMA_V2.replace(
+    "last_login_utc TEXT", "last_login_utc TEXT, " + _ROTATION_COLUMN
 )
 
 
@@ -83,7 +88,7 @@ class AccountStore:
                 with self.transaction():
                     self.connection.execute(_SCHEMA)
                     self.connection.execute(f"PRAGMA application_id={APPLICATION_ID}")
-                    self.connection.execute("PRAGMA user_version=2")
+                    self.connection.execute("PRAGMA user_version=3")
             self.validate()
         except BaseException:
             self.connection.close()
@@ -110,7 +115,7 @@ class AccountStore:
             version: object = self.connection.execute("PRAGMA user_version").fetchone()[
                 0
             ]
-            if version not in (1, 2):
+            if version not in (1, 2, 3):
                 raise SecurityStorageError("Corrupt or unsupported security database")
             self._validate_schema(version)
             if version == 1:
@@ -119,6 +124,12 @@ class AccountStore:
                 )
                 self.connection.execute("PRAGMA user_version=2")
                 self._validate_schema(2)
+            if version in (1, 2):
+                self.connection.execute(
+                    "ALTER TABLE accounts ADD COLUMN " + _ROTATION_COLUMN
+                )
+                self.connection.execute("PRAGMA user_version=3")
+                self._validate_schema(3)
             # BEGIN IMMEDIATE alone can succeed on a read-only connection.
             # This requires write access while changing no rows or metadata.
             self.connection.execute(
@@ -135,7 +146,11 @@ class AccountStore:
         columns: list[tuple[object, ...]] = self.connection.execute(
             "PRAGMA table_info(accounts)"
         ).fetchall()
-        names = _COLUMNS_V1 if version == 1 else _COLUMNS
+        names, ddl = {
+            1: (_COLUMNS_V1, _SCHEMA_V1),
+            2: (_COLUMNS_V2, _SCHEMA_V2),
+            3: (_COLUMNS, _SCHEMA),
+        }[version]
         if [row[1] for row in columns] != names.split(", "):
             raise SecurityStorageError("Unsupported account schema")
         schema: list[tuple[object, ...]] = self.connection.execute(
@@ -145,23 +160,33 @@ class AccountStore:
             len(schema) != 1
             or schema[0][:2] != ("table", "accounts")
             or not isinstance(schema[0][2], str)
-            or _schema_text(schema[0][2])
-            != _schema_text(_SCHEMA_V1 if version == 1 else _SCHEMA)
+            or _schema_text(schema[0][2]) != _schema_text(ddl)
         ):
             raise SecurityStorageError("Unsupported account schema")
         rows: list[tuple[object, ...]] = self.connection.execute(
             f"SELECT {names} FROM accounts"
         ).fetchall()
         for row in rows:
-            self.decode((*row, None) if version == 1 else row)
+            suffix = (None, 0) if version == 1 else (0,) if version == 2 else ()
+            self.decode(row + suffix)
 
     @staticmethod
     def decode(row: tuple[object, ...]) -> tuple[Account, PasswordVerifier]:
-        if len(row) != 10:
+        if len(row) != 11:
             raise SecurityStorageError("Malformed account record")
-        identity, name, key, role, enabled, version, iterations, salt, digest, login = (
-            row
-        )
+        (
+            identity,
+            name,
+            key,
+            role,
+            enabled,
+            version,
+            iterations,
+            salt,
+            digest,
+            login,
+            rotate,
+        ) = row
         if not isinstance(identity, str) or not isinstance(name, str):
             raise SecurityStorageError("Malformed account identity")
         try:
@@ -176,6 +201,8 @@ class AccountStore:
             or role not in (1, 2, 3)
             or type(enabled) is not int
             or enabled not in (0, 1)
+            or type(rotate) is not int
+            or rotate not in (0, 1)
             or type(version) is not int
             or type(iterations) is not int
             or not isinstance(salt, bytes)
@@ -183,7 +210,7 @@ class AccountStore:
         ):
             raise SecurityStorageError("Malformed account record")
         return Account(
-            identity, name, Role(role), bool(enabled), _login_time(login)
+            identity, name, Role(role), bool(enabled), _login_time(login), bool(rotate)
         ), PasswordVerifier(version, iterations, salt, digest)
 
     def by_name(self, username: str) -> tuple[Account, PasswordVerifier] | None:
@@ -207,6 +234,11 @@ class AccountStore:
         ).fetchall()
         return tuple(self.decode(row)[0] for row in rows)
 
+    def empty(self) -> bool:
+        return (
+            self.connection.execute("SELECT 1 FROM accounts LIMIT 1").fetchone() is None
+        )
+
     def create(
         self,
         username: str,
@@ -217,7 +249,13 @@ class AccountStore:
         account_id: str | None = None,
     ) -> Account:
         role, key = account_role(role), username_key(username)
-        account = Account(account_id or uuid4().hex, username, role, True)
+        account = Account(
+            account_id or uuid4().hex,
+            username,
+            role,
+            True,
+            must_change_password=not first,
+        )
         with self.transaction():
             if (
                 first
@@ -231,7 +269,7 @@ class AccountStore:
             if self.by_name(username) is not None:
                 raise AccountConflictError("Username already exists")
             self.connection.execute(
-                "INSERT INTO accounts VALUES (?,?,?,?,?,?,?,?,?,?)",
+                f"INSERT INTO accounts ({_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     account.account_id,
                     username,
@@ -243,6 +281,7 @@ class AccountStore:
                     verifier.salt,
                     verifier.digest,
                     None,
+                    int(account.must_change_password),
                 ),
             )
         return account
@@ -254,6 +293,7 @@ class AccountStore:
         role: Role | None = None,
         enabled: bool | None = None,
         verifier: PasswordVerifier | None = None,
+        temporary: bool = False,
     ) -> Account:
         if role is not None:
             account_role(role)
@@ -267,10 +307,11 @@ class AccountStore:
                 role if role is not None else previous.role,
                 enabled if enabled is not None else previous.enabled,
                 previous.last_login_utc,
+                previous.must_change_password if verifier is None else temporary,
             )
             password = verifier or password
             self.connection.execute(
-                "UPDATE accounts SET role=?, enabled=?, password_version=?, iterations=?, salt=?, digest=? WHERE account_id=?",
+                "UPDATE accounts SET role=?, enabled=?, password_version=?, iterations=?, salt=?, digest=?, must_change_password=? WHERE account_id=?",
                 (
                     int(account.role),
                     int(account.enabled),
@@ -278,6 +319,7 @@ class AccountStore:
                     password.iterations,
                     password.salt,
                     password.digest,
+                    int(account.must_change_password),
                     account_id,
                 ),
             )

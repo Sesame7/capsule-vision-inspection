@@ -134,31 +134,39 @@ administrative work from replacing a newer session decision. Password work stays
 outside the session lock; short authorized transactions and their session
 publication are serialized together.
 
-The private account store owns SQLite validation and transactions; the fixed-role
-service owns Administrator admission. Last-enabled-Administrator protection is
-transactional. Offline initialization/recovery is an explicit OS-trusted entry,
-with the same exclusive local file lease as normal application startup. See
-[local accounts](configuration.md#local-accounts) for storage and command contracts.
-Valid v1 stores migrate transactionally to v2, preserving existing account and
-verifier fields. A successful, still-current authentication commits UTC Last Login
-metadata before publishing the session; a failed write cannot report login success.
-Other account/session operations preserve this metadata.
+The private account store validates v1/v2 records and migrates them to v3 in one
+transaction, preserving IDs, credentials and Last Login. LocalIdentity owns both
+first setup and subsequent online mutations under its existing lease and audit
+owner. Setup leaves the session anonymous. A verified temporary password commits
+Last Login and publishes a restricted revision. All role admissions, including
+Guest replay, reject that revision. Only logout and a revision-bound password
+rotation are available. PBKDF2 runs outside the lock. The final password update,
+rotation-flag clearance and session publication share the service commit boundary.
+Cancellation invalidates uncommitted rotation and cannot undo a completed change.
+
+The account service protects every existing Administrator from administrative
+mutations and requires confirmation for granting Administrator access. The store
+also guards the last enabled Administrator transactionally. The offline GUI and
+CLI use the same OS-trusted maintenance operations and exclusive file lease. Each
+records its provenance through the existing audit writer when available and warns
+on audit loss. See [local accounts](configuration.md#local-accounts).
 
 Startup acquires identity ownership before creating application resources and
 passes that owner into the existing Application lifetime. Close drains it and
 joins the actual worker after the existing source/History cleanup. Missing account
 storage remains Guest without creating a database. Unavailable storage remains
 explicit. The window presents Login, Logout, Switch User, Change Password and
-Administrator account management through this same service. Masked, modeless
-forms clear secrets on submission/dismissal. Authentication and account IO use
-the service worker and queued, destruction-safe Qt delivery; superseded results
-cannot replace a later session decision. The existing shell refresh observes role
+Administrator account management through this same service. The forced-change
+form is window-modal. Credential forms clear secrets on submission or dismissal.
+The service worker handles authentication and account IO. Qt receives results
+through its destruction-safe queue and ignores superseded sessions. The existing shell refresh observes role
 changes. Manage Users presents a read-only four-column table and captures account
 IDs in separate role and disable-confirmation dialogs. Switch User retains the
 current login until successful replacement. Dismissing its pending credential form
 invalidates authentication at the service boundary as well as queued Qt delivery.
-Other account-dialog dismissal fences delivery without cancelling accepted account
-work; the service remains the transaction and authorization owner. The shell
+Dismissing pending first setup or forced rotation fences the initiating revision.
+Dismissing an ordinary account-management dialog stops delivery to that form.
+The service completes accepted work under its authorization checks. The shell
 disables account UI on confirmed Close. Application retains worker stop/join
 ownership. Login/logout never controls an inspection session.
 

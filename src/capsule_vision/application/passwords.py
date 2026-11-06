@@ -12,6 +12,27 @@ MIN_WORK_FACTOR = 100_000
 MAX_WORK_FACTOR = 2_000_000
 
 
+def weak_password(password: str, username: str = "") -> bool:
+    """Advisory only. Password bytes and verifier policy are unchanged."""
+    value = password.strip().casefold()
+    return (
+        len(value) < 8
+        or len(set(value)) <= 2
+        or value == username.casefold()
+        or value
+        in {
+            "password",
+            "password1",
+            "password123",
+            "administrator",
+            "qwerty123",
+            "letmein123",
+        }
+        or value in "01234567890123456789"
+        or value in "98765432109876543210"
+    )
+
+
 def password_bytes(password: str) -> bytes:
     if type(password) is not str:
         raise IdentityValidationError("Password must be text")

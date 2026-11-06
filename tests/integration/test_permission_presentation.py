@@ -10,7 +10,12 @@ import pytest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from tests.support.application import WAIT, ReplayEngine
 from tests.support.qt import close_window, until
-from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    provision_account,
+    saved_data,
+)
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.application.identity_models import AuthorizationError, Role
@@ -75,7 +80,7 @@ def screen(
     owner = startup.application.identity
     assert owner is not None
     for role in (Role.OPERATOR, Role.ENGINEER):
-        owner.create_account(role.name, role, TEST_PASSWORD).result(WAIT)
+        provision_account(owner, role.name, role, TEST_PASSWORD)
 
     def labels(path: Path, **_kwargs: object) -> tuple[str, ...]:
         return (
@@ -381,9 +386,10 @@ def test_disabling_current_account_closes_draft_form_and_keeps_unsaved_data(
 ) -> None:
     session, owner = screen.editing.session, screen.bridge.application.identity
     assert session is not None and owner is not None and session.entry is not None
-    admin = owner.snapshot().account
-    assert admin is not None
-    owner.create_account("Backup", Role.ADMINISTRATOR, TEST_PASSWORD).result(WAIT)
+    author = next(
+        a for a in owner.list_accounts().result(WAIT) if a.role is Role.ENGINEER
+    )
+    login(screen, Role.ENGINEER)
     screen.navigate(1)
     page = screen.recipe_page
     entry = session.entry
@@ -392,12 +398,14 @@ def test_disabling_current_account_closes_draft_form_and_keeps_unsaved_data(
     page.create_dialog(False)
     dialog = page.findChild(QDialog)
     assert dialog is not None and dialog.isVisible()
-    owner.set_enabled(admin.account_id, False).result(WAIT)
+    owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+    owner.set_enabled(author.account_id, False).result(WAIT)
+    owner.logout()
     until(lambda: not any(d.isVisible() for d in page.findChildren(QDialog)))
     assert page.metadata["display_name"].isReadOnly()
     assert page.metadata["display_name"].text() == entry.recipe.display_name
     assert session.entry is entry and session.draft.display_name == "Unpublished"
-    owner.login("Backup", TEST_PASSWORD).result(WAIT)
+    owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
     until(lambda: not page.metadata["display_name"].isReadOnly())
     assert page.metadata["display_name"].text() == "Unpublished"
 

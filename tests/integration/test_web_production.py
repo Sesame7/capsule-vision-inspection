@@ -17,7 +17,7 @@ from capsule_vision.application import ApplicationState
 from capsule_vision.application import startup as startup_module
 from capsule_vision.application.identity_models import AuthorizationError
 from capsule_vision.application.source_control import SourceControlState
-from capsule_vision.application.startup import ApplicationData, load_startup
+from capsule_vision.application.startup import ApplicationData, Startup, load_startup
 from capsule_vision.communication.reporting import ReportingMode, ReportStage
 from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
@@ -25,6 +25,9 @@ from capsule_vision.configuration.communication_preferences import (
     save_communication_preferences,
 )
 from capsule_vision.ui import bootstrap
+from capsule_vision.ui.future_delivery import FutureDelivery
+from capsule_vision.ui.identity_controls import IdentityControls
+from capsule_vision.ui.shell import NavigationBar
 from capsule_vision.web import ProductionSnapshotService
 from capsule_vision.web.runtime import WebRuntime, WebState
 
@@ -33,11 +36,21 @@ class StartupWindow(QWidget):
     """Keep the bootstrap probe small while observing the real shell handoff."""
 
     runtime: WebRuntime | None = None
+    identity_controls: IdentityControls
+
+    def compose(self, startup: Startup, _delivery: FutureDelivery) -> QWidget:
+        navbar = NavigationBar()
+        navbar.setParent(self)
+        self.identity_controls = IdentityControls(
+            navbar, startup.application.identity, self
+        )
+        return self
 
     def bind_web_runtime(self, runtime: WebRuntime) -> None:
         self.runtime = runtime
 
     def finish_close(self) -> None:
+        self.identity_controls.dispose()
         self.close()
 
 
@@ -53,12 +66,11 @@ def run_startup(
     def existing_qt(_args: object) -> QApplication:
         return qapp
 
-    def existing_window(*_args: object) -> QWidget:
-        return window
-
     def observe_before_close() -> int:
         assert window.isVisible()
         assert window.isMaximized()
+        setup = window.identity_controls.form
+        assert setup is not None and setup.kind == "setup" and setup.isVisible()
         runtime = window.runtime
         assert runtime is not None
         until(lambda: not runtime.snapshot().busy)
@@ -66,7 +78,7 @@ def run_startup(
         return 0
 
     monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
-    monkeypatch.setattr(bootstrap, "create_window", existing_window)
+    monkeypatch.setattr(bootstrap, "create_window", window.compose)
     monkeypatch.setattr(qapp, "exec", observe_before_close)
     try:
         assert bootstrap.main(root, []) == 0
@@ -383,11 +395,8 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
     def existing_qt(_args: object) -> QApplication:
         return qapp
 
-    def existing_window(*_args: object) -> QWidget:
-        return window
-
     monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
-    monkeypatch.setattr(bootstrap, "create_window", existing_window)
+    monkeypatch.setattr(bootstrap, "create_window", window.compose)
 
     def observed_failure() -> int:
         assert window.isVisible()

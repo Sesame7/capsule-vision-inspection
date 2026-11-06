@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
-from tests.support.startup import authenticated_startup, saved_data
+from tests.support.startup import authenticated_startup, provision_account, saved_data
 
 from capsule_vision.application import ApplicationState, ProductionCounters
 from capsule_vision.application.identity_models import Role
@@ -657,7 +657,7 @@ def test_reporting_segments_permissions_and_runtime_locks(
     if role is Role.GUEST:
         identity.logout()
     elif role is not Role.ADMINISTRATOR:
-        identity.create_account("ModeEditor", role, "isolated test password").result(5)
+        provision_account(identity, "ModeEditor", role, "isolated test password")
         identity.login("ModeEditor", "isolated test password").result(5)
     window.identity_controls.refresh()
     per_cycle = panel.mode_buttons[ReportingMode.PER_CYCLE]

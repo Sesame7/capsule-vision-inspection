@@ -11,7 +11,7 @@ from capsule_vision.application.identity_models import (
 
 def permits(application: ProductionApplication | None, minimum: Role) -> bool:
     identity = application.identity if application is not None else None
-    return identity is None or identity.snapshot().role >= minimum
+    return identity is None or identity.snapshot().permits(minimum)
 
 
 def failure_key(

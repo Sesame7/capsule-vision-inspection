@@ -15,6 +15,7 @@ import pytest
 
 from capsule_vision.application import identity as identity_module
 from capsule_vision.application import passwords
+from capsule_vision.application._account_store import AccountStore
 from capsule_vision.application.account_maintenance import (
     initialize_administrator,
     recover_administrator,
@@ -149,7 +150,11 @@ def test_accounts_persist_casefold_id_role_and_enabled_state(database: Path) -> 
         assert owner.snapshot().role is Role.GUEST
         owner.login("Admin", SECRET).result(WAIT)
         owner.set_enabled(account.account_id, True).result(WAIT)
-        session = owner.login("strasse", "operator-secret").result(WAIT)
+        pending = owner.login("strasse", "operator-secret").result(WAIT)
+        assert pending.rotation_required
+        session = owner.rotate_password(
+            "my permanent password", pending.revision
+        ).result(WAIT)
         assert session.account is not None
         assert (
             session.account.account_id == account.account_id
@@ -187,7 +192,10 @@ def test_management_boundary_and_self_password_change(database: Path) -> None:
         admin = owner.login("Admin", SECRET).result(WAIT).account
         assert admin is not None
         operator = owner.create_account("Worker", Role.OPERATOR, SECRET).result(WAIT)
-        session = owner.login("Worker", SECRET).result(WAIT)
+        pending = owner.login("Worker", SECRET).result(WAIT)
+        session = owner.rotate_password("first replacement", pending.revision).result(
+            WAIT
+        )
         for operation in (
             lambda: owner.list_accounts(),
             lambda: owner.create_account("Other", Role.OPERATOR, SECRET),
@@ -200,54 +208,54 @@ def test_management_boundary_and_self_password_change(database: Path) -> None:
         with pytest.raises(AuthenticationError):
             owner.change_password("wrong", "new-secret").result(WAIT)
         assert owner.snapshot() == session
-        changed = owner.change_password(SECRET, "new-secret").result(WAIT)
+        changed = owner.change_password("first replacement", "new-secret").result(WAIT)
         assert (
             changed.account == session.account and changed.revision > session.revision
         )
         with pytest.raises(AuthenticationError):
             owner.login("Worker", SECRET).result(WAIT)
         current = owner.login("Worker", "new-secret").result(WAIT).account
-        assert current is not None and replace(current, last_login_utc=None) == operator
+        assert (
+            current is not None
+            and replace(current, last_login_utc=None, must_change_password=True)
+            == operator
+        )
 
 
-def test_last_admin_rollback_and_immediate_session_reconciliation(
+def test_administrators_cannot_modify_self_or_peers_and_last_admin_is_transactional(
     database: Path,
 ) -> None:
     with opened(database) as owner:
         session = owner.login("Admin", SECRET).result(WAIT)
         admin = session.account
-        assert admin is not None
-        for operation in (
-            lambda: owner.set_enabled(admin.account_id, False),
-            lambda: owner.set_role(admin.account_id, Role.ENGINEER),
+        assert admin
+        with pytest.raises(AuthorizationError):
+            owner.create_account("Second", Role.ADMINISTRATOR, SECRET)
+        second = owner.create_account(
+            "Second", Role.ADMINISTRATOR, SECRET, confirm_administrator=True
+        ).result(WAIT)
+        for target in (admin, second):
+            for work in (
+                owner.set_enabled(target.account_id, False),
+                owner.set_role(target.account_id, Role.ENGINEER),
+                owner.reset_password(target.account_id, "replacement"),
+            ):
+                with pytest.raises(AuthorizationError):
+                    work.result(WAIT)
+        assert owner.snapshot() == session
+        assert set(owner.list_accounts().result(WAIT)) == {admin, second}
+    store = AccountStore(database)
+    try:
+        store.update(second.account_id, enabled=False)
+        for change in (
+            lambda: store.update(admin.account_id, role=Role.OPERATOR),
+            lambda: store.update(admin.account_id, enabled=False),
         ):
             with pytest.raises(LastAdministratorError):
-                operation().result(WAIT)
-            assert owner.snapshot() == session
-            assert owner.list_accounts().result(WAIT) == (admin,)
-        owner.create_account("Second", Role.ADMINISTRATOR, SECRET).result(WAIT)
-        changed = owner.set_role(admin.account_id, Role.ENGINEER).result(WAIT)
-        assert (
-            owner.snapshot().account == changed
-            and owner.snapshot().revision > session.revision
-        )
-        assert session.role is Role.ADMINISTRATOR  # Old observations never mutate.
-        with pytest.raises(AuthorizationError):
-            owner.list_accounts()
-        owner.login("Second", SECRET).result(WAIT)
-        second = owner.snapshot().account
-        assert second is not None
-        owner.set_role(admin.account_id, Role.ADMINISTRATOR).result(WAIT)
-        owner.set_enabled(second.account_id, False).result(WAIT)
-        assert owner.snapshot().role is Role.GUEST
-        owner.login("Admin", SECRET).result(WAIT)
-        owner.reset_password(admin.account_id, "reset-secret").result(WAIT)
-        assert owner.snapshot().role is Role.GUEST
-        with pytest.raises(AuthenticationError):
-            owner.login("Admin", SECRET).result(WAIT)
-        assert (
-            owner.login("Admin", "reset-secret").result(WAIT).role is Role.ADMINISTRATOR
-        )
+                change()
+            assert store.by_id(admin.account_id)[0] == admin
+    finally:
+        store.close()
 
 
 def test_late_login_cannot_overwrite_logout_or_later_login(
@@ -445,7 +453,10 @@ def test_offline_recovery_preserves_records_and_does_not_promote_operators(
         current = owner.login("Admin", "new-secret").result(WAIT).account
         assert current is not None
         assert replace(current, last_login_utc=recovered.last_login_utc) == recovered
-        assert owner.list_accounts().result(WAIT) == (current, operator)
+        rotated = owner.rotate_password(
+            "rotated secret", owner.snapshot().revision
+        ).result(WAIT)
+        assert owner.list_accounts().result(WAIT) == (rotated.account, operator)
 
 
 def test_maintenance_is_rejected_cross_process_even_when_database_missing(
@@ -492,13 +503,21 @@ def test_offline_recovery_can_enable_an_existing_disabled_administrator(
     with opened(database) as owner:
         admin = owner.login("Admin", SECRET).result(WAIT).account
         assert admin is not None
-        second = owner.create_account("Second", Role.ADMINISTRATOR, SECRET).result(WAIT)
-        owner.set_enabled(admin.account_id, False).result(WAIT)
-        assert owner.snapshot().role is Role.GUEST
+        second = owner.create_account(
+            "Second", Role.ADMINISTRATOR, SECRET, confirm_administrator=True
+        ).result(WAIT)
+    # A disabled administrator can exist in customer databases from earlier versions.
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "UPDATE accounts SET enabled=0 WHERE account_id=?", (admin.account_id,)
+        )
     restored = recover_administrator(database, "Admin", "recovered-secret")
     assert restored.account_id == admin.account_id and restored.enabled
     with opened(database) as owner:
         current = owner.login("Admin", "recovered-secret").result(WAIT).account
         assert current is not None
         assert replace(current, last_login_utc=restored.last_login_utc) == restored
-        assert owner.list_accounts().result(WAIT) == (current, second)
+        rotated = owner.rotate_password(
+            "permanent credential", owner.snapshot().revision
+        ).result(WAIT)
+        assert owner.list_accounts().result(WAIT) == (rotated.account, second)

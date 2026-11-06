@@ -17,7 +17,12 @@ from PySide6.QtWidgets import (
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import Screen, assert_inside
 from tests.support.recipe_ui import configured_screen as configured_screen
-from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    provision_account,
+    saved_data,
+)
 
 from capsule_vision.application import ApplicationState, PreparedConfiguration
 from capsule_vision.application.editing import RecipeEditorSession
@@ -400,20 +405,19 @@ def test_pending_selection_cannot_outlive_its_actor(
 
     monkeypatch.setattr(RecipeEditorSession, "prepare_saved", held)
     try:
-        admin = owner.snapshot().account
-        assert admin is not None
-        owner.create_account("Backup", Role.ADMINISTRATOR, TEST_PASSWORD).result(5)
+        author = provision_account(owner, "Author", Role.ENGINEER, TEST_PASSWORD)
+        owner.login("Author", TEST_PASSWORD).result(5)
         initial, preferences = app.snapshot(), data.preferences.read_bytes()
         picker.select(picker.recipes.findData("other"))
         until(entered.is_set)
         if transition == "logout":
             owner.logout()
-        elif transition == "switch":
-            owner.login("Backup", TEST_PASSWORD).result(5)
-        elif transition == "demote":
-            owner.set_role(admin.account_id, Role.OPERATOR).result(5)
         else:
-            owner.set_enabled(admin.account_id, False).result(5)
+            owner.login("TestAdmin", TEST_PASSWORD).result(5)
+            if transition == "demote":
+                owner.set_role(author.account_id, Role.OPERATOR).result(5)
+            elif transition == "disable":
+                owner.set_enabled(author.account_id, False).result(5)
         release.set()
         until(lambda: not window.editing.busy)
         assert (

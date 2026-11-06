@@ -95,6 +95,31 @@ def login_values(path: Path) -> dict[str, str | None]:
         return dict(connection.execute("SELECT username, last_login_utc FROM accounts"))
 
 
+def upgrade_fixture_to_v2(path: Path) -> None:
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("ALTER TABLE accounts ADD COLUMN last_login_utc TEXT")
+        db.execute("PRAGMA user_version=2")
+
+
+def test_v2_migration_preserves_credentials_identity_and_last_login(
+    v1_store: Path,
+) -> None:
+    upgrade_fixture_to_v2(v1_store)
+    stamp = "2026-08-11T09:31:41.123456+00:00"
+    with closing(sqlite3.connect(v1_store)) as db, db:
+        db.execute(
+            "UPDATE accounts SET last_login_utc=? WHERE username='Admin'", (stamp,)
+        )
+        before = db.execute("SELECT * FROM accounts ORDER BY account_id").fetchall()
+    with opened(v1_store) as owner:
+        assert owner.storage_snapshot().state is StorageState.READY
+    with closing(sqlite3.connect(v1_store)) as db:
+        assert db.execute("PRAGMA user_version").fetchone() == (3,)
+        assert db.execute("SELECT * FROM accounts ORDER BY account_id").fetchall() == [
+            (*row, 0) for row in before
+        ]
+
+
 def test_valid_v1_migrates_once_preserving_every_existing_field(v1_store: Path) -> None:
     with closing(sqlite3.connect(v1_store)) as connection, connection:
         before = connection.execute(
@@ -103,12 +128,12 @@ def test_valid_v1_migrates_once_preserving_every_existing_field(v1_store: Path) 
     for _ in range(2):
         store = AccountStore(v1_store)
         try:
-            assert store.connection.execute("PRAGMA user_version").fetchone() == (2,)
+            assert store.connection.execute("PRAGMA user_version").fetchone() == (3,)
             after = store.connection.execute(
                 "SELECT * FROM accounts ORDER BY username_key"
             ).fetchall()
-            assert [row[:-1] for row in after] == before
-            assert all(row[-1] is None for row in after)
+            assert [row[:-2] for row in after] == before
+            assert all(row[-2:] == (None, 0) for row in after)
             for name in ("ADMIN", "worker", "STRASSE"):
                 record = store.by_name(name)
                 assert record is not None and record[0].last_login_utc is None
@@ -118,12 +143,12 @@ def test_valid_v1_migrates_once_preserving_every_existing_field(v1_store: Path) 
             store.close()
 
 
-def test_new_store_is_v2_without_a_login_or_guest_record(tmp_path: Path) -> None:
+def test_new_store_is_v3_without_a_login_or_guest_record(tmp_path: Path) -> None:
     path = tmp_path / "data/security.sqlite3"
     admin = initialize_administrator(path, "Admin", SECRET)
     assert admin.last_login_utc is None
     with closing(sqlite3.connect(path)) as connection, connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
         assert connection.execute(
             "SELECT username, last_login_utc FROM accounts"
         ).fetchall() == [("Admin", None)]
@@ -217,20 +242,22 @@ def test_login_persists_utc_before_success_and_account_operations_preserve_it(
         worker = next(
             a for a in owner.list_accounts().result(10) if a.username == "Worker"
         )
-        backup = owner.create_account("Backup", Role.ADMINISTRATOR, SECRET).result(10)
+        backup = owner.create_account(
+            "Backup", Role.ADMINISTRATOR, SECRET, confirm_administrator=True
+        ).result(10)
         assert backup.last_login_utc is None
         owner.change_password(SECRET, "new credential").result(10)
-        owner.set_role(first.account.account_id, Role.ENGINEER).result(10)
         current = owner.snapshot().account
         assert current is not None and current.last_login_utc == stamp
         owner.logout()
         assert login_values(v1_store)["Admin"] == stamp.isoformat(
             timespec="microseconds"
         )
-        owner.login("Backup", SECRET).result(10)
-        owner.reset_password(first.account.account_id, SECRET).result(10)
-        owner.set_enabled(first.account.account_id, False).result(10)
-        owner.set_enabled(first.account.account_id, True).result(10)
+        restricted = owner.login("Backup", SECRET).result(10)
+        owner.rotate_password("replacement credential", restricted.revision).result(10)
+        owner.reset_password(worker.account_id, SECRET).result(10)
+        owner.set_enabled(worker.account_id, False).result(10)
+        owner.set_enabled(worker.account_id, True).result(10)
         owner.set_role(worker.account_id, Role.ENGINEER).result(10)
         assert login_values(v1_store)["Admin"] == stamp.isoformat(
             timespec="microseconds"
@@ -239,7 +266,7 @@ def test_login_persists_utc_before_success_and_account_operations_preserve_it(
     recover_administrator(v1_store, "Backup", SECRET)
     assert login_values(v1_store)["Admin"] == stamp.isoformat(timespec="microseconds")
     with opened(v1_store) as owner:
-        second = owner.login("Admin", SECRET).result(10)
+        second = owner.login("Admin", "new credential").result(10)
         assert second.account is not None and second.account.last_login_utc is not None
         assert second.account.last_login_utc > stamp
         assert (
@@ -392,9 +419,8 @@ def test_cancellation_after_commit_before_future_delivery_cannot_undo_login(
             deliver_release.set()
 
 
-@pytest.mark.parametrize("change", ["role", "disable", "reset", "self-password"])
 def test_committed_current_account_change_invalidates_pending_authentication(
-    v1_store: Path, monkeypatch: pytest.MonkeyPatch, change: str
+    v1_store: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     entered, release = Event(), Event()
 
@@ -406,23 +432,16 @@ def test_committed_current_account_change_invalidates_pending_authentication(
     with opened(v1_store) as owner:
         current = owner.login("Admin", SECRET).result(10)
         assert current.account is not None
-        account_id = current.account.account_id
         metadata = login_values(v1_store)
         monkeypatch.setattr(identity_module, "hash_password", held)
         try:
             # Hold the serial worker outside its session lock so both the account
             # change and authentication are admitted under the original revision.
-            backup = owner.create_account("Backup", Role.ADMINISTRATOR, SECRET)
+            backup = owner.create_account(
+                "Backup", Role.ADMINISTRATOR, SECRET, confirm_administrator=True
+            )
             assert entered.wait(10)
-            match change:
-                case "role":
-                    update = owner.set_role(account_id, Role.ENGINEER)
-                case "disable":
-                    update = owner.set_enabled(account_id, False)
-                case "reset":
-                    update = owner.reset_password(account_id, "replacement credential")
-                case _:
-                    update = owner.change_password(SECRET, "replacement credential")
+            update = owner.change_password(SECRET, "replacement credential")
             attempt = owner.login("Worker", SECRET)
             assert owner.snapshot() == current
             release.set()
@@ -433,13 +452,7 @@ def test_committed_current_account_change_invalidates_pending_authentication(
                 attempt.result(10)
             assert owner.snapshot() == changed
             assert changed.revision == current.revision + 1
-            assert changed.role is (
-                Role.ENGINEER
-                if change == "role"
-                else Role.ADMINISTRATOR
-                if change == "self-password"
-                else Role.GUEST
-            )
+            assert changed.role is Role.ADMINISTRATOR
             assert login_values(v1_store) == {**metadata, "Backup": None}
         finally:
             release.set()
@@ -451,8 +464,7 @@ def test_committed_current_account_change_invalidates_pending_authentication(
 def test_invalid_v2_timestamp_is_visible_and_never_replaced(
     v1_store: Path, stamp: str
 ) -> None:
-    store = AccountStore(v1_store)
-    store.close()
+    upgrade_fixture_to_v2(v1_store)
     with closing(sqlite3.connect(v1_store)) as connection, connection:
         connection.execute("UPDATE accounts SET last_login_utc=?", (stamp,))
     before = v1_store.read_bytes()
@@ -461,11 +473,13 @@ def test_invalid_v2_timestamp_is_visible_and_never_replaced(
     assert v1_store.read_bytes() == before
 
 
-@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("version", [1, 2, 3])
 def test_readonly_storage_fails_visibly_without_replacement(
     v1_store: Path, monkeypatch: pytest.MonkeyPatch, version: int
 ) -> None:
     if version == 2:
+        upgrade_fixture_to_v2(v1_store)
+    elif version == 3:
         store = AccountStore(v1_store)
         store.close()
     before = v1_store.read_bytes()

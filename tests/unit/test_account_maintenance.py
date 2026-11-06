@@ -42,8 +42,12 @@ def test_interactive_initialization_and_recovery(
         owner.ready.result(5)
         with pytest.raises(AuthenticationError):
             owner.login("Admin", "first test password").result(5)
+        pending = owner.login("Admin", "second test password").result(5)
+        assert pending.rotation_required and pending.role is Role.GUEST
         assert (
-            owner.login("Admin", "second test password").result(5).role
+            owner.rotate_password("private replacement", pending.revision)
+            .result(5)
+            .role
             is Role.ADMINISTRATOR
         )
     finally:

@@ -818,12 +818,15 @@ class MainWindow(QMainWindow):
         operator = permits(app, Role.OPERATOR)
         demo_start = (
             not operator
+            and permits(app, Role.GUEST)
             and isinstance(app, SourceProductionApplication)
             and app.guest_replay_available
         )
-        demo_controls = isinstance(
-            app, SourceProductionApplication
-        ) and app.is_guest_demo(self.snapshot.generation)
+        demo_controls = (
+            isinstance(app, SourceProductionApplication)
+            and permits(app, Role.GUEST)
+            and app.is_guest_demo(self.snapshot.generation)
+        )
         source_state = (
             app.source_snapshot().state
             if isinstance(app, SourceProductionApplication) and basler

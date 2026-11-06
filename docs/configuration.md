@@ -135,8 +135,12 @@ behavior and logging destinations. Explicit `QT_LOGGING_CONF` and
 
 Normal startup owns the Qt-independent `LocalIdentity` service for entry-relative
 `data/security.sqlite3`. Every process starts as anonymous Guest; no login is
-restored. Guest has no account row. A missing database remains missing and does not
-block Guest startup. The companion `security.lock` is acquired even when the
+restored. Guest has no account row. When storage is missing or validated as empty,
+the normal launcher offers first Administrator setup. Dismiss it to continue as
+Guest, or reopen setup from the user menu. Explicit setup creates the chosen
+account on the live identity worker and enables ordinary login immediately.
+The first Administrator chooses their own password and can log in with it.
+Corrupt or inaccessible storage shows an error and never offers setup. The companion `security.lock` is acquired even when the
 database is absent and retained until the identity worker actually exits on Close.
 Other cooperating application/maintenance owners for the same canonical path are
 rejected. The lock file is retained; do not delete it to clear a live owner.
@@ -147,10 +151,11 @@ Operator < Engineer < Administrator. Usernames are 1–64 printable characters w
 edge whitespace; uniqueness uses Unicode `casefold`, independently of SQLite's
 ASCII-only NOCASE. No username renaming or account deletion is provided.
 
-Schema version 2 adds nullable `last_login_utc` account metadata. Opening a valid
-version 1 store validates its schema and records before migrating it in one SQLite
-write transaction; failed migration rolls back. IDs, usernames, roles, enabled
-flags and password verifiers are preserved. New stores use version 2 directly.
+Account schema version 3 stores a required boolean `must_change_password`.
+Opening a valid v1 or v2 database validates its schema and rows before migrating
+in one SQLite transaction. Existing accounts retain their ID, verifier, role,
+enabled state and any UTC Last Login. Their rotation flag defaults to false.
+New databases use v3 directly. Failed migrations roll back.
 The verifier remains PBKDF2-HMAC-SHA256 version 1, with a random 16-byte salt,
 32-byte digest and iteration count. New passwords use 600,000 iterations; supported
 stored counts are bounded to 100,000–2,000,000. Passwords are nonempty UTF-8 text,
@@ -166,12 +171,21 @@ and account management do not update this value. The UI displays device-local
 `YYYY-MM-DD HH:mm`, or an em dash for an account that has never logged in. This
 metadata is not an audit trail.
 
-Administrator authorization is enforced by the account service for account listing,
-creation, enable/disable, role changes and password resets. The last enabled
-Administrator cannot be disabled or demoted; this check and the update share one
-SQLite write transaction. Changes to the current account are published before the
-operation completes: role changes take effect, disabling or administrative password
-reset returns to Guest, and successful self-password change can retain login.
+Accounts created by an Administrator and accounts receiving an administrative or
+offline reset have a temporary password. Verified temporary credentials commit
+Last Login and enter a restricted session. That session permits password
+rotation and logout. Even Guest replay admission is denied. The new password
+must differ from the verified temporary credential. Rotation updates the verifier
+and clears the flag together, then publishes the authorized role with a fresh
+revision. Cancel returns to Guest. Failures, logout and restart preserve the
+durable requirement. Ordinary self-change still verifies the current password.
+
+Administrator authorization covers listing, creation, role changes, enablement
+and resets. Creating or promoting an Administrator requires explicit confirmation.
+Existing Administrators, including the actor, are protected from administrative
+reset, role and enablement changes. Each can change their own password through
+verified self-change. The store independently protects the last enabled
+Administrator in the update transaction.
 All session observations are immutable and carry monotonically increasing
 revisions within that owner lifetime. A restart starts a new Guest revision sequence.
 A new authentication attempt supersedes an older pending attempt without changing
@@ -200,25 +214,33 @@ role or enabled state, and the outcome. Password operations identify the action
 without storing passwords or verifier material. Engineering saves record bounded
 field differences. The [Audit Trail contract](architecture.md#audit-trail) defines
 intent, completion, authorization and observable write loss. Audit records have
-no automatic expiry or application deletion API. Offline Administrator setup
-and recovery operate outside this trail. Protection against direct filesystem
-or SQLite modification rests with the operating system.
+no automatic expiry or application deletion API. Online first setup, temporary
+password rotation and account mutations require durable audit intent. Offline
+setup and recovery use the distinct OS-trusted actor `offline-maintenance` and
+the target's stable account ID. An unavailable intent or completion is reported
+to the maintenance operator. Emergency recovery stays available. Direct filesystem
+and SQLite access are protected by the operating system.
 
-First Administrator initialization and credential recovery are explicit offline
-commands. Stop the application first, select the directory containing its entry
-file, and enter/confirm the secret interactively:
+For offline setup or Administrator recovery, stop the application and select its
+installation root. The native Windows launcher defaults to the working directory
+and Chinese. Specify a different root or a supported UI language as needed:
 
 ```powershell
+uv run --no-sync python -m capsule_vision.ui.account_maintenance --entry-directory '<entry-directory>' --language en
+# Installed Windows GUI launcher:
+capsule-vision-accounts --entry-directory '<entry-directory>'
+# Interactive CLI fallback:
 uv run --no-sync python -m capsule_vision.application.account_maintenance --entry-directory '<entry-directory>' initialize-admin '<username>'
 uv run --no-sync python -m capsule_vision.application.account_maintenance --entry-directory '<entry-directory>' recover-admin '<username>'
 ```
 
-Initialization requires an empty account store. Recovery resets and enables an
-existing Administrator, preserving its ID, username and all other accounts; it
-cannot promote an Operator/Engineer. Both operations acquire the same exclusive
-ownership lock before accessing storage. Password arguments, noninteractive secret
-input and echoing console fallbacks are rejected. Interrupted/failed initialization
-is reported for explicit review, not silently repaired.
+Both offline interfaces use the same exclusive security lease and account
+operations. Setup requires an absent or valid empty store. Recovery preserves the
+existing Administrator's ID and role, enables the account and sets a temporary
+password. Other accounts and historical references are preserved. The CLI reads
+secrets interactively with echo disabled. Weak passwords require explicit
+confirmation in both interfaces, as in the normal account forms. The verifier
+bounds above still apply.
 
 The navigation's current-user button uses the exact caption `Guest` for anonymous
 sessions in every language, or the account's original username when logged in.
@@ -246,19 +268,18 @@ use one row; constrained widths or enlarged fonts wrap the groups without
 overlapping controls. There is no separate selected-account summary or Close button.
 Change Role opens a separate role selector with Save/Cancel; unchanged roles
 cannot be saved. Disabling requires a confirmation naming the target; enabling
-does not. Demotion/disable controls for the last enabled Administrator are disabled
-as a UI convenience, alongside the authoritative transactional service guard.
+does not. Selecting any existing Administrator disables all three account-specific
+actions. The service enforces the same restriction regardless of the UI.
 Account creation and password reset retain the existing masked forms. Every action
 uses the account service's own authorization and validation; there is no delete or
 username rename action. Native Close and Esc dismiss the dialog. Dismissal fences
 late UI delivery without cancelling already accepted service work or redirecting
 it to another selection. Application Close retains its session-revision and actual
 worker cleanup rules.
-Current-account role changes update the menu; disable/reset returns it to Guest.
+Session changes refresh the menu and role-dependent controls.
 Account dialogs close when their actor loses the required identity/role. Close
 invalidates UI delivery and waits for the existing Application-owned worker cleanup.
-Missing/unavailable storage is visible in the current-user tooltip and login form;
-offline initialization/recovery remains required. Identity menus, roles, forms,
+The current-user tooltip distinguishes first setup from unavailable storage. Identity menus, roles, forms,
 account management and feedback have native catalog entries in all 64 supported
 languages. Open identity dialogs refresh their captions without losing entered
 values or selected role identities. Unrelated optional UI entries retain their

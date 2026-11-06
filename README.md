@@ -73,6 +73,8 @@ the repository and must be provisioned separately. Managed models and related
 definitions belong under `data/`; engineering inputs may also use the repository
 `models/` directory.
 
+Normal startup offers first Administrator setup when account storage is uninitialized.
+For the offline Windows recovery tool and CLI fallback, see [Local accounts](docs/configuration.md#local-accounts).
 See [configuration](docs/configuration.md) for data layout and path contracts.
 
 ## Runtime and vendor prerequisites

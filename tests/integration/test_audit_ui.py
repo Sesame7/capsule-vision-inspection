@@ -8,7 +8,12 @@ from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT
 from tests.support.qt import close_window, until
-from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    provision_account,
+    saved_data,
+)
 
 from capsule_vision.application.audit import AuditOperation, AuditQuery, AuditRecord
 from capsule_vision.application.identity_models import AuthorizationError, Role
@@ -26,8 +31,8 @@ def test_audit_tab_filters_pages_and_revokes_pending_delivery(
     window = create_window(startup, delivery)
     page = window.audit_page
     try:
-        identity.create_account("Shift", Role.ENGINEER, TEST_PASSWORD).result(WAIT)
-        identity.create_account("Line", Role.OPERATOR, TEST_PASSWORD).result(WAIT)
+        provision_account(identity, "Shift", Role.ENGINEER, TEST_PASSWORD)
+        provision_account(identity, "Line", Role.OPERATOR, TEST_PASSWORD)
         for i in range(58):
             op = AuditOperation(
                 "stable",

@@ -1,7 +1,7 @@
 """Real account service, masked forms and queued Qt delivery; isolated data only."""
 
 from collections.abc import Iterator
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, current_thread, main_thread
@@ -50,6 +50,7 @@ from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui import identity_controls as identity_ui_module
+from capsule_vision.ui.account_maintenance import MaintenanceWindow
 from capsule_vision.ui.identity_controls import (
     CredentialDialog,
     IdentityControls,
@@ -183,7 +184,11 @@ def identity_screen(
     owner = LocalIdentity(path)
     owner.ready.result(5)
     owner.login("Admin", SECRET).result(5)
-    owner.create_account("Worker", Role.OPERATOR, SECRET).result(5)
+    owner.create_account(
+        "Worker", Role.OPERATOR, "temporary fixture credential"
+    ).result(5)
+    pending = owner.login("Worker", "temporary fixture credential").result(5)
+    owner.rotate_password(SECRET, pending.revision).result(5)
     owner.logout()
     ensure_test_fonts()
     candidate = prepared(tmp_path)
@@ -363,13 +368,17 @@ def test_admin_create_role_enable_reset_and_last_admin(
     assert selected is not None and selected.username == "Admin"
     assert not users.controls["identity_disable"].isEnabled()
     assert not users.controls["identity_change_role"].isEnabled()
-    assert users.controls["identity_reset"].isEnabled()
-    assert users.controls["identity_disable"].toolTip() == text(
-        "identity_last_admin", "en"
-    )
+    assert not users.controls["identity_reset"].isEnabled()
+    assert users.controls["identity_disable"].toolTip() == text("identity_denied", "en")
     users.controls["identity_create"].click()
     form(ui).role.setCurrentIndex(form(ui).role.findData(Role.ADMINISTRATOR))
-    submit(ui, username="Backup", new_password=SECRET, confirm=SECRET)
+    credentials = form(ui)
+    credentials.fields["identity_username"].setText("Backup")
+    credentials.fields["identity_new_password"].setText(SECRET)
+    credentials.fields["identity_confirm"].setText(SECRET)
+    assert credentials.grant.isVisible() and not credentials.submit.isEnabled()
+    credentials.grant.click()
+    credentials.submit.click()
     until(lambda: ui.form is None and not users.busy)
     assert any(a.username == "Backup" for a in users.accounts)
     users.controls["identity_create"].click()
@@ -393,44 +402,50 @@ def test_admin_create_role_enable_reset_and_last_admin(
     submit(ui, new_password=NEW_SECRET, confirm=NEW_SECRET)
     until(lambda: ui.form is None and not users.busy)
     assert worker.account_id == select(users, "Worker").account_id
-    select(users, "Admin")
-    change_role(ui, Role.ENGINEER)
-    until(lambda: ui.users is None)
-    assert owner.snapshot().role is Role.ENGINEER
-    assert "Engineer" in window.navbar.user.toolTip()
-    assert not ui.controls["identity_manage"].isVisible()
-    # Even a direct Qt method call reaches the real service authorization boundary.
-    ui.manage_users()
-    assert ui.users is None
+    select(users, "Backup")
+    assert all(
+        not users.controls[key].isEnabled()
+        for key in ("identity_reset", "identity_change_role", "identity_disable")
+    )
+    users.reject()
     ui.switch_user()
     submit(ui, username="Worker", password=NEW_SECRET)
+    until(lambda: ui.form is not None and ui.form.kind == "rotate")
+    assert (
+        owner.snapshot().rotation_required
+        and not ui.controls["identity_manage"].isVisible()
+    )
+    assert set(form(ui).fields) == {"identity_new_password", "identity_confirm"}
+    submit(ui, new_password=SECRET, confirm=SECRET)
     until(lambda: ui.form is None)
     assert owner.snapshot().role is Role.ENGINEER
 
 
-def test_self_disable_and_admin_reset_refresh_without_production_effect(
+def test_promoting_an_administrator_requires_explicit_confirmation(
     identity_screen: tuple[MainWindow, LocalIdentity],
 ) -> None:
     window, owner = identity_screen
     ui = window.identity_controls
-    before = window.bridge.application.snapshot()
     login(ui)
-    completed(owner.create_account("Backup", Role.ADMINISTRATOR, SECRET))
     users = manager(ui)
-    select(users, "Admin")
-    users.controls["identity_reset"].click()
-    submit(ui, new_password=NEW_SECRET, confirm=NEW_SECRET)
-    until(lambda: ui.users is None and ui.form is None)
-    assert owner.snapshot().role is Role.GUEST
-    login(ui, password=NEW_SECRET)
-    users = manager(ui)
-    select(users, "Admin")
-    users.controls["identity_disable"].click()
-    confirm_disable(ui)
-    until(lambda: ui.users is None)
-    assert owner.snapshot().role is Role.GUEST
-    assert window.navbar.user.text() == "Guest"
-    assert window.bridge.application.snapshot() == before
+    worker = select(users, "Worker")
+    users.controls["identity_change_role"].click()
+    role = ui.role_dialog
+    assert role
+    role.role.setCurrentIndex(role.role.findData(Role.ADMINISTRATOR))
+    assert role.grant.isVisible() and not role.submit.isEnabled()
+    role.grant.click()
+    role.submit.click()
+    until(lambda: ui.role_dialog is None and not users.busy)
+    selected = select(users, "Worker")
+    assert (
+        selected.account_id == worker.account_id and selected.role is Role.ADMINISTRATOR
+    )
+    assert all(
+        not users.controls[key].isEnabled()
+        for key in ("identity_reset", "identity_change_role", "identity_disable")
+    )
+    assert owner.snapshot().account and owner.snapshot().role is Role.ADMINISTRATOR
 
 
 @pytest.mark.parametrize("committed", [False, True])
@@ -571,8 +586,17 @@ def test_missing_or_corrupt_store_visible_guest_login(
             StorageState.UNAVAILABLE if corrupt else StorageState.MISSING
         )
         window.set_language("en")
+        window.identity_controls.offer_setup()
+        if corrupt:
+            assert window.identity_controls.form is None
+        else:
+            setup = form(window.identity_controls)
+            assert setup.kind == "setup"
+            setup.reject()
+            assert not data.security.exists()
         window.identity_controls.login()
         dialog = form(window.identity_controls)
+        dialog.fields["identity_username"].setText("Unavailable account")
         assert not dialog.submit.isEnabled()
         for language in ("en", "zh", "af", "ti"):
             window.set_language(language)
@@ -590,6 +614,135 @@ def test_missing_or_corrupt_store_visible_guest_login(
     finally:
         close_window(window)
         delivery.detach()
+
+
+def test_first_setup_weak_confirmation_and_immediate_login(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    from capsule_vision.application.startup import ApplicationData, load_startup
+    from capsule_vision.ui.bootstrap import create_window
+    from capsule_vision.ui.future_delivery import FutureDelivery
+
+    startup = load_startup(ApplicationData.at_entry(tmp_path))
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    window.show()
+    ui, owner = window.identity_controls, startup.application.identity
+    assert owner
+    try:
+        ui.offer_setup()
+        setup = form(ui)
+        guest = owner.snapshot()
+        setup.fields["identity_username"].setText("Lin")
+        setup.fields["identity_new_password"].setText("abc")
+        setup.fields["identity_confirm"].setText("abc")
+        assert setup.weak.isVisible() and not setup.submit.isEnabled()
+        setup.weak.click()
+        setup.fields["identity_new_password"].setText("abcd")
+        assert not setup.weak.isChecked() and not setup.submit.isEnabled()
+        window.set_language("en")
+        assert (
+            setup.guidance.text() == text("identity_guidance", "en")
+            and setup.fields["identity_username"].text() == "Lin"
+        )
+        setup.fields["identity_confirm"].setText("abcd")
+        setup.weak.click()
+        setup.submit.click()
+        until(lambda: ui.form is None)
+        assert owner.snapshot() == guest and ui.controls["identity_login"].isVisible()
+        login(ui, "Lin", "abcd")
+        assert owner.snapshot().role is Role.ADMINISTRATOR
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_temporary_login_cancel_retry_and_rotate_without_old_password(
+    identity_screen: tuple[MainWindow, LocalIdentity],
+) -> None:
+    window, owner = identity_screen
+    ui = window.identity_controls
+    login(ui)
+    completed(owner.create_account("Tech", Role.ENGINEER, SECRET))
+    for cancel in (True, False):
+        ui.login()
+        submit(ui, username="Tech", password=SECRET)
+        until(lambda: ui.form is not None and ui.form.kind == "rotate")
+        rotation = form(ui)
+        assert set(rotation.fields) == {"identity_new_password", "identity_confirm"}
+        pending = owner.snapshot()
+        assert (
+            pending.rotation_required
+            and not window.production_recipes.recipes.isEnabled()
+        )
+        assert (
+            ui.controls["identity_logout"].isVisible()
+            and not ui.controls["identity_switch"].isVisible()
+        )
+        window.set_language("zh")
+        assert rotation.windowTitle() == text("identity_rotate", "zh")
+        if cancel:
+            rotation.reject()
+            assert owner.snapshot().account is None and ui.form is None
+        else:
+            submit(ui, new_password=SECRET, confirm=SECRET)
+            until(lambda dialog=rotation: not dialog.busy)
+            assert owner.snapshot() == pending and rotation.status.text() == text(
+                "identity_rotate", "zh"
+            )
+            submit(ui, new_password=NEW_SECRET, confirm=NEW_SECRET)
+            until(lambda: ui.form is None)
+            assert owner.snapshot().role is Role.ENGINEER
+            assert owner.snapshot().revision > pending.revision
+
+
+def test_offline_gui_uses_live_lease_and_reports_audit_loss(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    path = tmp_path / "data/security.sqlite3"
+    path.parent.mkdir()
+    path.with_name("audit.sqlite3").mkdir()
+    owner = LocalIdentity(path)
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        offline = MaintenanceWindow(tmp_path, "en", worker)
+        offline.show()
+
+        def operate(kind: str, password: str) -> None:
+            (offline.setup if kind == "setup" else offline.recover).click()
+            dialog = offline.form
+            assert dialog and dialog.isVisible()
+            for key, value in (
+                ("identity_username", "Lin"),
+                ("identity_new_password", password),
+                ("identity_confirm", password),
+            ):
+                dialog.fields[key].setText(value)
+            dialog.submit.click()
+            until(lambda: not offline.pending)
+
+        try:
+            operate("setup", SECRET)
+            assert (
+                offline.status.text() == text("identity_busy", "en")
+                and not path.exists()
+            )
+            owner.request_stop()
+            assert owner.join(5)
+            operate("setup", SECRET)
+            assert text("identity_done", "en") in offline.status.text()
+            operate("recover", NEW_SECRET)
+            assert text("identity_audit_incomplete", "en") in offline.status.text()
+        finally:
+            owner.request_stop()
+            assert owner.join(5)
+            offline.close()
+            offline.delivery.detach()
+    reopened = LocalIdentity(path)
+    try:
+        assert completed(reopened.login("Lin", NEW_SECRET)).rotation_required
+    finally:
+        reopened.request_stop()
+        assert reopened.join(5)
 
 
 def test_runtime_database_failure_is_sanitized_and_returns_guest(
@@ -769,13 +922,11 @@ def test_queued_success_after_logout_or_external_role_change_is_not_installed(
     QApplication.processEvents()
     assert owner.snapshot().role is Role.GUEST and ui.form is None
     login(ui)
-    completed(owner.create_account("Backup", Role.ADMINISTRATOR, SECRET))
-    users = manager(ui)
-    current = select(users, "Admin")
-    completed(owner.set_role(current.account_id, Role.ENGINEER))
+    manager(ui)
+    completed(owner.login("Worker", SECRET))
     until(lambda: ui.users is None)
     assert not ui.controls["identity_manage"].isVisible()
-    assert owner.snapshot().role is Role.ENGINEER
+    assert owner.snapshot().role is Role.OPERATOR
 
 
 def test_close_drains_pending_account_creation_before_releasing_storage(
@@ -819,13 +970,12 @@ def test_close_drains_pending_account_creation_before_releasing_storage(
         assert reopened.join(5)
 
 
-def test_self_disable_keeps_an_existing_synthetic_production_session_running(
+def test_logout_and_administrator_protection_keep_an_existing_synthetic_session_running(
     identity_screen: tuple[MainWindow, LocalIdentity],
 ) -> None:
     window, owner = identity_screen
     ui = window.identity_controls
     login(ui)
-    completed(owner.create_account("Backup", Role.ADMINISTRATOR, SECRET))
     # This is the controlled FakeSession, without engine, camera or PLC owners.
     completed(window.bridge.application.start())
     until(lambda: window.snapshot.state is ApplicationState.RUNNING)
@@ -833,8 +983,8 @@ def test_self_disable_keeps_an_existing_synthetic_production_session_running(
     assert before.state is ApplicationState.RUNNING
     users = manager(ui)
     select(users, "Admin")
-    users.controls["identity_disable"].click()
-    confirm_disable(ui)
+    assert not users.controls["identity_disable"].isEnabled()
+    ui.logout()
     until(lambda: ui.users is None)
     assert owner.snapshot().role is Role.GUEST
     assert window.bridge.application.snapshot() == before
@@ -914,12 +1064,14 @@ def test_account_table_metadata_selection_and_readonly_contract(
     assert item.text() == admin.last_login_utc.astimezone().strftime("%Y-%m-%d %H:%M")
     worker = select(users, "Worker")
     item = users.table.item(users.table.currentRow(), 3)
-    assert item is not None and item.text() == "—"
+    assert item is not None and worker.last_login_utc is not None
     completed(owner.create_account("AAA", Role.ENGINEER, SECRET))
     users.controls["short_refresh"].click()
     until(lambda: not users.busy)
     assert users.selected() == worker
     assert users.table.currentRow() == 2  # Stable ID survives insertion before it.
+    never = users.table.item(0, 3)
+    assert never is not None and never.text() == "—"
     for row in range(users.table.rowCount()):
         for column in range(4):
             item = users.table.item(row, column)
@@ -1401,8 +1553,17 @@ def test_dismissed_role_dialog_ignores_delayed_success_without_retargeting(
     delivery: Future[Account] = Future()
     original = owner.set_role
 
-    def delayed(account_id: str, role: Role) -> Future[Account]:
-        accepted.append(original(account_id, role))
+    def delayed(
+        account_id: str, role: Role, *, revision: int, confirm_administrator: bool
+    ) -> Future[Account]:
+        accepted.append(
+            original(
+                account_id,
+                role,
+                revision=revision,
+                confirm_administrator=confirm_administrator,
+            )
+        )
         return delivery
 
     monkeypatch.setattr(owner, "set_role", delayed)

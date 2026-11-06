@@ -43,6 +43,14 @@ ENGLISH_DETAIL_KEYS = {
 }
 
 IDENTITY_UI_KEYS = {
+    "identity_setup",
+    "identity_rotate",
+    "identity_guidance",
+    "identity_weak",
+    "identity_grant",
+    "identity_maintenance",
+    "identity_stop_app",
+    "identity_audit_incomplete",
     "identity_new_user",
     "identity_status",
     "identity_last_login",
@@ -1372,7 +1380,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 607
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 615
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

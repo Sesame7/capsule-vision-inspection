@@ -13,7 +13,12 @@ from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT, ReplayEngine
 from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import close_window, until
-from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    provision_account,
+    saved_data,
+)
 
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
@@ -97,8 +102,8 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             app.stop().result(WAIT)
             assert app.alarm_snapshot().active[0].id == "emergency_stop"
             identity.login("Admin", TEST_PASSWORD).result(WAIT)
-            identity.create_account("Line", Role.OPERATOR, TEST_PASSWORD).result(WAIT)
-            identity.create_account("Tech", Role.ENGINEER, TEST_PASSWORD).result(WAIT)
+            provision_account(identity, "Line", Role.OPERATOR, TEST_PASSWORD)
+            provision_account(identity, "Tech", Role.ENGINEER, TEST_PASSWORD)
             identity.login("Line", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
             assert (
@@ -179,7 +184,7 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
     assert history and identity
     today = datetime.now(UTC)
     when = today.timestamp()
-    identity.create_account("Line", Role.OPERATOR, TEST_PASSWORD).result(WAIT)
+    provision_account(identity, "Line", Role.OPERATOR, TEST_PASSWORD)
     for i in range(57):
         history.offer_alarms(
             (

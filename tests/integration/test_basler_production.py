@@ -21,7 +21,12 @@ from tests.support.production import inferred
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import select_production_recipe
 from tests.support.reporting import seed, server
-from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    provision_account,
+    saved_data,
+)
 
 from capsule_vision.application import (
     ApplicationError,
@@ -785,7 +790,7 @@ def test_configured_basler_commands_require_operator(
             assert not engine.calls and not passive.closed
         else:
             if role is not Role.ADMINISTRATOR:
-                owner.create_account("Actor", role, TEST_PASSWORD).result(WAIT)
+                provision_account(owner, "Actor", role, TEST_PASSWORD)
                 owner.login("Actor", TEST_PASSWORD).result(WAIT)
             app.start().result(WAIT)
             assert app.source_snapshot().state is ConnectionState.CONNECTED
@@ -844,7 +849,7 @@ def test_operator_can_use_connected_source_while_engineering_settings_are_read_o
     window = create_window(startup, delivery)
     window.show()
     try:
-        owner.create_account("Actor", Role.OPERATOR, TEST_PASSWORD).result(WAIT)
+        provision_account(owner, "Actor", Role.OPERATOR, TEST_PASSWORD)
         owner.login("Actor", TEST_PASSWORD).result(WAIT)
         window.identity_controls.refresh()
         window.navigate(4)

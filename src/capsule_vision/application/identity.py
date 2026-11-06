@@ -16,9 +16,11 @@ from ._security_lock import SecurityLease
 from .audit import AuditOperation, AuditQuery, AuditRecord, AuditTrail, error_outcome
 from .identity_models import (
     Account,
+    AccountConflictError,
     AuthenticationError,
     AuthorizationError,
     IdentityError,
+    PasswordReuseError,
     Role,
     SecurityBusyError,
     SecurityStorageError,
@@ -26,6 +28,7 @@ from .identity_models import (
     SessionSnapshot,
     StaleSessionError,
     StorageState,
+    username_key,
 )
 from .passwords import (
     WORK_FACTOR,
@@ -160,7 +163,7 @@ class LocalIdentity:
                         f"Requested revision {revision}; current revision {self._session.revision}",
                     )
                 raise StaleSessionError("Session decision was superseded")
-            if self._session.role < minimum:
+            if not self._session.permits(minimum):
                 if action:
                     self.audit.record(
                         AuditOperation.by(
@@ -168,6 +171,8 @@ class LocalIdentity:
                         ),
                         "denied",
                     )
+                if self._session.rotation_required:
+                    raise AuthorizationError("Change the temporary password or log out")
                 raise AuthorizationError(f"{minimum.name.title()} required")
             yield self._session
 
@@ -180,8 +185,10 @@ class LocalIdentity:
         self._session = SessionSnapshot(self._session.revision + 1, account)
         return self._session
 
-    def logout(self) -> SessionSnapshot:
+    def logout(self, *, revision: int | None = None) -> SessionSnapshot:
         with self._lock:
+            if revision is not None and self._session.revision != revision:
+                return self._session
             actor = self._session
             session = self._publish(None)
             if actor.account:
@@ -238,12 +245,16 @@ class LocalIdentity:
             )
         return self._store
 
-    def _actor(self, revision: int, *, administrator: bool = False) -> Account:
+    def _actor(
+        self, revision: int, *, administrator: bool = False, rotation: bool = False
+    ) -> Account:
         if not self._accepting or self._session.revision != revision:
             raise StaleSessionError("Session decision was superseded")
         account = self._session.account
-        if account is None or (
-            administrator and account.role is not Role.ADMINISTRATOR
+        if (
+            account is None
+            or account.must_change_password != rotation
+            or (administrator and account.role is not Role.ADMINISTRATOR)
         ):
             raise AuthorizationError(
                 "Administrator required" if administrator else "Login required"
@@ -254,6 +265,8 @@ class LocalIdentity:
         password_bytes(password)
         with self._lock:
             self._admission()
+            if self._session.rotation_required:
+                raise AuthorizationError("Change the temporary password or log out")
             revision = self._session.revision
             initiator = self._session
             cancelled = Event()
@@ -338,8 +351,74 @@ class LocalIdentity:
     def list_accounts(self) -> Future[tuple[Account, ...]]:
         return self._admin(lambda store: store.accounts())
 
+    def setup_administrator(
+        self, username: str, password: str, *, revision: int | None = None
+    ) -> Future[Account]:
+        username_key(username)
+        password_bytes(password)
+        with self._lock:
+            self._admission()
+            actor = self._session
+            account_id = uuid4().hex
+
+            def check() -> None:
+                if (
+                    not self._accepting
+                    or actor.revision != self._session.revision
+                    or (revision is not None and revision != actor.revision)
+                ):
+                    raise StaleSessionError("Session decision was superseded")
+                if not self._storage.uninitialized or actor.account is not None:
+                    raise AccountConflictError(
+                        "First Administrator setup is unavailable"
+                    )
+
+            check()
+
+            def execute() -> Account:
+                op = AuditOperation.by(
+                    actor,
+                    "account.create",
+                    account_id,
+                    after=f"{username} · ADMINISTRATOR · first setup",
+                )
+                self.audit.intent(op).result()
+                try:
+                    verifier = hash_password(password)
+                    with self._lock:
+                        check()
+                        try:
+                            if self._store is None:
+                                self._store = AccountStore(self.path, initialize=True)
+                            result = self._store.create(
+                                username,
+                                Role.ADMINISTRATOR,
+                                verifier,
+                                first=True,
+                                account_id=account_id,
+                            )
+                        except (sqlite3.Error, OSError, SecurityStorageError) as exc:
+                            self._storage = SecurityStorageSnapshot(
+                                StorageState.UNAVAILABLE, _storage_issue(exc)
+                            )
+                            raise
+                        self._storage = SecurityStorageSnapshot(StorageState.READY)
+                except Exception as exc:
+                    self.audit.complete(op, error_outcome(exc), type(exc).__name__)
+                    raise
+                self.audit.complete(op, "success", username)
+                return result
+
+            return self._enqueue(execute)
+
     def create_account(
-        self, username: str, role: Role, password: str
+        self,
+        username: str,
+        role: Role,
+        password: str,
+        *,
+        confirm_administrator: bool = False,
+        revision: int | None = None,
     ) -> Future[Account]:
         account_id = uuid4().hex
         return self._mutate(
@@ -350,41 +429,52 @@ class LocalIdentity:
             lambda store, verifier: store.create(
                 username, role, self._verifier(verifier), account_id=account_id
             ),
+            revision=revision,
+            confirmed=role is not Role.ADMINISTRATOR or confirm_administrator is True,
         )
 
-    def _changed(self, account: Account, *, reset: bool = False) -> Account:
-        current = self._session.account
-        if current is not None and current.account_id == account.account_id:
-            self._publish(account if account.enabled and not reset else None)
-        return account
-
-    def set_enabled(self, account_id: str, enabled: bool) -> Future[Account]:
+    def set_enabled(
+        self, account_id: str, enabled: bool, *, revision: int | None = None
+    ) -> Future[Account]:
         return self._mutate(
             "account.enabled",
             account_id,
             str(enabled),
             None,
-            lambda store, _: self._changed(store.update(account_id, enabled=enabled)),
+            lambda store, _: store.update(account_id, enabled=enabled),
+            revision=revision,
         )
 
-    def set_role(self, account_id: str, role: Role) -> Future[Account]:
+    def set_role(
+        self,
+        account_id: str,
+        role: Role,
+        *,
+        confirm_administrator: bool = False,
+        revision: int | None = None,
+    ) -> Future[Account]:
         return self._mutate(
             "account.role",
             account_id,
             role.name,
             None,
-            lambda store, _: self._changed(store.update(account_id, role=role)),
+            lambda store, _: store.update(account_id, role=role),
+            revision=revision,
+            confirmed=role is not Role.ADMINISTRATOR or confirm_administrator is True,
         )
 
-    def reset_password(self, account_id: str, password: str) -> Future[Account]:
+    def reset_password(
+        self, account_id: str, password: str, *, revision: int | None = None
+    ) -> Future[Account]:
         return self._mutate(
             "account.reset_password",
             account_id,
             "",
             password,
-            lambda store, verifier: self._changed(
-                store.update(account_id, verifier=self._verifier(verifier)), reset=True
+            lambda store, verifier: store.update(
+                account_id, verifier=self._verifier(verifier), temporary=True
             ),
+            revision=revision,
         )
 
     @staticmethod
@@ -399,14 +489,19 @@ class LocalIdentity:
         after: str,
         password: str | None,
         operation: Callable[[AccountStore, PasswordVerifier | None], Account],
+        *,
+        revision: int | None,
+        confirmed: bool = True,
     ) -> Future[Account]:
         if password is not None:
             password_bytes(password)
         with self._lock:
             self._admission()
-            revision = self._session.revision
+            ticket = self._session.revision if revision is None else revision
             try:
-                self._actor(revision, administrator=True)
+                self._actor(ticket, administrator=True)
+                if not confirmed:
+                    raise AuthorizationError("Confirm granting Administrator access")
             except IdentityError as exc:
                 self.audit.record(
                     AuditOperation.by(self._session, action, target), error_outcome(exc)
@@ -417,15 +512,18 @@ class LocalIdentity:
             def execute() -> Account:
                 try:
                     with self._lock:
-                        self._actor(revision, administrator=True)
+                        self._actor(ticket, administrator=True)
                     before = ""
-                    if action in ("account.role", "account.enabled"):
+                    if action != "account.create":
                         previous, _ = self._available().by_id(target)
-                        before = (
-                            previous.role.name
-                            if action == "account.role"
-                            else str(previous.enabled)
-                        )
+                        if previous.role is Role.ADMINISTRATOR:
+                            raise AuthorizationError(
+                                "Administrator accounts are protected"
+                            )
+                        if action == "account.role":
+                            before = previous.role.name
+                        elif action == "account.enabled":
+                            before = str(previous.enabled)
                 except Exception as exc:
                     self.audit.record(
                         AuditOperation.by(initiator, action, target),
@@ -438,7 +536,7 @@ class LocalIdentity:
                 try:
                     verifier = hash_password(password) if password is not None else None
                     with self._lock:
-                        self._actor(revision, administrator=True)
+                        self._actor(ticket, administrator=True)
                         result = operation(self._available(), verifier)
                 except Exception as exc:
                     self.audit.complete(op, error_outcome(exc), type(exc).__name__)
@@ -449,35 +547,60 @@ class LocalIdentity:
             return self._enqueue(execute)
 
     def change_password(
-        self, old_password: str, new_password: str
+        self, old_password: str, new_password: str, *, revision: int | None = None
     ) -> Future[SessionSnapshot]:
         password_bytes(old_password)
+        return self._change_password(old_password, new_password, revision)
+
+    def rotate_password(
+        self, new_password: str, revision: int
+    ) -> Future[SessionSnapshot]:
+        if type(revision) is not int:
+            raise StaleSessionError("A password-change session revision is required")
+        return self._change_password(None, new_password, revision)
+
+    def _change_password(
+        self, old_password: str | None, new_password: str, revision: int | None
+    ) -> Future[SessionSnapshot]:
         password_bytes(new_password)
+        rotation = old_password is None
         with self._lock:
             self._admission()
-            revision = self._session.revision
-            account = self._actor(revision)
+            ticket = self._session.revision if revision is None else revision
+            account = self._actor(ticket, rotation=rotation)
+            actor = self._session
 
             def execute() -> SessionSnapshot:
                 with self._lock:
-                    self._actor(revision)
+                    self._actor(ticket, rotation=rotation)
                 store = self._available()
-                current, previous = store.by_id(account.account_id)
-                with self.change(
-                    "account.change_password",
-                    account.account_id,
-                    revision,
-                    role=Role.OPERATOR,
-                ):
-                    if not current.enabled or not verify_password(
-                        old_password, previous
+                op = AuditOperation.by(
+                    actor, "account.change_password", account.account_id
+                )
+                self.audit.intent(op).result()
+                try:
+                    current, previous = store.by_id(account.account_id)
+                    if (
+                        not current.enabled
+                        or current.must_change_password != rotation
+                        or (
+                            old_password is not None
+                            and not verify_password(old_password, previous)
+                        )
                     ):
                         raise AuthenticationError("Invalid username or password")
+                    if rotation and verify_password(new_password, previous):
+                        raise PasswordReuseError("Choose a different password")
                     verifier = hash_password(new_password)
                     with self._lock:
-                        self._actor(revision)
+                        self._actor(ticket, rotation=rotation)
                         updated = store.update(account.account_id, verifier=verifier)
-                        return self._publish(updated)
+                        result = self._publish(updated)
+                except Exception as exc:
+                    self.audit.complete(op, error_outcome(exc), type(exc).__name__)
+                    raise
+                self.audit.complete(op, "success")
+                return result
 
             return self._enqueue(execute)
 
@@ -509,7 +632,11 @@ class LocalIdentity:
                     exists = True
                 if exists:
                     self._store = AccountStore(self.path)
-                    state = SecurityStorageSnapshot(StorageState.READY)
+                    state = SecurityStorageSnapshot(
+                        StorageState.EMPTY
+                        if self._store.empty()
+                        else StorageState.READY
+                    )
                 else:
                     state = SecurityStorageSnapshot(StorageState.MISSING)
             except (sqlite3.Error, OSError, SecurityStorageError) as exc:

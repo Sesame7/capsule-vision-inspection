@@ -26,6 +26,9 @@ dev = [
 [project.scripts]
 capsule-vision = "capsule_vision.cli:app"
 
+[project.gui-scripts]
+capsule-vision-accounts = "capsule_vision.ui.account_maintenance:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

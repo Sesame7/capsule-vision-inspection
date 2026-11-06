@@ -241,6 +241,7 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
                 show_sized_window(window, args.window_size)
             except ValueError as exc:
                 parser.error(str(exc))
+        window.identity_controls.offer_setup()
         return qt.exec()
     finally:
         try:
