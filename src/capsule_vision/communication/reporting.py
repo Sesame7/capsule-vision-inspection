@@ -9,6 +9,7 @@ from threading import Condition, Thread, current_thread
 from time import perf_counter
 from typing import Protocol, runtime_checkable
 
+from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inspection import CycleId, CycleStatus
 from capsule_vision.inspection.models import nonnegative_integer
 from capsule_vision.inspection.production import (
@@ -399,6 +400,7 @@ class FirstStationReportingWorker:
         *,
         client_factory: Callable[[Endpoint], FirstStationClient] = open_client,
         attributable: Callable[[ReportIdentity], bool] = lambda _: True,
+        diagnostics: RunDiagnostics | None = None,
     ) -> None:
         ReportIdentity(generation, CycleId(0))
         if settings.mode is not ReportingMode.PER_CYCLE:
@@ -407,6 +409,7 @@ class FirstStationReportingWorker:
         self.generation, self.settings = generation, settings
         self._factory = client_factory
         self._attributable = attributable
+        self._diagnostics = diagnostics
         self._condition = Condition()
         self._pending: deque[_PendingReport] = deque()
         self._started = False
@@ -489,6 +492,7 @@ class FirstStationReportingWorker:
                 issue=ReportingIssue.from_error(error),
             )
             self._last_skip = self._last_outcome
+            self._observe(self._last_outcome)
 
     def submit(self, report: FirstStationReport) -> Future[ReportObservation]:
         with self._condition:
@@ -514,6 +518,7 @@ class FirstStationReportingWorker:
                 self._skipped += 1
                 self._last_outcome = observation
                 self._last_skip = observation
+                self._observe(observation)
                 completed.set_result(observation)  # New handle has no callbacks yet.
                 return completed
             elif (
@@ -537,6 +542,7 @@ class FirstStationReportingWorker:
                     issue=ReportingIssue.from_error(error),
                 )
                 self._last_reject = self._last_outcome
+                self._observe(self._last_outcome)
                 raise error
             completed = Future()
             completed.set_running_or_notify_cancel()
@@ -641,6 +647,29 @@ class FirstStationReportingWorker:
                 else None,
             )
 
+    def _observe(self, observation: ReportObservation) -> None:
+        trace = self._diagnostics
+        if trace and (
+            trace.writer.detailed
+            or observation.outcome is not ReportOutcome.ACKNOWLEDGED
+        ):
+            trace.record(
+                "per_cycle.report",
+                cycle_id=observation.identity.cycle_id,
+                submitted_generation=observation.identity.generation,
+                outcome=observation.outcome.value,
+                sequence=observation.sequence,
+                stage=observation.stage.value if observation.stage else None,
+                error_type=observation.issue.exception_type
+                if observation.issue
+                else None,
+                duration_ms=observation.duration_ms,
+                bitmap_ack_ms=observation.bitmap_ms,
+                sequence_ack_ms=observation.sequence_ms,
+                acknowledged_at_s=observation.acknowledged_at,
+                completion_to_ack_ms=observation.completion_to_ack_ms,
+            )
+
     def _settle(self, pending: _PendingReport, observation: ReportObservation) -> None:
         with self._condition:
             if observation.outcome is ReportOutcome.ACKNOWLEDGED:
@@ -655,6 +684,7 @@ class FirstStationReportingWorker:
             self._last_outcome = observation
             self._active = None
         pending.completed.set_result(observation)  # Outside admission locks.
+        self._observe(observation)
 
     def _run(self) -> None:
         current: _PendingReport | None = None

@@ -293,6 +293,10 @@ attempt; failed or uncertain writes are never replayed. ACK does not prove PLC
 scan consumption, physical association or mechanical ejection. The read/check/write
 sequence is not atomic; an in-flight commit cannot be recalled after association loss.
 
+The optional [runtime diagnostics](architecture.md#runtime-diagnostics) record
+these existing observations. Detailed mode correlates each retained counter
+read and the bitmap/commit timings with the generation and first admitted CycleId.
+
 A changed/stale counter, late initial read, duplicate/gapped CycleId, missing
 terminal evidence, mixed layout or source ambiguity latches phase loss for the
 generation. A next group arriving before the previous group settles also suppresses

@@ -17,6 +17,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 from numpy.typing import NDArray
 
+from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inference._validation import validate_image
 from capsule_vision.inspection import CameraId, CycleId, Frame
 from capsule_vision.runtime import CoordinatorStoppedError
@@ -70,6 +71,7 @@ class InspectionBinding:
     submit: Callable[[Frame], None]
     failed: Callable[[BaseException], None]
     admitting: Callable[[], bool]
+    diagnostics: RunDiagnostics | None = None
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -107,8 +109,14 @@ class _Command:
 
 
 class BaslerConnection:
-    def __init__(self, *, clock: Callable[[], float] = monotonic) -> None:
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = monotonic,
+        diagnostics: RuntimeDiagnostics | None = None,
+    ) -> None:
         self._clock = clock
+        self._diagnostics = diagnostics
         self._capture: _Capture | None = None
         self._lock = Lock()
         self._state = ConnectionState.DISCONNECTED
@@ -145,11 +153,14 @@ class BaslerConnection:
         self,
         cameras: tuple[CameraId, ...],
         serials: tuple[str, ...],
+        *,
+        diagnostics: RunDiagnostics | None = None,
     ) -> Future[None]:
         with self._lock:
             if self._state is not ConnectionState.DISCONNECTED:
                 raise ApplicationStateError("Disconnect the previous source first")
             source = ContinuousBaslerSource(cameras, serials)
+            source.diagnostics = diagnostics or self._diagnostics
             inactive = BaslerAdmissionControl(0)
             inactive.stop()
             source.control = inactive
@@ -360,6 +371,11 @@ class BaslerConnection:
                         if not command.attach:
                             control.stop()
                         self._source.control = control
+                        self._source.diagnostics = (
+                            command.binding.diagnostics
+                            if command.attach
+                            else self._diagnostics
+                        )
                         self._source.admission_ready = (
                             command.binding.admitting
                             if command.attach
@@ -417,6 +433,13 @@ class BaslerConnection:
                 if self._stop.is_set():
                     raise ApplicationStateError("Connection stopped before ARMED")
                 self._state = ConnectionState.CONNECTED
+            if source.diagnostics:
+                source.diagnostics.record(
+                    "basler.connection", outcome="armed", cameras=len(_event.serials)
+                )
+            # A connected camera may remain idle across Runs. The subsequent
+            # inspection binding supplies its own generation at attachment.
+            source.diagnostics = self._diagnostics
             self._ready.set_result(None)
 
         error: BaseException | None = None
@@ -438,6 +461,14 @@ class BaslerConnection:
             self.cancel_capture()
             if not source.cleanup_safe:
                 error = error or ApplicationStateError("Camera cleanup unresolved")
+            if error and source.diagnostics:
+                source.diagnostics.record(
+                    "basler.connection",
+                    outcome="failed",
+                    stage="acquisition" if self._ready.done() else "connect",
+                    error_type=type(error).__name__,
+                    cleanup_safe=source.cleanup_safe,
+                )
             with self._lock:
                 binding, self._binding = self._binding, None
                 self._state = (

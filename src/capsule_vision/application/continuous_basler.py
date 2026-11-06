@@ -13,6 +13,7 @@ from time import monotonic
 import numpy as np
 from numpy.typing import NDArray
 
+from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inspection import CameraId, CycleId, Frame, FrameId
 
 from .basler import (
@@ -54,15 +55,25 @@ class ContinuousBaslerSource:
         self._backend = None
         self._identity_lock = Lock()
         self._ambiguous_from: int | None = None
+        self.diagnostics: RuntimeDiagnostics | RunDiagnostics | None = None
 
     def attributable(self, cycle_id: CycleId) -> bool:
         """No observed association anomaly; not proof of a physical trigger ID."""
         with self._identity_lock:
             return self._ambiguous_from is None or cycle_id < self._ambiguous_from
 
-    def _ambiguity(self, cycle: CycleId | None, message: str) -> RuntimeError:
+    def _ambiguity(
+        self, cycle: CycleId | None, camera: CameraId, reason: str, message: str
+    ) -> RuntimeError:
         with self._identity_lock:
             self._ambiguous_from = int(cycle) if cycle is not None else 1
+        if self.diagnostics:
+            self.diagnostics.record(
+                "basler.attribution_failed",
+                last_observed_cycle_id=cycle,
+                camera_id=camera,
+                reason=reason,
+            )
         return RuntimeError(message)
 
     def retry_cleanup(self) -> None:
@@ -114,7 +125,17 @@ class ContinuousBaslerSource:
                 and self._clock() >= deadline
                 and len(seen) != len(self.serials)
             ):
-                if self.control is None or not self.control.settling:
+                settling = self.control is not None and self.control.settling
+                if self.diagnostics:
+                    self.diagnostics.record(
+                        "basler.capture_deadline",
+                        cycle_id=cycle,
+                        received=len(seen),
+                        expected=len(self.serials),
+                        deadline_at_s=deadline,
+                        settling=settling,
+                    )
+                if self.control is None or not settling:
                     raise TimeoutError(
                         "Missing camera at observed-cycle deadline; restart required"
                     )
@@ -157,7 +178,22 @@ class ContinuousBaslerSource:
                     if not backend.available(serial, 0):
                         continue
                     found = True
-                    row, pixels = backend.retrieve(serial)
+                    trace = self.diagnostics
+                    detailed = (
+                        isinstance(trace, RunDiagnostics) and trace.writer.detailed
+                    )
+                    started = monotonic() if detailed else 0.0
+                    try:
+                        row, pixels = backend.retrieve(serial)
+                    except Exception as exc:
+                        if trace:
+                            trace.record(
+                                "basler.retrieve_failed",
+                                camera_id=self.cameras[index],
+                                error_type=type(exc).__name__,
+                            )
+                        raise
+                    retrieved = monotonic() if detailed else 0.0
                     if stop.is_set():
                         return
                     if (
@@ -166,7 +202,12 @@ class ContinuousBaslerSource:
                         or row.serial != serial
                         or row.skipped_images not in (0, None)
                     ):
-                        raise self._ambiguity(cycle, f"Invalid camera result: {serial}")
+                        raise self._ambiguity(
+                            cycle,
+                            self.cameras[index],
+                            "invalid_result",
+                            f"Invalid camera result: {serial}",
+                        )
                     ordinal, block = row.image_number, row.block_id
                     if (
                         ordinal is None
@@ -176,6 +217,8 @@ class ContinuousBaslerSource:
                     ):
                         raise self._ambiguity(
                             cycle,
+                            self.cameras[index],
+                            "missing_counters",
                             f"Required acquisition counters unavailable: {serial}",
                         )
                     previous = sequence.get(serial)
@@ -184,7 +227,10 @@ class ContinuousBaslerSource:
                         previous[1] + 1,
                     ):
                         raise self._ambiguity(
-                            cycle, f"Camera sequence discontinuity: {serial}"
+                            cycle,
+                            self.cameras[index],
+                            "sequence_discontinuity",
+                            f"Camera sequence discontinuity: {serial}",
                         )
                     expected = (
                         1
@@ -194,6 +240,8 @@ class ContinuousBaslerSource:
                     if ordinal != expected:
                         raise self._ambiguity(
                             cycle,
+                            self.cameras[index],
+                            "unexpected_ordinal",
                             f"Unexpected acquisition ordinal {ordinal}, expected {expected}; association unsafe: {serial}",
                         )
                     if cycle is None or len(seen) == len(self.serials):
@@ -211,7 +259,10 @@ class ContinuousBaslerSource:
                         expire_capture()
                     if serial in seen:
                         raise self._ambiguity(
-                            cycle, f"Duplicate camera frame: {serial}"
+                            cycle,
+                            self.cameras[index],
+                            "duplicate_frame",
+                            f"Duplicate camera frame: {serial}",
                         )
                     sequence[serial] = block, ordinal
                     seen.add(serial)
@@ -231,6 +282,17 @@ class ContinuousBaslerSource:
                         frame
                     )  # Eligible camera inspection need not wait for its peers.
                     self.frames += 1
+                    if detailed and trace:
+                        trace.record(
+                            "basler.acquisition",
+                            cycle_id=cycle,
+                            camera_id=self.cameras[index],
+                            frame_sequence=ordinal,
+                            block_id=block,
+                            device_timestamp_raw=row.camera_timestamp,
+                            host_received_at_s=row.received_at,
+                            retrieve_ms=(retrieved - started) * 1000,
+                        )
                     on_frame(cycle, row)
                     if len(seen) == len(self.serials) and self.control is not None:
                         self.control.capture_finished(cycle)

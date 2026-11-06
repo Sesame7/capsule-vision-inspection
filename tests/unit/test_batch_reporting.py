@@ -2,13 +2,15 @@
 
 from collections.abc import Callable, Generator
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import replace
+from pathlib import Path
 from threading import Event, get_ident
 from time import perf_counter
 
 import pytest
 from tests.support.business import mixed_result
+from tests.support.diagnostics import observations
 from tests.support.fins_tcp import Fault, Stage, TcpPeer
 
 from capsule_vision.communication import (
@@ -31,6 +33,7 @@ from capsule_vision.communication.reporting import (
     ReportObservation,
     ReportOutcome,
 )
+from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inspection import CycleId, CycleStatus
 from capsule_vision.inspection.production import ChannelBusinessStatus, ChannelId
 
@@ -48,6 +51,7 @@ def owner(
     mode: ReportingMode = ReportingMode.FOUR_CYCLE,
     attributable: Callable[[ReportIdentity], bool] = lambda _: True,
     on_completed: Callable[[CompletedReportingBatch], None] = lambda _: None,
+    diagnostics: RunDiagnostics | None = None,
 ) -> Generator[FourCycleReportingWorker]:
     worker = FourCycleReportingWorker(
         7,
@@ -58,6 +62,7 @@ def owner(
         ),
         attributable=attributable,
         on_completed=on_completed,
+        diagnostics=diagnostics,
     )
     worker.start()
     try:
@@ -158,6 +163,71 @@ def test_four_authoritative_projections_and_register_ownership(
                 for r in evidence.reads
             )
             assert evidence.completed_at is not None and not evidence.commit_uncertain
+
+
+@pytest.mark.parametrize("case", ["ack", "uncertain", "stop"])
+def test_detailed_diagnostics_observe_actual_handshake(
+    tmp_path: Path, case: str
+) -> None:
+    with closing(RuntimeDiagnostics(tmp_path, "detailed")) as writer:
+        trace = RunDiagnostics(writer, 7, "local", "actual-run")
+        with (
+            TcpPeer(base_address=149) as peer,
+            owner(peer, diagnostics=trace) as worker,
+        ):
+            peer.set_words(148, (41,))
+            count = 2 if case == "stop" else 4
+            admit(worker, 11, count)
+            if case == "uncertain":
+                peer.fail_next("sequence", "drop_after")
+            future = submit(worker, 11, count=count)[-1]
+            if case == "stop":
+                worker.request_stop(drain=True)
+            actual = future.result(3)
+            fact = worker.snapshot().batch_observations[-1]
+            assert (
+                actual.outcome
+                is {
+                    "ack": ReportOutcome.ACKNOWLEDGED,
+                    "uncertain": ReportOutcome.FAILED,
+                    "stop": ReportOutcome.SKIPPED,
+                }[case]
+            )
+            writes = [p for p in peer.packets if p[10:12] == b"\x01\x02"]
+            assert len(writes) == (0 if case == "stop" else 2)
+    members = observations(tmp_path, "four_cycle.member")
+    assert [(r["cycle_id"], r["exposure"]) for r in members] == [
+        (11 + i, i + 1) for i in range(count)
+    ]
+    assert all(
+        r["run_id"] == "actual-run" and r["first_cycle_id"] == 11 for r in members
+    )
+    completed = observations(tmp_path, "four_cycle.completed")
+    assert len(completed) == int(case != "stop")
+    if completed:
+        assert completed[0]["completed_at_s"] == fact.completed_at
+    (report,) = observations(tmp_path, "four_cycle.report")
+    assert (
+        report["outcome"] == actual.outcome.value
+        and report["eligible"] == fact.inspection_complete
+    )
+    assert report["commit_uncertain"] == (case == "uncertain")
+    assert report["cycle_ids"] == list(fact.cycles)
+    assert report["completion_to_ack_ms"] == actual.completion_to_ack_ms
+    stages = observations(tmp_path, "four_cycle.counter_read")
+    assert [
+        (r["stage"], r["value"], r["address"], r["finished_at_s"]) for r in stages
+    ] == [(r.stage, r.value, r.address, r.finished_at) for r in fact.reads]
+    (stage,) = observations(tmp_path, "four_cycle.writes")
+    assert stage["acknowledged_at_s"] == actual.acknowledged_at
+    assert (
+        stage["bitmap_ack_ms"] == actual.bitmap_ms
+        and stage["sequence_ack_ms"] == actual.sequence_ms
+    )
+    assert (
+        stage["commit_started_at_s"] == fact.commit_started_at
+        and stage["commit_finished_at_s"] == fact.commit_finished_at
+    )
 
 
 def test_counter_skips_wrap_bounded_evidence_and_no_local_sequence() -> None:

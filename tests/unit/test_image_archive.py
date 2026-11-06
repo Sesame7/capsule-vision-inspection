@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 from tests.support.application import production
 from tests.support.business import channel
+from tests.support.diagnostics import observations
 
 from capsule_vision.application.archive_links import PublishedImage
 from capsule_vision.application.image_archive import (
@@ -21,6 +22,7 @@ from capsule_vision.application.image_archive import (
     write_png,
 )
 from capsule_vision.configuration import ImageArchiveSettings
+from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import (
     CameraInspectionResult,
@@ -369,11 +371,13 @@ def test_write_failure_no_completed_partial_and_next_task_continues(
             raise PermissionError("not writable")
         return write_png(root, item)
 
+    log = RuntimeDiagnostics(tmp_path / "logs", "detailed")
     archive = ImageArchive(
         ImageArchiveSettings(str(tmp_path), True),
         1,
         production().layout.camera_ids,
         writer=writer,
+        diagnostics=RunDiagnostics(log, 1, "local", RUN),
     )
     published: list[PublishedImage] = []
     archive.bind_run(RUN, published.append)
@@ -387,6 +391,18 @@ def test_write_failure_no_completed_partial_and_next_task_continues(
         archive.complete(result.cycle_id, result)
     archive.request_stop()
     assert archive.join(3)
+    log.close()
+    first, second = observations(tmp_path / "logs", "archive.write")
+    assert (first["outcome"], first["error_type"], first["cycle_id"]) == (
+        "failed",
+        "PermissionError",
+        1,
+    )
+    assert (second["outcome"], second["cycle_id"], second["run_id"]) == (
+        "published",
+        2,
+        RUN,
+    )
     snapshot = archive.snapshot()
     assert calls == [1, 2] and snapshot.failed == snapshot.written == 1
     assert [link.cycle_id for link in published] == [2] and published[0].path.is_file()
@@ -406,6 +422,7 @@ def test_bounded_memory_queue_and_actual_writer_termination(tmp_path: Path) -> N
     result, camera = production(), inspected()
     result = replace(result, cameras=(camera, *result.cameras[1:]))
     frame = pixels(camera)
+    log = RuntimeDiagnostics(tmp_path / "logs", "detailed")
     archive = ImageArchive(
         ImageArchiveSettings(str(tmp_path), True),
         1,
@@ -415,6 +432,7 @@ def test_bounded_memory_queue_and_actual_writer_termination(tmp_path: Path) -> N
         max_frame_bytes=frame.image.nbytes,
         max_pending=1,
         max_cycles=1,
+        diagnostics=RunDiagnostics(log, 1, "local", RUN),
     )
     published: list[PublishedImage] = []
     archive.bind_run(RUN, published.append)
@@ -461,6 +479,15 @@ def test_bounded_memory_queue_and_actual_writer_termination(tmp_path: Path) -> N
         release.set()
         archive.request_stop()
         assert archive.join(3)
+        log.close()
+    drops = observations(tmp_path / "logs", "archive.dropped")
+    assert len(drops) == archive.snapshot().dropped
+    assert any(
+        r["cycle_id"] == 2
+        and r["reason"] == "Archive write queue capacity exceeded"
+        and r["pending"] == 1
+        for r in drops
+    )
     assert owners == [owners[0]] and owners[0] != get_ident()
     assert [image.cycle_id for image in published] == [1] and published[
         0

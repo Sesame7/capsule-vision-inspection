@@ -15,7 +15,8 @@ from capsule_vision.configuration.alarm_definitions import (
     create_local_alarm_definitions,
 )
 from capsule_vision.configuration.communication_preferences import AlarmPreferences
-from capsule_vision.inspection import CycleId, Frame
+from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
+from capsule_vision.inspection import CycleId, CycleStatus, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
 from capsule_vision.localization.languages import Language
 
@@ -89,10 +90,13 @@ class ProductionApplication:
         identity: LocalIdentity | None = None,
         initial_candidate: PreparedConfiguration | None = None,
         initial_alarm: AlarmPreferences | None = None,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
             raise ValueError("max_pending_cycles must be positive")
         self._factory = session_factory
+        self.diagnostics = diagnostics
+        self.run_diagnostics: RunDiagnostics | None = None
         self.history = history
         self._export_thread: Thread | None = None
         self._export_cancel = Event()
@@ -139,6 +143,7 @@ class ProductionApplication:
                 history.path.with_name(TEMPLATE.name),
                 history.offer_alarms,
                 self._alarm_context,
+                diagnostics=diagnostics,
             )
             if history is not None and initial_alarm is not None
             else None
@@ -265,6 +270,14 @@ class ProductionApplication:
     def recipe_selection_failed(
         self, request: RecipeSelection, error: BaseException
     ) -> None:
+        if self.diagnostics:
+            self.diagnostics.record(
+                "recipe.preparation",
+                generation=request.generation,
+                recipe_id=request.operation.target if request.operation else None,
+                outcome="failed",
+                error_type=type(error).__name__,
+            )
         if self.identity and request.operation:
             self.identity.audit.record(
                 request.operation, error_outcome(error), type(error).__name__
@@ -336,6 +349,13 @@ class ProductionApplication:
                 self._issue = None
             self._selection = None
             self._candidate = candidate
+            if self.diagnostics:
+                self.diagnostics.record(
+                    "recipe.preparation",
+                    recipe_id=candidate.configuration.recipe_id,
+                    generation=self._generation,
+                    outcome="installed",
+                )
             self._candidate_requires_preparation = False
             self._state = ApplicationState.READY
 
@@ -589,8 +609,15 @@ class ProductionApplication:
                 raise
 
     def _rejected_start(self, actor: SessionSnapshot | None, error: Exception) -> None:
+        recipe = self._candidate or self._active
+        if self.diagnostics:
+            self.diagnostics.record(
+                "production.start",
+                outcome="rejected",
+                recipe_id=recipe.configuration.recipe_id if recipe else None,
+                error_type=type(error).__name__,
+            )
         if actor and self.identity:
-            recipe = self._candidate or self._active
             self.identity.audit.record(
                 AuditOperation.by(
                     actor,
@@ -621,6 +648,11 @@ class ProductionApplication:
             self._startup = _promise(Future())
             prepared = self._candidate or self._active
             recipe = prepared.configuration.recipe_id if prepared else ""
+            if self.diagnostics:
+                self.run_diagnostics = RunDiagnostics(
+                    self.diagnostics, self._generation, recipe
+                )
+                self.run_diagnostics.record("production.start", outcome="admitted")
             self._start_operation = (
                 AuditOperation.by(actor, "production.start", recipe) if actor else None
             )
@@ -748,6 +780,14 @@ class ProductionApplication:
                 not result.cleanup_complete,
             )
         assert future is not None
+        if self.diagnostics:
+            self.diagnostics.record(
+                "model.preparation",
+                model_id=operation.request.model.model_id,
+                outcome="failed" if error else "completed",
+                error_type=type(error).__name__ if error else None,
+                cleanup_complete=result.cleanup_complete,
+            )
         if error is not None:
             future.set_exception(
                 lifecycle_error(
@@ -774,6 +814,13 @@ class ProductionApplication:
                 return self._stopped
             self._stopped = _promise(Future())
             future = self._stopped
+            if self.diagnostics:
+                self.diagnostics.record(
+                    "production.stop_requested",
+                    generation=self._generation,
+                    run_id=self._run_id,
+                    state=self._state.name,
+                )
             if self._session is None and self._state in (
                 ApplicationState.READY,
                 ApplicationState.UNCONFIGURED,
@@ -812,6 +859,13 @@ class ProductionApplication:
                 return self._closed
             self._closed = _promise(Future())
             self._closing = True
+            if self.diagnostics:
+                self.diagnostics.record(
+                    "application.close",
+                    outcome="requested",
+                    generation=self._generation,
+                    run_id=self._run_id,
+                )
             self._export_cancel.set()
             self._stop_requested = True
             if self._state is not ApplicationState.FAULT:
@@ -858,10 +912,25 @@ class ProductionApplication:
             session = self._session
             assert session is not None
             if len(self._pending) >= self._max_pending:
+                if self.run_diagnostics:
+                    self.run_diagnostics.record(
+                        "cycle.rejected",
+                        cycle_id=cycle_id,
+                        error_type="ApplicationCapacityError",
+                    )
                 raise ApplicationCapacityError(
                     "Outstanding application cycle capacity reached"
                 )
-            source = session.begin_cycle(cycle_id)
+            try:
+                source = session.begin_cycle(cycle_id)
+            except Exception as exc:
+                if self.run_diagnostics:
+                    self.run_diagnostics.record(
+                        "cycle.rejected",
+                        cycle_id=cycle_id,
+                        error_type=type(exc).__name__,
+                    )
+                raise
             public = ProductionCycle(_promise(Future()), _promise(Future()))
             token = object()
             self._pending[token] = _Pending(self._generation, cycle_id, source, public)
@@ -894,10 +963,18 @@ class ProductionApplication:
                 pending.source.accepted.result()
             except BaseException as exc:
                 del self._pending[token]
+                if self.run_diagnostics:
+                    self.run_diagnostics.record(
+                        "cycle.rejected",
+                        cycle_id=pending.cycle_id,
+                        error_type=type(exc).__name__,
+                    )
                 pending.public.accepted.set_exception(exc)
                 pending.public.result.set_exception(exc)
                 return
             pending.admitted = True
+            if self.run_diagnostics and self.run_diagnostics.writer.detailed:
+                self.run_diagnostics.record("cycle.admitted", cycle_id=pending.cycle_id)
             self._counters = self._counters.admitted()
             if self._durable_run and self.history:
                 self.history.admitted(self._durable_run, pending.cycle_id)
@@ -908,7 +985,9 @@ class ProductionApplication:
     def _completed(self, token: object) -> None:
         error: BaseException | None = None
         result: ProductionInspectionResult | None = None
+        technical_error = False
         with self._condition:
+            trace = self.run_diagnostics
             pending = self._pending.get(token)
             if (
                 pending is None
@@ -923,6 +1002,7 @@ class ProductionApplication:
                     raise ApplicationError(
                         "Runtime returned a different cycle identity"
                     )
+                previous_errors = self._counters.technical_error_cycles
                 self._counters = self._counters.completed(result)
                 self._latest = result
                 if self.history is not None:
@@ -940,17 +1020,29 @@ class ProductionApplication:
                     )
             except BaseException as exc:
                 error = exc
+                if self.run_diagnostics:
+                    self.run_diagnostics.record(
+                        "cycle.failed",
+                        cycle_id=pending.cycle_id,
+                        error_type=type(exc).__name__,
+                    )
                 if self.history and self._durable_run:
                     self.history.missing_terminal(self._durable_run)
                 if isinstance(exc, ApplicationError) or (
                     self._session is not None and self._session.failure is not None
                 ):
                     self._fault("runtime", exc)
+            else:
+                technical_error = (
+                    self._counters.technical_error_cycles > previous_errors
+                )
         if error is not None:
             pending.public.result.set_exception(error)
         else:
             assert result is not None
             pending.public.result.set_result(result)
+            if trace:
+                _observe_inspection(trace, result, technical_error)
 
     def _fault(self, stage: str, error: BaseException) -> None:
         entered = self._state is not ApplicationState.FAULT
@@ -959,6 +1051,16 @@ class ProductionApplication:
             stage, "lifecycle_failure", type(error).__name__, str(error)
         )
         if entered:
+            if self.diagnostics:
+                self.diagnostics.record(
+                    "production.fault",
+                    stage=stage,
+                    generation=self._generation,
+                    run_id=self.run_diagnostics.run_id
+                    if self.run_diagnostics
+                    else None,
+                    error_type=type(error).__name__,
+                )
             self._record_application_alarm("activated")
         self._stop_requested = True
         self._condition.notify_all()
@@ -1116,6 +1218,13 @@ class ProductionApplication:
                             self._batch_segment = run_id
                             self._batch_uncertain |= durable_run is None
                         self._state = ApplicationState.RUNNING
+                        if self.run_diagnostics:
+                            self.run_diagnostics.run_id = run_id
+                            self.run_diagnostics.record(
+                                "production.start",
+                                outcome="activated",
+                                durable=durable_run is not None,
+                            )
                     if start_operation and self.identity:
                         self.identity.audit.record(
                             replace(
@@ -1129,6 +1238,13 @@ class ProductionApplication:
                     startup.set_result(None)
                 except BaseException as exc:
                     startup_error = exc
+                    if self.run_diagnostics:
+                        self.run_diagnostics.record(
+                            "production.start",
+                            outcome="failed",
+                            error_type=type(exc).__name__,
+                            stop_requested=self._stop_requested,
+                        )
                     with self._condition:
                         if isinstance(exc, VisionPreparationRequired):
                             self._candidate_requires_preparation = True
@@ -1232,6 +1348,16 @@ class ProductionApplication:
                         else ApplicationState.UNCONFIGURED
                     )
                 self._stop_requested = False
+                if self.run_diagnostics:
+                    self.run_diagnostics.record(
+                        "production.stop",
+                        outcome="failed" if cleanup_error else "settled",
+                        error_type=type(cleanup_error).__name__
+                        if cleanup_error
+                        else None,
+                    )
+                    if session_settled:
+                        self.run_diagnostics = None
                 stopped = self._stopped
                 # Close may arrive after the resource check above. In that case
                 # leave its request pending for the next owner iteration; never
@@ -1291,6 +1417,10 @@ class ProductionApplication:
                     else:
                         with self._condition:
                             self._state = ApplicationState.CLOSED
+                            if self.diagnostics:
+                                self.diagnostics.record(
+                                    "application.close", outcome="closed"
+                                )
                         closed.set_result(None)
                         return
                 closed.set_exception(
@@ -1299,3 +1429,57 @@ class ProductionApplication:
                         cleanup_error or ApplicationError("Runtime still owned"),
                     )
                 )
+
+
+def _observe_inspection(
+    trace: RunDiagnostics, result: ProductionInspectionResult, technical_error: bool
+) -> None:
+    detailed = trace.writer.detailed
+    if (
+        not detailed
+        and result.cycle_status is CycleStatus.COMPLETE
+        and not technical_error
+    ):
+        return
+    trace.record(
+        "cycle.terminal",
+        cycle_id=result.cycle_id,
+        status=result.cycle_status.name,
+        technical_error=technical_error,
+        inspection_started_at_s=result.inspection_started_at,
+        result_ready_at_s=result.result_ready_at,
+        aggregation_ms=result.aggregation_ms,
+    )
+    for camera in result.cameras:
+        issue = camera.collection_issue
+        code = issue.code if issue else None
+        error_type = issue.exception_type if issue else None
+        if technical_error or result.cycle_status is not CycleStatus.COMPLETE:
+            # One representative technical issue per camera. Never include arbitrary
+            # exception messages, defect labels or model output.
+            for row in camera.channels:
+                if code:
+                    break
+                if row.occupancy and row.occupancy.error_code:
+                    code, error_type = (
+                        row.occupancy.error_code,
+                        row.occupancy.exception_type,
+                    )
+                else:
+                    issue = next((r for r in row.reasons if r.exception_type), None)
+                    if issue:
+                        code, error_type = issue.code, issue.exception_type
+        if detailed or code:
+            timing = camera.timing
+            trace.record(
+                "camera.inspection",
+                cycle_id=result.cycle_id,
+                camera_id=camera.camera_id,
+                frame_sequence=camera.frame_id.sequence if camera.frame_id else None,
+                issue=code,
+                error_type=error_type,
+                occupancy_ms=timing.occupancy_ms,
+                traditional_ms=timing.traditional_ms,
+                vimo_ms=timing.vimo_ms,
+                mapping_ms=timing.mapping_ms,
+            )

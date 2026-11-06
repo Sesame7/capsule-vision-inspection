@@ -11,6 +11,8 @@ from queue import Full, Queue
 from threading import Event, Lock, Thread, current_thread
 from uuid import uuid4
 
+from capsule_vision.diagnostics import RuntimeDiagnostics
+
 from ._account_store import AccountStore
 from ._security_lock import SecurityLease
 from .audit import AuditOperation, AuditQuery, AuditRecord, AuditTrail, error_outcome
@@ -64,7 +66,9 @@ class LocalIdentity:
     authorized transactions; expensive password work stays outside that lock.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self, path: Path, *, diagnostics: RuntimeDiagnostics | None = None
+    ) -> None:
         self.path = path.resolve()
         self._lease = SecurityLease(path)
         self._lock = Lock()
@@ -83,7 +87,9 @@ class LocalIdentity:
         self._thread = Thread(target=self._run, name="LocalIdentity", daemon=False)
         try:
             self.audit = AuditTrail(
-                self.path.with_name("audit.sqlite3"), self._review_revision
+                self.path.with_name("audit.sqlite3"),
+                self._review_revision,
+                diagnostics=diagnostics,
             )
         except BaseException:
             self._lease.close()

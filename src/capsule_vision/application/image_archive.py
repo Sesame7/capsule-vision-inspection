@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from threading import Condition, Thread
+from time import monotonic
 from typing import Protocol, runtime_checkable
 
 import cv2
 
 from capsule_vision.configuration import ImageArchiveSettings
+from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inspection import CameraId, CycleId, Frame
 from capsule_vision.inspection.production import (
     CameraInspectionResult,
@@ -159,6 +161,7 @@ class ImageArchive:
         max_frame_bytes: int = 32 * 1024 * 1024,
         writer: Callable[[Path, ArchiveImage], Path] = write_png,
         now: Callable[[], datetime] = lambda: datetime.now().astimezone(),
+        diagnostics: RunDiagnostics | None = None,
     ) -> None:
         if min(max_pending, max_bytes, max_cycles, max_frame_bytes) < 1:
             raise ValueError("Archive limits must be positive")
@@ -172,6 +175,7 @@ class ImageArchive:
         self._max_pending, self._max_bytes = max_pending, max_bytes
         self._max_cycles, self._max_frame_bytes = max_cycles, max_frame_bytes
         self._writer, self._now = writer, now
+        self._diagnostics = diagnostics
         self._condition = Condition()
         self._run_id: str | None = None
         self._published: Callable[[PublishedImage], None] | None = None
@@ -200,9 +204,22 @@ class ImageArchive:
                 raise RuntimeError("Archive already bound to a Run")
             self._run_id, self._published = run_id, published
 
-    def _drop(self, message: str) -> None:
+    def _drop(
+        self, message: str, cycle: CycleId, camera: CameraId | None = None
+    ) -> None:
         self._dropped += 1
         self._issue = message
+        if self._diagnostics:
+            self._diagnostics.record(
+                "archive.dropped",
+                cycle_id=cycle,
+                camera_id=camera,
+                reason=message,
+                pending=len(self._queue) + self._active,
+                retained_bytes=self._bytes,
+                collecting=len(self._cycles),
+                dropped=self._dropped,
+            )
 
     def begin(self, cycle: CycleId) -> bool:
         with self._condition:
@@ -211,7 +228,7 @@ class ImageArchive:
                 or cycle in self._cycles
                 or len(self._cycles) >= self._max_cycles
             ):
-                self._drop("Archive cycle capacity/state rejection")
+                self._drop("Archive cycle capacity/state rejection", cycle)
                 return False
             self._cycles[cycle] = {}
             return True
@@ -222,11 +239,19 @@ class ImageArchive:
             if self._stopping or rows is None:
                 return  # Terminal/rejected cycles cannot reopen through late frames.
             if frame.id.camera_id not in self.cameras or frame.id.camera_id in rows:
-                self._drop("Archive unknown/duplicate camera frame")
+                self._drop(
+                    "Archive unknown/duplicate camera frame",
+                    frame.id.cycle_id,
+                    frame.id.camera_id,
+                )
                 return
             size = frame.image.nbytes
             if size > self._max_frame_bytes or self._bytes + size > self._max_bytes:
-                self._drop("Archive raw-pixel capacity exceeded")
+                self._drop(
+                    "Archive raw-pixel capacity exceeded",
+                    frame.id.cycle_id,
+                    frame.id.camera_id,
+                )
                 return
             rows[frame.id.camera_id] = frame, self._now()
             self._bytes += size
@@ -244,7 +269,7 @@ class ImageArchive:
                 and result.layout.camera_ids == self.cameras
             )
             if result is not None and not matched:
-                self._drop("Archive result identity mismatch")
+                self._drop("Archive result identity mismatch", cycle)
             outcomes = (
                 {row.camera_id: row for row in result.cameras}
                 if matched and result is not None
@@ -257,7 +282,7 @@ class ImageArchive:
                     outcome.frame_id != frame.id
                     or outcome.image_shape != frame.image.shape
                 ):
-                    self._drop("Archive FrameId/image-shape mismatch")
+                    self._drop("Archive FrameId/image-shape mismatch", cycle, camera)
                     status = None
                 enabled = (
                     status is not None
@@ -277,7 +302,7 @@ class ImageArchive:
                             )
                         )
                         continue
-                    self._drop("Archive write queue capacity exceeded")
+                    self._drop("Archive write queue capacity exceeded", cycle, camera)
                 self._bytes -= frame.image.nbytes
             self._condition.notify_all()
 
@@ -316,15 +341,39 @@ class ImageArchive:
                     return
                 item = self._queue.popleft()
                 self._active = 1
+                pending = len(self._queue)
+            trace = self._diagnostics
+            started = monotonic() if trace else 0.0
             try:
                 path = self._writer(Path(self.settings.root_directory), item)
             except Exception as exc:
                 with self._condition:
                     self._failed += 1
                     self._issue = f"{type(exc).__name__}: {exc}"[:500]
+                if trace:
+                    trace.record(
+                        "archive.write",
+                        outcome="failed",
+                        cycle_id=item.frame.id.cycle_id,
+                        camera_id=item.frame.id.camera_id,
+                        frame_sequence=item.frame.id.sequence,
+                        error_type=type(exc).__name__,
+                        duration_ms=(monotonic() - started) * 1000,
+                    )
             else:
                 with self._condition:
                     self._written += 1
+                if trace and trace.writer.detailed:
+                    trace.record(
+                        "archive.write",
+                        outcome="published",
+                        cycle_id=item.frame.id.cycle_id,
+                        camera_id=item.frame.id.camera_id,
+                        frame_sequence=item.frame.id.sequence,
+                        archive_status=item.status,
+                        pending_at_dequeue=pending,
+                        duration_ms=(monotonic() - started) * 1000,
+                    )
                 if self._published is not None and item.run_id is not None:
                     try:
                         self._published(
@@ -337,6 +386,13 @@ class ImageArchive:
                             )
                         )
                     except Exception as exc:
+                        if trace:
+                            trace.record(
+                                "archive.link_failed",
+                                cycle_id=item.frame.id.cycle_id,
+                                camera_id=item.frame.id.camera_id,
+                                error_type=type(exc).__name__,
+                            )
                         with self._condition:
                             self._issue = (
                                 f"PNG saved; History link handoff failed: {exc}"[:500]

@@ -28,6 +28,7 @@ from capsule_vision.configuration.preferences import (
     read_preferences,
     save_preferences,
 )
+from capsule_vision.diagnostics import DiagnosticLevel, RuntimeDiagnostics
 from capsule_vision.localization.languages import is_language
 from capsule_vision.web.runtime import WebRuntime, WebRuntimeSnapshot
 
@@ -40,6 +41,7 @@ from .style import Style
 
 class _Arguments(argparse.Namespace):
     window_size: tuple[int, int] | None = None
+    diagnostics: DiagnosticLevel | None = None
 
 
 def parse_window_size(value: str) -> tuple[int, int]:
@@ -198,7 +200,41 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
         metavar="WIDTHxHEIGHT",
         help="show a normal window with this logical client size (UI validation; not persisted)",
     )
+    parser.add_argument(
+        "--diagnostics",
+        choices=("standard", "detailed"),
+        help="write process-lifetime runtime diagnostics under data/logs",
+    )
     args = parser.parse_args(argv, namespace=_Arguments())
+    data = ApplicationData.at_entry(entry_directory)
+    diagnostics = (
+        RuntimeDiagnostics(data.root / "logs", args.diagnostics)
+        if args.diagnostics
+        else None
+    )
+    if diagnostics is None:
+        return _run(data, args, parser, None)
+    diagnostics.record("application.startup", level=diagnostics.level)
+    try:
+        code = _run(data, args, parser, diagnostics)
+    except BaseException as exc:
+        diagnostics.record(
+            "application.exit", outcome="failed", error_type=type(exc).__name__
+        )
+        raise
+    else:
+        diagnostics.record("application.exit", outcome="closed", exit_code=code)
+        return code
+    finally:
+        diagnostics.close()
+
+
+def _run(
+    data: ApplicationData,
+    args: _Arguments,
+    parser: argparse.ArgumentParser,
+    diagnostics: RuntimeDiagnostics | None,
+) -> int:
     delivery: FutureDelivery | None = None
 
     def source_finished(future: Future[None]) -> None:
@@ -207,8 +243,9 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
 
     # Complete startup artifact IO before Qt creation.
     startup = load_startup(
-        ApplicationData.at_entry(entry_directory),
+        data,
         observe_source=source_finished,
+        diagnostics=diagnostics,
     )
     runtime: WebRuntime | None = None
     window: MainWindow | None = None

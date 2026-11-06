@@ -3,6 +3,7 @@
 import sys
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from threading import Condition, Event, Thread, get_ident
@@ -17,6 +18,7 @@ from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.support.application import WAIT
 from tests.support.cycles import image_result
+from tests.support.diagnostics import observations
 from tests.support.production import inferred
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import select_production_recipe
@@ -77,6 +79,11 @@ from capsule_vision.configuration import (
     load_recipe,
     save_camera_sources,
     save_recipe,
+)
+from capsule_vision.diagnostics import (
+    DiagnosticLevel,
+    RunDiagnostics,
+    RuntimeDiagnostics,
 )
 from capsule_vision.inference import BoundingRect, ImageResult
 from capsule_vision.inference._validation import uint8_array
@@ -359,9 +366,15 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
         return write_png(directory, item)
 
     def archiver(
-        settings: ImageArchiveSettings, generation: int, cameras: tuple[CameraId, ...]
+        settings: ImageArchiveSettings,
+        generation: int,
+        cameras: tuple[CameraId, ...],
+        *,
+        diagnostics: RunDiagnostics | None = None,
     ) -> ImageArchive:
-        return ImageArchive(settings, generation, cameras, writer=writer)
+        return ImageArchive(
+            settings, generation, cameras, writer=writer, diagnostics=diagnostics
+        )
 
     monkeypatch.setattr(production_session, "ImageArchive", archiver)
 
@@ -807,6 +820,126 @@ def passive(monkeypatch: pytest.MonkeyPatch) -> PassiveBackend:
     return backend
 
 
+@pytest.mark.parametrize("level", ["standard", "detailed"])
+def test_optional_diagnostics_follow_actual_source_and_run(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, level: DiagnosticLevel
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    recipe = data.recipes / "local.json"
+    save_recipe(
+        recipe,
+        replace(
+            load_recipe(recipe),
+            image_archive=ImageArchiveSettings(
+                str(tmp_path / "archive"), save_empty=True
+            ),
+        ),
+    )
+    engine = Engine()
+    engine.release_warm.set()
+    logs = data.root / "logs"
+    with closing(RuntimeDiagnostics(logs, level)) as writer:
+        startup = authenticated_startup(
+            data, engine_factory=lambda _: engine, diagnostics=writer
+        )
+        app = startup.application
+        try:
+            app.start().result(WAIT)
+            run = app.snapshot().run_id
+            generation = app.snapshot().generation
+            passive.expose(1)
+            until(lambda: app.snapshot().counters.cycles_completed == 1)
+            app.stop().result(WAIT)
+            result = app.snapshot().latest_production_result
+            assert result and result.cycle_id == 1 and run
+            assert len(tuple((tmp_path / "archive").rglob("*.png"))) == 6
+        finally:
+            app.close().result(WAIT)
+            assert app.join(WAIT)
+    rows = observations(logs)
+    assert not writer.snapshot().error and not writer.snapshot().dropped
+    (armed,) = [
+        r for r in rows if r["event"] == "basler.connection" and r["outcome"] == "armed"
+    ]
+    assert (armed["generation"], armed["recipe_id"], armed["run_id"]) == (
+        generation,
+        "local",
+        None,
+    )
+    (activated,) = [
+        r
+        for r in rows
+        if r["event"] == "production.start" and r["outcome"] == "activated"
+    ]
+    assert (activated["run_id"], activated["recipe_id"], activated["generation"]) == (
+        run,
+        "local",
+        generation,
+    )
+    assert any(
+        r["event"] == "inspection.warmup"
+        and r["outcome"] == "completed"
+        and r["run_id"] is None
+        for r in rows
+    )
+    assert any(
+        r["event"] == "production.stop"
+        and r["outcome"] == "settled"
+        and r["run_id"] == run
+        for r in rows
+    )
+    assert rows[-1]["event"] == "application.close" and rows[-1]["outcome"] == "closed"
+    detail_events = {
+        "cycle.admitted",
+        "frame.admission",
+        "basler.acquisition",
+        "cycle.terminal",
+        "camera.inspection",
+        "archive.write",
+    }
+    detail = [r for r in rows if r["event"] in detail_events]
+    if level == "standard":
+        assert not detail
+        return
+    assert all(
+        r["run_id"] == run and r["cycle_id"] == 1 and r["generation"] == generation
+        for r in detail
+    )
+    for name in (
+        "frame.admission",
+        "basler.acquisition",
+        "camera.inspection",
+        "archive.write",
+    ):
+        assert {r["camera_id"] for r in detail if r["event"] == name} == set(
+            result.layout.camera_ids
+        )
+    for camera in result.cameras:
+        (row,) = [
+            r
+            for r in detail
+            if r["event"] == "camera.inspection" and r["camera_id"] == camera.camera_id
+        ]
+        assert camera.frame_id and row["frame_sequence"] == camera.frame_id.sequence
+        assert (
+            row["occupancy_ms"],
+            row["traditional_ms"],
+            row["vimo_ms"],
+            row["mapping_ms"],
+        ) == (
+            camera.timing.occupancy_ms,
+            camera.timing.traditional_ms,
+            camera.timing.vimo_ms,
+            camera.timing.mapping_ms,
+        )
+    assert all(
+        r["device_timestamp_raw"] == 1000 and r["block_id"] == 0
+        for r in detail
+        if r["event"] == "basler.acquisition"
+    )
+
+
 @pytest.mark.parametrize("role", list(Role))
 def test_configured_basler_commands_require_operator(
     tmp_path: Path, passive: PassiveBackend, role: Role
@@ -1079,7 +1212,11 @@ def test_vision_capture_cancellation_and_stale_delivery(
     engine.release_warm.set()
     now = [1.0]
     connection = BaslerConnection(clock=lambda: now[0])
-    monkeypatch.setattr(production_application, "BaslerConnection", lambda: connection)
+
+    def connected(**_options: object) -> BaslerConnection:
+        return connection
+
+    monkeypatch.setattr(production_application, "BaslerConnection", connected)
     startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
@@ -1903,7 +2040,10 @@ def test_stop_or_close_during_native_warmup_settles_source_and_discards_arrivals
     data = saved_data(tmp_path)
     save_basler(data.sources)
     engine = Engine()
-    startup = authenticated_startup(data, engine_factory=lambda _: engine)
+    writer = RuntimeDiagnostics(data.root / "logs", "standard")
+    startup = authenticated_startup(
+        data, engine_factory=lambda _: engine, diagnostics=writer
+    )
     assert isinstance(startup.application, SourceConnectionCommands)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
@@ -1929,6 +2069,16 @@ def test_stop_or_close_during_native_warmup_settles_source_and_discards_arrivals
         engine.release_warm.set()
         app.close().result(WAIT)
         assert app.join(WAIT)
+        writer.close()
+    rows = observations(data.root / "logs")
+    assert any(
+        r["event"] == "inspection.warmup" and r["outcome"] == "cancelled" for r in rows
+    )
+    assert all(r.get("run_id") is None for r in rows)
+    assert [r["outcome"] for r in rows if r["event"] == "production.start"] == [
+        "admitted",
+        "failed",
+    ]
 
 
 def test_close_during_connect_cancels_before_arm_and_joins_actual_owner(

@@ -45,6 +45,7 @@ from capsule_vision.configuration import (
     save_machine_layout,
     save_recipe,
 )
+from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection import CameraId, CycleId, Frame, FrameId
 from capsule_vision.localization.catalog import text
@@ -360,7 +361,13 @@ def test_cam6_template_needs_its_own_source_and_valid_image_bounds(
         assert isinstance(app, SourceProductionApplication)
         requested: list[tuple[tuple[CameraId, ...], tuple[str, ...]]] = []
 
-        def connect(cameras: tuple[CameraId, ...], serials: tuple[str, ...]) -> None:
+        def connect(
+            cameras: tuple[CameraId, ...],
+            serials: tuple[str, ...],
+            *,
+            diagnostics: RunDiagnostics | None = None,
+        ) -> None:
+            assert diagnostics is None
             requested.append((cameras, serials))
             raise ApplicationStateError("Fake source unavailable")
 

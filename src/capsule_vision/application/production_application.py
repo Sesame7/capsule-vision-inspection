@@ -42,6 +42,7 @@ from capsule_vision.configuration import (
 )
 from capsule_vision.configuration.communication_preferences import AlarmPreferences
 from capsule_vision.configuration.drafts import CameraSourceDraft
+from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CameraId, CycleId
 
@@ -81,6 +82,7 @@ class SourceProductionApplication(ProductionApplication):
         initial_candidate: PreparedConfiguration | None = None,
         initial_reporting: ReportingSelection | None = None,
         initial_alarm: AlarmPreferences | None = None,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         self.replay_cache = cache
         self._display_store = store
@@ -104,7 +106,7 @@ class SourceProductionApplication(ProductionApplication):
         self._source_draft = source_draft
         self._replay_control: FolderReplayControl | None = None
         self._basler_control: BaslerAdmissionControl | None = None
-        self.connection = BaslerConnection()
+        self.connection = BaslerConnection(diagnostics=diagnostics)
         self._connecting_start = False
         self._cancelled_start_connection = False
         self._source_cameras = source_cameras
@@ -116,6 +118,7 @@ class SourceProductionApplication(ProductionApplication):
             identity=identity,
             initial_candidate=initial_candidate,
             initial_alarm=initial_alarm,
+            diagnostics=diagnostics,
         )
 
     def snapshot(self) -> ProductionApplicationSnapshot:
@@ -258,7 +261,9 @@ class SourceProductionApplication(ProductionApplication):
                 raise ApplicationStateError(
                     "Source requires explicit recovery in Vision"
                 )
-            self.connection.begin_connect(cameras, serials)
+            self.connection.begin_connect(
+                cameras, serials, diagnostics=self.run_diagnostics
+            )
             self._cancelled_start_connection = False
             self._connecting_start = True
         try:

@@ -3,6 +3,7 @@
 from collections import deque
 from concurrent.futures import Future
 from dataclasses import replace
+from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic
 
@@ -10,6 +11,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 from tests.support.application import WAIT
+from tests.support.diagnostics import observations
 
 from capsule_vision.application import (
     ApplicationCapacityError,
@@ -25,6 +27,7 @@ from capsule_vision.application.basler_control import BaslerAdmissionControl
 from capsule_vision.application.continuous_basler import ContinuousBaslerSource
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.communication import FinsTcpClient, FinsUdpClient
+from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inspection import CameraId, CycleId, Frame
 
 SERIALS = tuple(str(1000 + i) for i in range(6))
@@ -345,10 +348,13 @@ def test_whole_trigger_missed_by_all_cameras_has_no_acquisition_counter_gap(
 )
 def test_duplicate_new_group_before_missing_peer_and_counter_anomalies_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     ordinal: int,
     change: dict[str, int | None] | None,
 ) -> None:
     run = Run(monkeypatch)
+    writer = RuntimeDiagnostics(tmp_path, "standard")
+    run.source.diagnostics = RunDiagnostics(writer, 4, "local", "observed-run")
     try:
         run.start()
         run.backend.expose(1, (0,))
@@ -360,6 +366,15 @@ def test_duplicate_new_group_before_missing_peer_and_counter_anomalies_fail_clos
         assert not run.source.attributable(CycleId(1))
     finally:
         run.close()
+        writer.close()
+    (issue,) = observations(tmp_path, "basler.attribution_failed")
+    assert issue["run_id"] == "observed-run" and issue["last_observed_cycle_id"] == 1
+    assert issue["camera_id"] == CAMERAS[0] and "cycle_id" not in issue
+    assert issue["reason"] in (
+        "sequence_discontinuity",
+        "unexpected_ordinal",
+        "missing_counters",
+    )
 
 
 def test_late_completed_ordinal_never_becomes_a_new_cycle(

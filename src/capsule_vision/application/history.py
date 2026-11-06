@@ -17,6 +17,7 @@ from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
     ReportingSettings,
 )
+from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.inspection.production import ProductionInspectionResult
 
 from . import alarm_records, archive_links, batch_records
@@ -170,10 +171,12 @@ class ProductionHistory:
         retention_batch: int = 256,
         on_failure: Callable[[str], None] | None = None,
         alarm_access: Callable[[int | None], int] | None = None,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         if max_pending < 1 or retention_batch < 1:
             raise ValueError("History bounds must be positive")
         self.path = path
+        self._diagnostics = diagnostics
         self._on_failure = on_failure
         self._alarm_access = alarm_access
         self.clock = clock
@@ -225,6 +228,13 @@ class ProductionHistory:
                     return True
             self._dropped += 1
             self._loss_run, self._loss_persisted = context.run_id, False
+            if self._diagnostics:
+                self._diagnostics.record(
+                    "history.storage_issue",
+                    stage="cycle_handoff",
+                    run_id=context.run_id,
+                    cycle_id=result.cycle_id,
+                )
             return False
 
     def offer_image(self, image: PublishedImage) -> None:
@@ -236,6 +246,14 @@ class ProductionHistory:
             else:
                 self._image_links_lost += 1
                 self._image_link_error = "History image link queue is full or closed"
+                if self._diagnostics:
+                    self._diagnostics.record(
+                        "history.storage_issue",
+                        stage="link_handoff",
+                        run_id=image.run_id,
+                        cycle_id=image.cycle_id,
+                        camera_id=image.camera_id,
+                    )
 
     def _command[T](
         self,
@@ -286,6 +304,13 @@ class ProductionHistory:
                 with self._lock:
                     self._alarm_loss += len(events)
                     self._alarm_issue = str(error)
+                if self._diagnostics:
+                    self._diagnostics.record(
+                        "history.storage_issue",
+                        stage="alarm_storage",
+                        lost=len(events),
+                        error_type=type(error).__name__,
+                    )
 
         self._command(write, reserved=False).add_done_callback(finished)
 
@@ -373,6 +398,10 @@ class ProductionHistory:
         with self._lock:
             self._loss_run, self._loss_persisted = run, False
             self._record_loss("Admitted Cycle has no confirmed terminal result")
+            if self._diagnostics:
+                self._diagnostics.record(
+                    "history.storage_issue", stage="missing_terminal", run_id=run
+                )
 
     def _record_loss(self, detail: str) -> None:
         # Called under the handoff lock. Notify once, without waiting on a write.
@@ -392,6 +421,12 @@ class ProductionHistory:
                 self._record_loss(
                     "Batch storage unavailable or full; accounting fact not confirmed"
                 )
+                if self._diagnostics:
+                    self._diagnostics.record(
+                        "history.storage_issue",
+                        stage="accounting_handoff",
+                        run_id=item.run,
+                    )
 
     def admitted(self, run: str, cycle: int) -> None:
         self._offer_fact(
@@ -453,13 +488,28 @@ class ProductionHistory:
                 self._image_link_error,
             )
 
-    def _failure(self, error: BaseException) -> None:
+    def _failure(
+        self,
+        error: BaseException,
+        *,
+        stage: str = "sqlite",
+        run_id: str | None = None,
+        cycle_id: int | None = None,
+    ) -> None:
         detail = f"{type(error).__name__}: {error}"[:2000]
         with self._lock:
             changed = self._error != detail
             self._error = detail
         if changed and self._on_failure is not None:
             self._on_failure(type(error).__name__)
+        if self._diagnostics and (changed or run_id is not None):
+            self._diagnostics.record(
+                "history.storage_issue",
+                stage=stage,
+                error_type=type(error).__name__,
+                run_id=run_id,
+                cycle_id=cycle_id,
+            )
 
     def _open(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -586,7 +636,20 @@ class ProductionHistory:
 
         return True
 
-    def _image_failure(self, error: BaseException, *, lost: int = 0) -> None:
+    def _image_failure(
+        self, error: BaseException, *, image: PublishedImage | None = None
+    ) -> None:
+        lost = int(image is not None)
+        if self._diagnostics:
+            self._diagnostics.record(
+                "history.storage_issue",
+                stage="image_links",
+                error_type=type(error).__name__,
+                lost=lost,
+                run_id=image.run_id if image else None,
+                cycle_id=image.cycle_id if image else None,
+                camera_id=image.camera_id if image else None,
+            )
         with self._lock:
             self._image_links_lost += lost
             self._image_link_error = f"{type(error).__name__}: {error}"[:500]
@@ -600,7 +663,7 @@ class ProductionHistory:
                     archive_links.create(connection)
                 archive_links.insert(connection, image)
         except Exception as exc:
-            self._image_failure(exc, lost=1)
+            self._image_failure(exc, image=image)
         else:
             self._has_images = True
             with self._lock:
@@ -835,7 +898,12 @@ class ProductionHistory:
                     try:
                         inserted = self._write(connection, item)
                     except Exception as exc:
-                        self._failure(exc)
+                        self._failure(
+                            exc,
+                            stage="cycle_write",
+                            run_id=item.context.run_id,
+                            cycle_id=item.result.cycle_id,
+                        )
                         with self._lock:
                             self._failed += 1
                             self._loss_run, self._loss_persisted = (
@@ -850,7 +918,7 @@ class ProductionHistory:
                         with connection:
                             item.write(connection)
                     except Exception as exc:
-                        self._failure(exc)
+                        self._failure(exc, stage="accounting_write", run_id=item.run)
                         with self._lock:
                             self._failed += 1
                             self._loss_run, self._loss_persisted = item.run, False

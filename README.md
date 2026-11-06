@@ -67,6 +67,12 @@ Set the working directory correctly in Windows shortcuts. In particular, a
 shortcut for the installed command must start from the intended configuration
 root.
 
+For a troubleshooting session, run `uv run --no-sync python app.py --diagnostics standard`.
+Use `--diagnostics detailed` for frame and PLC stage timings. The same arguments
+can follow the script or installed command in a Windows shortcut Target.
+Omitting the option leaves logging off. See [runtime diagnostics](docs/architecture.md#runtime-diagnostics)
+for file retention and how to trace a Run.
+
 Normal operation requires local configuration, Recipes, MachineLayout, camera
 sources, models and proprietary runtime assets. These items are not supplied by
 the repository and must be provisioned separately. Managed models and related

@@ -4,12 +4,14 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from threading import Event, Lock
+from time import monotonic
 from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
 
 from capsule_vision.configuration import validate_model_artifact
+from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inference import ImageResult, VimoSegmentationEngine
 from capsule_vision.inference._validation import validate_image
 from capsule_vision.inspection import CycleId, Frame
@@ -100,10 +102,12 @@ class ProductionRuntimeSession:
         max_ready: int = 2,
         max_commands: int = 32,
         early_camera: bool = False,
+        diagnostics: RunDiagnostics | None = None,
     ) -> None:
         if type(warmup_iterations) is not int or warmup_iterations < 1:
             raise ValueError("warmup_iterations must be positive")
         self.generation = generation
+        self.diagnostics = diagnostics
         self._lock = Lock()
         self._cleanup_safe = True
         self._stop = Event()
@@ -119,6 +123,8 @@ class ProductionRuntimeSession:
                 base_directory=prepared.model_path.parent,
             )
             engine = _OwnedEngine(engine_factory(prepared), self._unsafe_cleanup)
+            started = monotonic() if diagnostics else 0.0
+            cancelled = False
             try:
                 shapes: set[tuple[int, ...]] = set()
                 for supplied in warmup(prepared):
@@ -128,6 +134,7 @@ class ProductionRuntimeSession:
                     shapes.add(image.shape)
                     for _ in range(warmup_iterations):
                         if self._stop.is_set():
+                            cancelled = True
                             raise ApplicationStateError("Stopped during warm-up")
                         result = engine.infer(image)
                         if result.image_shape != image.shape:
@@ -136,11 +143,27 @@ class ProductionRuntimeSession:
                 if not shapes:
                     raise ValueError("Warm-up provider returned no input shapes")
             except BaseException as exc:
+                if diagnostics:
+                    diagnostics.record(
+                        "inspection.warmup",
+                        outcome="cancelled" if cancelled else "failed",
+                        error_type=type(exc).__name__,
+                        stop_requested=self._stop.is_set(),
+                        duration_ms=(monotonic() - started) * 1000,
+                    )
                 try:
                     engine.close()
                 except BaseException as cleanup:
                     exc.add_note(f"Warm-up cleanup failed: {cleanup}")
                 raise
+            if diagnostics:
+                diagnostics.record(
+                    "inspection.warmup",
+                    outcome="completed",
+                    shapes=len(shapes),
+                    iterations_per_shape=warmup_iterations,
+                    duration_ms=(monotonic() - started) * 1000,
+                )
             return engine
 
         self._coordinator = (
@@ -207,7 +230,31 @@ class ProductionRuntimeSession:
         return ProductionCycle(admission.accepted, result)
 
     def submit_frame(self, frame: Frame) -> Future[None]:
-        return self._coordinator.submit_frame(frame)
+        trace = self.diagnostics
+        if trace is None or not trace.writer.detailed:
+            return self._coordinator.submit_frame(frame)
+        identity, captured = frame.id, frame.captured_at
+        started = monotonic()
+
+        def observed(error: BaseException | None) -> None:
+            trace.record(
+                "frame.admission",
+                cycle_id=identity.cycle_id,
+                camera_id=identity.camera_id,
+                frame_sequence=identity.sequence,
+                source_captured_at_s=captured,
+                outcome="rejected" if error else "accepted",
+                error_type=type(error).__name__ if error else None,
+                handoff_ms=(monotonic() - started) * 1000,
+            )
+
+        try:
+            accepted = self._coordinator.submit_frame(frame)
+        except Exception as exc:
+            observed(exc)
+            raise
+        accepted.add_done_callback(lambda done: observed(done.exception()))
+        return accepted
 
     def expire(self) -> Future[None]:
         return self._coordinator.expire()

@@ -27,6 +27,7 @@ from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
+from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.ui import bootstrap, recipe_page
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
@@ -63,8 +64,11 @@ def test_launch_failure_joins_owners_created_before_qt(
             data: ApplicationData,
             *,
             observe_source: Callable[[Future[None]], None],
+            diagnostics: RuntimeDiagnostics | None = None,
         ) -> Startup:
-            startup = real_load(data, observe_source=observe_source)
+            startup = real_load(
+                data, observe_source=observe_source, diagnostics=diagnostics
+            )
             owners.append(startup)
             return startup
 

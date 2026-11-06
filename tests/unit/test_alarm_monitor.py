@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import pytest
 from tests.support.application import FakeSession, prepared
+from tests.support.diagnostics import observations
 from tests.support.fins_tcp import TcpPeer
 from tests.unit.test_batch_reporting import admit, owner, submit, wait
 
@@ -35,6 +36,7 @@ from capsule_vision.configuration.communication_preferences import (
     save_communication_preferences,
 )
 from capsule_vision.configuration.errors import ConfigurationError
+from capsule_vision.diagnostics import RuntimeDiagnostics
 
 
 def signal(**fields: object) -> dict[str, object]:
@@ -233,8 +235,13 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
         signal(id="stop", bit=2, category="interlock"),
     )
     events: list[AlarmEvent] = []
+    writer = RuntimeDiagnostics(tmp_path / "logs", "standard")
     monitor = AlarmMonitor(
-        path, events.extend, lambda: (100.0, "batch-1", "Line A"), interval=0.025
+        path,
+        events.extend,
+        lambda: (100.0, "batch-1", "Line A"),
+        interval=0.025,
+        diagnostics=writer,
     )
     with TcpPeer() as peer:
         try:
@@ -284,6 +291,11 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
         finally:
             monitor.request_stop()
             assert monitor.join(2)
+            writer.close()
+    assert [r["event"] for r in observations(tmp_path / "logs")] == [
+        "alarm_monitor.unavailable",
+        "alarm_monitor.recovered",
+    ]
 
 
 def test_invalid_asset_never_contacts_plc_and_requires_reactivation(

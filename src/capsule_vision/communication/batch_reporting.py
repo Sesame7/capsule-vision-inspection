@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from threading import Condition, Thread, current_thread
 from time import perf_counter
 
+from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inspection import CycleId, CycleStatus
 
 from .endpoints import Endpoint, open_client
@@ -90,6 +91,7 @@ class FourCycleReportingWorker:
         client_factory: Callable[[Endpoint], FinsTcpClient] = _open_four_cycle_client,
         attributable: Callable[[ReportIdentity], bool] = lambda _: True,
         on_completed: Callable[[CompletedReportingBatch], None] = lambda _: None,
+        diagnostics: RunDiagnostics | None = None,
     ) -> None:
         ReportIdentity(generation, CycleId(0))
         settings.validate_four_cycle()
@@ -99,6 +101,7 @@ class FourCycleReportingWorker:
         self._base = settings.require_base_address()
         self._factory, self._attributable = client_factory, attributable
         self._on_completed = on_completed
+        self._diagnostics = diagnostics
         self._condition = Condition()
         self._batches: deque[_Batch] = deque()
         self._recent: deque[BatchReportObservation] = deque(maxlen=16)
@@ -204,8 +207,14 @@ class FourCycleReportingWorker:
     def _identity(self, batch: _Batch) -> ReportIdentity:
         return ReportIdentity(self.generation, batch.cycles[0])
 
-    def _lose_phase(self, reason: str) -> None:
+    def _lose_phase(self, reason: str, code: str) -> None:
         # Caller holds the condition. Never silently recover or reassign the counter.
+        if self._diagnostics and self._phase_issue is None:
+            self._diagnostics.record(
+                "four_cycle.phase_lost",
+                reason=code,
+                last_admitted_cycle_id=self._last_cycle,
+            )
         self._phase_issue = self._phase_issue or reason
         for batch in self._batches:
             if not batch.finished:
@@ -219,19 +228,22 @@ class FourCycleReportingWorker:
             if not self._started or self._stopping:
                 raise ReportingStateError("Four-cycle owner is not accepting cycles")
             if self._last_cycle is not None and cycle != self._last_cycle + 1:
-                self._lose_phase("Nonconsecutive or duplicate Basler CycleId")
+                self._lose_phase(
+                    "Nonconsecutive or duplicate Basler CycleId", "nonconsecutive_cycle"
+                )
                 if cycle <= self._last_cycle:
                     raise ReportingStateError(self._phase_issue)
             if (
                 sum(len(batch.cycles) for batch in self._batches)
                 >= self.settings.max_pending + 1
             ):
-                self._lose_phase("Four-cycle reporting capacity exceeded")
+                self._lose_phase("Four-cycle reporting capacity exceeded", "capacity")
                 raise ReportingCapacityError(self._phase_issue)
             if not self._batches or len(self._batches[-1].cycles) == 4:
                 if any(not batch.finished for batch in self._batches):
                     self._lose_phase(
-                        "Next batch admitted before previous batch settled; late report suppressed"
+                        "Next batch admitted before previous batch settled; late report suppressed",
+                        "group_overlap",
                     )
                 self._batches.append(
                     _Batch(admitted_at=perf_counter(), reason=self._phase_issue)
@@ -241,6 +253,13 @@ class FourCycleReportingWorker:
                 self._peak = max(self._peak, len(self._batches) - 1)
             batch = self._batches[-1]
             batch.cycles.append(cycle)
+            if self._diagnostics and self._diagnostics.writer.detailed:
+                self._diagnostics.record(
+                    "four_cycle.member",
+                    first_cycle_id=batch.cycles[0],
+                    cycle_id=cycle,
+                    exposure=len(batch.cycles),
+                )
             self._last_cycle = cycle
             self._condition.notify_all()
 
@@ -251,17 +270,21 @@ class FourCycleReportingWorker:
         completed.set_running_or_notify_cancel()
         with self._condition:
             if report.identity.generation != self.generation:
-                self._lose_phase("Mixed reporting generation")
+                self._lose_phase("Mixed reporting generation", "mixed_generation")
                 raise ReportingStateError("Mixed reporting generation")
             batch = next(
                 (b for b in self._batches if report.identity.cycle_id in b.cycles), None
             )
             if batch is None:
-                self._lose_phase("Terminal result without a pending admission")
+                self._lose_phase(
+                    "Terminal result without a pending admission", "unadmitted_terminal"
+                )
                 raise ReportingStateError("Terminal result without a pending admission")
             cycle = report.identity.cycle_id
             if cycle in batch.terminals:
-                self._lose_phase("Duplicate terminal cycle result")
+                self._lose_phase(
+                    "Duplicate terminal cycle result", "duplicate_terminal"
+                )
                 raise ReportingStateError("Duplicate terminal cycle result")
             batch.reports[cycle] = report
             batch.terminals[cycle] = status.name
@@ -280,7 +303,8 @@ class FourCycleReportingWorker:
             if batch is not None:
                 batch.terminals[identity.cycle_id] = "unavailable"
             self._lose_phase(
-                f"Unattributable/unavailable terminal result: {str(error)[:300]}"
+                f"Unattributable/unavailable terminal result: {str(error)[:300]}",
+                "unavailable_terminal",
             )
 
     def request_stop(self, *, drain: bool = False) -> None:
@@ -316,7 +340,7 @@ class FourCycleReportingWorker:
             for c in batch.cycles
         ):
             with self._condition:
-                self._lose_phase("Ambiguous Basler attribution")
+                self._lose_phase("Ambiguous Basler attribution", "basler_attribution")
         with self._condition:
             if batch.reason is not None:
                 raise ReportingStateError(batch.reason)
@@ -325,7 +349,8 @@ class FourCycleReportingWorker:
         if self._read(batch, "confirm") != retained:
             with self._condition:
                 self._lose_phase(
-                    "PLC counter changed before commit; retained group suppressed"
+                    "PLC counter changed before commit; retained group suppressed",
+                    "counter_changed",
                 )
             raise ReportingStateError("PLC counter changed before commit")
         # Admission can change while a read is in flight.
@@ -337,7 +362,7 @@ class FourCycleReportingWorker:
             for c in batch.cycles
         ):
             with self._condition:
-                self._lose_phase("Ambiguous Basler attribution")
+                self._lose_phase("Ambiguous Basler attribution", "basler_attribution")
             raise ReportingStateError("Ambiguous Basler attribution")
 
     def _attempt(self, batch: _Batch) -> ReportObservation:
@@ -359,15 +384,19 @@ class FourCycleReportingWorker:
                     with self._condition:
                         self._failure_issue = ReportingIssue.from_error(exc)
                         self._lose_phase(
-                            f"PLC counter admission read failed: {str(exc)[:300]}"
+                            f"PLC counter admission read failed: {str(exc)[:300]}",
+                            "counter_read_failed",
                         )
                 with self._condition:
                     if len(batch.cycles) > 1:
                         self._lose_phase(
-                            "Initial counter read completed after second cycle admission"
+                            "Initial counter read completed after second cycle admission",
+                            "late_initial_read",
                         )
                     if retained == self._last_counter:
-                        self._lose_phase("Stale PLC counter at next group admission")
+                        self._lose_phase(
+                            "Stale PLC counter at next group admission", "stale_counter"
+                        )
                     self._last_counter = retained
             with self._condition:
                 self._condition.wait_for(
@@ -384,7 +413,7 @@ class FourCycleReportingWorker:
                 reports = tuple(batch.reports[c] for c in batch.cycles)
             if len({len(r.reject_words) for r in reports}) != 1:
                 with self._condition:
-                    self._lose_phase("Mixed channel layouts")
+                    self._lose_phase("Mixed channel layouts", "mixed_layouts")
                 raise ReportingStateError("Mixed channel layouts")
             merged = tuple(
                 a | b | c | d
@@ -417,6 +446,16 @@ class FourCycleReportingWorker:
             except BaseException as exc:
                 with self._condition:
                     self._failure_issue = ReportingIssue.from_error(exc)
+            if self._diagnostics:
+                self._diagnostics.record(
+                    "four_cycle.completed",
+                    first_cycle_id=identity.cycle_id,
+                    cycle_ids=tuple(batch.cycles),
+                    plc_counter=retained,
+                    admitted_at_s=batch.admitted_at,
+                    completed_at_s=batch.completed_at,
+                    batch_duration_ms=completion.duration_ms,
+                )
             with self._condition:
                 self._attempted += 1
                 self._last_attempt = ReportObservation(
@@ -443,7 +482,10 @@ class FourCycleReportingWorker:
             with self._condition:
                 batch.commit_finished_at = finished
                 if not attributable:
-                    self._lose_phase("Basler attribution lost during commit request")
+                    self._lose_phase(
+                        "Basler attribution lost during commit request",
+                        "attribution_during_commit",
+                    )
                 if batch.reason is not None:
                     raise ReportingStateError(
                         "Commit ACK arrived after association loss; uncertain"
@@ -468,7 +510,7 @@ class FourCycleReportingWorker:
             with self._condition:
                 batch.reason = batch.reason or str(exc)[:300]
                 if stage is ReportStage.INITIALIZATION:
-                    self._lose_phase(batch.reason)
+                    self._lose_phase(batch.reason, "ineligible_group")
                 if (
                     batch.commit_started_at is not None
                     and batch.commit_finished_at is None
@@ -504,9 +546,55 @@ class FourCycleReportingWorker:
             else:
                 self._skipped += 1
                 self._last_skip = observation
-            self._recent.append(batch.observation(observation))
+            settled = batch.observation(observation)
+            self._recent.append(settled)
             self._batches.popleft()
             futures = tuple(batch.futures)
+        trace = self._diagnostics
+        if trace:
+            first = observation.identity.cycle_id
+            trace.record(
+                "four_cycle.report",
+                first_cycle_id=first,
+                cycle_ids=settled.cycles,
+                terminals=len(settled.terminal_outcomes),
+                eligible=settled.inspection_complete,
+                plc_counter=observation.sequence,
+                outcome=observation.outcome.value,
+                stage=observation.stage.value if observation.stage else None,
+                error_type=observation.issue.exception_type
+                if observation.issue
+                else None,
+                commit_uncertain=settled.commit_uncertain,
+                duration_ms=observation.duration_ms,
+                completion_to_ack_ms=observation.completion_to_ack_ms,
+            )
+            if trace.writer.detailed:
+                # Publish existing stage clocks after the handshake, outside its fences.
+                for read in settled.reads:
+                    trace.record(
+                        "four_cycle.counter_read",
+                        first_cycle_id=first,
+                        stage=read.stage,
+                        address=read.address,
+                        value=read.value,
+                        started_at_s=read.started_at,
+                        finished_at_s=read.finished_at,
+                        duration_ms=(read.finished_at - read.started_at) * 1000,
+                    )
+                trace.record(
+                    "four_cycle.writes",
+                    first_cycle_id=first,
+                    reject_words=observation.reject_words,
+                    plc_counter=observation.sequence,
+                    bitmap_ack_ms=observation.bitmap_ms,
+                    commit_started_at_s=settled.commit_started_at,
+                    commit_finished_at_s=settled.commit_finished_at,
+                    sequence_ack_ms=observation.sequence_ms,
+                    acknowledged_at_s=observation.acknowledged_at,
+                    commit_uncertain=settled.commit_uncertain,
+                    outcome=observation.outcome.value,
+                )
         for future in futures:
             try:
                 future.set_result(observation)

@@ -22,6 +22,7 @@ from capsule_vision.application.session import EngineFactory, real_engine
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
 from capsule_vision.communication.operations import RequestKind
 from capsule_vision.communication.simulator import FinsUdpSimulator
+from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.ui import bootstrap
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
@@ -65,6 +66,7 @@ def install() -> None:
         *,
         engine_factory: EngineFactory = real_engine,
         observe_source: Callable[[Future[None]], None] = lambda _: None,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> Startup:
         # Missing test data gives the real stopped UNCONFIGURED shell, no GPU.
         load_for_scenario = (
@@ -76,6 +78,7 @@ def install() -> None:
             ApplicationData.at_entry(root),
             engine_factory=engine_factory,
             observe_source=observe_source,
+            diagnostics=diagnostics,
         )
 
     def close_event(self: MainWindow, event: QCloseEvent) -> None:

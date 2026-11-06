@@ -14,6 +14,8 @@ from threading import Lock, Thread
 from typing import cast
 from uuid import uuid4
 
+from capsule_vision.diagnostics import RuntimeDiagnostics
+
 from .identity_models import (
     AuthorizationError,
     IdentityError,
@@ -155,10 +157,12 @@ class AuditTrail:
         authorize_review: Callable[[int | None], int],
         *,
         capacity: int = 128,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         if capacity < 1:
             raise ValueError("Audit capacity must be positive")
         self.path = path
+        self._diagnostics = diagnostics
         self._authorize_review = authorize_review
         self._queue: Queue[Callable[[sqlite3.Connection | None], None] | None] = Queue(
             capacity + 1
@@ -199,6 +203,13 @@ class AuditTrail:
                 with self._lock:
                     self._lost += int(write)
                     self._issue = f"Audit {type(exc).__name__}: {exc}"
+                if self._diagnostics:
+                    self._diagnostics.record(
+                        "audit.storage_issue",
+                        stage="execute",
+                        write=write,
+                        error_type=type(exc).__name__,
+                    )
                 done.set_exception(AuditUnavailable(self._issue))
             else:
                 done.set_result(result)
@@ -209,6 +220,13 @@ class AuditTrail:
             else:
                 self._lost += int(write)
                 self._issue = "Audit request capacity reached or owner closed"
+                if self._diagnostics:
+                    self._diagnostics.record(
+                        "audit.storage_issue",
+                        stage="handoff",
+                        write=write,
+                        lost=self._lost,
+                    )
                 done.set_exception(AuditUnavailable(self._issue))
         return done
 
@@ -250,6 +268,12 @@ class AuditTrail:
                     db = None
                 with self._lock:
                     self._issue = str(exc)
+                if self._diagnostics:
+                    self._diagnostics.record(
+                        "audit.storage_issue",
+                        stage="open",
+                        error_type=type(exc).__name__,
+                    )
             while (work := self._queue.get()) is not None:
                 work(db)
         finally:

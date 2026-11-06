@@ -36,6 +36,7 @@ from capsule_vision.communication.reporting import (
 from capsule_vision.configuration import (
     CameraSources,
 )
+from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
@@ -92,6 +93,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         replay_control: FolderReplayControl | None = None,
         continuous_source: BaslerConnection | None = None,
         basler_control: BaslerAdmissionControl | None = None,
+        diagnostics: RunDiagnostics | None = None,
     ) -> None:
         if continuous_source is not None and replay_control is not None:
             raise ValueError("Basler acquisition cannot use Folder replay controls")
@@ -112,6 +114,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             max_collecting=1,
             max_ready=1,
             early_camera=continuous_source is not None,
+            diagnostics=diagnostics,
         )
         self._application, self._images, self._store = application, images, store
         self._layout = prepared.configuration.layout
@@ -123,7 +126,9 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         self.reporting = reporting
         settings = prepared.configuration.image_archive
         self.archive = (
-            ImageArchive(settings, generation, self._layout.camera_ids)
+            ImageArchive(
+                settings, generation, self._layout.camera_ids, diagnostics=diagnostics
+            )
             if continuous_source is not None and settings.enabled
             else None
         )
@@ -246,6 +251,12 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             # still reaches accounting; overload is not model NG/application FAULT.
             with self._lock:
                 self._reporting_overload = type(exc)(str(exc))
+            if self.diagnostics:
+                self.diagnostics.record(
+                    "reporting.handoff_failed",
+                    cycle_id=cycle_id,
+                    error_type=type(exc).__name__,
+                )
             self._source_stop.set()
             try:
                 self._application.stop()
@@ -399,6 +410,12 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 and isinstance(exc, (ApplicationStateError, CoordinatorStoppedError))
             ):
                 self.source_done.set_exception(exc)
+                if self.diagnostics:
+                    self.diagnostics.record(
+                        "source.failed",
+                        source="basler" if self._continuous_source else "folder",
+                        error_type=type(exc).__name__,
+                    )
                 # Stop a partially admitted cycle; never retry or fabricate NG.
                 try:
                     self._application.stop()
@@ -477,6 +494,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
                 not self._source_stop.is_set()
                 and self._application.snapshot().state is ApplicationState.RUNNING
             ),
+            self.diagnostics,
         )
         try:
             source.command(binding, attach=True).result()

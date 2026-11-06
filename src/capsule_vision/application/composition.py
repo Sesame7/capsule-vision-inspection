@@ -45,6 +45,7 @@ from capsule_vision.configuration import (
 from capsule_vision.configuration.catalog import RecipeCatalog
 from capsule_vision.configuration.communication_preferences import AlarmPreferences
 from capsule_vision.configuration.drafts import CameraSourceDraft
+from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inference._validation import uint8_array
 from capsule_vision.inspection import CycleId, Frame, FrameId
@@ -192,6 +193,7 @@ def create_production_application(
     initial_reporting: ReportingSelection | None = None,
     initial_alarm: AlarmPreferences | None = None,
     initial_candidate: PreparedConfiguration | None = None,
+    diagnostics: RuntimeDiagnostics | None = None,
 ) -> tuple[SourceProductionApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != len(editor.machine.layout.cameras):
@@ -334,11 +336,13 @@ def create_production_application(
                     identity.cycle_id
                 ),
                 on_completed=app.observe_pilot_batch,
+                diagnostics=app.run_diagnostics,
             )
         else:
             report_worker = FirstStationReportingWorker(
                 generation,
                 session_reporting,
+                diagnostics=app.run_diagnostics,
                 attributable=lambda identity: (
                     continuous_source is None
                     or continuous_source.attributable(identity.cycle_id)
@@ -351,6 +355,7 @@ def create_production_application(
             group,
             store,
             engine_factory,
+            diagnostics=app.run_diagnostics,
             replay=replay,
             sources=snapshot,
             source_base=sources_file.parent,
@@ -375,6 +380,7 @@ def create_production_application(
         reporting=reporting,
         reporting_editable=reporting_editable,
         history=history,
+        diagnostics=diagnostics,
         identity=identity,
         initial_reporting=initial_reporting,
         initial_alarm=initial_alarm,
@@ -396,6 +402,7 @@ def unconfigured_application(
     identity: LocalIdentity | None = None,
     initial_reporting: ReportingSelection | None = None,
     initial_alarm: AlarmPreferences | None = None,
+    diagnostics: RuntimeDiagnostics | None = None,
 ) -> ProductionApplication:
     """Normal stopped shell can edit session preferences without inventing inputs."""
 
@@ -409,6 +416,7 @@ def unconfigured_application(
         FolderReplayCache(),
         reporting_editable=True,
         history=history,
+        diagnostics=diagnostics,
         identity=identity,
         initial_reporting=initial_reporting,
         initial_alarm=initial_alarm,

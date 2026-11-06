@@ -33,6 +33,7 @@ from capsule_vision.configuration.preferences import (
     ApplicationPreferences,
     read_preferences,
 )
+from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CameraId
 from capsule_vision.web import ProductionSnapshotService
@@ -123,13 +124,18 @@ def load_startup(
     *,
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
+    diagnostics: RuntimeDiagnostics | None = None,
 ) -> Startup:
     """Acquire local identity ownership before any application resources exist."""
-    identity = LocalIdentity(data.security)
+    identity = LocalIdentity(data.security, diagnostics=diagnostics)
     try:
         identity.ready.result()  # Explicit blocking startup IO, before Qt exists.
         return _load_startup(
-            data, identity, engine_factory=engine_factory, observe_source=observe_source
+            data,
+            identity,
+            engine_factory=engine_factory,
+            observe_source=observe_source,
+            diagnostics=diagnostics,
         )
     except BaseException:
         identity.request_stop()
@@ -143,6 +149,7 @@ def _load_startup(
     *,
     engine_factory: EngineFactory,
     observe_source: Callable[[Future[None]], None],
+    diagnostics: RuntimeDiagnostics | None,
 ) -> Startup:
     """Blocking startup IO only, called before QApplication is constructed.
 
@@ -370,11 +377,15 @@ def _load_startup(
             return actor.revision
 
     history = ProductionHistory(
-        data.history, on_failure=history_error, alarm_access=alarm_access
+        data.history,
+        on_failure=history_error,
+        alarm_access=alarm_access,
+        diagnostics=diagnostics,
     )
     if editor is None or editor.camera_sources is None:
         application = unconfigured_application(
             history,
+            diagnostics=diagnostics,
             identity=identity,
             initial_reporting=communication.reporting,
             initial_alarm=communication.alarm,
@@ -389,6 +400,7 @@ def _load_startup(
     else:
         application, frames = create_production_application(
             editor,
+            diagnostics=diagnostics,
             engine_factory=engine_factory,
             observe_source=observe_source,
             reporting_editable=True,
@@ -398,6 +410,13 @@ def _load_startup(
             initial_candidate=prepared,
             initial_reporting=communication.reporting,
             initial_alarm=communication.alarm,
+        )
+    if diagnostics:
+        for issue in issues:
+            diagnostics.record("startup.issue", code=issue.key, blocking=issue.blocking)
+        diagnostics.record(
+            "startup.loaded",
+            recipe_id=prepared.configuration.recipe_id if prepared else None,
         )
     return Startup(
         data,

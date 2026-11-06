@@ -33,6 +33,7 @@ from capsule_vision.configuration.preferences import (
     ApplicationPreferences,
     save_preferences,
 )
+from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.inspection import CameraId
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -102,12 +103,16 @@ def authenticated_startup(
     engine_factory: EngineFactory = real_engine,
     observe_source: Callable[[Future[None]], None] = lambda _: None,
     select_basler_batch: bool = True,
+    diagnostics: RuntimeDiagnostics | None = None,
 ) -> Startup:
     """Run existing privileged workflows against a real disposable account."""
     if not data.security.exists():
         initialize_administrator(data.security, "TestAdmin", TEST_PASSWORD)
     startup = load_startup(
-        data, engine_factory=engine_factory, observe_source=observe_source
+        data,
+        engine_factory=engine_factory,
+        observe_source=observe_source,
+        diagnostics=diagnostics,
     )
     try:
         owner = startup.application.identity

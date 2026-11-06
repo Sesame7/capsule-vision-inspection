@@ -119,6 +119,54 @@ in Application editing, with independent Machine/Source outcomes. Request tokens
 current selection and closing state guard late results. Close drains setup/import
 cleanup and the independent label/Preview work before releasing presentation.
 
+## Runtime diagnostics
+
+The normal launcher accepts `--diagnostics standard` or `--diagnostics detailed`
+for one process lifetime. Omitting the option creates no diagnostic thread,
+directory or file. Standard records startup and Close, Recipe preparation,
+Start/warm-up, Run activation, Stop and faults. It also records acquisition and
+inspection failures, eligible four-cycle groups and reporting outcomes, alarm
+monitor outages/recovery and History, Audit or PNG persistence problems.
+Detailed adds frame admission, host retrieval and camera timing, per-Cycle
+and per-camera inspection stages, group membership, counter reads, write/ACK
+timings and successful PNG publication.
+
+Owners hand small scalar observations to one non-daemon writer with 2,048
+waiting slots. The writer serializes UTF-8 JSON Lines under entry-relative
+`data/logs/` as `capsule-runtime-v1-<session_id>-<segment>.jsonl`.
+It rolls at 10 MiB and retains up to ten owned segments across
+launches. A directory lease protects concurrent writers. On normal exit, the
+launcher drains accepted observations and joins the writer after the application
+and Web owners settle. A full queue drops observations and produces a counted
+`diagnostics.loss` record when writing permits. A writer failure disables
+further publication for that launch and reports the exception type on standard
+error. Launch from a console to see this feedback if no file appears.
+
+### Field troubleshooting
+
+1. Start with Standard. Keep the segments for the incident before rotation
+   removes them. Each row carries the schema `capsule.runtime.v1`, UTC time
+   (`utc`), process monotonic time (`monotonic_ns`), event type, PID and a unique
+   launch `session_id`. Use the activation row to locate the Recipe, generation
+   and `run_id`. Pre-activation events can have a generation without a Run.
+2. For a timing investigation, reproduce with Detailed. Join frames using the
+   Run/generation, CycleId, configured CameraId and frame sequence. Occupancy,
+   traditional, ViMo and mapping times come from the terminal inspection
+   evidence. Durations ending in `_ms` are elapsed milliseconds. Owner stage
+   clocks ending in `_at_s` are monotonic seconds. The SDK device timestamp has
+   its own raw units. These clocks do not establish physical trigger time.
+3. For four-cycle delivery, follow the observed member IDs and the group's
+   first CycleId within that generation. Compare eligibility, retained PLC
+   counter, bitmap ACK, sequence ACK and commit uncertainty. Group timing ends
+   on the last distinct terminal arrival. The counter-read and write detail
+   uses the owner's original stage times and is published after settlement.
+   A null ACK time means the owner recorded no confirmed ACK for that stage.
+   A protocol ACK does not establish PLC scan consumption or ejection.
+4. Check for loss records and writer errors before interpreting gaps.
+   History, Audit Trail and published PNGs retain their existing evidence
+   roles. Diagnostic records contain no image pixels, model outputs, account
+   credentials or arbitrary exception text.
+
 ## Local identity ownership
 
 `application/identity.py` owns an anonymous-by-default immutable session and one

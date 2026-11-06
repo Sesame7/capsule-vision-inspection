@@ -15,6 +15,7 @@ fallback, automatic repair of saved geometry or fake inference is used for recov
 | `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
 | `data/security.sqlite3` | optional local accounts and versioned password verifiers; independent of History |
 | `data/audit.sqlite3` | append-only application audit records with their own schema and writer |
+| `data/logs/` | opt-in, process-lifetime [runtime diagnostic logs](architecture.md#runtime-diagnostics) controlled by the startup argument |
 | `data/security.lock` | application/offline-maintenance ownership lock; file presence does not mean it is held |
 | `data/models/<model_id>/model.json` | Model definition: `display_name`, `expected_sha256`, `module_id` |
 | `data/models/<model_id>/model.vimosln` | Managed Model artifact, verified by SHA-256 |

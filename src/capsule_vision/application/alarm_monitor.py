@@ -14,6 +14,7 @@ from capsule_vision.configuration.alarm_definitions import (
 )
 from capsule_vision.configuration.communication_preferences import AlarmPreferences
 from capsule_vision.configuration.errors import ConfigurationError
+from capsule_vision.diagnostics import RuntimeDiagnostics
 
 from .alarm_records import AlarmEvent
 
@@ -33,11 +34,13 @@ class AlarmMonitor:
         context: Callable[[], tuple[float, str | None, str | None]],
         *,
         interval: float = 1.0,
+        diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         if interval <= 0:
             raise ValueError("Alarm polling interval must be positive")
         self.definitions_path, self._offer, self._context = definitions, offer, context
         self._interval = interval
+        self._diagnostics = diagnostics
         self._condition = Condition()
         self._selection = AlarmPreferences()
         self._snapshot = AlarmSnapshot()
@@ -63,6 +66,12 @@ class AlarmMonitor:
                 except RuntimeError as exc:
                     self._thread = None
                     self._snapshot = AlarmSnapshot("unavailable", issue=str(exc))
+                    if self._diagnostics:
+                        self._diagnostics.record(
+                            "alarm_monitor.unavailable",
+                            stage="start",
+                            error_type=type(exc).__name__,
+                        )
             self._condition.notify_all()
 
     def snapshot(self) -> AlarmSnapshot:
@@ -82,9 +91,15 @@ class AlarmMonitor:
             thread.join(timeout)
         return thread is None or not thread.is_alive()
 
-    def _unavailable(self, cancel: Event, exc: Exception) -> None:
+    def _unavailable(self, cancel: Event, exc: Exception, stage: str) -> None:
         with self._condition:
             if not cancel.is_set():
+                if self._diagnostics and self._snapshot.state != "unavailable":
+                    self._diagnostics.record(
+                        "alarm_monitor.unavailable",
+                        stage=stage,
+                        error_type=type(exc).__name__,
+                    )
                 self._snapshot = replace(
                     self._snapshot, state="unavailable", issue=str(exc)
                 )
@@ -101,7 +116,7 @@ class AlarmMonitor:
             try:
                 definitions = load_alarm_definitions(self.definitions_path)
             except ConfigurationError as exc:
-                self._unavailable(cancel, exc)
+                self._unavailable(cancel, exc, "definitions")
                 cancel.wait()  # Invalid assets are reread only at a new activation.
                 continue
             self._poll(selection, cancel, definitions)
@@ -130,7 +145,7 @@ class AlarmMonitor:
                         selection.address, 1, area=FinsMemoryArea.W
                     )
                 except (FinsError, OSError) as exc:
-                    self._unavailable(cancel, exc)
+                    self._unavailable(cancel, exc, "plc_read")
                     gap = True
                     if client is not None:
                         client.close()
@@ -167,6 +182,10 @@ class AlarmMonitor:
                     with self._condition:
                         if cancel.is_set():
                             return
+                        if self._diagnostics and self._snapshot.state == "unavailable":
+                            self._diagnostics.record(
+                                "alarm_monitor.recovered", address=selection.address
+                            )
                         self._snapshot = AlarmSnapshot("online", active)
                         if events:
                             self._offer(events)
