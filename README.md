@@ -131,6 +131,29 @@ uv run --no-sync python app.py --help
 uv run --no-sync capsule-vision --help
 ```
 
+For a UI review on a **development checkout**, close `app.py` and run these
+commands from its repository root:
+
+```powershell
+uv run --no-sync python scripts/populate_development_data.py accounts
+uv run --no-sync python scripts/populate_development_data.py populate
+uv run --no-sync python app.py
+```
+
+`accounts` prompts locally for masked credentials. On an empty account store it
+sets up `DEV-Admin`. On an existing store, sign in with an enabled Administrator.
+It creates `DEV-Engineer` and `DEV-Operator` with temporary passwords that must
+be changed at first login. Existing accounts keep their credentials.
+
+`populate` records twelve fictitious commissioning shifts against the saved
+Recipe, verified model and channel layout in this checkout's `data/`. The first
+import selects `DEV-LOT-F`. Re-running keeps the original dates and any later
+Batch selection. Conflicting sample identities or incompatible History schemas
+stop the import. In History, choose **All dates** to page through the examples;
+use Administrator to review both Audit and Alarm History. `DEV-LOT-*` Batches
+and `DEV-Example-*` audit actors identify the samples. The usual History
+retention period applies.
+
 The normal repository quality gates are:
 
 ```powershell
