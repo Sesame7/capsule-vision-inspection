@@ -3,12 +3,13 @@
 import json
 import sqlite3
 import zlib
+from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Full, Queue
-from threading import Event, Lock, Thread
+from threading import Condition, Event, Thread
 from time import time
 from typing import Literal, cast
 
@@ -18,8 +19,9 @@ from capsule_vision.communication.reporting import (
 )
 from capsule_vision.inspection.production import ProductionInspectionResult
 
-from . import alarm_records, batch_records
+from . import alarm_records, archive_links, batch_records
 from .alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
+from .archive_links import PublishedImage
 from .batch_records import BatchSelection, ReportBatches
 from .models import ConfigurationIdentity
 
@@ -54,6 +56,7 @@ class HistoryCamera:
     judgment: str
     reasons: tuple[str, ...]
     unassigned_labels: tuple[str, ...]
+    image_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +109,9 @@ class HistorySnapshot:
     dropped: int
     failed: int
     error: str
+    images_linked: int = 0
+    image_links_lost: int = 0
+    image_link_error: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,10 +180,16 @@ class ProductionHistory:
         self.retention_batch = retention_batch
         self._capacity = max_pending
         # One reserved slot lets the lifecycle owner close a Run behind all admitted facts.
-        self._queue: Queue[HistorySubmission | _Read | _Operation | _Fact | None] = (
-            Queue(max_pending + 1)
+        self._queue: Queue[HistorySubmission | _Read | _Operation | _Fact] = Queue(
+            max_pending + 1
         )
-        self._lock = Lock()
+        self._lock = Condition()
+        # Metadata only. These slots cannot consume any Run/Cycle/Group capacity.
+        self._images: deque[PublishedImage] = deque()
+        self._images_linked = self._image_links_lost = 0
+        self._image_link_error = ""
+        self._has_images = False  # SQLite owner only; optional on existing databases.
+        self._next_image_retention = float("-inf")
         self._accepting, self._ready = True, False
         self._accepted = self._persisted = self._dropped = self._failed = 0
         self._error = ""
@@ -205,6 +217,7 @@ class ProductionHistory:
                     if self._queue.qsize() >= self._capacity:
                         raise Full
                     self._queue.put_nowait(HistorySubmission(context, result))
+                    self._lock.notify()
                 except Full:
                     self._record_loss("History capacity reached; record not admitted")
                 else:
@@ -213,6 +226,16 @@ class ProductionHistory:
             self._dropped += 1
             self._loss_run, self._loss_persisted = context.run_id, False
             return False
+
+    def offer_image(self, image: PublishedImage) -> None:
+        """Nonblocking handoff from the PNG writer after final publication."""
+        with self._lock:
+            if self._accepting and len(self._images) < self._capacity:
+                self._images.append(image)
+                self._lock.notify()
+            else:
+                self._image_links_lost += 1
+                self._image_link_error = "History image link queue is full or closed"
 
     def _command[T](
         self,
@@ -240,6 +263,7 @@ class ProductionHistory:
                 self._queue.put_nowait(
                     _Operation(execute, future.set_exception, read_only)
                 )
+                self._lock.notify()
             except Full:
                 future.set_exception(RuntimeError("Batch storage capacity reached"))
             except RuntimeError as exc:
@@ -361,6 +385,7 @@ class ProductionHistory:
         with self._lock:
             if self._accepting and self._queue.qsize() < self._capacity:
                 self._queue.put_nowait(item)
+                self._lock.notify()
             else:
                 self._loss_run, self._loss_persisted = item.run, False
                 self._dropped += 1
@@ -389,6 +414,7 @@ class ProductionHistory:
                 if self._queue.qsize() >= self._capacity:
                     raise Full
                 self._queue.put_nowait(_Read(query or HistoryQuery(), future))
+                self._lock.notify()
             except Full:
                 future.set_exception(
                     RuntimeError(
@@ -404,12 +430,7 @@ class ProductionHistory:
             if not self._accepting:
                 return
             self._accepting = False
-            try:
-                self._queue.put_nowait(
-                    None
-                )  # Wake an idle owner; full means work exists.
-            except Full:
-                pass
+            self._lock.notify()
 
     def join(self, timeout: float | None = None) -> bool:
         self._thread.join(timeout)
@@ -427,6 +448,9 @@ class ProductionHistory:
                 self._dropped,
                 self._failed,
                 self._error,
+                self._images_linked,
+                self._image_links_lost,
+                self._image_link_error,
             )
 
     def _failure(self, error: BaseException) -> None:
@@ -479,6 +503,12 @@ class ProductionHistory:
             }
             if columns:
                 self._alarm_translations = "translations" in columns
+            self._has_images = (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_images'"
+                ).fetchone()
+                is not None
+            )
             return connection
         except BaseException:
             connection.close()
@@ -556,8 +586,29 @@ class ProductionHistory:
 
         return True
 
+    def _image_failure(self, error: BaseException, *, lost: int = 0) -> None:
+        with self._lock:
+            self._image_links_lost += lost
+            self._image_link_error = f"{type(error).__name__}: {error}"[:500]
+
+    def _write_image(
+        self, connection: sqlite3.Connection, image: PublishedImage
+    ) -> None:
+        try:
+            with connection:
+                if not self._has_images:
+                    archive_links.create(connection)
+                archive_links.insert(connection, image)
+        except Exception as exc:
+            self._image_failure(exc, lost=1)
+        else:
+            self._has_images = True
+            with self._lock:
+                self._images_linked += 1
+
     def _retain(self, connection: sqlite3.Connection) -> None:
         expired = False
+        expired_cycles: list[tuple[str, str]] = []
         now = self.clock()
         cutoff = now - 30 * 86400
         if self._alarm_translations is not None and now >= self._next_alarm_retention:
@@ -576,19 +627,33 @@ class ProductionHistory:
                 with self._lock:
                     self._alarm_issue = str(exc)
         with connection:
-            for table, column, run_column in (
-                ("cycles", "completed_at", "run_id"),
+            for table, column, returning in (
+                ("cycles", "completed_at", "run_id,cycle_id"),
                 ("plc_groups", "observed", "run"),
             ):
                 removed = connection.execute(
                     f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE {column} < ? "
-                    f"ORDER BY {column},rowid LIMIT ?) RETURNING {run_column}",
+                    f"ORDER BY {column},rowid LIMIT ?) RETURNING {returning}",
                     (cutoff, self.retention_batch),
                 ).fetchall()
                 connection.executemany(
-                    "UPDATE runs SET detail_expired=1 WHERE uuid=?", set(removed)
+                    "UPDATE runs SET detail_expired=1 WHERE uuid=?",
+                    {(row[0],) for row in removed},
                 )
+                if table == "cycles":
+                    expired_cycles = removed
                 expired |= bool(removed)
+        if self._has_images and (expired_cycles or now >= self._next_image_retention):
+            self._next_image_retention = now + 60
+            try:
+                with connection:
+                    orphans = archive_links.expire(
+                        connection, expired_cycles, cutoff, self.retention_batch
+                    )
+                if orphans == self.retention_batch:
+                    self._next_image_retention = now
+            except sqlite3.Error as exc:
+                self._image_failure(exc)
         if expired:
             row = connection.execute(
                 "SELECT uuid FROM batches WHERE selected=1 AND EXISTS "
@@ -650,7 +715,16 @@ class ProductionHistory:
                 [*args, query.limit + 1],
             ).fetchall(),
         )
-        records = tuple(self._decode(row) for row in rows[: query.limit])
+        visible = rows[: query.limit]
+        images: dict[tuple[int, str], Path] = {}
+        if self._has_images and visible:
+            try:
+                images = archive_links.for_page(
+                    connection, tuple(cast(int, row[0]) for row in visible)
+                )
+            except sqlite3.Error as exc:
+                self._image_failure(exc)
+        records = tuple(self._decode(row, images) for row in visible)
         return HistoryPageData(
             tuple(reversed(records)) if query.newer else records,
             tuple(batches),
@@ -658,7 +732,9 @@ class ProductionHistory:
         )
 
     @staticmethod
-    def _decode(row: tuple[object, ...]) -> HistoryRecord:
+    def _decode(
+        row: tuple[object, ...], images: dict[tuple[int, str], Path]
+    ) -> HistoryRecord:
         # Typed boundary for our versioned SQLite payload; corrupt data fails the
         # query instead of becoming fabricated judgments or affecting Production.
         detail: object = json.loads(zlib.decompress(cast(bytes, row[12])))
@@ -680,9 +756,15 @@ class ProductionHistory:
             )
             for r in (_items(v) for v in _items(payload[0]))
         )
+        record_id = int(cast(int, row[0]))
         cameras = tuple(
             HistoryCamera(
-                str(r[0]), str(r[1]), str(r[2]), _strings(r[3]), _strings(r[4])
+                str(r[0]),
+                str(r[1]),
+                str(r[2]),
+                _strings(r[3]),
+                _strings(r[4]),
+                images.get((record_id, str(r[0]))),
             )
             for r in (_items(v) for v in _items(payload[1]))
         )
@@ -695,7 +777,7 @@ class ProductionHistory:
             recipe_name,
         )
         return HistoryRecord(
-            int(cast(int, row[0])),
+            record_id,
             context,
             int(cast(str, row[5])),
             str(row[9]),
@@ -709,7 +791,9 @@ class ProductionHistory:
 
     def _run(self) -> None:
         connection: sqlite3.Connection | None = None
-        item: HistorySubmission | _Read | _Operation | _Fact | None = None
+        item: HistorySubmission | _Read | _Operation | _Fact | PublishedImage | None = (
+            None
+        )
         try:
             connection = self._open()
             self._retain(connection)
@@ -718,12 +802,22 @@ class ProductionHistory:
                 self._ready = True
             self.initial_selection.set_result(selection)
             while True:
-                try:
-                    item = self._queue.get(
-                        timeout=60
-                    )  # Idle retention, interruptible by Stop.
-                except Empty:
-                    item = None
+                with self._lock:
+                    self._lock.wait_for(
+                        lambda: (
+                            not self._queue.empty()
+                            or bool(self._images)
+                            or not self._accepting
+                        ),
+                        timeout=60,
+                    )
+                    if not self._queue.empty():
+                        item = self._queue.get_nowait()
+                    else:
+                        item = self._images.popleft() if self._images else None
+                if isinstance(item, PublishedImage):
+                    self._write_image(connection, item)
+                    continue
                 try:
                     self._retain(connection)
                     with self._lock:
@@ -774,7 +868,7 @@ class ProductionHistory:
                         self._failure(exc)
                         item.future.set_exception(exc)
                 with self._lock:
-                    if not self._accepting and self._queue.empty():
+                    if not self._accepting and self._queue.empty() and not self._images:
                         break
         except BaseException as exc:
             self._failure(exc)
@@ -796,6 +890,10 @@ class ProductionHistory:
         finally:
             with self._lock:
                 self._accepting = False
+                if self._images:
+                    self._image_links_lost += len(self._images)
+                    self._image_link_error = self._error or "History stopped"
+                    self._images.clear()
             while True:
                 try:
                     pending = self._queue.get_nowait()
@@ -808,7 +906,7 @@ class ProductionHistory:
                     pending.future.set_exception(
                         RuntimeError(self._error or "History stopped")
                     )
-                elif isinstance(pending, _Operation):
+                else:
                     pending.failed(RuntimeError(self._error or "History stopped"))
             if connection is not None:
                 try:

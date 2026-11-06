@@ -172,13 +172,14 @@ for an explicitly approved change. The product requirements are:
 - Associate the four observed Run/Cycle identities with their eligible physical group regardless of History arrival order. Retain group timing and final outcomes for the same 30-day detail window.
 - Persist enough association to distinguish the production Batch, Run, PLC group and Cycle identities defined above; PLC counter text alone is not a group key.
 - Do not convert a lack of verified physical association into a fictitious group. Where a reporting mode does not establish that association, keep Cycle records without an invented physical-group identity.
-- Existing inspection History records/old database format need **no migration compatibility**. The owner will manually clear affected old History data during an approved upgrade. This decision does not cover account storage or authorize cleanup now. The application must **not** silently delete the user's database or other assets during normal startup.
+- PRODUCT-0 requires no general migration of unsupported older inspection History formats. Any manual clearing of affected data belongs to a separately approved upgrade. This does not cover account storage or authorize cleanup now. The application must **not** silently delete the user's database or other assets during normal startup.
 - **Keep the current 30-day History retention**; no new retention controls in PRODUCT-0.
 
 ### 6.2 Archived image lookup
 
-- Archive images independently of History. Time, camera, Cycle, and—if needed—an adjusted image naming convention may be used to support manual identification.
-- A simple **Open photo / Open containing folder** action may make a best-effort match. No image index, mapping database, guaranteed match, or image-management system is required. Ambiguous matches must not silently open an unrelated photo; missing/deleted files can simply be reported.
+- Archive each eligible Basler image independently. New filenames identify its Run, Cycle, camera, result code and observation time. Preserve existing PNGs.
+- For a durable Run, record the actual path after successful publication, keyed by Run/Cycle/Camera for the Cycle-detail retention period. A missing link does not invalidate the image or the inspection.
+- **Open Image** opens the PNG linked to the selected Cycle and camera with one click. Report missing files. Never guess from filenames, backfill old records or delete PNGs with History detail. Existing supported History databases remain readable without a reset for this addition. See [image archiving](architecture.md#image-archiving).
 
 ### 6.3 Manual production export
 
@@ -249,9 +250,8 @@ above or authorize choosing a convenient implementation silently.
   how existing disabled Recipes will be handled before enforcing the target
   every-exposure inspection policy; this document does not reinterpret their
   saved settings or authorize an implicit enablement change.
-- **Feature acceptance details:** settle deterministic best-effort photo
-  matching and representative readable minima/geometry criteria for each changed
-  table in their respective scoped Phases.
+- **Feature acceptance details:** settle representative readable minima/geometry
+  criteria for each changed table in its scoped Phase.
 
 The next code-level audit should trace existing owners and alternate entry paths
 for session switching, Start/connection/Close, reporting attribution and counters,

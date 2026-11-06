@@ -57,6 +57,7 @@ from .models import (
     ProductionApplicationSnapshot,
 )
 from .production_session import SourceRuntimeSession
+from .session import RuntimeSession
 
 
 class SourceProductionApplication(ProductionApplication):
@@ -134,6 +135,12 @@ class SourceProductionApplication(ProductionApplication):
 
     def _run_reporting(self) -> ReportingSettings | None:
         return self._session_reporting
+
+    def _bind_run(self, session: RuntimeSession, run_id: str, durable: bool) -> None:
+        if isinstance(session, SourceRuntimeSession) and session.archive is not None:
+            session.archive.bind_run(
+                run_id, self.history.offer_image if durable and self.history else None
+            )
 
     def observe_pilot_batch(self, batch: CompletedReportingBatch) -> None:
         """Trusted reporting completion, independent of Qt, History and PLC ACK."""

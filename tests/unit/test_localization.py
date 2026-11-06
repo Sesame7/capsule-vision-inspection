@@ -155,6 +155,11 @@ OPTIONAL_UI_KEYS = {
     "audit_unresolved",
     "audit_uncertain",
     "history_group",
+    "history_open_image",
+    "history_no_image",
+    "history_image_missing",
+    "history_image_open_failed",
+    "history_image_link_warning",
     "report_export",
     "report_search",
     "previous_page",
@@ -1389,7 +1394,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 626
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 631
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta
 from math import ceil
+from pathlib import Path
 
 from PySide6.QtCore import (
     QDate,
@@ -17,10 +18,12 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QTimer,
+    QUrl,
     Slot,
 )
 from PySide6.QtGui import (
     QColor,
+    QDesktopServices,
     QFontMetrics,
     QFontMetricsF,
     QPainter,
@@ -68,7 +71,7 @@ from .future_delivery import FutureDelivery
 from .image_tools import image_icon
 from .permissions import permits
 from .report_dialog import ReportDialog
-from .style import Style, theme_colors
+from .style import Style, button_width, theme_colors
 
 
 class _ResultDelegate(QStyledItemDelegate):
@@ -324,7 +327,17 @@ class HistoryPage(QWidget):
         root.addWidget(self.channels)
         self.channel_detail = QPlainTextEdit()
         self.channel_detail.setReadOnly(True)
-        root.addWidget(self.channel_detail)
+        detail = QHBoxLayout()
+        detail.addWidget(self.channel_detail, 1)
+        self.image_button = QPushButton()
+        self.image_button.setMinimumHeight(Style.touch)
+        self.image_button.clicked.connect(self._open_image)
+        detail.addWidget(
+            self.image_button,
+            0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+        )
+        root.addLayout(detail)
         for table in (self.cycles, self.channels):
             for child in table.findChildren(
                 QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly
@@ -339,6 +352,7 @@ class HistoryPage(QWidget):
         self.older.clicked.connect(lambda: self._turn(False))
         self.cycles.itemSelectionChanged.connect(self._selected)
         self.channels.currentCellChanged.connect(self._channel_selected)
+        self.channels.itemSelectionChanged.connect(self._image_selection_changed)
         self.timer = QTimer(self)
         self.timer.setInterval(500)
         self.timer.timeout.connect(
@@ -660,6 +674,11 @@ class HistoryPage(QWidget):
             )
             + 4 * Style.small
         )
+        self.image_button.setFixedWidth(
+            button_width(
+                self.image_button, ("history_open_image",), languages=("zh", "en")
+            )
+        )
         action_width = 3 * width + self.export_button.width() + 4 * Style.small
         wrapped = self.workspace.width() < desired_row + action_width
         available = self.workspace.width() - (0 if wrapped else action_width)
@@ -804,6 +823,8 @@ class HistoryPage(QWidget):
         self.batch.setAccessibleName(text("history_batch", language))
         self.result.setAccessibleName(text("history_result", language))
         self.export_button.setText(text("report_export", language))
+        self.image_button.setText(text("history_open_image", language))
+        self.image_button.setAccessibleName(self.image_button.text())
         self.identity_changed()
         if self.report_dialog is not None:
             self.report_dialog.set_language(language)
@@ -1153,13 +1174,14 @@ class HistoryPage(QWidget):
             self._detail_record_id = None
             self.channels.setRowCount(0)
             self.channel_detail.clear()
-            self._size_detail()
+            self._channel_selected()
             return
         record = self._data.records[index]
         old_item = self.channels.currentItem()
         old_channel: object = (
             old_item.data(Qt.ItemDataRole.UserRole) if old_item else None
         )
+        old_camera = old_item.text() if old_item and old_item.column() == 0 else None
         same_record = self._detail_record_id == record.record_id
         self._detail_record_id = record.record_id
         selected = (0, 1)
@@ -1168,7 +1190,8 @@ class HistoryPage(QWidget):
         self.channels.setRowCount(len(record.cameras))
         for row, camera in enumerate(record.cameras):
             item = QTableWidgetItem(camera.camera)
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            if same_record and old_camera == camera.camera:
+                selected = (row, 0)
             item.setToolTip(camera.camera)
             self.channels.setItem(row, 0, item)
             for channel in record.channels:
@@ -1206,6 +1229,51 @@ class HistoryPage(QWidget):
         self.channel_detail.setPlainText(
             self._channel_text(channel) if isinstance(channel, HistoryChannel) else ""
         )
+        self._image_selection_changed()
+        self._size_detail()
+
+    @Slot()
+    def _image_selection_changed(self) -> None:
+        path = self._selected_image()
+        self.image_button.setEnabled(path is not None)
+        description = (
+            str(path) if path is not None else text("history_no_image", self.language)
+        )
+        self.image_button.setToolTip(description)
+        self.image_button.setAccessibleDescription(description)
+
+    def _selected_image(self) -> Path | None:
+        cycle, camera = self.cycles.currentRow(), self.channels.currentRow()
+        if (
+            self.busy
+            or not self.cycles.selectedItems()
+            or not self.channels.selectedItems()
+            or not 0 <= cycle < len(self._data.records)
+        ):
+            return None
+        cameras = self._data.records[cycle].cameras
+        return cameras[camera].image_path if 0 <= camera < len(cameras) else None
+
+    @Slot()
+    def _open_image(self) -> None:
+        path = self._selected_image()
+        if path is None:
+            return
+        self._channel_selected()  # Clear any earlier open error; retain the channel evidence.
+        try:
+            if (
+                not path.is_absolute()
+                or path.suffix.lower() != ".png"
+                or not path.is_file()
+            ):
+                issue = "history_image_missing"
+            elif QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+                return
+            else:
+                issue = "history_image_open_failed"
+        except OSError:
+            issue = "history_image_open_failed"
+        self.channel_detail.appendPlainText(text(issue, self.language))
         self._size_detail()
 
     @Slot()
@@ -1216,7 +1284,8 @@ class HistoryPage(QWidget):
         )
         identity = self.application.identity if self.application else None
         lost, issue = identity.audit.observation() if identity else (0, "")
-        self.warning.setVisible(bool(warning or issue))
+        image_issue = observation.image_link_error if observation else ""
+        self.warning.setVisible(bool(warning or issue or image_issue))
         history_text = (
             text("history_warning", self.language).format(
                 lost=observation.dropped + observation.failed if observation else 0,
@@ -1230,6 +1299,11 @@ class HistoryPage(QWidget):
                 x
                 for x in (
                     history_text,
+                    text("history_image_link_warning", self.language).format(
+                        count=observation.image_links_lost
+                    )
+                    if image_issue and observation
+                    else "",
                     text("audit_warning", self.language).format(count=lost)
                     if issue
                     else "",
@@ -1238,7 +1312,11 @@ class HistoryPage(QWidget):
             )
         )
         self.warning.setToolTip(
-            "\n".join(x for x in (observation.error if observation else "", issue) if x)
+            "\n".join(
+                x
+                for x in (observation.error if observation else "", image_issue, issue)
+                if x
+            )
         )
         self.warning.setStyleSheet(f"color: {theme_colors(self).warning};")
 

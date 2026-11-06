@@ -1008,6 +1008,9 @@ class ProductionApplication:
     def _run_reporting(self) -> ReportingSettings | None:
         return None
 
+    def _bind_run(self, session: RuntimeSession, run_id: str, durable: bool) -> None:
+        """Bind session-owned evidence before opening Cycle admission."""
+
     def _close_resources(self) -> None:
         """Application-lifetime resources; called only by the lifecycle owner."""
         if self._export_thread is not None:
@@ -1105,6 +1108,7 @@ class ProductionApplication:
                             raise ApplicationStateError(
                                 "Startup stopped before activation"
                             )
+                        self._bind_run(session, run_id, durable_run is not None)
                         self._active = prepared
                         self._run_id = run_id
                         if record_unbatched and batch is None:

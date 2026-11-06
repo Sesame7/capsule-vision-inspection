@@ -652,7 +652,11 @@ the independent business/technical/judgment states and reason codes; NG and ERRO
 can coexist. List summaries count channel OK/NG/EMPTY, adding UNKNOWN and independent
 technical ERR counts when present. Cycle-level anomalies absent from those counts
 remain explicit; routine COMPLETE/SUCCESS is implicit in the presentation only.
-Query failures remain explicit. History has no image association or Web API.
+Query failures remain explicit. For each visible Cycle the same query request
+loads committed archive paths by Run/Cycle/Camera. Selecting a camera or one of
+its channels enables **Open Image** only when that camera has a link. One click
+opens the recorded PNG in the system viewer. History reports a missing file or
+a rejected desktop open. History has no Web API.
 
 Operators and higher roles can manually export any saved named Production Batch,
 including an ended Batch, from History. The picker pages through durable Batch
@@ -702,20 +706,29 @@ uses additional transient storage for one image, so this is not an RSS cap.
 Overflow drops archival work with scalar diagnostics; disk/encoding/path failures
 record a bounded last issue and continue subsequent images. Bridge observation
 shows an archive warning/detail without changing judgments, counters or PLC state.
-No completed-image history is retained. Stop/Close drain accepted writes after
+No completed pixels are retained in memory. Stop/Close drain accepted writes after
 runtime callbacks settle and wait for the actual writer exit on the application
 lifecycle thread. A blocked writer keeps shutdown pending; no timeout abandons it.
 
-The exact selected root receives `YYYY-MM-DD/<CameraId>/<code>_HHmmssSSS_<cycle-id>.png`.
+The selected root receives `YYYY-MM-DD/<CameraId>/<code>_HHmmssSSS_<CycleId>_<CameraId>_<RunId>.png`.
+Start binds the full RunId to the session archive before opening Cycle admission.
+If recording the Run was unavailable, PNGs still use its session RunId, without
+claiming a durable History association.
 Configured `CAM1`..`CAM6` names remain unchanged; filesystem-unsafe camera bytes
 are escaped without assigning a different camera identity. One local wall-clock
 observation timestamp captured at frame retention supplies both date and filename
 (it is not a claimed camera exposure time). PNG preserves all original pixels and
 dimensions, without overlays/crops. Same-directory `.part` write/fsync followed by
-atomic no-replace publication avoids completed-looking partial PNGs. Existing files
-get `_1`, `_2`, etc.; exhaustion at 999 collisions is an observable failure.
-There are no sidecars, indexes, retention rules or automatic deletion. Recording
-is best-effort, not guaranteed evidence delivery or storage-capacity management.
+atomic no-replace publication avoids completed-looking partial PNGs. On collision
+the new file gets `_1`, `_2`, etc.; exhaustion at 999 collisions is an observable failure.
+
+Only after publication does the writer offer the absolute final path, including
+any suffix, to the History owner for a durable Run. Its separate bounded queue
+(128 paths by default) yields to Run, Cycle, group and query work. A link can
+arrive before or after its Cycle. A dropped or failed link is visible in History
+without invalidating the PNG or marking production totals uncertain. Close drains
+accepted paths. Cycle retention also drops its links; unpaired paths expire
+incrementally after 30 days. History never backfills links or deletes image files.
 
 ## Display and Web
 

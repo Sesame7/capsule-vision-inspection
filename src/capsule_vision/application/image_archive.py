@@ -21,6 +21,8 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 
+from .archive_links import PublishedImage
+
 
 def camera_archive_status(camera: CameraInspectionResult) -> int | None:
     """NG, then ERROR; otherwise distinguish occupied OK images from all EMPTY."""
@@ -74,14 +76,18 @@ class ArchiveImage:
     frame: Frame
     observed_at: datetime
     status: int
+    run_id: str | None = None
 
 
-def write_png(root: Path, item: ArchiveImage) -> None:
+def write_png(root: Path, item: ArchiveImage) -> Path:
     """Encode off the critical path, publish atomically without replacing evidence."""
     stamp = item.observed_at
-    directory = root / stamp.strftime("%Y-%m-%d") / _component(item.frame.id.camera_id)
+    camera = _component(item.frame.id.camera_id)
+    directory = root.absolute() / stamp.strftime("%Y-%m-%d") / camera
     directory.mkdir(parents=True, exist_ok=True)
-    name = f"{item.status}_{stamp:%H%M%S}{stamp.microsecond // 1000:03d}_{item.frame.id.cycle_id}"
+    name = f"{item.status}_{stamp:%H%M%S}{stamp.microsecond // 1000:03d}_{item.frame.id.cycle_id}_{camera}"
+    if item.run_id is not None:
+        name += "_" + _component(item.run_id)
     ok, encoded = cv2.imencode(".png", item.frame.image)
     if not ok:
         raise OSError("PNG encoding failed")
@@ -105,7 +111,7 @@ def write_png(root: Path, item: ArchiveImage) -> None:
                     os.link(
                         temporary, final
                     )  # Same-directory atomic no-replace publication.
-                break
+                return final
             except FileExistsError:
                 continue
         else:
@@ -151,7 +157,7 @@ class ImageArchive:
         max_bytes: int = 128 * 1024 * 1024,
         max_cycles: int = 8,
         max_frame_bytes: int = 32 * 1024 * 1024,
-        writer: Callable[[Path, ArchiveImage], None] = write_png,
+        writer: Callable[[Path, ArchiveImage], Path] = write_png,
         now: Callable[[], datetime] = lambda: datetime.now().astimezone(),
     ) -> None:
         if min(max_pending, max_bytes, max_cycles, max_frame_bytes) < 1:
@@ -167,6 +173,8 @@ class ImageArchive:
         self._max_cycles, self._max_frame_bytes = max_cycles, max_frame_bytes
         self._writer, self._now = writer, now
         self._condition = Condition()
+        self._run_id: str | None = None
+        self._published: Callable[[PublishedImage], None] | None = None
         self._cycles: dict[CycleId, dict[CameraId, tuple[Frame, datetime]]] = {}
         self._queue: deque[ArchiveImage] = deque()
         self._bytes = self._active = self._written = self._dropped = self._failed = 0
@@ -182,6 +190,15 @@ class ImageArchive:
 
     def start(self) -> None:
         self._thread.start()
+
+    def bind_run(
+        self, run_id: str, published: Callable[[PublishedImage], None] | None
+    ) -> None:
+        """Bind once at successful activation, before the first Cycle can enter."""
+        with self._condition:
+            if self._run_id is not None:
+                raise RuntimeError("Archive already bound to a Run")
+            self._run_id, self._published = run_id, published
 
     def _drop(self, message: str) -> None:
         self._dropped += 1
@@ -255,7 +272,9 @@ class ImageArchive:
                     if len(self._queue) + self._active < self._max_pending:
                         assert status is not None
                         self._queue.append(
-                            ArchiveImage(self.generation, frame, stamp, status)
+                            ArchiveImage(
+                                self.generation, frame, stamp, status, self._run_id
+                            )
                         )
                         continue
                     self._drop("Archive write queue capacity exceeded")
@@ -298,7 +317,7 @@ class ImageArchive:
                 item = self._queue.popleft()
                 self._active = 1
             try:
-                self._writer(Path(self.settings.root_directory), item)
+                path = self._writer(Path(self.settings.root_directory), item)
             except Exception as exc:
                 with self._condition:
                     self._failed += 1
@@ -306,6 +325,22 @@ class ImageArchive:
             else:
                 with self._condition:
                     self._written += 1
+                if self._published is not None and item.run_id is not None:
+                    try:
+                        self._published(
+                            PublishedImage(
+                                item.run_id,
+                                item.frame.id.cycle_id,
+                                item.frame.id.camera_id,
+                                path,
+                                item.observed_at.timestamp(),
+                            )
+                        )
+                    except Exception as exc:
+                        with self._condition:
+                            self._issue = (
+                                f"PNG saved; History link handoff failed: {exc}"[:500]
+                            )
             finally:
                 with self._condition:
                     self._active = 0

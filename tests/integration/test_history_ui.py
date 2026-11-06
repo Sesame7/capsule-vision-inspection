@@ -12,8 +12,8 @@ from time import time
 from uuid import uuid4
 
 import pytest
-from PySide6.QtCore import QDate, QLocale, QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPalette, QPixmap
+from PySide6.QtCore import QDate, QLocale, QPoint, QRect, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPalette, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -35,6 +35,7 @@ from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.startup import saved_data
 
 from capsule_vision.application import ConfigurationIdentity
+from capsule_vision.application.archive_links import PublishedImage
 from capsule_vision.application.history import (
     HistoryChannel,
     HistoryContext,
@@ -83,6 +84,84 @@ def cycle_record(page: HistoryPage, row: int = 0) -> HistoryRecord:
     record = item.data(Qt.ItemDataRole.UserRole)
     assert isinstance(record, HistoryRecord)
     return record
+
+
+def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    history = ProductionHistory(tmp_path / "history.sqlite3")
+    ctx = HistoryContext(
+        time(), "segment", None, uuid4().hex, ConfigurationIdentity("r", "m", "c" * 64)
+    )
+    page = HistoryPage(history)
+    photo = tmp_path / "归档 图片" / "saved_1.png"
+    photo.parent.mkdir()
+    pixels = QImage(4, 3, QImage.Format.Format_RGB32)
+    pixels.fill(Qt.GlobalColor.green)
+    assert pixels.save(str(photo))
+    target = QUrl.fromLocalFile(str(photo))
+    opened: list[QUrl] = []
+
+    def open_url(url: QUrl) -> bool:
+        opened.append(url)
+        return len(opened) == 1
+
+    monkeypatch.setattr(QDesktopServices, "openUrl", open_url)
+    try:
+        history.start_run(None, ctx.run_id, ctx.active, None).result(WAIT)
+        assert history.offer(ctx, mixed_result())
+        assert history.offer(ctx, mixed_result(2))
+        page.resize(1080, 900)
+        page.show()
+        page.activate()
+        until(lambda: not page.busy)
+        button = page.image_button
+        assert button.text() == button.accessibleName() == "打开图片"
+        assert button.menu() is None
+        assert page.cycles.columnCount() == 6 and not button.isEnabled()
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        assert not opened
+        history.offer_image(
+            PublishedImage(ctx.run_id, 1, "CAM2", photo, ctx.completed_at)
+        )
+        until(lambda: history.snapshot().images_linked == 1)
+        page.refresh()
+        until(lambda: not page.busy)
+        page.cycles.selectRow(1)
+        assert cycle_record(page, 1).cycle_id == 1 and not button.isEnabled()
+        page.channels.setCurrentCell(
+            1, 0
+        )  # Camera name as well as any of its channel cells.
+        assert button.isEnabled() and button.toolTip() == str(photo)
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        assert opened == [target]
+        page.set_language("en")
+        assert button.text() == button.accessibleName() == "Open Image"
+        page.channels.setCurrentCell(1, 3)
+        button.setFocus()
+        QTest.keyClick(button, Qt.Key.Key_Space)  # Desktop handler refuses this open.
+        assert opened == [target, target]
+        assert (
+            text("history_image_open_failed", "en") in page.channel_detail.toPlainText()
+        )
+        photo.rename(photo.with_name("moved.png"))
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        assert (
+            opened == [target, target]
+            and text("history_image_missing", "en") in page.channel_detail.toPlainText()
+        )
+        page.channels.setCurrentCell(0, 2)
+        assert not button.isEnabled()
+        page.cycles.selectRow(0)
+        page.channels.setCurrentCell(1, 3)
+        assert not button.isEnabled()
+        QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+        assert opened == [target, target]
+    finally:
+        page.dispose()
+        page.close()
+        history.request_stop()
+        assert history.join(WAIT)
 
 
 def test_history_filters_pagination_selection_and_presentation(

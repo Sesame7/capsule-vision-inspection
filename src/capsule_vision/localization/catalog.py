@@ -376,6 +376,23 @@ STRINGS: dict[str, tuple[str, str]] = {
     "history_cycle_disabled": ("周期 DISABLED", "Cycle DISABLED"),
     "history_cycle_unknown": ("周期 UNKNOWN", "Cycle UNKNOWN"),
     "history_select_channel": ("选择通道查看详情", "Select a channel for details"),
+    "history_open_image": ("打开图片", "Open Image"),
+    "history_no_image": (
+        "所选相机没有已关联的图像",
+        "No linked image for the selected camera",
+    ),
+    "history_image_missing": (
+        "找不到已关联的图像，文件可能已移动或删除。",
+        "Linked image not found. It may have been moved or deleted.",
+    ),
+    "history_image_open_failed": (
+        "无法打开已关联的图片。",
+        "Could not open the linked image.",
+    ),
+    "history_image_link_warning": (
+        "归档图像关联异常 · 未保存的关联：{count}",
+        "Archive image link warning · links not saved: {count}",
+    ),
     "history_recipe_name_missing": (
         "未记录配方名称；显示配方 ID",
         "Recipe name not recorded; showing Recipe ID",

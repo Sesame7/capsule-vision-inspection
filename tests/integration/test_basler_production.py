@@ -52,6 +52,7 @@ from capsule_vision.application.basler_connection import (
     SourceConnectionCommands,
 )
 from capsule_vision.application.basler_control import BaslerControlSnapshot
+from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.image_archive import (
     ArchiveImage,
@@ -152,16 +153,27 @@ def test_normal_folder_configuration_cycles_and_six_vision_positions(
         delivery.detach()
 
 
-@pytest.mark.parametrize("save_empty", [False, True])
-@pytest.mark.parametrize("camera_count", [5, 6])
+@pytest.mark.parametrize(
+    "save_empty,camera_count,durable",
+    [
+        (False, 5, True),
+        (False, 6, True),
+        (True, 5, True),
+        (True, 6, True),
+        (True, 5, False),
+    ],
+)
 def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
     qapp: QApplication,
     tmp_path: Path,
     passive: PassiveBackend,
     save_empty: bool,
     camera_count: int,
+    durable: bool,
 ) -> None:
     data = saved_data(tmp_path, camera_count=camera_count)
+    if not durable:
+        data.history.write_bytes(b"unavailable fixture")
     passive.serials = SERIALS[:camera_count]
     save_basler(data.sources)
     recipe_file = data.recipes / "local.json"
@@ -189,6 +201,8 @@ def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
         app.connect_source()
         app.start().result(WAIT)
         assert app.snapshot().batch_id is None
+        run = app.snapshot().run_id
+        assert run is not None
         assert startup.editor is not None
         startup.editor.draft.image_archive.save_empty = not save_empty
         passive.expose(1, tuple(i for i in (4, 2, 5, 1, 3, 0) if i < camera_count))
@@ -219,8 +233,29 @@ def test_empty_archiving_uses_active_recipe_and_original_basler_frame(
         assert observation.pending == observation.retained_bytes == 0
         files = sorted(root.rglob("*.png"))
         assert len(files) == (camera_count if save_empty else 0)
+        history = app.history
+        assert history is not None
+        if durable:
+            until(lambda: history.snapshot().images_linked == len(files))
+            (record,) = history.query().result(WAIT).records
+            assert record.context.run_id == run
+            assert {
+                c.camera: c.image_path
+                for c in record.cameras
+                if c.image_path is not None
+            } == {file.parent.name: file for file in files}
+        else:
+            assert app.snapshot().unbatched_run_uncertain and history.snapshot().error
+            assert (
+                history.snapshot().images_linked
+                == history.snapshot().image_links_lost
+                == 0
+            )
+            assert data.history.read_bytes() == b"unavailable fixture"
         for path in files:
-            assert path.name.startswith("3_") and path.name.endswith("_1.png")
+            assert path.name.startswith("3_") and path.name.endswith(
+                f"_1_{path.parent.name}_{run}.png"
+            )
             index = int(path.parent.name.removeprefix("CAM")) - 1
             decoded = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
             np.testing.assert_array_equal(
@@ -314,14 +349,14 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
     owners: list[int] = []
     requests: list[ArchiveImage] = []
 
-    def writer(directory: Path, item: ArchiveImage) -> None:
+    def writer(directory: Path, item: ArchiveImage) -> Path:
         owners.append(get_ident())
         requests.append(item)
         entered.set()
         assert release.wait(WAIT)
         if disk_failure:
             raise OSError("Simulated full disk")
-        write_png(directory, item)
+        return write_png(directory, item)
 
     def archiver(
         settings: ImageArchiveSettings, generation: int, cameras: tuple[CameraId, ...]
@@ -436,6 +471,18 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
             release.set()
             app.close().result(WAIT)
             assert app.join(WAIT)
+
+    # Stop/Close drain the actual PNG writer before the History owner closes.
+    reopened = ProductionHistory(data.history)
+    try:
+        (saved,) = reopened.query().result(WAIT).records
+        assert all(item.run_id == saved.context.run_id for item in requests)
+        assert {
+            c.camera: c.image_path for c in saved.cameras if c.image_path is not None
+        } == {file.parent.name: file for file in root.rglob("*.png")}
+    finally:
+        reopened.request_stop()
+        assert reopened.join(WAIT)
 
 
 class Engine:

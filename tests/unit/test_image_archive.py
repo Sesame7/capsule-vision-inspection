@@ -13,6 +13,7 @@ import pytest
 from tests.support.application import production
 from tests.support.business import channel
 
+from capsule_vision.application.archive_links import PublishedImage
 from capsule_vision.application.image_archive import (
     ArchiveImage,
     ImageArchive,
@@ -38,6 +39,7 @@ PRESENT, EMPTY, UNCERTAIN = (
     OccupancyState.UNKNOWN,
 )
 STAMP = datetime(2026, 10, 17, 23, 59, 59, 123456).astimezone()
+RUN = "bbd4acd7f3d8483f88311a2ab0d9c0c9"
 
 
 def inspected() -> CameraInspectionResult:
@@ -147,6 +149,8 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
         now=now,
     )
     frames = tuple(pixels(camera) for camera in result.cameras)
+    published: list[PublishedImage] = []
+    archive.bind_run(RUN, published.append)
     archive.start()
     assert archive.begin(result.cycle_id)
     for frame in reversed(frames):
@@ -160,9 +164,17 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
     expected = {camera: code for camera, code in expected.items() if enabled[code]}
     files = sorted(tmp_path.rglob("*.png"))
     assert len(files) == len(expected) and count == [6]
+    assert {link.path for link in published} == set(files)
+    assert all(
+        link.run_id == RUN
+        and link.cycle_id == 1
+        and link.camera_id == link.path.parent.name
+        and link.observed_at == STAMP.timestamp()
+        for link in published
+    )
     for file in files:
         camera = file.parent.name
-        assert file.name == f"{expected[camera]}_235959123_1.png"
+        assert file.name == f"{expected[camera]}_235959123_1_{camera}_{RUN}.png"
         assert file.parent.parent.name == "2026-10-17"
         original = frames[result.layout.camera_ids.index(camera)].image
         loaded = cv2.imdecode(np.fromfile(file, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -271,15 +283,13 @@ def test_atomic_collision_publication_and_encoding_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     frame = pixels(inspected())
-    item = ArchiveImage(2, frame, STAMP, 0)
-    write_png(tmp_path, item)
-    original = next(tmp_path.rglob("*.png"))
+    item = ArchiveImage(2, frame, STAMP, 0, RUN)
+    original = write_png(tmp_path, item)
     before = original.read_bytes()
-    write_png(tmp_path, item)
-    assert sorted(p.name for p in tmp_path.rglob("*.png")) == [
-        "0_235959123_1.png",
-        "0_235959123_1_1.png",
-    ]
+    collision = write_png(tmp_path, item)
+    assert original.name == f"0_235959123_1_CAM1_{RUN}.png"
+    assert collision == original.with_stem(original.stem + "_1")
+    assert {original, collision} == set(tmp_path.rglob("*.png"))
     assert original.read_bytes() == before and not list(tmp_path.rglob("*.part"))
 
     def failed_encode(*_args: object) -> tuple[bool, np.typing.NDArray[np.uint8]]:
@@ -291,22 +301,73 @@ def test_atomic_collision_publication_and_encoding_failure(
     assert len(list(tmp_path.rglob("*.png"))) == 2
 
 
+def test_only_successful_camera_links_its_actual_collision_path(tmp_path: Path) -> None:
+    result = production()
+    result = replace(
+        result,
+        cameras=tuple(
+            replace(
+                c,
+                channels=tuple(
+                    channel(row, PRESENT, SUCCESS, OK) for row in c.channels
+                ),
+            )
+            for c in result.cameras
+        ),
+    )
+    first, second = (pixels(c) for c in result.cameras[:2])
+    old = write_png(tmp_path, ArchiveImage(1, second, STAMP, 0, RUN))
+    old_bytes = old.read_bytes()
+    links: list[PublishedImage] = []
+
+    def writer(root: Path, item: ArchiveImage) -> Path:
+        if item.frame.id == first.id:
+            raise OSError("camera file not writable")
+        return write_png(root, item)
+
+    archive = ImageArchive(
+        ImageArchiveSettings(str(tmp_path), True),
+        1,
+        result.layout.camera_ids,
+        writer=writer,
+        now=lambda: STAMP,
+    )
+    archive.bind_run(RUN, links.append)
+    archive.start()
+    try:
+        assert archive.begin(result.cycle_id)
+        archive.retain(first)
+        archive.retain(second)
+        archive.complete(result.cycle_id, result)
+    finally:
+        archive.request_stop()
+        assert archive.join(3)
+    assert archive.snapshot().written == archive.snapshot().failed == 1
+    (linked,) = links
+    assert linked.camera_id == second.id.camera_id and linked.path == old.with_stem(
+        old.stem + "_1"
+    )
+    assert linked.path.is_file() and old.read_bytes() == old_bytes
+
+
 def test_write_failure_no_completed_partial_and_next_task_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def failed(*_args: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(os, "fsync", failed)
-    with pytest.raises(OSError, match="disk full"):
-        write_png(tmp_path, ArchiveImage(1, pixels(inspected()), STAMP, 1))
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fsync", failed)
+        with pytest.raises(OSError, match="disk full"):
+            write_png(tmp_path, ArchiveImage(1, pixels(inspected()), STAMP, 1))
     assert not list(tmp_path.rglob("*.png")) and not list(tmp_path.rglob("*.part"))
     calls: list[int] = []
 
-    def writer(_root: Path, item: ArchiveImage) -> None:
+    def writer(root: Path, item: ArchiveImage) -> Path:
         calls.append(item.frame.id.cycle_id)
         if len(calls) == 1:
             raise PermissionError("not writable")
+        return write_png(root, item)
 
     archive = ImageArchive(
         ImageArchiveSettings(str(tmp_path), True),
@@ -314,6 +375,8 @@ def test_write_failure_no_completed_partial_and_next_task_continues(
         production().layout.camera_ids,
         writer=writer,
     )
+    published: list[PublishedImage] = []
+    archive.bind_run(RUN, published.append)
     archive.start()
     for cycle in (1, 2):
         result = production(cycle)
@@ -326,6 +389,7 @@ def test_write_failure_no_completed_partial_and_next_task_continues(
     assert archive.join(3)
     snapshot = archive.snapshot()
     assert calls == [1, 2] and snapshot.failed == snapshot.written == 1
+    assert [link.cycle_id for link in published] == [2] and published[0].path.is_file()
     assert "PermissionError" in snapshot.last_issue and snapshot.retained_bytes == 0
 
 
@@ -333,10 +397,11 @@ def test_bounded_memory_queue_and_actual_writer_termination(tmp_path: Path) -> N
     entered, release = Event(), Event()
     owners: list[int] = []
 
-    def blocked(_root: Path, _item: ArchiveImage) -> None:
+    def blocked(root: Path, item: ArchiveImage) -> Path:
         owners.append(get_ident())
         entered.set()
         assert release.wait(3)
+        return write_png(root, item)
 
     result, camera = production(), inspected()
     result = replace(result, cameras=(camera, *result.cameras[1:]))
@@ -351,6 +416,8 @@ def test_bounded_memory_queue_and_actual_writer_termination(tmp_path: Path) -> N
         max_pending=1,
         max_cycles=1,
     )
+    published: list[PublishedImage] = []
+    archive.bind_run(RUN, published.append)
     archive.start()
     try:
         assert archive.begin(result.cycle_id)
@@ -388,12 +455,16 @@ def test_bounded_memory_queue_and_actual_writer_termination(tmp_path: Path) -> N
         )
         assert snapshot.dropped >= 3 and snapshot.last_issue
         archive.request_stop()
+        assert not published  # Neither queued nor dropped/cancelled frames have links.
         assert not archive.join(0) and archive.snapshot().alive
     finally:
         release.set()
         archive.request_stop()
         assert archive.join(3)
     assert owners == [owners[0]] and owners[0] != get_ident()
+    assert [image.cycle_id for image in published] == [1] and published[
+        0
+    ].path.is_file()
     assert archive.snapshot().retained_bytes == 0
     assert not any(t.name == archive.thread_name for t in threads())
 
