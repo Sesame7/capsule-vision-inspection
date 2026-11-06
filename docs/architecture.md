@@ -241,14 +241,21 @@ A new activation starts a fresh observation baseline.
 One nonblocking handoff carries all transitions from a word to the existing
 History SQLite owner. Its bounded queue retains the lifecycle slot for Run
 closure. An additive alarm table is created on the first event. Each row freezes
-the signal ID, both display labels, category, endpoint, station, word/bit,
+the signal ID, required Chinese and English labels, any configured translations,
+category, endpoint, station, word/bit,
 definition origin/version/digest and the selected Batch UUID and label when
 available. Actual Production FAULT entry and explicit fault reset use a
 separate application source and carry no PLC address. Storage loss is visible
 in Alarm History. Bounded retention removes alarm observations older than 30
 days and leaves Batch totals and the independent Audit Trail intact.
 
-All roles can see the PLC alarm status in the existing 44-pixel strip. Operator,
+Existing bilingual alarm tables can be reviewed immediately. The History owner
+adds one nullable translations column on the next alarm write. Earlier rows
+retain their labels and cursors. Changing the UI language selects from the
+labels captured with the observation, with English fallback. Reading History
+never consults the current equipment file.
+
+All roles can see the PLC alarm status in the existing 58-pixel strip. Operator,
 Engineer and Administrator can review the third History tab by UTC date, signal
 category and exact Batch label or UUID. Pages contain up to 50 observations and
 private rows are cleared on identity change. Close waits for the actual monitor

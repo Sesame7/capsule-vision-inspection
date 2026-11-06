@@ -1614,7 +1614,7 @@ class MainWindow(QMainWindow):
                     text("alarm_last_known", self.language)
                     if alarms.state == "unavailable" and alarms.active
                     else "",
-                    *(s.zh if self.language == "zh" else s.en for s in alarms.active),
+                    *(s.label(self.language) for s in alarms.active),
                 ),
             )
         )

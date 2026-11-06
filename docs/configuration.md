@@ -397,17 +397,31 @@ error while allowing valid reporting, Diagnostics and Web settings to load.
 
 The [bundled JSON template](../src/capsule_vision/configuration/alarm_definitions.json)
 maps bits 0–10 of W18/W118 from the approved equipment signal table dated
-2026-09-05. A local override supplies a complete `version` and `signals` array
+2026-09-05. It is used when `data/alarm_definitions.json` is absent. Engineer
+and Administrator can use **Communication → Alarm file → Create local alarm file
+from template** to publish an exact copy at that path. Creation requires a
+durable Audit Trail intent and exclusive file publication. Existing local files,
+including invalid ones, are preserved across repeat requests and software
+updates. **Open containing folder** opens the equipment directory for external
+editing or repair.
+
+A local override supplies a complete `version` and `signals` array
 with 1–16 definitions. Each signal has a unique stable `id`, unique word `bit`
 (0–15), `category` (`equipment`, `interlock`, `startup` or `software`), and
-nonempty `zh` and `en` labels. Other UI languages use the English signal label.
+required `zh` and `en` labels. Each signal can add a `translations` object,
+for example `"translations": {"zh-TW": "氣壓低", "de": "Luftdruck niedrig"}`.
+Keys use the [exact supported language codes](#files-and-paths). Labels contain
+1–128 printable characters and must include non-whitespace text. A repeated
+`zh` or `en` must agree with its required field. A missing translation uses
+the English label, including when another regional variant has a translation.
 Optional boolean `active_high` defaults to true.
 IDs start with a lowercase ASCII letter and may contain lowercase letters,
 digits, underscores and hyphens (64 characters maximum). The asset is limited
 to 32 KiB. Each activation captures one validated file and its SHA-256 digest.
-An invalid local file leaves the monitor unavailable until a new activation.
-To load an edited file, save monitoring off and then on. Direct file edits have
-file provenance and carry no in-app actor attribution.
+An invalid or unreadable local file leaves the monitor unavailable at activation.
+To load an edited file, save monitoring off and then on, or restart with
+monitoring enabled. Creating or editing the file leaves the active definitions
+in place. Direct file edits carry file provenance without in-app actor attribution.
 
 The codecs construct the same immutable protocol-specific endpoint values for
 Diagnostics and reporting. Reporting's address/capacity belong to its separate

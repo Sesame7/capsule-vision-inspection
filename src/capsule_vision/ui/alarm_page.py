@@ -182,7 +182,7 @@ class AlarmPage(HistoryEventTable):
             e = record.event
             values = (
                 datetime.fromtimestamp(e.observed, UTC).strftime("%Y-%m-%d %H:%M:%S"),
-                e.zh if lang == "zh" else e.en,
+                e.label(lang),
                 text("alarm_" + e.state, lang),
                 e.batch_label or "—",
             )
@@ -224,7 +224,7 @@ class AlarmPage(HistoryEventTable):
                 filter(
                     None,
                     (
-                        f"{e.zh if self.language == 'zh' else e.en}   ·   {text('alarm_' + e.category, self.language)}",
+                        f"{e.label(self.language)}   ·   {text('alarm_' + e.category, self.language)}",
                         f"{source}   ·   {e.signal}",
                         e.definition,
                         e.detail,

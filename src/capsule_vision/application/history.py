@@ -182,7 +182,8 @@ class ProductionHistory:
         self._accepted = self._persisted = self._dropped = self._failed = 0
         self._error = ""
         self._reported_loss = False
-        self._alarm_table = False  # Accessed exclusively by the SQLite owner.
+        # None: absent; False: original zh/en table; True: optional translations.
+        self._alarm_translations: bool | None = None  # SQLite owner only.
         self._next_alarm_retention = float("-inf")
         self._alarm_loss = 0
         self._alarm_issue = ""
@@ -251,9 +252,9 @@ class ProductionHistory:
             raise ValueError("Expected one alarm observation with 1..16 transitions")
 
         def write(db: sqlite3.Connection) -> None:
-            if not self._alarm_table:
-                alarm_records.create(db)
-                self._alarm_table = True
+            if self._alarm_translations is not True:
+                alarm_records.create(db, legacy=self._alarm_translations is False)
+                self._alarm_translations = True
             alarm_records.append(db, events)
 
         def finished(result: Future[None]) -> None:
@@ -279,8 +280,13 @@ class ProductionHistory:
         def read(db: sqlite3.Connection) -> tuple[AlarmRecord, ...]:
             authorize(ticket)
             records = (
-                alarm_records.page(db, query, self.clock() - 30 * 86400)
-                if self._alarm_table
+                alarm_records.page(
+                    db,
+                    query,
+                    self.clock() - 30 * 86400,
+                    translated=self._alarm_translations,
+                )
+                if self._alarm_translations is not None
                 else ()
             )
             authorize(ticket)
@@ -468,12 +474,11 @@ class ProductionHistory:
                 )
             with connection:
                 batch_records.recover(connection, self.clock())
-            self._alarm_table = (
-                connection.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='alarm_events'"
-                ).fetchone()
-                is not None
-            )
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(alarm_events)")
+            }
+            if columns:
+                self._alarm_translations = "translations" in columns
             return connection
         except BaseException:
             connection.close()
@@ -555,7 +560,7 @@ class ProductionHistory:
         expired = False
         now = self.clock()
         cutoff = now - 30 * 86400
-        if self._alarm_table and now >= self._next_alarm_retention:
+        if self._alarm_translations is not None and now >= self._next_alarm_retention:
             self._next_alarm_retention = now + 60
             try:
                 with connection:

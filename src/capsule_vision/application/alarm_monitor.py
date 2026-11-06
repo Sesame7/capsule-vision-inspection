@@ -36,7 +36,7 @@ class AlarmMonitor:
     ) -> None:
         if interval <= 0:
             raise ValueError("Alarm polling interval must be positive")
-        self._definitions, self._offer, self._context = definitions, offer, context
+        self.definitions_path, self._offer, self._context = definitions, offer, context
         self._interval = interval
         self._condition = Condition()
         self._selection = AlarmPreferences()
@@ -99,7 +99,7 @@ class AlarmMonitor:
                     return
                 selection, cancel = self._selection, self._cancel
             try:
-                definitions = load_alarm_definitions(self._definitions)
+                definitions = load_alarm_definitions(self.definitions_path)
             except ConfigurationError as exc:
                 self._unavailable(cancel, exc)
                 cancel.wait()  # Invalid assets are reread only at a new activation.
@@ -159,6 +159,7 @@ class AlarmMonitor:
                             provenance,
                             batch_id,
                             label,
+                            translations=s.translations,
                         )
                         for s in definitions.signals
                         if (s in active) != (s in (previous or ()))

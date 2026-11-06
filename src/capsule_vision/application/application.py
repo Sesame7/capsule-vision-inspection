@@ -10,6 +10,10 @@ from uuid import uuid4
 
 from capsule_vision.communication.reporting import ReportingSettings
 from capsule_vision.configuration import CameraSources, MachineLayoutDefinition
+from capsule_vision.configuration.alarm_definitions import (
+    TEMPLATE,
+    create_local_alarm_definitions,
+)
 from capsule_vision.configuration.communication_preferences import AlarmPreferences
 from capsule_vision.inspection import CycleId, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
@@ -132,7 +136,7 @@ class ProductionApplication:
         )
         self._alarms = (
             AlarmMonitor(
-                history.path.with_name("alarm_definitions.json"),
+                history.path.with_name(TEMPLATE.name),
                 history.offer_alarms,
                 self._alarm_context,
             )
@@ -158,6 +162,29 @@ class ProductionApplication:
 
     def alarm_snapshot(self) -> AlarmSnapshot:
         return self._alarms.snapshot() if self._alarms is not None else AlarmSnapshot()
+
+    def alarm_definitions_path(self, revision: int | None = None) -> Path:
+        with self._condition, self._admission(Role.ENGINEER, revision):
+            if self._alarms is None:
+                raise ApplicationStateError(
+                    "Alarm definitions unavailable for this launcher"
+                )
+            return self._alarms.definitions_path
+
+    def create_alarm_definitions(self, revision: int | None = None) -> None:
+        """Worker command. Publishing a local copy does not activate the monitor."""
+        ticket = self.session_revision if revision is None else revision
+        with (
+            self.identity.change(
+                "alarm_definitions.create",
+                TEMPLATE.name,
+                ticket,
+                after="Bundled template",
+            )
+            if self.identity is not None
+            else nullcontext()
+        ):
+            create_local_alarm_definitions(self.alarm_definitions_path(ticket))
 
     def alarm_page(
         self, query: AlarmQuery, revision: int | None = None

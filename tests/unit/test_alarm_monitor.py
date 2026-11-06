@@ -2,10 +2,12 @@
 
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
+from unittest.mock import patch
 
 import pytest
 from tests.support.application import FakeSession, prepared
@@ -24,6 +26,7 @@ from capsule_vision.communication.endpoints import FinsTcpEndpoint
 from capsule_vision.communication.reporting import ReportOutcome
 from capsule_vision.configuration.alarm_definitions import (
     TEMPLATE,
+    create_local_alarm_definitions,
     load_alarm_definitions,
 )
 from capsule_vision.configuration.communication_preferences import (
@@ -98,6 +101,15 @@ def test_bundled_workbook_mapping_override_and_persisted_selection(
         (signal(active_high=1),),
         (signal(category="fault"),),
         (signal(en=""),),
+        (signal(translations=None),),
+        (signal(translations=["de"]),),
+        (signal(translations={"de": 7}),),
+        (signal(translations={"de": "   "}),),
+        (signal(translations={"de": "a" * 129}),),
+        (signal(translations={"de": "two\nlines"}),),
+        (signal(translations={"pt-br": "wrong code"}),),
+        (signal(translations={"zh-CN": "unsupported alias"}),),
+        (signal(translations={"en": "Conflicting name"}),),
         (signal(id="unbounded name"),),
         (signal(foo=1),),
     ],
@@ -111,6 +123,77 @@ def test_invalid_equipment_asset_is_never_replaced(
     with pytest.raises(ConfigurationError):
         load_alarm_definitions(path)
     assert path.read_bytes() == original
+
+
+def test_template_creation_is_exclusive_and_keeps_invalid_or_custom_local_files(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "equipment" / "alarm_definitions.json"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        copies = [pool.submit(create_local_alarm_definitions, path) for _ in range(2)]
+        failures = [f.exception(3) for f in copies]
+    assert failures.count(None) == 1
+    assert sum(isinstance(e, FileExistsError) for e in failures) == 1
+    assert path.read_bytes() == TEMPLATE.read_bytes()
+    definitions(path, signal(zh="本机报警"))
+    before = path.read_bytes()
+    with pytest.raises(FileExistsError):
+        create_local_alarm_definitions(path)
+    assert path.read_bytes() == before
+    path.write_bytes(b"{invalid")
+    with pytest.raises(ConfigurationError):
+        create_local_alarm_definitions(path)
+    assert path.read_bytes() == b"{invalid"
+    assert list(path.parent.iterdir()) == [path]
+
+
+def test_exact_alarm_labels_and_bounded_optional_translations(tmp_path: Path) -> None:
+    path = tmp_path / "alarm_definitions.json"
+    definitions(
+        path,
+        signal(
+            translations={
+                "zh": "气压低",
+                "zh-TW": "氣壓低",
+                "en": "Low air pressure",
+                "pt-BR": "Pressão baixa",
+            }
+        ),
+    )
+    (alarm,) = load_alarm_definitions(path).signals
+    assert alarm.label("zh") == "气压低" and alarm.label("zh-TW") == "氣壓低"
+    assert alarm.label("pt-BR") == "Pressão baixa"
+    assert (
+        alarm.label("pt-PT")
+        == alarm.label("fr")
+        == alarm.label("en")
+        == "Low air pressure"
+    )
+    content = path.read_text(encoding="utf-8")
+    path.write_text(
+        content.replace('"pt-BR":', '"pt-BR":"duplicado","pt-BR":'), encoding="utf-8"
+    )
+    with pytest.raises(ConfigurationError, match="Duplicate"):
+        load_alarm_definitions(path)
+    path.write_bytes(content.encode() + b" " * 32768)
+    with pytest.raises(ConfigurationError, match="32 KiB"):
+        load_alarm_definitions(path)
+
+
+def test_unreadable_local_definitions_never_use_or_copy_the_bundle(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "alarm_definitions.json"
+    path.write_bytes(b"local equipment data")
+    with patch.object(
+        Path, "open", autospec=True, side_effect=PermissionError("access denied")
+    ) as opened:
+        for command in (load_alarm_definitions, create_local_alarm_definitions):
+            with pytest.raises(ConfigurationError) as failure:
+                command(path)
+            assert isinstance(failure.value.__cause__, PermissionError)
+        assert [call.args[0] for call in opened.call_args_list] == [path, path]
+    assert path.read_bytes() == b"local equipment data"
 
 
 @pytest.mark.parametrize(
@@ -145,7 +228,9 @@ def test_invalid_alarm_preferences_are_explicit_and_isolated_at_startup(
 def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None:
     path = tmp_path / "alarm_definitions.json"
     definitions(
-        path, signal(active_high=False), signal(id="stop", bit=2, category="interlock")
+        path,
+        signal(active_high=False, translations={"de": "Luftdruck niedrig"}),
+        signal(id="stop", bit=2, category="interlock"),
     )
     events: list[AlarmEvent] = []
     monitor = AlarmMonitor(
@@ -159,7 +244,12 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
             assert (events[0].station, events[0].address, events[0].bit) == (2, 118, 3)
             assert events[0].batch_id == "batch-1" and events[0].batch_label == "Line A"
             assert "equipment/site-1" in events[0].definition
-            definitions(path, signal(id="new", bit=15), version="site-2")
+            assert monitor.snapshot().active[0].label("de") == "Luftdruck niedrig"
+            definitions(
+                path,
+                signal(id="new", bit=15, translations={"de": "Neuer Alarm"}),
+                version="site-2",
+            )
             peer.set_words(118, (12,))
             wait(lambda: len(events) == 3)
             assert [(e.signal, e.state) for e in events[1:]] == [
@@ -178,6 +268,9 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
                 "observed_recovered",
             ]
             assert all(e.definition == events[0].definition for e in events)
+            assert [e.label("de") for e in events if e.signal == "air"] == [
+                "Luftdruck niedrig"
+            ] * 3
             assert all(
                 p[10:18] == bytes.fromhex("0101 b1 0076 00 0001") for p in peer.packets
             )
@@ -187,6 +280,7 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
             wait(lambda: len(events) == 6)
             assert events[-1].signal == "new" and events[-1].address == 18
             assert "site-2" in events[-1].definition
+            assert events[-1].label("de") == "Neuer Alarm"
         finally:
             monitor.request_stop()
             assert monitor.join(2)
@@ -366,6 +460,86 @@ def test_runtime_fault_and_reset_are_separate_application_events(
         gate.set()
         app.close().result(3)
         assert app.join(3)
+
+
+def test_legacy_alarm_history_reads_without_writing_and_freezes_new_translations(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "history.sqlite3"
+    history = ProductionHistory(path)
+    try:
+        batch = history.select_batch("Original Batch").result(3)
+        assert batch is not None
+    finally:
+        history.request_stop()
+        assert history.join(3)
+    with closing(sqlite3.connect(path)) as db, db:
+        db.executescript("""
+            CREATE TABLE alarm_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, observed REAL NOT NULL,
+                signal TEXT NOT NULL, state TEXT NOT NULL, category TEXT NOT NULL,
+                zh TEXT NOT NULL, en TEXT NOT NULL, source TEXT NOT NULL,
+                station INTEGER, address INTEGER, bit INTEGER, definition TEXT NOT NULL,
+                batch_id TEXT, batch_label TEXT, detail TEXT NOT NULL);
+            INSERT INTO alarm_events VALUES
+                (17,100,'air','activated','equipment','低气压','Original air alarm','PLC',1,18,3,
+                 'equipment/old',NULL,NULL,'');
+        """)
+    history = ProductionHistory(path, clock=lambda: 100, alarm_access=lambda _: 0)
+    try:
+        assert history.initial_selection.result(3) == batch
+        (old,) = history.alarm_page(AlarmQuery()).result(3)
+        assert old.cursor == 17 and old.event.label("ja") == "Original air alarm"
+    finally:
+        history.request_stop()
+        assert history.join(3)
+    with closing(sqlite3.connect(path)) as db:
+        assert "translations" not in [
+            row[1] for row in db.execute("PRAGMA table_info(alarm_events)")
+        ]
+    local = tmp_path / "alarm_definitions.json"
+    definitions(local, signal(translations={"ja": "旧ラベル"}))
+    history = ProductionHistory(path, clock=lambda: 100, alarm_access=lambda _: 0)
+    try:
+        definitions_at_event = load_alarm_definitions(local)
+        alarm = definitions_at_event.signals[0]
+        history.offer_alarms(
+            (
+                replace(
+                    event(),
+                    signal=alarm.id,
+                    zh=alarm.zh,
+                    en=alarm.en,
+                    translations=alarm.translations,
+                    definition=definitions_at_event.digest,
+                ),
+            )
+        )
+        definitions(
+            local, signal(en="Changed live name", translations={"ja": "新ラベル"})
+        )
+        assert [row.cursor for row in history.alarm_page(AlarmQuery()).result(3)] == [
+            18,
+            17,
+        ]
+    finally:
+        history.request_stop()
+        assert history.join(3)
+    history = ProductionHistory(path, clock=lambda: 100, alarm_access=lambda _: 0)
+    try:
+        assert history.initial_selection.result(3) == batch
+        new, original = history.alarm_page(AlarmQuery()).result(3)
+        assert original == old and new.event.definition == definitions_at_event.digest
+        assert (
+            new.event.label("ja") == "旧ラベル"
+            and new.event.label("fr") == "Low air pressure"
+        )
+        assert load_alarm_definitions(local).signals[0].label("ja") == "新ラベル"
+    finally:
+        history.request_stop()
+        assert history.join(3)
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("PRAGMA user_version").fetchone() == (3,)
 
 
 def test_damaged_alarm_table_cannot_block_named_batch_restoration(

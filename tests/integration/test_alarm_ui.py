@@ -8,7 +8,8 @@ from threading import Event
 from threading import enumerate as threads
 
 import pytest
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT, ReplayEngine
 from tests.support.fins_tcp import TcpPeer
@@ -22,16 +23,22 @@ from tests.support.startup import (
 
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
-from capsule_vision.application.audit import AuditQuery
+from capsule_vision.application.audit import (
+    AuditOperation,
+    AuditQuery,
+    AuditUnavailable,
+)
 from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.startup import load_startup
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
+from capsule_vision.configuration.alarm_definitions import TEMPLATE
 from capsule_vision.configuration.communication_preferences import (
     AlarmPreferences,
     CommunicationPreferences,
     load_communication_preferences,
     save_communication_preferences,
 )
+from capsule_vision.localization.catalog import text
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 
@@ -94,6 +101,10 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
                 not page.alarm_enabled.isEnabled()
                 and not window.history_tabs.isTabEnabled(2)
             )
+            for command in (app.create_alarm_definitions, app.alarm_definitions_path):
+                with pytest.raises(AuthorizationError):
+                    command()
+            assert not page.alarm_file.isEnabled()
             with pytest.raises(AuthorizationError):
                 app.alarm_page(AlarmQuery())
             with pytest.raises(AuthorizationError):
@@ -110,10 +121,24 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
                 not page.alarm_enabled.isEnabled()
                 and window.history_tabs.isTabEnabled(2)
             )
+            with pytest.raises(AuthorizationError):
+                app.create_alarm_definitions()
             assert not window.history_tabs.isTabEnabled(1)
             app.start_batch("Batch P").result(WAIT)
             identity.login("Tech", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
+            page.alarm_create.trigger()
+            until(lambda: not page.busy)
+            path = app.alarm_definitions_path()
+            assert path.read_bytes() == TEMPLATE.read_bytes()
+            assert text("alarm_file_created", "en") in page.preferences_status.text()
+            assert len(app.alarm_page(AlarmQuery()).result(WAIT)) == 1
+            # Editing while live does not reactivate it. A different saved station does.
+            content = path.read_text(encoding="utf-8").replace(
+                '"en": "Start inhibited: homing required"',
+                '"en": "Start inhibited: homing required", "translations": {"de": "Referenzfahrt erforderlich"}',
+            )
+            path.write_text(content, encoding="utf-8")
             page.alarm_port.setValue(second.port)
             page.alarm_station.setCurrentIndex(1)
             assert (
@@ -137,6 +162,9 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
                 )
             )
             assert load_communication_preferences(data.communication).alarm.station == 2
+            window.set_language("de")
+            until(lambda: "Referenzfahrt erforderlich" in bar.alarm.toolTip())
+            assert "Referenzfahrt erforderlich" in bar.alarm.accessibleDescription()
             ops = identity.audit_page(AuditQuery(action="communication.save")).result(
                 WAIT
             )
@@ -146,6 +174,8 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             )
             events = app.alarm_page(AlarmQuery()).result(WAIT)
             assert events[0].event.batch_label == "Batch P"
+            assert events[0].event.label("de") == "Referenzfahrt erforderlich"
+            assert events[-1].event.label("de") == "Emergency stop"
             assert events[0].event.batch_id == app.snapshot().batch_uuid
             assert events[-1].event.batch_id is None
             identity.logout()
@@ -175,6 +205,141 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             delivery.detach()
 
 
+def test_local_alarm_file_menu_feedback_authorization_and_audit(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = saved_data(tmp_path)
+    startup = authenticated_startup(data)
+    app, identity = startup.application, startup.application.identity
+    assert identity is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    page = window.communication
+    opened: list[Path] = []
+
+    def open_folder(url: QUrl) -> bool:
+        opened.append(Path(url.toLocalFile()))
+        return True
+
+    monkeypatch.setattr(QDesktopServices, "openUrl", open_folder)
+    path = app.alarm_definitions_path()
+    try:
+        # A file action must leave this separate draft alone.
+        page.alarm_port.setValue(10001)
+        page.alarm_open.trigger()
+        until(lambda: not page.busy)
+        assert opened == [path.parent] and not path.exists()
+        assert text("alarm_file_missing", "en") in page.preferences_status.text()
+        page.alarm_create.trigger()
+        until(lambda: not page.busy)
+        assert path.read_bytes() == TEMPLATE.read_bytes() and page.dirty
+        page.alarm_create.trigger()
+        until(lambda: not page.busy)
+        assert text("alarm_file_exists", "en") in page.preferences_status.text()
+        path.write_bytes(b"{broken")
+        page.alarm_create.trigger()
+        until(lambda: not page.busy)
+        assert text("alarm_file_invalid", "en") in page.preferences_status.text()
+        page.alarm_open.trigger()
+        until(lambda: not page.busy)
+        assert path.read_bytes() == b"{broken" and opened == [path.parent] * 2
+        assert text("alarm_file_invalid", "en") in page.preferences_status.text()
+        assert str(path) in page.preferences_status.accessibleDescription()
+        ops = identity.audit_page(AuditQuery(action="alarm_definitions.create")).result(
+            WAIT
+        )
+        assert [row.outcome for row in ops] == ["failed", "failed", "success"]
+        assert all(
+            row.operation.target == path.name and row.operation.username == "TestAdmin"
+            for row in ops
+        )
+        assert not data.communication.exists() and app.alarm_snapshot().state == "off"
+
+        with monkeypatch.context() as denied:
+
+            def inaccessible(_path: Path, *, bundled_fallback: bool) -> None:
+                raise PermissionError("isolated access denial")
+
+            denied.setattr(
+                "capsule_vision.ui.communication_page.load_alarm_definitions",
+                inaccessible,
+            )
+            page.alarm_open.trigger()
+            until(lambda: not page.busy)
+            assert (
+                text("alarm_file_unavailable", "en") in page.preferences_status.text()
+            )
+            assert len(opened) == 2
+
+        # A folder launch is a separate side effect on queued delivery.
+        release, reading = Event(), Event()
+
+        def wait_for_logout(_path: Path, *, bundled_fallback: bool) -> None:
+            reading.set()
+            assert release.wait(WAIT)
+
+        monkeypatch.setattr(
+            "capsule_vision.ui.communication_page.load_alarm_definitions",
+            wait_for_logout,
+        )
+        page.alarm_open.trigger()
+        try:
+            until(reading.is_set)
+            identity.logout()
+            window.identity_controls.refresh()
+        finally:
+            release.set()
+        until(lambda: not page.busy)
+        assert opened == [path.parent] * 2
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_creating_alarm_file_requires_durable_intent_and_current_session(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    app, identity = startup.application, startup.application.identity
+    assert identity is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    page, path = window.communication, app.alarm_definitions_path()
+    try:
+        gate: Future[None] = Future()
+        entered = Event()
+
+        def pending(_op: AuditOperation) -> Future[None]:
+            entered.set()
+            return gate
+
+        with monkeypatch.context() as held:
+            held.setattr(identity.audit, "intent", pending)
+            page.alarm_create.trigger()
+            try:
+                until(entered.is_set)
+                identity.logout()
+                window.identity_controls.refresh()
+            finally:
+                gate.set_result(None)
+            until(lambda: not page.busy)
+            assert not path.exists() and not page.alarm_file.isEnabled()
+        identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+
+        def no_audit(_op: AuditOperation) -> Future[None]:
+            unavailable: Future[None] = Future()
+            unavailable.set_exception(AuditUnavailable("isolated audit failure"))
+            return unavailable
+
+        monkeypatch.setattr(identity.audit, "intent", no_audit)
+        with pytest.raises(AuditUnavailable):
+            app.create_alarm_definitions()
+        assert not path.exists()
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
 def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -202,6 +367,7 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
                     "equipment/v1 SHA-256 fixture",
                     "stable-id",
                     "P" if i else "Q",
+                    translations=(("de", "Hub nicht eingestellt"),),
                 ),
             )
         )
@@ -233,6 +399,10 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
         item = page.table.item(0, 1)
         assert item is not None and item.text() == "往复轴行程未设置"
         assert page.table.horizontalScrollBar().maximum() == 0
+        window.set_language("de")
+        item = page.table.item(0, 1)
+        assert item is not None and item.text() == "Hub nicht eingestellt"
+        assert item.text() in page.details.toPlainText()
         window.set_language("zh-TW")
         item = page.table.item(0, 1)
         assert item is not None and item.text() == "Reciprocating axis stroke not set"

@@ -341,7 +341,11 @@ replacement. It sends no writes, triggers, resets or acknowledgments.
 
 Normal launch restores the saved selection under Guest. Logout, navigation and
 Production Start/Stop are independent of it. Faulted monitoring has its own
-unavailable status. Commissioning a shared PLC endpoint requires support for
+unavailable status. The **Alarm file** menu on the monitoring row lets Engineers
+and Administrators create the equipment copy or open its folder. These actions
+are independent of preference Save and monitor activation. Each activation
+captures the [signal definitions and their labels](configuration.md#communication-preferences)
+once for polling, display and History. Commissioning a shared PLC endpoint requires support for
 separately negotiated, concurrently serviced sessions and sufficient PLC service
 capacity to meet the [four-cycle deadlines](#four-cycle-reporting). The monitor
 never uses the reporting socket, request queue or worker. A serial-only PLC

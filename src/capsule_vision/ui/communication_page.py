@@ -9,8 +9,24 @@ from math import ceil
 from pathlib import Path
 from threading import Event, Thread
 
-from PySide6.QtCore import QEvent, QObject, QRect, QSize, Qt, QThread, QTimer, Slot
-from PySide6.QtGui import QColor, QFontMetricsF, QHideEvent, QResizeEvent
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QRect,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Slot,
+)
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QFontMetricsF,
+    QHideEvent,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -22,6 +38,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -86,6 +103,7 @@ from capsule_vision.communication.reporting import (
     ReportingWriteProtectedError,
 )
 from capsule_vision.configuration import ConfigurationError
+from capsule_vision.configuration.alarm_definitions import load_alarm_definitions
 from capsule_vision.configuration.communication_preferences import (
     AlarmPreferences,
     CommunicationPreferences,
@@ -174,6 +192,7 @@ class CommunicationPage(QWidget):
         self._settings_loading = False
         self._settings_missing = True
         self._settings_message, self._settings_detail = "", ""
+        self._alarm_file_message, self._alarm_file_detail = "", ""
         self._discard_dialog: QMessageBox | None = None
         self._watch_observations: list[CommunicationResponse | None] = []
         self._watch_fresh: set[int] = set()
@@ -258,6 +277,17 @@ class CommunicationPage(QWidget):
         alarm_row.addWidget(self._caption("comm_port"))
         alarm_row.addWidget(self.alarm_port)
         alarm_row.addStretch()
+        self.alarm_file = QPushButton()
+        self.alarm_file.setMinimumHeight(Style.touch)
+        menu = QMenu(self.alarm_file)
+        self.alarm_create = menu.addAction("")
+        self.alarm_open = menu.addAction("")
+        self.alarm_create.triggered.connect(
+            lambda: self._alarm_file_action(create=True)
+        )
+        self.alarm_open.triggered.connect(lambda: self._alarm_file_action(create=False))
+        self.alarm_file.setMenu(menu)
+        alarm_row.addWidget(self.alarm_file)
         layout.addWidget(self.alarm_strip)
         self.alarm_strip.hide()  # Explicit launchers without saved communication settings.
         diagnostics = self._panel(layout, "comm_diagnostics")
@@ -586,6 +616,7 @@ class CommunicationPage(QWidget):
     def refresh_icons(self) -> None:
         colors = theme_colors(self)
         for button, tool in (
+            (self.alarm_file, "folder"),
             (self.watch_editor_button, "plus"),
             (self.watch_add, "apply"),
             (self.watch_remove, "delete"),
@@ -865,6 +896,7 @@ class CommunicationPage(QWidget):
         self._render_preferences()
 
     def identity_changed(self) -> None:
+        self._alarm_file_message = self._alarm_file_detail = ""
         if self._discard_dialog is not None:
             self._discard_dialog.reject()
         self._refresh()
@@ -897,14 +929,15 @@ class CommunicationPage(QWidget):
             if self._settings_missing
             else "comm_settings_saved"
         )
-        self.preferences_status.setText(
-            text(
-                {"comm_settings_saved": "saved", "comm_settings_dirty": "unsaved"}.get(
-                    key, key
-                ),
-                self.language,
-            )
+        status = text(
+            {"comm_settings_saved": "saved", "comm_settings_dirty": "unsaved"}.get(
+                key, key
+            ),
+            self.language,
         )
+        if self._alarm_file_message:
+            status += "  ·  " + text(self._alarm_file_message, self.language)
+        self.preferences_status.setText(status)
         failed = self._settings_message in (
             "audit_required",
             "comm_settings_failed",
@@ -913,13 +946,24 @@ class CommunicationPage(QWidget):
             "permission_engineer",
             "identity_stale",
         )
-        self.preferences_status.setToolTip(self._settings_detail if failed else "")
-        self.preferences_status.setAccessibleDescription("")
+        detail = "\n".join(
+            filter(
+                None, (self._settings_detail if failed else "", self._alarm_file_detail)
+            )
+        )
+        self.preferences_status.setToolTip(detail)
+        self.preferences_status.setAccessibleDescription(detail)
         self.preferences_status.setStyleSheet(
             f"color: {theme_colors(self).warning if failed else theme_colors(self).secondary};"
         )
         editable = not (
             self.busy or self._auto_refresh or self._closing or self._disposed
+        )
+        self.alarm_file.setEnabled(
+            engineer and editable and self._application is not None
+        )
+        self.alarm_file.setToolTip(
+            text("alarm_file" if engineer else "permission_engineer", self.language)
         )
         self.save_settings.setEnabled(
             engineer and editable and (dirty or failed or self._settings_missing)
@@ -937,7 +981,70 @@ class CommunicationPage(QWidget):
         if self._settings_loading:
             return
         self._settings_message = self._settings_detail = ""
+        self._alarm_file_message = self._alarm_file_detail = ""
         self._render_preferences()
+
+    def _alarm_file_action(self, *, create: bool) -> None:
+        app = self._application
+        if (
+            app is None
+            or self.busy
+            or self._auto_refresh
+            or self._closing
+            or self._disposed
+        ):
+            return
+        ticket = app.session_revision
+        try:
+            path = app.alarm_definitions_path(ticket)
+        except RuntimeError as exc:
+            self._alarm_file_message = failure_key(exc, "alarm_file_unavailable")
+            self._alarm_file_detail = str(exc)
+            self._render_preferences()
+            return
+
+        def finished(_value: object, error: BaseException | None) -> None:
+            if self._closing or self._disposed or app.session_revision != ticket:
+                return
+            try:
+                # Open the directory even for malformed definitions so they can be repaired.
+                if not create and (
+                    error is None or isinstance(error, ConfigurationError)
+                ):
+                    app.authorize_engineering(ticket)
+                    if not QDesktopServices.openUrl(
+                        QUrl.fromLocalFile(str(path.parent))
+                    ):
+                        raise OSError(f"Cannot open {path.parent}")
+            except (RuntimeError, OSError) as exc:
+                error = exc
+            if error is None:
+                key = "alarm_file_created" if create else "alarm_file_opened"
+            elif isinstance(error, FileExistsError):
+                key = "alarm_file_exists"
+            elif isinstance(error, ConfigurationError) and isinstance(
+                error.__cause__, FileNotFoundError
+            ):
+                key = "alarm_file_missing"
+            elif isinstance(error, ConfigurationError) and not isinstance(
+                error.__cause__, OSError
+            ):
+                key = "alarm_file_invalid"
+            else:
+                key = failure_key(error, "alarm_file_unavailable")
+            self._alarm_file_message = key
+            self._alarm_file_detail = str(error) if error else str(path)
+            self._render_preferences()
+
+        def work() -> None:
+            if create:
+                app.create_alarm_definitions(ticket)
+            else:
+                load_alarm_definitions(
+                    app.alarm_definitions_path(ticket), bundled_fallback=False
+                )
+
+        self._file_work(work, finished)
 
     def _commit_preferences(
         self,
@@ -1302,6 +1409,10 @@ class CommunicationPage(QWidget):
                 selector.setItemText(0, text("comm_holding_registers", language))
         self.web_panel.set_language(language)
         self.alarm_enabled.setText(text("alarm_monitor", language))
+        self.alarm_file.setText(text("alarm_file", language))
+        self.alarm_file.setAccessibleName(self.alarm_file.text())
+        self.alarm_create.setText(text("alarm_definitions.create", language))
+        self.alarm_open.setText(text("alarm_file_open", language))
         for field, key in (
             (self.alarm_enabled, "alarm_monitor"),
             (self.alarm_host, "comm_host"),
