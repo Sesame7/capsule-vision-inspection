@@ -692,9 +692,10 @@ Recipe `defaults.vimo` defines one shared `enabled`, `required` and `disabled_la
 policy for every configured camera/channel. Missing/null leaves use the effective
 defaults: enabled and required, with an empty filter. The structural objects cannot
 be null. Exclusions use exact case-sensitive label identities; an empty list excludes
-nothing. Each channel retains its own image, ROI, identity, findings and judgment.
-Filtering changes consumed findings, not model thresholds, inference masks,
-returned IDs or shared evidence.
+nothing. The [inspection judgment](architecture.md#inspection-and-results)
+applies the shared filter to assigned findings using each channel's Occupancy.
+The SDK thresholds, full-image inference and raw results are independent of
+this consumption policy.
 
 `capsule` has uniform product-level Size/Color settings, without camera/channel
 overrides or a configurable `required` switch:

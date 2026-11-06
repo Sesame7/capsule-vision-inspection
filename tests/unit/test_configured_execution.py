@@ -116,7 +116,7 @@ def test_shared_vimo_policy_and_exact_label_filtering(
 
 
 @pytest.mark.parametrize("accept", [False, True])
-def test_unassigned_policy_and_cycle_ng_without_channel_ng(
+def test_unassigned_findings_respect_label_policy_without_causing_ng(
     tmp_path: Path, accept: bool
 ) -> None:
     configuration = config(tmp_path)
@@ -141,7 +141,10 @@ def test_unassigned_policy_and_cycle_ng_without_channel_ng(
         set(configuration.layout.camera_ids) if accept else set()
     )
     counters = ProductionCounters().admitted().completed(result)
-    assert counters.production_ng_cycles == int(accept)
+    assert counters.production_ng_cycles == 0
+    assert all(
+        camera.assessment.judgment is ProductJudgment.OK for camera in result.cameras
+    )
     assert counters.channel_ng == 0 and counters.channel_ok == 36
 
 

@@ -160,7 +160,7 @@ def test_invalid_layouts_fail_early(kind: str) -> None:
         (BoundingRect(8, 1, 2, 2), ()),  # Touching edges are not overlap.
     ],
 )
-def test_roi_assignment_and_unassigned_ng(
+def test_roi_assignment_and_unassigned_evidence(
     rect: BoundingRect, ids: tuple[int, ...]
 ) -> None:
     camera = layout(1).cameras[0]
@@ -194,7 +194,7 @@ def test_explicit_overlap_policy_and_region_order_do_not_define_channels() -> No
         OverlapPolicy(0)
 
 
-def test_unassigned_defect_and_independent_error_preserve_overall_error_ng() -> None:
+def test_unassigned_finding_does_not_override_independent_error() -> None:
     base = production()
     camera = base.cameras[0]
     assert camera.frame_id is not None
@@ -209,7 +209,7 @@ def test_unassigned_defect_and_independent_error_preserve_overall_error_ng() -> 
         ERROR,
         UNKNOWN,
     )
-    assert result.assessment == Assessment(ERROR, NG)
+    assert result.assessment == Assessment(ERROR, UNKNOWN)
     assert len(result.unassigned_findings) == 1
     assert not any(channel.assessment.judgment is NG for channel in result.channels)
 

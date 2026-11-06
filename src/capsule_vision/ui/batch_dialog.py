@@ -1,4 +1,6 @@
-"""Select a production Batch or explicitly end the current selection."""
+"""Select or end a Production Batch, or clear the current unbatched statistics."""
+
+from typing import Literal
 
 from PySide6.QtWidgets import (
     QDialog,
@@ -30,7 +32,8 @@ class BatchDialog(QDialog):
         self.setObjectName("productionBatchDialog")
         self.setWindowTitle(text("batch", language))
         self.language: Language = language
-        self.end_requested = False
+        self.action: Literal["select", "end", "clear"] = "select"
+        self._named_batch = snapshot.batch_id is not None
         layout = QVBoxLayout(self)
         form = QFormLayout()
         current = QLineEdit()
@@ -60,11 +63,15 @@ class BatchDialog(QDialog):
                 warning.setWordWrap(True)
                 layout.addWidget(warning)
         actions = QHBoxLayout()
-        self.end = QPushButton(text("batch_end", language))
-        self.end.setAutoDefault(False)
-        self.end.setEnabled(snapshot.batch_id is not None)
-        self.end.clicked.connect(self._confirm_end)
-        actions.addWidget(self.end)
+        self.secondary = QPushButton(
+            text(
+                "batch_end" if self._named_batch else "production.clear_statistics",
+                language,
+            )
+        )
+        self.secondary.setAutoDefault(False)
+        self.secondary.clicked.connect(self._confirm_secondary)
+        actions.addWidget(self.secondary)
         actions.addStretch()
         self.select = QPushButton(text("batch_select", language))
         self.select.setDefault(True)
@@ -72,7 +79,7 @@ class BatchDialog(QDialog):
         self.select.setEnabled(bool(self.label.text().strip()))
         self.label.textChanged.connect(self._label_changed)
         actions.addWidget(self.select)
-        for button in (self.select, self.end):
+        for button in (self.select, self.secondary):
             button.setMinimumHeight(Style.touch)
         layout.addLayout(actions)
         self.label.selectAll()
@@ -82,19 +89,27 @@ class BatchDialog(QDialog):
     def _label_changed(self, value: str) -> None:
         self.select.setEnabled(bool(value.strip()))
 
-    def _confirm_end(self) -> None:
+    def _confirm_secondary(self) -> None:
         prompt = QMessageBox(self)
-        prompt.setWindowTitle(text("batch_end", self.language))
-        prompt.setText(text("batch_end_confirm", self.language))
-        end = prompt.addButton(
-            text("batch_end", self.language), QMessageBox.ButtonRole.AcceptRole
+        prompt.setWindowTitle(self.secondary.text())
+        prompt.setText(
+            text(
+                "batch_end_confirm"
+                if self._named_batch
+                else "clear_statistics_confirm",
+                self.language,
+            )
         )
-        keep_open = prompt.addButton(
-            text("batch_keep_open", self.language), QMessageBox.ButtonRole.RejectRole
+        confirm = prompt.addButton(
+            self.secondary.text(), QMessageBox.ButtonRole.AcceptRole
         )
-        prompt.setDefaultButton(keep_open)
-        prompt.setEscapeButton(keep_open)
+        cancel = prompt.addButton(
+            text("batch_keep_open" if self._named_batch else "cancel", self.language),
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        prompt.setDefaultButton(cancel)
+        prompt.setEscapeButton(cancel)
         prompt.exec()
-        if prompt.clickedButton() is end:
-            self.end_requested = True
+        if prompt.clickedButton() is confirm:
+            self.action = "end" if self._named_batch else "clear"
             self.accept()

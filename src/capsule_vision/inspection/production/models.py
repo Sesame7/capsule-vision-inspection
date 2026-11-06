@@ -157,9 +157,7 @@ def aggregate(checks: Sequence[CheckResult]) -> Assessment:
     )
 
 
-def combine(
-    assessments: Sequence[Assessment], *, error: bool = False, ng: bool = False
-) -> Assessment:
+def combine(assessments: Sequence[Assessment], *, error: bool = False) -> Assessment:
     """All child channels/cameras are required; disabled children are neutral."""
     active = [
         item
@@ -169,7 +167,7 @@ def combine(
     error = error or any(
         item.technical_status is TechnicalStatus.ERROR for item in active
     )
-    ng = ng or any(item.judgment is ProductJudgment.NG for item in active)
+    ng = any(item.judgment is ProductJudgment.NG for item in active)
     status = (
         TechnicalStatus.ERROR
         if error
@@ -398,7 +396,6 @@ class CameraInspectionResult:
         return combine(
             tuple(row.assessment for row in self.channels),
             error=self.collection_issue is not None,
-            ng=bool(self.unassigned_findings),
         )
 
 

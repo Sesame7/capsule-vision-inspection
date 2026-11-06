@@ -77,7 +77,7 @@ def mixed_result(
         (OccupancyState.PRESENT, TechnicalStatus.SUCCESS, ProductJudgment.OK),
         (OccupancyState.EMPTY, TechnicalStatus.SUCCESS, ProductJudgment.OK),
         (OccupancyState.UNKNOWN, TechnicalStatus.SUCCESS, ProductJudgment.OK),
-        (OccupancyState.EMPTY, TechnicalStatus.ERROR, ProductJudgment.NG),
+        (OccupancyState.PRESENT, TechnicalStatus.ERROR, ProductJudgment.NG),
         (OccupancyState.PRESENT, TechnicalStatus.ERROR, ProductJudgment.UNKNOWN),
         (OccupancyState.UNKNOWN, TechnicalStatus.SUCCESS, ProductJudgment.NG),
     )

@@ -192,10 +192,11 @@ def test_elided_batch_editor_receives_the_full_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     window, session = screen
-    before = window.bridge.application.snapshot()
-    full = "Long Batch 批次 日本語 Lotto " * 30
-    window.bridge.snapshot_changed.emit(replace(before, batch_id=full))
+    full = ("Long Batch 批次 日本語 Lotto " * 30).rstrip()
+    window.bridge.start_batch(full)
     qapp.processEvents()
+    before = window.bridge.application.snapshot()
+    assert before.batch_id == full
     assert window.batch_label.text() != full and "…" in window.batch_label.text()
     assert window.batch_label.accessibleName().endswith(full)
     initial: list[str] = []

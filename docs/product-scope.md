@@ -62,6 +62,7 @@ prescribe a new service, database or framework.
 - Each IPC identifies a Production Batch by its trimmed, nonempty, case-sensitive label and retains a stable internal UUID. Selecting a new label starts its own totals. Selecting a previously used label continues its original Batch and totals, including after an explicit End.
 - Switching labels changes the selection. End Batch records an end event and clears the selection after confirmation. Startup restores the last selection and totals and waits for an explicit Start. Each successful Start creates a distinct Run, including Runs that stop before the first Cycle. A named Batch requires durable Run admission.
 - Basler can Start without a Batch in every reporting mode. Retain the unbatched Run, its Cycles and eligible PLC groups when storage supports them. If recording is unavailable or incomplete, show that uncertainty and allow inspection. Later Batch selections apply only to subsequent Runs.
+- In READY without a named Batch, an Operator or higher can confirm **Clear Statistics** in the Batch dialog. This starts fresh displayed counts in the last successful Start's counting mode and preserves recorded Runs and groups.
 - Switching Recipe does not itself reset the operator Batch's cumulative quantities. Exact constraints on changing Recipe while running remain subject to the current lifecycle contract unless deliberately changed in a later Phase.
 
 ## 3. PLC reporting, result semantics and display
@@ -80,17 +81,17 @@ or recovery logic here.
 The target inspection policy retains the current algorithm as an accepted product
 baseline, not a claim of globally optimal accuracy or throughput:
 
-- **ViMo inspects the full camera image on every exposure.** Retain existing
-  defect-label filtering and channel-ROI assignment. Channel-associated defect
-  evidence that survives the label filter requests rejection.
-- Background-only findings require no new rejection policy or precise capsule-mask
-  localization in this scope. Preserve existing handling of unassigned camera
-  findings; lack of ROI assignment alone is not proof of harmless background.
+- **ViMo inspects the full camera image on every exposure.**
+  Apply the saved label filter and channel-ROI assignment. A finding that
+  overlaps several channels requests rejection independently for each PRESENT
+  or UNKNOWN channel it matches. Findings outside all channel ROIs have no
+  effect on channel or camera judgments or PLC rejection.
 - **Occupancy** establishes presence/absence evidence and supports conditional
   traditional checks. Enabled **Length** (the existing Size check) and **Color**
   evaluate both optical views on each exposure using the existing implementation.
-  Confirmed EMPTY may skip Length/Color, but **does not suppress ViMo** or erase
-  defect evidence.
+  When both views confirm EMPTY, skip enabled Length/Color and ignore assigned
+  ViMo defects for that channel. Full-image inference still runs when enabled.
+  Missing evidence, execution errors and forced rejects retain their existing effects.
 - Retain per-exposure traditional checks. Once-per-four-Cycle sampling requires
   measured performance and detection evidence before a separately approved change;
   it is not an authorized optimization.

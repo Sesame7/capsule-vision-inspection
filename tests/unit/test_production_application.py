@@ -43,12 +43,16 @@ def test_start_is_async_transaction_and_stop_during_start_cannot_activate(
         started = app.start()
         assert session.start_entered.wait(WAIT)
         assert not started.done() and app.snapshot().state is ApplicationState.STARTING
+        with pytest.raises(ApplicationStateError):
+            app.clear_statistics()
         assert app.snapshot().active is None
         with pytest.raises(ApplicationStateError):
             app.configure(prepared(tmp_path))
         stopped = app.stop()
         assert app.stop() is stopped
         assert app.snapshot().state is ApplicationState.STOPPING
+        with pytest.raises(ApplicationStateError):
+            app.clear_statistics()
         session.ready.set_result(None)
         stopped.result(WAIT)
         with pytest.raises(ApplicationError):

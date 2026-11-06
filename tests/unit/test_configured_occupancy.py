@@ -10,13 +10,15 @@ from tests.support.application import prepared
 from tests.support.capsule_images import SETTINGS, bodies
 from tests.support.production import inferred
 
-from capsule_vision.application import ConfiguredProductionPipeline
+from capsule_vision.application import ConfiguredProductionPipeline, ProductionCounters
+from capsule_vision.application.image_archive import camera_archive_status
 from capsule_vision.communication.reporting import FirstStationReport
 from capsule_vision.configuration import ResolvedInspectionConfiguration
 from capsule_vision.inference import BoundingRect, ImageResult
 from capsule_vision.inspection import CycleCollector, CycleId, Frame, FrameId
 from capsule_vision.inspection.production import (
     Assessment,
+    ChannelBusinessStatus,
     OccupancyResult,
     OccupancyState,
     ProductJudgment,
@@ -235,49 +237,103 @@ def test_layout_slots_supply_occupancy_and_traditional_rois(
             assert row.occupancy == OccupancyResult(measure_occupancy(image, slot.rect))
 
 
-def test_empty_keeps_accepted_vimo_ng_and_unassigned_findings(tmp_path: Path) -> None:
-    config = configuration(tmp_path)
+@pytest.mark.parametrize("cameras", [5, 6])
+def test_confirmed_empty_ignores_defects_after_full_image_inference(
+    tmp_path: Path, cameras: int
+) -> None:
+    config = configuration(tmp_path, count=cameras)
     image = np.zeros((120, 481, 3), dtype=np.uint8)
     original = replace(
         inferred(BoundingRect(1, 1, 4, 4), BoundingRect(480, 1, 1, 2)),
         image_shape=(120, 481, 3),
     )
+    calls = 0
+
+    def infer(full_image: NDArray[np.uint8]) -> ImageResult:
+        nonlocal calls
+        assert full_image.shape == image.shape
+        calls += 1
+        return original
+
     result = (
-        ConfiguredProductionPipeline(config).inspect(
-            cycle(config, image), lambda _: original
-        )
-    ).production
+        ConfiguredProductionPipeline(config)
+        .inspect(cycle(config, image), infer)
+        .production
+    )
+    assert calls == cameras
     for camera in result.cameras:
-        first = camera.channels[0]
-        assert (
-            first.occupancy is not None
-            and first.occupancy.state is OccupancyState.EMPTY
-        )
-        assert first.traditional_skip is TraditionalSkipReason.CONFIRMED_EMPTY
-        assert first.assessment == Assessment(
-            TechnicalStatus.SUCCESS, ProductJudgment.NG
-        )
-        assert first.vimo_findings[0].finding.label == "label-0"
-        assert first.checks[1].reasons[0].code == "defect_region"
-        assert len(camera.unassigned_findings) == 1
-        assert camera.unassigned_findings[0].label == "label-1"
-        assert all(not row.vimo_findings for row in camera.channels[1:])
-    assert result.assessment.judgment is ProductJudgment.NG
+        for row in camera.channels:
+            assert row.business_status is ChannelBusinessStatus.EMPTY
+            assert row.traditional_skip is TraditionalSkipReason.CONFIRMED_EMPTY
+            assert row.checks[1].assessment == Assessment(
+                TechnicalStatus.SUCCESS, ProductJudgment.OK
+            )
+            assert not row.vimo_findings and not row.reasons
+        assert [f.label for f in camera.unassigned_findings] == ["label-1"]
+        assert camera_archive_status(camera) == 3
+    assert result.assessment == Assessment(TechnicalStatus.SUCCESS, ProductJudgment.OK)
     assert len(original.regions) == 2
-    # The unresolved finding on each camera prevents trusting its apparently empty slots.
+    assert FirstStationReport.from_result(1, result).reject_words == (0,) * (
+        (cameras * 6 + 15) // 16
+    )
+    totals = ProductionCounters().admitted().completed(result)
+    assert totals.business_empty == cameras * 6 and totals.production_ng_cycles == 0
+
+
+def test_one_finding_across_empty_present_and_unknown_slots(tmp_path: Path) -> None:
+    config = replace(configuration(tmp_path), capsule=CapsuleSettings())
+    image = scene()
+    raw = replace(inferred(BoundingRect(75, 1, 90, 4)), image_shape=(120, 480, 3))
+    result = (
+        ConfiguredProductionPipeline(config)
+        .inspect(cycle(config, image), lambda _: raw)
+        .production
+    )
+    for camera in result.cameras:
+        empty, present, unknown = camera.channels[:3]
+        assert [
+            row.occupancy.state for row in (empty, present, unknown) if row.occupancy
+        ] == [OccupancyState.EMPTY, OccupancyState.PRESENT, OccupancyState.UNKNOWN]
+        assert empty.business_status is ChannelBusinessStatus.EMPTY
+        assert not empty.vimo_findings and not empty.reasons
+        assert present.vimo_findings[0].finding is unknown.vimo_findings[0].finding
+        for row in (present, unknown):
+            assert row.business_status is ChannelBusinessStatus.NG
+            assert [reason.code for reason in row.reasons] == ["defect_region"]
+        assert camera_archive_status(camera) == 1
+    assert FirstStationReport.from_result(1, result).reject_words[0] & 7 == 0b110
+
+
+@pytest.mark.parametrize("error", ["execution_error", "invalid_result"])
+@pytest.mark.parametrize("required", [False, True])
+def test_confirmed_empty_preserves_enabled_vimo_errors(
+    tmp_path: Path, error: str, required: bool
+) -> None:
+    config = configuration(tmp_path)
+    config = replace(
+        config,
+        checks=replace(
+            config.checks, vimo=replace(config.checks.vimo, required=required)
+        ),
+    )
+    image = np.zeros((120, 480, 3), dtype=np.uint8)
+
+    def infer(_: NDArray[np.uint8]) -> ImageResult:
+        if error == "execution_error":
+            raise RuntimeError("synthetic failure")
+        return replace(inferred(BoundingRect(480, 0, 1, 1)), image_shape=(120, 480, 3))
+
+    result = (
+        ConfiguredProductionPipeline(config)
+        .inspect(cycle(config, image), infer)
+        .production
+    )
+    for row in result.channels:
+        assert row.business_status is ChannelBusinessStatus.EMPTY
+        assert row.checks[1].assessment.technical_status is TechnicalStatus.ERROR
+        assert [reason.code for reason in row.checks[1].reasons] == [error]
     assert FirstStationReport.from_result(1, result).reject_words == (
         0xFFFF,
-        0xFFFF,
-        0x000F,
-    )
-    # With only the assigned finding, CH1 keeps its NG bit. The other five empty
-    # slots on that camera clear without affecting the unresolved cameras.
-    first_camera, *others = result.cameras
-    assigned_only = replace(
-        result, cameras=(replace(first_camera, unassigned_findings=()), *others)
-    )
-    assert FirstStationReport.from_result(1, assigned_only).reject_words == (
-        0xFFC1,
         0xFFFF,
         0x000F,
     )

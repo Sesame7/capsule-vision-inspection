@@ -1036,18 +1036,21 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _batch_dialog(self) -> None:
+        revision = self.bridge.application.session_revision
+        selection = self.bridge.application.snapshot()
         if (
             self._closing
             or not permits(self.bridge.application, Role.OPERATOR)
-            or self.bridge.application.snapshot().state is not ApplicationState.READY
+            or selection.state is not ApplicationState.READY
+            or selection.batch_pending
         ):
             return
-        revision = self.bridge.application.session_revision
-        selection = self.snapshot
         dialog = BatchDialog(selection, self.language, self)
         try:
             if dialog.exec():
-                if dialog.end_requested:
+                if dialog.action == "clear":
+                    self.bridge.clear_statistics(revision, selection.generation)
+                elif dialog.action == "end":
                     self.bridge.end_batch(revision, selection.batch_uuid)
                 else:
                     self.bridge.start_batch(dialog.label.text(), revision)

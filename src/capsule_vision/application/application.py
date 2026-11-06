@@ -452,6 +452,48 @@ class ProductionApplication:
     ) -> Future[None]:
         return self._change_batch(None, revision, expected_batch)
 
+    def clear_statistics(
+        self, *, revision: int | None = None, expected_generation: int | None = None
+    ) -> None:
+        """Start fresh displayed counts without changing durable Run or Batch records."""
+        action = "production.clear_statistics"
+        with (
+            self._condition,
+            self._admission(
+                Role.OPERATOR,
+                revision,
+                action=action,
+                target="unbatched",
+            ) as actor,
+        ):
+            self._require(ApplicationState.READY)
+            if self._batch is not None or self._batch_pending or self._restoring:
+                raise ApplicationStateError(
+                    "Clearing statistics requires no selected Batch"
+                )
+            if (
+                expected_generation is not None
+                and expected_generation != self._generation
+            ):
+                raise ApplicationStateError("Production changed before confirmation")
+            cycles = self._counters.cycles_completed
+            groups = self._pilot_counters.batches_completed
+            self._counters = ProductionCounters()
+            self._pilot_counters = PilotCounters()
+            self._latest = None
+            self._batch_duration_ms = None
+            if actor and self.identity:
+                self.identity.audit.record(
+                    AuditOperation.by(
+                        actor,
+                        action,
+                        "unbatched",
+                        f"cycles={cycles}, groups={groups}",
+                        "cycles=0, groups=0",
+                    ),
+                    "success",
+                )
+
     def _change_batch(
         self, label: str | None, revision: int | None, expected_batch: str | None = None
     ) -> Future[None]:

@@ -212,8 +212,9 @@ execution append separate terminal evidence. Repeating the same fact for the sam
 operation is idempotent. A crash between the intent and completion leaves the
 operation unresolved. An audit finalization error leaves the business result intact.
 
-Authentication, logout, actual Start/Stop, Batch changes, saved Recipe selection
-and important security or persistence failures submit observations without waiting.
+Authentication, logout, actual Start/Stop, Batch changes, unbatched statistics
+clearing, saved Recipe selection and important security or persistence failures
+submit observations without waiting.
 The audit writer exposes a separate storage issue and count of unconfirmed writes
 for its lifetime. An abrupt process exit can lose queued best-effort observations.
 Inspection, automatic reporting and Stop continue through audit loss. Close drains
@@ -475,18 +476,21 @@ Reporting eligibility and ambiguity checks are in [communication](communication.
 
 Full-camera ViMo runs at most once per eligible camera frame when enabled, then
 findings are assigned against saved channel ROIs with original global ChannelIds.
-Per-channel label filtering is a consumption policy, not a change to SDK evidence.
-Unassigned camera findings remain distinct and never fabricate channel findings.
-They contribute camera-level NG and prevent verified EMPTY from clearing reject bits
-on that camera under the [PLC projection contract](communication.md#first-station-registers);
-they are not automatically classified as harmless background.
+After label filtering, each PRESENT or UNKNOWN channel consumes its assigned
+findings, including a finding shared with another channel. Confirmed EMPTY
+channels omit those assignments and their defect reasons from the effective
+judgment. Unassigned findings remain available as diagnostic evidence. The
+camera aggregates the channel judgments and collection status, and its defect
+overlays show the findings and reasons consumed by those channels. See the
+[PLC projection contract](communication.md#first-station-registers) for reject bits.
 
 Occupancy always measures the centered `max(1, width*70//100)` portion of the saved
 ROI, split into upper/lower views; a pixel is foreground if any BGR component is
 greater than 20. Each view is EMPTY at <=1%, PRESENT at >=5%, otherwise UNKNOWN.
 Only equal EMPTY/EMPTY or PRESENT/PRESENT pairs fuse to that state. Geometry stays
-unchanged. Valid EMPTY explicitly skips enabled Size/Color, preserving provenance;
-it does not suppress ViMo or erase its NG evidence.
+unchanged. Valid EMPTY explicitly skips enabled Size/Color with recorded
+provenance. Enabled full-camera inference and result validation still run.
+Execution errors, collection failures and forced rejects retain their own reasons.
 
 Size thresholds the complete Channel ROI once (any BGR channel >20), then labels
 8-connected foreground once. The divider at `height // 2` assigns logical views;
@@ -595,7 +599,9 @@ Run confirmation. Stored Cycle rows have independent persistent IDs and unique
 `(run_id, cycle_id)` identities. Compact details retain configured camera/slot/
 channel identities, business/technical/judgment states and existing abnormal
 reason codes. Images, masks, raw outputs, measurements and full snapshots are
-excluded. Neither judgments nor PLC delivery depend on storage success.
+excluded. History reads each stored judgment and reason as recorded under the
+inspection policy in effect at the time. Neither judgments nor PLC delivery
+depend on storage success.
 
 Accepted Cycle admissions, terminal results and eligible four-Cycle completions
 enter this owner through bounded non-waiting handoffs. For a named Batch a
@@ -798,8 +804,10 @@ Its text budget follows ordinary content and is capped for long values; elision
 never changes the underlying Batch identity or its full tooltip/accessibility text.
 The editor shows the current Batch ID and a separate input. Enter or **Set Batch ID**
 submits a nonempty value. Escape and the window close button discard the edit.
-**End Batch** opens a confirmation with **Keep Open** as the default. Dismissing
-that confirmation returns to the editor with its input intact.
+A named Batch offers **End Batch** with **Keep Open** as the confirmation default.
+In READY without a named Batch, the same slot offers **Clear Statistics** to an
+Operator or higher, with **Cancel** as the confirmation default. Dismissing
+either confirmation returns to the editor with its input intact.
 The stacked player and Batch fit the existing ordinary-font header height, leaving
 the metrics row and camera grid geometry unchanged. The Production identity has two
 rows: state with conditional inline active/requested identity, then the saved-Recipe
@@ -870,6 +878,10 @@ the original occurrence counters. Both cumulative stores survive Stop/Start and
 Recipe changes and remain separate across mode changes. Selecting a Batch loads
 its summaries and last eligible group duration and clears current result overlays
 and group progress. Retained pixels do not carry the cleared judgments.
+Confirmed unbatched clearing resets both counter sets, recent result indications
+and group duration in memory. It preserves the last successful Start's counting
+mode and any persistence warning. It appends a routine Audit Trail action when
+available and leaves historical records and PLC registers intact.
 
 The History Cycle table shows Time, `#`, Group, Batch, Recipe and Result. Group
 shows the first CycleId and the Cycle's stored slot (for example, `2265 · 2/4`),

@@ -318,7 +318,6 @@ class CameraCard(QFrame):
             boxes.extend(
                 item.finding.bounding_rect for item in result.assigned_findings
             )
-            boxes.extend(item.bounding_rect for item in result.unassigned_findings)
             for row in result.channels:
                 for check in row.checks:
                     if check.assessment.judgment is ProductJudgment.NG:

@@ -366,7 +366,8 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
             startup.editor.draft.image_archive.root_directory = str(
                 tmp_path / "draft-only"
             )
-            passive.expose(1, (5, 3, 1, 4, 2, 0))
+            # All six observed frames must contain product for this NG archive case.
+            passive.expose(1, (5, 3, 1, 4, 2, 0), intensity=30)
             assert entered.wait(WAIT)
             until(lambda: app.snapshot().counters.cycles_completed == 1)
             until(
@@ -409,7 +410,8 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
             for item in requests:
                 index = result.layout.camera_ids.index(item.frame.id.camera_id)
                 assert (
-                    np.all(item.frame.image == 10 + index)
+                    item.status == 1
+                    and np.all(item.frame.image == 30 + index)
                     and not item.frame.image.flags.writeable
                 )
             if not disk_failure:
@@ -700,13 +702,18 @@ class PassiveBackend:
         with self.condition:
             return self.queues[serial].popleft()
 
-    def expose(self, ordinal: int, cameras: tuple[int, ...] = tuple(range(6))) -> None:
+    def expose(
+        self,
+        ordinal: int,
+        cameras: tuple[int, ...] = tuple(range(6)),
+        *,
+        intensity: int | None = None,
+    ) -> None:
+        level = ordinal * 10 if intensity is None else intensity
         with self.condition:
             for index in cameras:
                 width, height = self.dimensions[SERIALS[index]]
-                pixels = np.full(
-                    (height, width, 3), ordinal * 10 + index, dtype=np.uint8
-                )
+                pixels = np.full((height, width, 3), level + index, dtype=np.uint8)
                 pixels.setflags(write=False)
                 self.queues[SERIALS[index]].append(
                     (

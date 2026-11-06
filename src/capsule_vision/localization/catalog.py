@@ -19,6 +19,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "production.recipe": ("选择生产配方", "Select Production Recipe"),
     "batch.select": ("设置批号", "Set Batch ID"),
     "batch.end": ("结束批次", "End Batch"),
+    "production.clear_statistics": ("清零统计", "Clear Statistics"),
     "recipe.save": ("保存配方", "Save Recipe"),
     "recipe.delete": ("删除配方", "Delete Recipe"),
     "model.stage": ("检查模型导入", "Stage Model import"),
@@ -769,6 +770,10 @@ STRINGS: dict[str, tuple[str, str]] = {
     "batch_current": ("当前批号", "Current Batch ID"),
     "batch_input": ("批号", "Batch ID"),
     "batch_end": ("结束批次", "End Batch"),
+    "clear_statistics_confirm": (
+        "清零当前无批号的统计？历史记录将保留。",
+        "Clear unbatched counts? Saved records are kept.",
+    ),
     "batch_end_confirm": (
         "结束当前批次？再次选择同一批号可继续累计。",
         "End the current Batch? Selecting the same label later continues its totals.",

@@ -199,6 +199,7 @@ OPTIONAL_UI_KEYS = {
     "batch_keep_open",
     "batch_end",
     "batch_end_confirm",
+    "clear_statistics_confirm",
     "batch_select",
     "run_uncertain",
     "batch_uncertain",
@@ -1388,7 +1389,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 624
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 626
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

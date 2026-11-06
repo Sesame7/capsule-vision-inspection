@@ -74,7 +74,7 @@ def test_failed_occupancy_is_not_empty_or_ok(ng: bool) -> None:
     assert row.assessment.technical_status is TechnicalStatus.ERROR
 
 
-def test_unassigned_camera_ng_never_fabricates_channel_ng() -> None:
+def test_unassigned_findings_do_not_change_camera_or_channel_judgments() -> None:
     base = production()
     camera = base.cameras[0]
     assert camera.frame_id is not None
@@ -102,7 +102,7 @@ def test_unassigned_camera_ng_never_fabricates_channel_ng() -> None:
     )
     result = replace(base, cameras=cameras)
     assert (
-        result.unassigned_findings and result.assessment.judgment is ProductJudgment.NG
+        result.unassigned_findings and result.assessment.judgment is ProductJudgment.OK
     )
     assert all(
         row.business_status is ChannelBusinessStatus.OK for row in result.channels

@@ -1,14 +1,19 @@
 """Normal composition with a temporary History, accounts and synthetic devices."""
 
+import json
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pytest
+from numpy.typing import NDArray
 from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.integration.test_basler_production import Engine, PassiveBackend, save_basler
 from tests.support.application import WAIT
 from tests.support.fins_tcp import TcpPeer
+from tests.support.production import inferred
 from tests.support.qt import close_window, until
 from tests.support.startup import (
     TEST_PASSWORD,
@@ -16,9 +21,20 @@ from tests.support.startup import (
     close,
     saved_data,
 )
+from tests.unit.test_alarm_monitor import event as alarm_event
 
-from capsule_vision.application import ApplicationError, ApplicationState, _basler_sdk
+from capsule_vision.application import (
+    ApplicationError,
+    ApplicationState,
+    ApplicationStateError,
+    ProductionCounters,
+    _basler_sdk,
+)
+from capsule_vision.application.alarm_records import AlarmQuery
+from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.identity_models import AuthorizationError
+from capsule_vision.application.image_archive import camera_archive_status
+from capsule_vision.application.models import PilotCounters
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
@@ -28,11 +44,24 @@ from capsule_vision.communication.reporting import (
     ReportingSelection,
     ReportingSettings,
 )
+from capsule_vision.inference import BoundingRect, ImageResult
 from capsule_vision.localization.catalog import text
 from capsule_vision.ui import recipe_page
 from capsule_vision.ui.batch_dialog import BatchDialog
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
+
+
+class ExposureFindings(Engine):
+    def infer(self, image_bgr: NDArray[np.generic]) -> ImageResult:
+        raw = super().infer(image_bgr)
+        exposure = int(image_bgr[0, 0, 0]) // 10
+        # One background region on every exposure. The first slot also has
+        # a finding on exposure 1 (empty) and 3 (occupied), but not on 4.
+        regions = [BoundingRect(58, 15, 2, 2)]
+        if exposure in (1, 3):
+            regions.append(BoundingRect(1, 1, 2, 2))
+        return replace(raw, regions=inferred(*regions).regions)
 
 
 @pytest.mark.parametrize(
@@ -48,7 +77,7 @@ def test_unbatched_basler_run_keeps_its_cycles_and_eligible_group(
     save_basler(data.sources)
     backend = PassiveBackend()
     monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
-    engine = Engine()
+    engine = ExposureFindings()
     engine.release_warm.set()
     startup = authenticated_startup(
         data, engine_factory=lambda _: engine, select_basler_batch=False
@@ -68,6 +97,8 @@ def test_unbatched_basler_run_keeps_its_cycles_and_eligible_group(
             run = snapshot.run_id
             assert run and snapshot.batch_id is None and snapshot.batch_uuid is None
             assert not snapshot.unbatched_run_uncertain
+            with pytest.raises(ApplicationStateError):
+                app.clear_statistics()
             for ordinal in range(1, cycles + 1):
                 backend.expose(ordinal)
                 until(
@@ -75,6 +106,13 @@ def test_unbatched_basler_run_keeps_its_cycles_and_eligible_group(
                         app.snapshot().counters.cycles_completed == ordinal
                     )
                 )
+                observed = app.snapshot().latest_production_result
+                assert observed is not None
+                if ordinal in (1, 3, 4):
+                    assert all(
+                        camera_archive_status(camera) == {1: 3, 3: 1, 4: 0}[ordinal]
+                        for camera in observed.cameras
+                    )
                 if mode is ReportingMode.FOUR_CYCLE and ordinal == 1:
                     until(
                         lambda: bool(
@@ -92,8 +130,62 @@ def test_unbatched_basler_run_keeps_its_cycles_and_eligible_group(
             else:
                 assert not peer.packets
             app.stop().result(WAIT)
-            assert not app.snapshot().unbatched_run_uncertain
+            before = app.snapshot()
+            assert (
+                before.counters.cycles_completed == cycles
+                and before.latest_production_result
+            )
+            assert before.pilot_counting is (mode is ReportingMode.FOUR_CYCLE)
+            if before.pilot_counting:
+                assert before.pilot_counters == PilotCounters(
+                    batches_completed=1, channel_ok=30, channel_ng=6
+                )
+                assert before.batch_duration_ms is not None
+                assert before.group_progress is not None
+                assert peer.words(50, 3) == (0x1041, 0x4104, 0)
+            packets = tuple(peer.packets)
+            with pytest.raises(ApplicationStateError, match="before confirmation"):
+                app.clear_statistics(expected_generation=before.generation - 1)
+            assert app.snapshot() == before
+            app.clear_statistics(
+                revision=app.session_revision, expected_generation=before.generation
+            )
+            cleared = app.snapshot()
+            assert (
+                cleared.counters == ProductionCounters()
+                and cleared.pilot_counters == PilotCounters()
+            )
+            assert (
+                cleared.latest_production_result
+                is cleared.batch_duration_ms
+                is cleared.group_progress
+                is None
+            )
+            assert cleared.pilot_counting is before.pilot_counting
+            assert (
+                cleared.batch_id is cleared.batch_uuid is None
+                and not cleared.unbatched_run_uncertain
+            )
+            assert tuple(peer.packets) == packets
+            assert app.history is not None
+            history = sorted(
+                app.history.query().result(WAIT).records,
+                key=lambda record: record.cycle_id,
+            )
+            assert len(history) == cycles
+            assert history[0].judgment == "OK" and all(
+                c.business == "EMPTY" and not c.reasons for c in history[0].channels
+            )
+            if cycles == 4:
+                assert history[2].judgment == "NG" and history[3].judgment == "OK"
+                assert [
+                    c.channel
+                    for c in history[2].channels
+                    if "defect_region" in c.reasons
+                ] == [1, 7, 13, 19, 25, 31]
             app.start_batch("Later").result(WAIT)
+            with pytest.raises(ApplicationStateError):
+                app.clear_statistics()
             assert app.snapshot().counters.cycles_completed == 0
             assert app.snapshot().pilot_counters.batches_completed == 0
         finally:
@@ -114,9 +206,50 @@ def test_unbatched_basler_run_keeps_its_cycles_and_eligible_group(
             "SELECT run,cycle,slot FROM group_members ORDER BY slot"
         ).fetchall()
         assert groups == ([(run, "1", 7)] if cycles == 4 else [])
+        if cycles == 4:
+            finals = db.execute("SELECT final_channels FROM plc_groups").fetchone()
+            assert json.loads(finals[0]) == [
+                [c, "NG" if c % 6 == 1 else "OK"] for c in range(1, 37)
+            ]
         assert members == (
             [(run, str(i), i) for i in range(1, 5)] if cycles == 4 else []
         )
+    with closing(sqlite3.connect(data.audit)) as audit:
+        assert audit.execute(
+            "SELECT username,target,old_value,new_value FROM operations JOIN completions USING(id) "
+            "WHERE action='production.clear_statistics' AND outcome='success'"
+        ).fetchall() == [
+            (
+                "TestAdmin",
+                "unbatched",
+                f"cycles={cycles}, groups={int(cycles == 4)}",
+                "cycles=0, groups=0",
+            )
+        ]
+
+
+def test_unbatched_clear_preserves_prior_audit_and_alarm_records(
+    tmp_path: Path,
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    app = startup.application
+    try:
+        history, identity = app.history, app.identity
+        assert history is not None and identity is not None
+        history.offer_alarms((alarm_event(history.clock(), "prior-alarm"),))
+        alarms = app.alarm_page(AlarmQuery()).result(WAIT)
+        audit = identity.audit.page(AuditQuery()).result(WAIT)
+        assert alarms and audit
+        app.clear_statistics()
+        assert app.alarm_page(AlarmQuery()).result(WAIT) == alarms
+        latest, *prior = identity.audit.page(AuditQuery()).result(WAIT)
+        assert tuple(prior) == audit
+        assert (
+            latest.operation.action == "production.clear_statistics"
+            and latest.outcome == "success"
+        )
+    finally:
+        close(startup)
 
 
 def test_unbatched_start_with_unavailable_history_is_visible(
@@ -147,6 +280,7 @@ def test_unbatched_start_with_unavailable_history_is_visible(
         backend.expose(1)
         until(lambda: app.snapshot().counters.cycles_completed == 1)
         app.stop().result(WAIT)
+        app.clear_statistics()
         assert app.snapshot().unbatched_run_uncertain
         assert app.history and app.history.snapshot().persisted == 0
     finally:
@@ -239,8 +373,8 @@ def test_batch_dialog_revision_confirmation_and_restart(
         until(lambda: window.snapshot.batch_id == "Next")
 
         def end(dialog: BatchDialog) -> int:
-            dialog.end.click()
-            return int(dialog.end_requested)
+            dialog.secondary.click()
+            return int(dialog.action == "end")
 
         monkeypatch.setattr(BatchDialog, "exec", end)
 

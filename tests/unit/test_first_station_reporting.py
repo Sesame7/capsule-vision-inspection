@@ -223,7 +223,7 @@ def test_unobserved_cycle_and_invalid_projection_are_not_reports() -> None:
             FirstStationReport(data.identity, statuses)
 
 
-def test_unassigned_ng_does_not_spread_to_channel_bits() -> None:
+def test_unassigned_finding_does_not_change_judgment_or_channel_bits() -> None:
     result = mixed_result()
     result = replace(
         result,
@@ -253,7 +253,7 @@ def test_unassigned_ng_does_not_spread_to_channel_bits() -> None:
         result,
         cameras=(replace(camera, unassigned_findings=(finding,)), *result.cameras[1:]),
     )
-    assert changed.assessment.judgment is ProductJudgment.NG
+    assert changed.assessment.judgment is ProductJudgment.OK
     assert finding not in tuple(
         assignment.finding
         for row in changed.channels
@@ -266,7 +266,7 @@ def test_unassigned_ng_does_not_spread_to_channel_bits() -> None:
     )
 
 
-def test_unassigned_finding_rejects_camera_empty_evidence() -> None:
+def test_unassigned_finding_preserves_verified_empty_bits() -> None:
     result = mixed_result()
     camera = result.cameras[0]
     assert camera.frame_id is not None
@@ -279,7 +279,7 @@ def test_unassigned_finding_rejects_camera_empty_evidence() -> None:
         cameras=(replace(camera, unassigned_findings=(finding,)), *result.cameras[1:]),
     )
     assert FirstStationReport.from_result(1, changed).reject_words == (
-        0xCF3E,
+        0xCF3C,
         0x3CF3,
         15,
     )

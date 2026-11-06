@@ -193,6 +193,14 @@ class QtProductionBridge(QObject):
             ),
         )
 
+    def clear_statistics(self, revision: int | None, generation: int) -> None:
+        self._immediate(
+            "batch",
+            lambda: self.application.clear_statistics(
+                revision=revision, expected_generation=generation
+            ),
+        )
+
     @Slot()
     def close(self) -> None:
         self._check_thread()

@@ -78,6 +78,7 @@ def test_production_role_boundaries(
                 app.begin_recipe_selection,
                 lambda: app.configure(candidate),
                 lambda: app.start_batch("changed"),
+                app.clear_statistics,
                 app.reset_fault,
                 app.connect_source,
                 app.disconnect_source,
@@ -87,6 +88,14 @@ def test_production_role_boundaries(
                     command()
             assert app.snapshot() == before and app.source_snapshot() == connection
         else:
+            until(lambda: not app.snapshot().batch_pending)
+            app.clear_statistics(revision=owner.snapshot().revision)
+            revision = owner.snapshot().revision
+            account = owner.snapshot().account
+            assert account is not None
+            owner.login(account.username, TEST_PASSWORD).result(WAIT)
+            with pytest.raises(StaleSessionError):
+                app.clear_statistics(revision=revision)
             first = app.begin_recipe_selection()
             second = app.begin_recipe_selection()
             with pytest.raises(StaleSessionError):

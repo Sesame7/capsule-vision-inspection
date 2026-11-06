@@ -218,7 +218,13 @@ def test_frames_match_identity_bgr_and_clear_stale_overlay(
     result = replace(
         result,
         cameras=(
-            replace(camera, channels=(row, *camera.channels[1:])),
+            replace(
+                camera,
+                channels=(row, *camera.channels[1:]),
+                unassigned_findings=(
+                    replace(finding, bounding_rect=BoundingRect(58, 15, 2, 2)),
+                ),
+            ),
             *result.cameras[1:],
         ),
     )
@@ -226,7 +232,7 @@ def test_frames_match_identity_bgr_and_clear_stale_overlay(
     assert receipt.result.done()
     until(lambda: window.cards[0].result is not None)
     card = window.cards[0]
-    assert card.viewport.boxes
+    assert card.viewport.boxes == (finding.bounding_rect,)
     # A candidate layout change must not relabel the retained matching result.
     original_layout = card.camera_layout
     card.camera_layout = replace(
@@ -1010,7 +1016,7 @@ def test_batch_dialog_applies_only_submitted_input(
         assert {w.text() for w in editor.findChildren(QLabel)} == {current, field}
         assert {w.text() for w in editor.findChildren(QPushButton)} == {end, submit}
         assert editor.label.accessibleName() == field and editor.select.isDefault()
-        assert editor.end.geometry().right() < editor.select.geometry().left()
+        assert editor.secondary.geometry().right() < editor.select.geometry().left()
         if action == "enter":
             editor.label.setText("  ")
             QTest.keyClick(editor.label, Qt.Key.Key_Return)
@@ -1024,8 +1030,8 @@ def test_batch_dialog_applies_only_submitted_input(
             QTest.keyClick(editor.label, Qt.Key.Key_Escape)
         else:
             if action != "close":
-                editor.end.click()
-                assert editor.isVisible() and not editor.end_requested
+                editor.secondary.click()
+                assert editor.isVisible() and editor.action == "select"
                 assert editor.label.text() == "batch-Y"
             editor.close()
         assert not editor.isVisible()
@@ -1056,6 +1062,70 @@ def test_batch_dialog_applies_only_submitted_input(
         )
         assert window.snapshot.counters == counts
         assert window.snapshot.latest_production_result is not None
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_unbatched_clear_requires_confirmation_and_refreshes_counts(
+    screen: tuple[MainWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+    language: Language,
+) -> None:
+    window, session = screen
+    window.resize(1080, 900)
+    window.set_language(language)
+    session.ready.set_result(None)
+    window.bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    receipt = window.bridge.application.begin_cycle(CycleId(1))
+    session.cycles[0].accepted.set_result(None)
+    session.cycles[0].result.set_result(mixed_result())
+    until(
+        lambda: receipt.result.done() and window.snapshot.counters.cycles_completed == 1
+    )
+    window.bridge.stop()
+    until(lambda: window.snapshot.state is ApplicationState.READY)
+    before = window.snapshot
+    caption = "清零统计" if language == "zh" else "Clear Statistics"
+
+    def confirm(prompt: QMessageBox) -> int:
+        prompt.show()
+        assert prompt.windowTitle() == caption
+        safe = prompt.defaultButton()
+        assert safe is not None and safe.text() == text("cancel", language)
+        assert prompt.escapeButton() is safe
+        if approved:
+            next(
+                button for button in prompt.buttons() if button.text() == caption
+            ).click()
+        else:
+            QTest.keyClick(prompt, Qt.Key.Key_Escape)
+        return prompt.result()
+
+    def answer(editor: BatchDialog) -> int:
+        editor.open()
+        assert editor.secondary.text() == caption and not editor.select.isEnabled()
+        assert editor.secondary.geometry().right() < editor.select.geometry().left()
+        editor.secondary.click()
+        if not approved:
+            assert editor.isVisible()
+            editor.close()
+        return editor.result()
+
+    monkeypatch.setattr(QMessageBox, "exec", confirm)
+    monkeypatch.setattr(BatchDialog, "exec", answer)
+    approved = False
+    window.buttons["batch"].click()
+    assert window.snapshot == before
+    approved = True
+    window.buttons["batch"].click()
+    assert window.snapshot.batch_id is None and window.snapshot.batch_uuid is None
+    assert window.snapshot.counters == ProductionCounters()
+    assert window.snapshot.latest_production_result is None
+    assert window.metrics["processing"][0].text() == "--"
+    assert all(
+        window.metrics[k][0].text() == "0"
+        for k in ("cycles", "channel_ok", "channel_ng", "channel_empty")
+    )
 
 
 def test_five_metrics_follow_cumulative_business_counts_and_batch(

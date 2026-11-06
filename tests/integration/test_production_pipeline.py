@@ -67,12 +67,13 @@ def test_collected_cycle_worker_and_production_results_compose(
         replace(prepared(tmp_path).configuration, layout=config)
     )
     collector.begin(CycleId(1))
-    # These owned inputs belong only to this test; shared frame seeds stay unchanged.
+    # Occupied frames exercise both assigned NG and independent camera failures.
+    first_marker = 31
     inputs = {
-        index + 1: Frame(
+        first_marker + index: Frame(
             FrameId(CycleId(1), camera.camera_id, 5 - index),
             2000.0,
-            np.full((20, 60, 3), index + 1, dtype=np.uint8),
+            np.full((20, 60, 3), first_marker + index, dtype=np.uint8),
         )
         for index, camera in enumerate(config.cameras)
     }
@@ -98,7 +99,9 @@ def test_collected_cycle_worker_and_production_results_compose(
 
     # Fail CAM4 by its pixels, independently of reverse arrival or call count.
     failed_id = expected_ids[3]
-    worker = InferenceWorker(lambda: Engine(trace, fail_marker=4 if fail_one else None))
+    worker = InferenceWorker(
+        lambda: Engine(trace, fail_marker=first_marker + 3 if fail_one else None)
+    )
     try:
         worker.start().result(5)
         assert [

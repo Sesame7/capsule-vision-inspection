@@ -166,13 +166,9 @@ class FirstStationReport:
                 statuses.append((row.channel_id, status))
                 # Business EMPTY already requires two empty views and excludes NG
                 # and forced rejection. Optional check errors can still coexist with it.
-                if (
-                    status is ChannelBusinessStatus.EMPTY
-                    and not camera.unassigned_findings
-                    and all(
-                        check.assessment.technical_status is not TechnicalStatus.ERROR
-                        for check in row.checks
-                    )
+                if status is ChannelBusinessStatus.EMPTY and all(
+                    check.assessment.technical_status is not TechnicalStatus.ERROR
+                    for check in row.checks
                 ):
                     verified_empty.add(row.channel_id)
         return cls(

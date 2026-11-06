@@ -1,6 +1,9 @@
 """Real SQLite + queued Qt browsing, independent of Production and source actions."""
 
+import json
 import sqlite3
+import zlib
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -547,7 +550,7 @@ def test_stored_recipe_names_missing_names_and_content_sized_channel_details(
         ("ok", "OK 36 · NG 0 · EMPTY 0"),
         ("empty", "OK 0 · NG 0 · EMPTY 36"),
         ("unknown", "OK 0 · NG 0 · EMPTY 0 · UNKNOWN 36"),
-        ("cycle_ng", "OK 36 · NG 0 · EMPTY 0 · 周期 NG"),
+        ("unassigned", "OK 36 · NG 0 · EMPTY 0"),
         ("cycle_error", "OK 36 · NG 0 · EMPTY 0 · 周期 ERR · 周期 UNKNOWN"),
         ("timed_out", "OK 36 · NG 0 · EMPTY 0 · TIMED_OUT · 周期 ERR · 周期 UNKNOWN"),
     ],
@@ -580,7 +583,7 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
                 for camera in result.cameras
             ),
         )
-    if scenario == "cycle_ng":
+    if scenario == "unassigned":
         camera = result.cameras[0]
         assert camera.frame_id is not None
         finding = ViMoFinding(
@@ -688,13 +691,10 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
                 page.channel_detail.toPlainText()
                 == f"CAM1 · CH01 · {'OK' if scenario == 'ok' else 'EMPTY'}"
             )
-        elif scenario == "cycle_ng":
-            item = page.channels.item(0, 0)
-            assert item is not None
-            assert (
-                "周期 NG" in content(page.cycles, 0, 5)
-                and "unassigned_defect" in stored.cameras[0].unassigned_labels
-            )
+        elif scenario == "unassigned":
+            assert stored.judgment == stored.cameras[0].judgment == "OK"
+            assert "unassigned_defect" in stored.cameras[0].unassigned_labels
+            assert all(not c.reasons for c in stored.channels)
         elif scenario in ("cycle_error", "timed_out"):
             assert "周期 ERR" in content(page.cycles, 0, 5)
         if scenario == "cycle_error":
@@ -703,10 +703,69 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
                 item is not None
                 and "camera_collection_error" in stored.cameras[0].reasons
             )
-        if scenario in ("cycle_error", "timed_out", "cycle_ng"):
+        if scenario in ("cycle_error", "timed_out"):
             page.set_language("en")
             assert content(page.cycles, 0, 5) == expected.replace("周期", "Cycle")
             assert "Cycle" in content(page.cycles, 0, 5)
+    finally:
+        page.dispose()
+        page.close()
+        history.request_stop()
+        assert history.join(WAIT)
+        page.deleteLater()
+
+
+def test_historical_camera_ng_keeps_its_stored_judgment(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    path = tmp_path / "history.sqlite3"
+    history = ProductionHistory(path)
+    history.initial_selection.result(WAIT)
+    history.request_stop()
+    assert history.join(WAIT)
+    # A recorded pre-change Cycle: every channel was OK, while the unmatched
+    # finding on CAM1 was recorded as camera- and Cycle-level NG.
+    channels = [
+        [f"CAM{i // 6 + 1}", i % 6, i + 1, "OK", "SUCCESS", "OK", ()] for i in range(36)
+    ]
+    cameras = [
+        [
+            f"CAM{i + 1}",
+            "SUCCESS",
+            "NG" if i == 0 else "OK",
+            [],
+            ["background"] if i == 0 else [],
+        ]
+        for i in range(6)
+    ]
+    detail = zlib.compress(json.dumps([channels, cameras, "Old Recipe"]).encode())
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute(
+            "INSERT INTO cycles(completed_at,batch_segment,run_id,cycle_id,recipe_id,model_id,model_sha,"
+            "status,technical,judgment,empty_count,unknown_count,detail) VALUES(?,?,?,?,?,?,?,"
+            "'COMPLETE','SUCCESS','NG',0,0,?)",
+            (
+                time(),
+                "segment",
+                "historical-run",
+                "1",
+                "recipe",
+                "model",
+                "c" * 64,
+                detail,
+            ),
+        )
+    history = ProductionHistory(path)
+    page = HistoryPage(history)
+    try:
+        page.activate()
+        until(lambda: not page.busy)
+        assert content(page.cycles, 0, 5) == "OK 36 · NG 0 · EMPTY 0 · 周期 NG"
+        stored = cycle_record(page)
+        assert stored.judgment == stored.cameras[0].judgment == "NG"
+        assert stored.cameras[0].unassigned_labels == ("background",)
+        page.set_language("en")
+        assert content(page.cycles, 0, 5).endswith("Cycle NG")
     finally:
         page.dispose()
         page.close()

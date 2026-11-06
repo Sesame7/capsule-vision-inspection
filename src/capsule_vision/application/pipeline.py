@@ -221,8 +221,12 @@ class ConfiguredProductionPipeline:
         for slot, traditional_check, presence in zip(
             layout.slots, traditional, occupancy, strict=True
         ):
-            matched = tuple(
-                item for item in assignments if item.channel_id == slot.channel_id
+            matched = (
+                ()
+                if presence.state is OccupancyState.EMPTY
+                else tuple(
+                    item for item in assignments if item.channel_id == slot.channel_id
+                )
             )
             rows.append(
                 ChannelInspectionResult(
