@@ -1013,7 +1013,18 @@ def test_batch_dialog_applies_only_submitted_input(
             "en": ("Current Batch ID", "Batch ID", "Set Batch ID", "End Batch"),
             "ja": ("Current Batch ID", "ロット", "Set Batch ID", "End Batch"),
         }[language]
-        assert {w.text() for w in editor.findChildren(QLabel)} == {current, field}
+        assert {w.text() for w in editor.findChildren(QLabel) if w.text()} == {
+            current,
+            field,
+            *(
+                text(key, language)
+                for key in ("batch_product", "batch_specification", "batch_notes")
+            ),
+        }
+        assert [f.accessibleName() for f in editor.inputs] == [
+            text(key, language)
+            for key in ("batch_product", "batch_specification", "batch_notes")
+        ]
         assert {w.text() for w in editor.findChildren(QPushButton)} == {end, submit}
         assert editor.label.accessibleName() == field and editor.select.isDefault()
         assert editor.secondary.geometry().right() < editor.select.geometry().left()
@@ -1750,10 +1761,7 @@ def _assert_grid_and_navigation(
     full_caption = text("page_production", language)
     navigation = window.navigation[0]
     assert navigation.accessibleName() == navigation.toolTip() == full_caption
-    assert navigation.text() == full_caption or (
-        navigation.text().endswith("…")
-        and full_caption.startswith(navigation.text()[:-1])
-    )
+    assert navigation.text() == text("nav_inspect", language)
     for index, card in enumerate(window.cards):
         number = str(card.camera_layout.camera_id).removeprefix("CAM")
         assert card.identity.text() == number

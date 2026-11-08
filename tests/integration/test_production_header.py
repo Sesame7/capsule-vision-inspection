@@ -114,7 +114,7 @@ def test_real_font_changes_grow_then_restore_header_without_clipping(
     assert window.bridge.application.snapshot() == before and not session.cycles
 
 
-def test_navigation_modes_and_player_focus_survive_coordinated_reflow(
+def test_player_focus_and_geometry_survive_navigation_changes(
     screen: tuple[MainWindow, FakeSession],
     qapp: QApplication,
     monkeypatch: pytest.MonkeyPatch,
@@ -142,21 +142,14 @@ def test_navigation_modes_and_player_focus_survive_coordinated_reflow(
         (1080, "it"),
         (1080, "en"),
     )
-    for pixels, mode in (
-        (15, "comfortable"),
-        (26, "compact"),
-        (34, "two_row"),
-        (26, "compact"),
-        (15, "comfortable"),
-    ):
+    for pixels in (15, 26, 15):
         window.navbar.setStyleSheet(f"QWidget {{font-size: {pixels}px;}}")
         qapp.processEvents()
-        assert window.navbar.mode == mode
         for theme in ("light", "dark"):
             window.set_theme(theme)
             for width, language in sizes_and_languages:
                 window.set_language(language)
-                window.resize(width, 1920)
+                window.resize(width, 1920 if width == 1080 else 1080)
                 qapp.processEvents()
                 assert window.summary.height() == ordinary
                 assert_player_fit(window)

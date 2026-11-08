@@ -2,10 +2,7 @@
 
 import json
 import sqlite3
-from concurrent.futures import CancelledError
 from dataclasses import asdict, dataclass
-from pathlib import Path
-from threading import Event
 from uuid import uuid4
 
 from capsule_vision.communication.reporting import (
@@ -33,6 +30,7 @@ class BatchSelection:
 class ReportBatches:
     choices: tuple[tuple[str, str], ...]  # UUID and operator label
     more: bool
+    attributable: frozenset[str] = frozenset()
 
 
 def report_batches(
@@ -45,61 +43,17 @@ def report_batches(
         args.append(cursor)
     order = "DESC" if previous else "ASC"
     rows = db.execute(
-        "SELECT uuid,label FROM batches WHERE "
+        "SELECT uuid,label,json_extract(positions,'$.batches_completed') FROM batches WHERE "
         + " AND ".join(where)
         + f" ORDER BY label {order} LIMIT 51",
         args,
     ).fetchall()
     page = rows[:50]
-    return ReportBatches(tuple(reversed(page) if previous else page), len(rows) > 50)
-
-
-def capture_report(
-    db: sqlite3.Connection,
-    batch: str,
-    snapshot: Path,
-    now: float,
-    loss_run: str | None,
-    cancel: Event,
-) -> None:
-    """Copy only this Batch's export columns at one point on the serial History owner."""
-    if cancel.is_set():
-        raise CancelledError()
-    db.execute("ATTACH DATABASE ? AS report", (str(snapshot),))
-    try:
-        with db:
-            db.execute("BEGIN")
-            db.set_progress_handler(lambda: int(cancel.is_set()), 4096)
-            try:
-                db.execute(
-                    "CREATE TABLE report.batch AS SELECT uuid,label,created,occurrences,positions,"
-                    "? AS observed FROM main.batches WHERE uuid=?",
-                    (now, batch),
-                )
-                if db.execute("SELECT 1 FROM report.batch").fetchone() is None:
-                    raise ValueError("Production Batch unavailable")
-                db.execute(
-                    "CREATE TABLE report.runs AS SELECT uuid,started,terminated,outcome,recipe,"
-                    "reporting_mode,uncertain OR uuid IS ? AS uncertain,detail_expired,"
-                    "(SELECT count(*) FROM main.cycles c WHERE c.run_id=r.uuid) AS retained_cycles "
-                    "FROM main.runs r WHERE batch=?",
-                    (loss_run, batch),
-                )
-                # Both detail tables have a leading Run key. Copy the actual
-                # members; Run/Cycle identities can repeat across different Runs.
-                for table in ("plc_groups", "group_members"):
-                    db.execute(
-                        f"CREATE TABLE report.{table} AS SELECT d.* FROM main.{table} d "
-                        "WHERE d.run IN (SELECT uuid FROM report.runs)"
-                    )
-            finally:
-                db.set_progress_handler(None, 0)
-    except sqlite3.OperationalError:
-        if cancel.is_set():
-            raise CancelledError() from None
-        raise
-    finally:
-        db.execute("DETACH DATABASE report")
+    return ReportBatches(
+        tuple((r[0], r[1]) for r in (reversed(page) if previous else page)),
+        len(rows) > 50,
+        frozenset(r[0] for r in page if r[2]),
+    )
 
 
 SCHEMA = """
@@ -133,6 +87,101 @@ CREATE TABLE group_members (
     PRIMARY KEY(run,cycle), FOREIGN KEY(run,first_cycle) REFERENCES plc_groups ON DELETE CASCADE
 );
 """
+
+RUN_POSITIONS_SCHEMA = """CREATE TABLE IF NOT EXISTS run_positions (
+    run TEXT PRIMARY KEY REFERENCES runs(uuid) ON DELETE CASCADE,
+    positions TEXT
+)"""
+
+
+def run_totals(saved: str | None, mode: str) -> PilotCounters | None:
+    """Unknown coverage and absence of physical grouping are not zero production."""
+    totals = PilotCounters(**json.loads(saved)) if saved is not None else None
+    return (
+        totals
+        if totals is not None and (mode == "four_cycle" or totals.batches_completed)
+        else None
+    )
+
+
+def retained_positions(db: sqlite3.Connection, run: str) -> PilotCounters | None:
+    counts = {"OK": 0, "NG": 0, "EMPTY": 0, "UNKNOWN": 0}
+    groups = 0
+    for encoded, members, slots, low, high, first in db.execute(
+        """SELECT g.final_channels,count(m.cycle),count(DISTINCT m.slot),
+        min(m.slot),max(m.slot),sum(m.slot=1 AND m.cycle=g.first_cycle)
+        FROM plc_groups g LEFT JOIN group_members m USING(run,first_cycle)
+        WHERE g.run=? GROUP BY g.run,g.first_cycle""",
+        (run,),
+    ):
+        if (members, slots, low, high, first) != (4, 4, 1, 4, 1):
+            return None
+        try:
+            pairs: list[tuple[int, str]] = json.loads(encoded)
+            finals = dict(pairs)
+            if (
+                len(pairs) not in (30, 36)
+                or len(finals) != len(pairs)
+                or set(finals) != set(range(1, len(pairs) + 1))
+                or not set(finals.values()) <= counts.keys()
+            ):
+                return None
+        except TypeError, ValueError:
+            return None
+        groups += 1
+        for status in finals.values():
+            counts[status] += 1
+    return PilotCounters(
+        groups, counts["OK"], counts["NG"], counts["EMPTY"], counts["UNKNOWN"]
+    )
+
+
+def initialize_run_positions(db: sqlite3.Connection) -> None:
+    """Recover only verifiable legacy totals, before retention, on the History owner."""
+    db.execute(RUN_POSITIONS_SCHEMA)
+    missing: dict[str, str | None] = dict(
+        db.execute("""SELECT r.uuid,r.batch FROM runs r LEFT JOIN run_positions p
+            ON p.run=r.uuid WHERE p.run IS NULL""")
+    )
+    recovered: dict[str, PilotCounters] = {}
+    for batch in {b for b in missing.values() if b is not None}:
+        candidates: dict[str, PilotCounters] = {}
+        for run, uncertain, expired, outcome, saved in db.execute(
+            """SELECT r.uuid,r.uncertain,r.detail_expired,r.outcome,p.positions
+            FROM runs r LEFT JOIN run_positions p ON p.run=r.uuid WHERE r.batch=?""",
+            (batch,),
+        ):
+            if run not in missing:
+                totals = (
+                    PilotCounters(**json.loads(saved)) if saved is not None else None
+                )
+            elif not uncertain and not expired and outcome in ("stopped", "fault"):
+                totals = retained_positions(db, run)
+            else:
+                totals = None
+            if totals is None:
+                break
+            candidates[run] = totals
+        else:
+            # There is no legacy per-Run checkpoint. Require all contributions to
+            # reconcile to the independent durable Batch summary; never assign a
+            # residual to one Run or recover an unbatched Run without that evidence.
+            (saved_batch,) = db.execute(
+                "SELECT positions FROM batches WHERE uuid=?", (batch,)
+            ).fetchone()
+            expected = PilotCounters(**json.loads(saved_batch))
+            if all(
+                sum(asdict(t)[key] for t in candidates.values()) == value
+                for key, value in asdict(expected).items()
+            ):
+                recovered.update(candidates)
+    db.executemany(
+        "INSERT INTO run_positions VALUES (?,?)",
+        (
+            (run, json.dumps(asdict(recovered[run])) if run in recovered else None)
+            for run in missing
+        ),
+    )
 
 
 def selected(db: sqlite3.Connection) -> BatchSelection | None:
@@ -226,6 +275,10 @@ def start_run(
     )
     if inserted.rowcount != 1:
         raise ValueError("Current Production Batch is unavailable")
+    db.execute(
+        "INSERT INTO run_positions VALUES (?,?)",
+        (run, json.dumps(asdict(PilotCounters()))),
+    )
 
 
 def finish_run(
@@ -308,6 +361,17 @@ def group(
             (run, str(report.identity.cycle_id), str(first), slot)
             for slot, report in enumerate(fact.reports, 1)
         ),
+    )
+    (saved_run,) = db.execute(
+        "SELECT positions FROM run_positions WHERE run=?", (run,)
+    ).fetchone()
+    # This is the same deduplicated fact and transaction as the Batch update.
+    # New Runs always have a ledger, including unbatched Runs. Closed legacy
+    # Runs cannot admit a new fact through _first.
+    run_counters = PilotCounters(**json.loads(saved_run)).completed(fact)
+    db.execute(
+        "UPDATE run_positions SET positions=? WHERE run=?",
+        (json.dumps(asdict(run_counters)), run),
     )
     batch, saved = db.execute(
         "SELECT r.batch,b.positions FROM runs r LEFT JOIN batches b ON r.batch=b.uuid WHERE r.uuid=?",

@@ -38,6 +38,7 @@ from capsule_vision.localization.languages import (
     Language,
 )
 from capsule_vision.ui.main_window import MainWindow
+from capsule_vision.ui.shell import PAGE_CAPTIONS
 from capsule_vision.ui.style import Style, theme_colors
 from capsule_vision.web import ProductionSnapshotService
 from capsule_vision.web.runtime import WebRuntime, WebRuntimeSnapshot, WebState
@@ -252,9 +253,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
     assert ready.state is ApplicationState.READY and window.buttons["batch"].isEnabled()
     timers = set(window.findChildren(QTimer))
     width = window.language_selector.width()
-    navigation: dict[Language, tuple[QRect, ...]] = {
-        "zh": tuple(button.geometry() for button in window.navigation)
-    }
+    navigation = tuple(button.geometry() for button in window.navigation)
     row = window.navbar.layout()
     assert row is not None
     assert window.navigation[0].mapTo(window.navbar, QPoint()).x() == (
@@ -265,6 +264,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         button.click()
         QApplication.processEvents()
         assert window.pages.currentIndex() == page
+        assert window.windowTitle() == "Capsule Vision Inspection"
         assert tuple(b.isChecked() for b in window.navigation) == tuple(
             i == page for i in range(5)
         )
@@ -288,10 +288,8 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             assert window.language == language and window.navigation[4].isChecked()
             assert window.pages.currentWidget() is window.vision_page
             assert window.language_selector.width() == width
-            assert tuple(
-                button.geometry() for button in window.navigation
-            ) == navigation.setdefault(
-                language, tuple(button.geometry() for button in window.navigation)
+            assert (
+                tuple(button.geometry() for button in window.navigation) == navigation
             )
             palette = window.recipe_page.metadata["display_name"].palette()
             assert palette.color(
@@ -324,8 +322,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
     assert before.generation == 1 and before.counters.cycles_completed == 1
     assert not window.buttons["batch"].isEnabled()
     icon_keys = tuple(button.icon().cacheKey() for button in window.navigation)
-    # Language can change navigation mode/height; player roles stay fixed inside
-    # the unchanged Production header as that whole page moves below navigation.
+    # Neither the navigation slots nor the Production player move on translation.
     player_geometry = tuple(
         QRect(button.mapTo(window.summary, QPoint()), button.size())
         for button in (window.buttons[key] for key in ("operation", "pause", "stop"))
@@ -354,7 +351,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         assert window.width() == size[0], (language, window.minimumSizeHint())
         assert all(button.width() >= Style.touch for button in window.navigation)
         geometry = tuple(button.geometry() for button in window.navigation)
-        assert geometry == navigation.setdefault(language, geometry), language
+        assert geometry == navigation, language
         assert (
             tuple(button.icon().cacheKey() for button in window.navigation) == icon_keys
         )
@@ -369,22 +366,13 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             window.navigation,
             strict=True,
         ):
-            full = "PLC / Web" if key == "page_communication" else text(key, language)
-            visible = button.text()
-            assert visible == full or (
-                visible.endswith("…") and full.startswith(visible.removesuffix("…"))
-            ), language
+            assert button.text() == text(PAGE_CAPTIONS[key], language)
             assert not button.icon().isNull() and button.height() >= Style.touch
             assert window.navbar.rect().contains(
                 QRect(button.mapTo(window.navbar, QPoint()), button.size())
             ), language
-            assert button.fontMetrics().horizontalAdvance(button.text()) <= (
-                button.content_rects()[1].width()
-                if window.navbar.compact
-                else button.width() - 40
-            ), language
             assert button.accessibleName() == button.toolTip() == text(key, language)
-            assert button.property("iconAlignment") == "leading"
+            assert button.property("iconAlignment") == "center"
         assert window.navbar.rect().contains(
             QRect(
                 window.language_selector.mapTo(window.navbar, QPoint()),
@@ -395,14 +383,11 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             a.geometry().right() < b.geometry().left()
             for a, b in zip(window.navigation[:-1], window.navigation[1:], strict=True)
         )
-        if window.navbar.mode == "two_row":
-            assert (
-                window.navbar.page_row.geometry().bottom() < window.navbar.utilities.y()
-            )
-        else:
-            assert (
-                window.navbar.page_row.geometry().right() < window.navbar.utilities.x()
-            )
+        assert window.navigation[-1].geometry().right() < window.navbar.user.x()
+        assert (
+            window.navigation[0].geometry().center().y()
+            == window.navbar.user.geometry().center().y()
+        )
         assert window.theme_button.geometry().right() < window.language_selector.x()
         assert (
             window.language_selector.fontMetrics().horizontalAdvance(
@@ -446,10 +431,11 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         assert page.body.width() <= page.scroll_area.viewport().width(), language
         assert page.write_button.text() == text("comm_write", language)
         window.navigate(3)
+        window.history_tabs.setCurrentWidget(window.history)
         QApplication.processEvents()
         assert window.history.workspace.width() <= window.history.width(), language
         for control in (
-            window.history.batch,
+            window.records_filters.batch,
             window.history.result,
             window.history.refresh_button,
         ):

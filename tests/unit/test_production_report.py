@@ -2,7 +2,7 @@
 
 import sqlite3
 from concurrent.futures import CancelledError
-from contextlib import closing
+from contextlib import closing, nullcontext
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -12,9 +12,12 @@ from zipfile import ZipFile
 import pytest
 from openpyxl import load_workbook
 from openpyxl.worksheet._writer import ALL_TEMP_FILES
+from reportlab.pdfgen.canvas import Canvas
+from scripts.development_records import Shift, cycle_result
 from tests.support.application import WAIT, FakeSession, close, prepared
 from tests.support.business import mixed_result
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.unit.test_configured_occupancy import configuration
 from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_history import finish
 
@@ -22,9 +25,12 @@ from capsule_vision.application import (
     ApplicationStateError,
     ProductionApplication,
     production_report,
+    report_pdf,
 )
+from capsule_vision.application.batch_review import BatchInformation, StartAccount
 from capsule_vision.application.history import HistoryContext, ProductionHistory
 from capsule_vision.application.identity_models import StaleSessionError
+from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
 from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
@@ -81,7 +87,9 @@ def test_workbook_uses_only_selected_batch_and_persisted_physical_outcomes(
             replace(RECIPE, recipe_id="second"),
             replace(FOUR_CYCLE, mode=ReportingMode.PER_CYCLE),
         ).result(WAIT)
-        assert history.offer(replace(context, run_id="run-b"), mixed_result(1))
+        assert history.offer(
+            replace(context, run_id="run-b", recipe_name="Gold A"), mixed_result(1)
+        )
         history.finish_run("run-b", "stopped", False).result(WAIT)
         now += 5
         history.start_run(batch.uuid, "run-c", RECIPE, None).result(WAIT)
@@ -107,47 +115,36 @@ def test_workbook_uses_only_selected_batch_and_persisted_physical_outcomes(
             WAIT
         )
         with closing(load_workbook(path)) as book:
-            assert book.sheetnames == [
-                text("report_summary", language),
-                text("report_groups", language),
-            ]
-            summary, groups = book.worksheets
-            assert summary["B2"].value == batch.label and summary["B2"].data_type == "s"
-            assert summary["B3"].value == batch.uuid
-            assert summary["B6"].value == text(
-                "batch_uncertain" if cameras == 6 else "report_recorded", language
+            assert book.sheetnames == [text("customer_batch", language)]
+            summary = book.worksheets[0]
+            rows = list(summary.values)
+            assert (text("batch_input", language), batch.label) == rows[2][:2]
+            assert summary["B3"].data_type == "s"
+            metrics = next(
+                i
+                for i, r in enumerate(rows)
+                if r[0] == text("report_inspected", language)
             )
-            assert summary["B5"].value == datetime.fromtimestamp(now)
-            assert isinstance(summary["D5"].value, datetime)
-            assert [c.value for c in summary[9][:8]] == [
-                1,
+            assert tuple(rows[metrics + 1][col] for col in (0, 2, 4, 6)) == (
                 5 * cameras,
                 cameras,
                 4 * cameras,
-                cameras,
                 0.2,
-                0.8,
-                1,
-            ]
-            assert summary["F9"].number_format == summary["G9"].number_format == "0.00%"
-            assert summary["B13"].value == 5
-            assert [c.value for c in summary["A"][16:]] == ["run-a", "run-b", "run-c"]
-            assert [summary[f"G{r}"].value for r in (17, 18, 19)] == [4, 1, 0]
-            assert summary["E18"].value == "second" and summary["D18"].value == text(
-                "report_stopped", language
             )
-            assert groups.max_row == 2 and groups.max_column == 8 + cameras * 6
-            assert [cell.value for cell in groups[1][8:]] == [
-                f"CH{i:02}" for i in range(1, cameras * 6 + 1)
-            ]
-            assert [cell.value for cell in groups[2]] == [
-                datetime.fromtimestamp(context.completed_at),
-                context.run_id,
-                65535,
-                *(str(first + i) for i in range(4)),
-                127.5,
-                *(["OK", "EMPTY", "NG", "NG", "NG", "NG"] * cameras),
-            ]
+            assert summary.cell(metrics + 2, 7).number_format == "0.00%"
+            assert isinstance(summary["B2"].value, datetime)
+            runs = [r for r in rows if type(r[0]) is int and isinstance(r[1], datetime)]
+            assert [r[0] for r in runs] == [1, 2, 3]
+            assert runs[0][5:] == (5 * cameras, cameras, 4 * cameras, 0.2)
+            assert all(r[5:] == (None,) * 4 for r in runs[1:])
+            assert runs[1][4] == text("report_stopped", language)
+            flat = str(rows)
+            assert "Other" not in flat and str(first) not in flat and "CH01" not in flat
+            assert context.run_id not in flat and RECIPE.model_sha256 not in flat
+            assert text("run_statistics_unavailable", language) in flat
+            assert text("customer_batch_basis", language) not in flat
+            if cameras == 6:
+                assert text("run_uncertain_totals", language) in flat
     finally:
         close(app)
 
@@ -184,11 +181,15 @@ def test_expiry_interruption_and_empty_batch_do_not_invent_detail(
                 )
             )
         ) as book:
-            summary, groups = book.worksheets
-            assert summary.title == "Production Summary"
-            assert summary["I16"].value == "Model ID" and summary.max_row == 16
-            assert [c.value for c in summary[9][:8]] == [0, 0, 0, 0, 0, "—", "—", 0]
-            assert groups.max_row == 1 and groups.max_column == 8
+            summary = book.worksheets[0]
+            assert (
+                summary.title == "Batch Production Report" and len(book.worksheets) == 1
+            )
+            rows = list(summary.values)
+            metrics = next(i for i, r in enumerate(rows) if r[0] == "Inspected")
+            assert rows[metrics + 1][:4] == ("—", "—", "—", "—")
+            assert "Production statistics unavailable" in str(rows)
+            assert not any(type(r[0]) is int for r in rows)
         with closing(
             load_workbook(
                 app.export_report(batch.uuid, tmp_path / "expired.xlsx", "en").result(
@@ -196,18 +197,16 @@ def test_expiry_interruption_and_empty_batch_do_not_invent_detail(
                 )
             )
         ) as book:
-            summary, groups = book.worksheets
-            assert [c.value for c in summary[9][:8]] == [1, 25, 5, 20, 5, 0.2, 0.8, 0]
-            assert "incomplete" in str(summary["B6"].value) and "expired" in str(
-                summary["B6"].value
-            )
-            assert summary["D17"].value == "Interrupted" and summary[
-                "C17"
-            ].value == datetime.fromtimestamp(now)
-            assert groups.max_row == 2
-            assert groups["A1"].value == "Group detail incomplete"
-            assert "0 / 1" in str(groups["B1"].value)
-            assert groups["A2"].value == text("history_time", "en")
+            rows = list(book.worksheets[0].values)
+            metrics = next(i for i, r in enumerate(rows) if r[0] == "Inspected")
+            assert rows[metrics + 1][:4] == (25, 5, 20, 0.2)
+            assert (
+                "First inspection",
+                datetime.fromtimestamp(1_800_000_000.0),
+            ) in [r[i : i + 2] for r in rows for i in range(len(r) - 1)]
+            assert "Interrupted: 1 Runs" in str(rows)
+            assert "Records may be incomplete" in str(rows)
+            assert len(book.worksheets) == 1
     finally:
         close(app)
 
@@ -261,8 +260,10 @@ def test_active_export_is_a_consistent_snapshot_and_releases_actual_worker(
         if ending == "complete":
             with closing(load_workbook(export.result(WAIT))) as book:
                 summary = book.worksheets[0]
-                assert summary["B13"].value == 0 and summary["C17"].value is None
-                assert summary["B6"].value == summary["D17"].value == "In progress"
+                rows = list(summary.values)
+                assert "In progress" in str(rows)
+                assert "Inspection span" not in str(rows)
+                assert "First inspection" not in str(rows)
         else:
             with pytest.raises(OSError if ending == "error" else CancelledError):
                 export.result(WAIT)
@@ -273,14 +274,19 @@ def test_active_export_is_a_consistent_snapshot_and_releases_actual_worker(
         close(app)
 
 
-def test_session_replacement_prevents_unpublished_workbook(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("extension", ["xlsx", "pdf"])
+def test_session_replacement_prevents_unpublished_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extension: str
 ) -> None:
     app = authenticated_startup(saved_data(tmp_path)).application
     identity = app.identity
     assert identity is not None
     entered, release = Event(), Event()
-    write = production_report.write_workbook
+    write = (
+        production_report.write_workbook
+        if extension == "xlsx"
+        else report_pdf.write_pdf
+    )
 
     def hold_after_write(
         db: sqlite3.Connection, staged: Path, language: Language, stop: Event
@@ -289,8 +295,11 @@ def test_session_replacement_prevents_unpublished_workbook(
         entered.set()
         assert release.wait(WAIT)
 
-    monkeypatch.setattr(production_report, "write_workbook", hold_after_write)
-    target = tmp_path / "existing.xlsx"
+    if extension == "xlsx":
+        monkeypatch.setattr(production_report, "write_workbook", hold_after_write)
+    else:
+        monkeypatch.setattr(report_pdf, "write_pdf", hold_after_write)
+    target = tmp_path / f"existing.{extension}"
     target.write_bytes(b"original")
     try:
         app.start_batch("Selected").result(WAIT)
@@ -308,7 +317,7 @@ def test_session_replacement_prevents_unpublished_workbook(
         close(app)
 
 
-def test_exposure_slots_and_layouts_come_from_retained_rows(
+def test_compact_export_omits_exposure_rows_and_releases_spools_on_disk_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "history.sqlite3"
@@ -339,10 +348,16 @@ def test_exposure_slots_and_layouts_come_from_retained_rows(
         with closing(
             load_workbook(app.export_report(batch.uuid, target, "en").result(WAIT))
         ) as book:
-            detail = book.worksheets[1]
-            assert detail.max_column == 44 and detail.max_row == 3
-            assert detail["B2"].value == "run-5" and detail["E2"].value == "116"
-            assert detail["AM2"].value is None and detail["AR3"].value == "NG"
+            assert len(book.worksheets) == 1
+            rows = list(book.worksheets[0].values)
+            metrics = next(i for i, r in enumerate(rows) if r[0] == "Inspected")
+            assert tuple(rows[metrics + 1][col] for col in (0, 2, 4, 6)) == (
+                55,
+                11,
+                44,
+                0.2,
+            )
+            assert "116" not in str(rows) and "CH01" not in str(rows)
         before = target.read_bytes()
         spools = set(ALL_TEMP_FILES)
 
@@ -357,3 +372,169 @@ def test_exposure_slots_and_layouts_come_from_retained_rows(
         assert not list(tmp_path.glob("*.tmp"))
     finally:
         close(app)
+
+
+def test_high_volume_report_length_business_fields_and_entire_batch_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = configuration(tmp_path)
+    now = 1_800_000_000.0
+    observed = now
+    owner = ProductionHistory(tmp_path / "volume.sqlite3", clock=lambda: observed)
+    pages: list[int] = []
+    show = Canvas.showPage
+
+    def count_page(canvas: Canvas) -> None:
+        pages.append(canvas.getPageNumber())
+        show(canvas)
+
+    monkeypatch.setattr(Canvas, "showPage", count_page)
+    try:
+        batch = owner.select_batch("QA-High-volume").result(WAIT)
+        assert batch
+        info = BatchInformation(
+            "Capsules / 胶囊", "Size 0", "Development acceptance sample"
+        )
+        owner.update_batch_information(
+            batch.uuid, BatchInformation(), info, lambda _l, _i: nullcontext()
+        ).result(WAIT)
+        owner.start_run(
+            batch.uuid, "volume", RECIPE, FOUR_CYCLE, StartAccount("operator-id", "Lin")
+        ).result(WAIT)
+        ctx = HistoryContext(now, batch.uuid, batch.label, "volume", RECIPE)
+        lengths: list[int] = []
+        for group in range(200):
+            observed = now + group * 4 + 4
+            results = [
+                cycle_result(
+                    config, Shift(0, "volume", batch.label, now), group * 4 + slot
+                )
+                for slot in range(1, 5)
+            ]
+            reports = tuple(FirstStationReport.from_result(1, r) for r in results)
+            words = tuple(
+                a | b | c | d
+                for a, b, c, d in zip(*(r.reject_words for r in reports), strict=True)
+            )
+            owner.offer_group(
+                "volume",
+                CompletedReportingBatch(
+                    reports[0].identity, group, reports, words, 120.0
+                ),
+            )
+            for result in results:
+                assert owner.offer(
+                    replace(ctx, completed_at=now + result.cycle_id), result
+                )
+            owner.query(HistoryQuery(limit=1)).result(
+                WAIT
+            )  # Drain bounded test handoffs.
+            if group in (0, 199):
+                request = ReportRequest(
+                    "batch",
+                    "capsule",
+                    batch.uuid,
+                    HistoryQuery(since=now + 999999, result=frozenset(("ERROR",))),
+                )
+                xlsx = tmp_path / f"{group}.xlsx"
+                production_report.write_report(
+                    owner, request, xlsx, "en", Event(), lambda: None
+                )
+                production_report.write_report(
+                    owner,
+                    request,
+                    tmp_path / f"{group}.pdf",
+                    "en",
+                    Event(),
+                    lambda: None,
+                )
+                with closing(load_workbook(xlsx)) as book:
+                    sheet = book.worksheets[0]
+                    lengths.append(sheet.max_row)
+                    rows = list(sheet.values)
+                    assert (
+                        next(r[1] for r in rows if r[0] == text("batch_product", "en"))
+                        == info.product
+                    )
+                    pairs = [r[i : i + 2] for r in rows for i in range(len(r) - 1)]
+                    assert ("Start Account", "Lin") in pairs
+                    assert (
+                        "First inspection",
+                        datetime.fromtimestamp(now + 1),
+                    ) in pairs
+                    assert (
+                        "Latest inspection",
+                        datetime.fromtimestamp(now + group * 4 + 4),
+                    ) in pairs
+                    assert not any(r[0] == "Runs" for r in rows)
+                    if group == 199:
+                        metrics = next(
+                            i for i, r in enumerate(rows) if r[0] == "Inspected"
+                        )
+                        inspected = rows[metrics + 1][0]
+                        assert isinstance(inspected, int) and inspected > 5000
+        assert lengths[0] == lengths[1] < 30 and pages == [1, 1]
+    finally:
+        finish(owner)
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_hundred_run_customer_report_keeps_every_row_and_factual_exceptions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, language: Language
+) -> None:
+    owner = ProductionHistory(tmp_path / "hundred.sqlite3")
+    numbers: list[int] = []
+    drawn: list[str] = []
+    pages: list[int] = []
+    draw, page = Canvas.drawString, Canvas.showPage
+
+    def record_text(canvas: Canvas, x: float, y: float, value: str) -> None:
+        drawn.append(value)
+        # The approved 14 mm margin and 6 pt cell inset locate the Run column.
+        if x == pytest.approx(14 * 72 / 25.4 + 6) and value.isdecimal():
+            numbers.append(int(value))
+        draw(canvas, x, y, value)
+
+    def record_page(canvas: Canvas) -> None:
+        pages.append(canvas.getPageNumber())
+        page(canvas)
+
+    monkeypatch.setattr(Canvas, "drawString", record_text)
+    monkeypatch.setattr(Canvas, "showPage", record_page)
+    try:
+        batch = owner.select_batch("Many shifts").result(WAIT)
+        assert batch
+        for n in range(100):
+            owner.start_run(
+                batch.uuid, f"run-{n}", RECIPE, FOUR_CYCLE, StartAccount("actor", "Lin")
+            ).result(WAIT)
+            owner.finish_run(
+                f"run-{n}", "interrupted" if n == 0 else "stopped", n == 0
+            ).result(WAIT)
+        request = ReportRequest("batch", "capsule", batch.uuid)
+        for suffix in ("xlsx", "pdf"):
+            production_report.write_report(
+                owner,
+                request,
+                tmp_path / f"hundred.{suffix}",
+                language,
+                Event(),
+                lambda: None,
+            )
+        with closing(load_workbook(tmp_path / "hundred.xlsx")) as book:
+            rows = list(book.worksheets[0].values)
+            runs = [r for r in rows if type(r[0]) is int and isinstance(r[1], datetime)]
+            assert [r[0] for r in runs] == list(range(1, 101))
+            assert all(r[5:8] == (0, 0, 0) and r[8] is None for r in runs)
+            assert text("run_uncertain_totals", language) in str(rows)
+            assert text("customer_batch_basis", language) not in str(rows)
+        assert numbers == list(range(1, 101))
+        assert len(pages) > 1 and pages == list(range(1, len(pages) + 1))
+        assert text("report_interrupted", language) in " ".join(drawn)
+        assert text("run_uncertain_totals", language) in " ".join(drawn)
+        assert not any(
+            word in " ".join(drawn).lower()
+            for word in ("cycle", "plc", "attribut", "四次", "周期")
+        )
+    finally:
+        finish(owner)

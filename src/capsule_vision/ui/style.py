@@ -5,18 +5,27 @@ from functools import cache
 from math import ceil
 from typing import Literal
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
     QFontMetricsF,
     QIcon,
     QPainter,
     QPainterPath,
+    QPaintEvent,
     QPalette,
     QPen,
     QPixmap,
 )
-from PySide6.QtWidgets import QPushButton, QStyle, QStyleOptionButton, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QPushButton,
+    QStyle,
+    QStyleOptionButton,
+    QStyleOptionComboBox,
+    QWidget,
+)
 
 from capsule_vision.localization import catalog
 from capsule_vision.localization import languages as language_identity
@@ -87,6 +96,7 @@ def theme_colors(widget: QWidget) -> ThemeColors:
 
 class Style:
     # Dark canvas drawing tokens; themed controls use their window palette.
+    font_families = ("Microsoft YaHei UI", "Segoe UI", "sans-serif")
     background = DARK.background
     surface = DARK.surface
     raised = DARK.raised
@@ -170,7 +180,38 @@ def set_button_caption(button: QPushButton, caption: str, width: int) -> None:
     button.setAccessibleName(caption)
 
 
+class _PointerFocus(QObject):
+    """Leave focus and selection intact; let the native style draw keyboard cues."""
+
+    _presses = (
+        QEvent.Type.MouseButtonPress,
+        QEvent.Type.MouseButtonDblClick,
+        QEvent.Type.TouchBegin,
+    )
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() in self._presses and isinstance(watched, QWidget):
+            window = watched.window()
+            # Clicking an already keyboard-focused widget doesn't send FocusIn.
+            # Qt otherwise keeps painting its previous keyboard focus rectangle.
+            cue = Qt.WidgetAttribute.WA_KeyboardFocusChange
+            if window.testAttribute(cue):
+                window.setAttribute(cue, False)
+                if (focused := QApplication.focusWidget()) is not None:
+                    focused.update()
+        return False
+
+
 def apply_theme(widget: QWidget, theme: Theme) -> None:
+    app = QApplication.instance()
+    if (
+        app is not None
+        and app.findChild(
+            _PointerFocus, options=Qt.FindChildOption.FindDirectChildrenOnly
+        )
+        is None
+    ):
+        app.installEventFilter(_PointerFocus(app))
     colors = LIGHT if theme == "light" else DARK
     widget.setProperty("theme", theme)
     palette = QPalette()
@@ -203,10 +244,13 @@ def apply_theme(widget: QWidget, theme: Theme) -> None:
 
 def stylesheet(theme: Theme = "dark") -> str:
     c = LIGHT if theme == "light" else DARK
+    # Repolishing can replace a child's inherited family with the platform default.
+    # Keep the shell font stack when measuring and painting navigation in either theme.
+    nav_fonts = ", ".join(f'"{name}"' for name in Style.font_families)
     return f"""
     QWidget {{ color: {c.primary}; font-size: {Style.body}px; }}
     QMainWindow, QWidget#shell, QWidget#recipeEditor, QDialog {{ background: {c.background}; }}
-    QTabWidget#historyTabs::pane, QWidget#auditPage, QWidget#alarmPage {{ background: {c.background}; border: none; }}
+    QTabWidget#historyTabs::pane, QWidget#auditPage, QWidget#alarmPage, QWidget#batchPage {{ background: {c.background}; border: none; }}
     QFrame#summary, QFrame#camera, QFrame#navigation, QFrame#event, QFrame#commPanel {{
         background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px;
     }}
@@ -220,23 +264,20 @@ def stylesheet(theme: Theme = "dark") -> str:
     QFrame#recipeSection {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
     QFrame#visionModeSwitch QPushButton {{ background: transparent; border: none; border-radius: 20px; padding: 0; }}
     QFrame#visionModeSwitch QPushButton:checked, QFrame#visionModeSwitch QPushButton:hover, QFrame#visionModeSwitch QPushButton:disabled {{ background: transparent; border: none; }}
-    QFrame#visionModeSwitch QPushButton:focus:enabled {{ border: 1px dotted {c.accent}; }}
     QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton[compactAction="true"] {{ padding: 5px 4px; }}
     QPushButton[reportingSegment="first"] {{ border-top-right-radius: 0; border-bottom-right-radius: 0; }}
     QPushButton[reportingSegment="last"] {{ border-top-left-radius: 0; border-bottom-left-radius: 0; }}
-    QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.selected}; border-color: {c.accent}; }}
-    QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; }}
+    QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.raised}; border-color: {c.secondary}; }}
+    QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton#recipeRule {{ text-align: left; }}
     QWidget#page_production QPushButton#start, QPushButton#productionAction {{ padding: 6px 8px; }}
     QPushButton:checked {{ color: {c.accent}; background: {c.selected}; border-color: {c.accent}; }}
-    QPushButton:focus:enabled {{ border: 2px solid {c.accent}; }}
-    QComboBox:focus, QLineEdit:focus {{ border-color: {c.accent}; }}
-    QWidget#page_production QPushButton#start:focus:enabled {{ border-color: {c.primary}; }}
+    QLineEdit:focus {{ border-color: {c.accent}; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
     QPushButton[reportingSegment]:checked:disabled {{ background: {c.selected}; border-color: {c.secondary}; }}
-    QDateEdit#historyDate, QDateEdit#auditDate, QDateEdit#alarmDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
-    QDateEdit#historyDate:disabled, QDateEdit#auditDate:disabled, QDateEdit#alarmDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
+    QDateEdit#batchDate, QDateEdit#historyDate, QDateEdit#auditDate, QDateEdit#alarmDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
+    QDateEdit#batchDate:disabled, QDateEdit#historyDate:disabled, QDateEdit#auditDate:disabled, QDateEdit#alarmDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
     QCalendarWidget#historyCalendar {{ background: {c.surface}; color: {c.primary}; }}
     QCalendarWidget#historyCalendar QWidget#qt_calendar_navigationbar {{ background: {c.raised}; }}
     QCalendarWidget#historyCalendar QToolButton {{ background: {c.raised}; color: {c.primary}; padding: 4px 6px; min-height: 24px; }}
@@ -248,32 +289,34 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton#visionSourceCard {{ background: {c.background}; border-radius: {Style.radius}px; }}
     QPushButton#visionSourceCard:hover {{ background: {c.raised}; border-color: {c.secondary}; }}
     QPushButton#visionSourceCard:checked {{ background: {c.selected}; border-color: {c.accent}; }}
-    QPushButton#visionSourceCard:focus:enabled {{ border: 2px solid {c.accent}; }}
     QPushButton#visionSourceCard:disabled {{ background: {c.surface}; border-color: {c.border}; }}
     QFrame#visionSources QLineEdit#visionSourceValue, QFrame#visionSources QComboBox#visionSourceValue {{ font-weight: 600; }}
     QFrame#visionFps {{ background: {c.background}; border: 1px solid {c.border}; border-radius: 7px; }}
     QFrame#visionFps QPushButton, QFrame#visionFps QLineEdit {{ background: transparent; border: none; padding: 0; }}
     QFrame#visionFps QPushButton:hover:enabled {{ background: {c.selected}; }}
-    QFrame#visionFps QPushButton:focus:enabled, QFrame#visionFps QLineEdit:focus {{ border: 1px solid {c.accent}; }}
+    QFrame#visionFps QLineEdit:focus {{ border: 1px solid {c.accent}; }}
     QPushButton#start {{ background: #5b7ffc; color: #ffffff; font-weight: 600; border-color: #5b7ffc; }}
     QPushButton#start:hover {{ background: #6d8eff; }}
     QPushButton#start:pressed {{ background: #4265de; }}
     QPushButton#start:disabled {{ background: {c.raised}; color: {c.secondary}; border-color: {c.border}; }}
     QFrame#navigation QPushButton {{ border: none; background: transparent; padding: 6px 10px; }}
+    QFrame#navigation QPushButton[iconAlignment="center"] {{ text-align: center; padding: 6px 4px; }}
+    QFrame#navigation QPushButton, QFrame#navigation QComboBox {{ font-family: {nav_fonts}; }}
     QFrame#navigation QPushButton:hover {{ background: {c.raised}; }}
+    QFrame#navigation QPushButton:pressed {{ background: {c.selected}; }}
     QFrame#navigation QPushButton:checked {{ color: {c.accent}; background: {c.selected}; }}
-    QFrame#navigation QPushButton:focus {{ border: 1px solid {c.accent}; }}
-    QFrame#navigation QPushButton:checked:focus {{ border: none; }}
     QPushButton[iconAlignment="leading"] {{ text-align: left; }}
     QFrame#batchBadge {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 8px; }}
     QPushButton#productionBatch {{ background: transparent; border-color: transparent; }}
     QFrame#productionMetrics {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 8px; }}
     QFrame#navigation QComboBox {{ padding: 5px 8px; }}
+    QComboBox#recordFilter {{ padding: 5px 4px; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
-    QComboBox#language {{ combobox-popup: 0; }}
+    QComboBox {{ combobox-popup: 0; qproperty-maxVisibleItems: 24; }}
+    QComboBox#language {{ qproperty-maxVisibleItems: {len(language_identity.LANGUAGES)}; }}
     QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
-    QComboBox#webAddress::drop-down {{ width: {Style.touch}px; }}
-    QComboBox#webAddress::down-arrow {{ image: none; }}
+    QComboBox#reportChoice::drop-down, QComboBox#webAddress::drop-down {{ width: {Style.touch}px; }}
+    QComboBox#reportChoice::down-arrow, QComboBox#webAddress::down-arrow {{ image: none; }}
     QPushButton#webPower, QPushButton#reportingPower {{ color: {c.primary}; border-color: {c.accent}; background: {c.selected}; }}
     QPushButton#webPower:disabled, QPushButton#reportingPower:disabled {{ color: {c.secondary}; border-color: {c.border}; background: {c.raised}; }}
     QComboBox QAbstractItemView, QMenu {{ background: {c.surface}; color: {c.primary}; border: 1px solid {c.border}; selection-background-color: {c.selected}; }}
@@ -281,13 +324,13 @@ def stylesheet(theme: Theme = "dark") -> str:
     QDialog#productionBatchDialog QLineEdit {{ selection-color: {c.primary}; }}
     QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
     QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
-    QTableWidget, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
+    QTableWidget, QTreeWidget#batchRecords, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
     QTableWidget#accounts, QListWidget#reportBatches {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; }}
+    QTreeWidget#batchRecords::item {{ min-height: 36px; }}
     QTableWidget#accounts::item, QListWidget#reportBatches::item {{ min-height: 32px; }}
     QTableWidget#accounts::item:selected, QListWidget#reportBatches::item:selected {{ background: {c.selected}; color: {c.primary}; }}
-    QListWidget#reportBatches:focus {{ border-color: {c.accent}; }}
     QTableWidget#historyCycles, QTableWidget#historyChannels {{ border-radius: {Style.radius}px; }}
-    QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected, QTableWidget#auditRecords::item:selected, QTableWidget#alarmRecords::item:selected {{ background: {c.selected}; color: {c.primary}; }}
+    QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected, QTableWidget#auditRecords::item:selected, QTableWidget#alarmRecords::item:selected, QTreeWidget#batchRecords::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
     QTableWidget#historyCycles QHeaderView, QTableWidget#historyChannels QHeaderView {{ background: {c.raised}; }}
     QTableWidget#historyCycles QScrollBar:horizontal, QTableWidget#historyChannels QScrollBar:horizontal {{ background: {c.background}; height: 14px; }}
@@ -300,10 +343,16 @@ def stylesheet(theme: Theme = "dark") -> str:
     QCheckBox#archiveCondition {{ color: {c.primary}; background: {c.surface}; border: 1px solid {c.border}; border-radius: 6px; padding: 4px 8px; spacing: 6px; }}
     QCheckBox#archiveCondition:hover:enabled {{ border-color: {c.secondary}; }}
     QCheckBox#archiveCondition:checked:enabled {{ background: {c.selected}; border-color: {c.accent}; }}
-    QCheckBox#archiveCondition:focus:enabled {{ border-color: {c.accent}; }}
     QCheckBox#archiveCondition:disabled {{ color: {c.secondary}; background: {c.raised}; border-color: {c.border}; }}
     QTabBar::tab {{ padding: 12px 10px; min-height: 20px; color: {c.primary}; background: {c.surface}; border: none; }}
     QTabBar::tab:selected {{ color: {c.accent}; background: {c.selected}; }}
+    QTabBar#recordTypes::tab {{ width: 132px; min-height: 30px; padding: 6px 8px; margin-right: 4px; border: 1px solid {c.border}; border-radius: 7px; }}
+    QTabBar#recordTypes::tab:!selected:hover:enabled {{ background: {c.raised}; }}
+    QTabBar#recordTypes::tab:selected {{ border-color: {c.accent}; color: {c.accent}; background: {c.selected}; }}
+    QTabBar#recordTypes::tab:disabled {{ color: {c.secondary}; background: {c.background}; }}
+    QTabWidget#historyTabs::pane {{ padding-top: {Style.small}px; }}
+    QTextEdit#recordDetails {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: 8px; padding: 6px; }}
+    QTextEdit#channelEvidence {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: 6px; }}
     QSlider::groove:horizontal {{ height: 6px; background: {c.border}; border-radius: 3px; }}
     QSlider::handle:horizontal {{ width: 22px; margin: -8px 0; border-radius: 11px; background: {c.accent}; }}
     QScrollBar:vertical {{ background: {c.background}; width: 14px; }}
@@ -628,3 +677,23 @@ def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
         p.end()
         icon.addPixmap(pixmap)
     return icon
+
+
+class ChevronComboBox(QComboBox):
+    """Use the shell's painted chevron while retaining native combo hit testing."""
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        area = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxArrow,
+            self,
+        )
+        painter = QPainter(self)
+        shell_icon("chevron", theme_colors(self).secondary).paint(
+            painter, area.adjusted(10, 10, -10, -10)
+        )
+        painter.end()

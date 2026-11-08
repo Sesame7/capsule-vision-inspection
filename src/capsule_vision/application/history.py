@@ -6,12 +6,13 @@ import zlib
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Condition, Event, Thread
 from time import time
-from typing import Literal, cast
+from typing import cast
 
 from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
@@ -20,13 +21,40 @@ from capsule_vision.communication.reporting import (
 from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.inspection.production import ProductionInspectionResult
 
-from . import alarm_records, archive_links, batch_records
+from . import (
+    alarm_records,
+    archive_links,
+    batch_records,
+    batch_review,
+    defect_records,
+    records_query,
+)
 from .alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
+from .alarm_report import AlarmReportRequest
+from .alarm_report import capture as capture_alarm
 from .archive_links import PublishedImage
+from .audit import AuditRecord, AuditUnavailable
 from .batch_records import BatchSelection, ReportBatches
-from .models import ConfigurationIdentity
-
-type ResultFilter = Literal["all", "OK", "NG", "ERROR", "EMPTY", "UNKNOWN"]
+from .batch_review import (
+    BatchDetail,
+    BatchInformation,
+    BatchInformationConflict,
+    BatchList,
+    BatchSetup,
+    StartAccount,
+)
+from .identity_models import IdentityError
+from .models import ApplicationStateError, ConfigurationIdentity
+from .records_query import BatchChoices, RecordsScope
+from .report_scope import (
+    DefectScope,
+    ReportRequest,
+    capture_report,
+    defect_scope,
+    register_result_filter,
+)
+from .report_scope import HistoryQuery as HistoryQuery
+from .report_scope import ResultFilter as ResultFilter
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,23 +100,6 @@ class HistoryRecord:
     cameras: tuple[HistoryCamera, ...]
     group_first_cycle: int | None = None
     group_slot: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class HistoryQuery:
-    since: float | None = None
-    until: float | None = None
-    batch_segment: str | None = None
-    result: ResultFilter = "all"
-    cursor: tuple[float, int] | None = None
-    newer: bool = False
-    limit: int = 50
-
-    def __post_init__(self) -> None:
-        if type(self.limit) is not int or not 1 <= self.limit <= 50:
-            raise ValueError("History page limit must be 1..50")
-        if self.result not in ("all", "OK", "NG", "ERROR", "EMPTY", "UNKNOWN"):
-            raise ValueError("Unknown History result filter")
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,18 +362,189 @@ class ProductionHistory:
             read_only=True,
         )
 
-    def capture_report(self, batch: str, snapshot: Path, cancel: Event) -> Future[None]:
+    def batch_page(
+        self,
+        prefix: str = "",
+        cursor: tuple[float, str] | None = None,
+        newer: bool = False,
+        *,
+        since: int | None = None,
+        until: int | None = None,
+        batch: str | None = None,
+        unbatched: bool = False,
+    ) -> Future[BatchList]:
+        return self._command(
+            lambda db: batch_review.page(
+                db, prefix, cursor, newer, since, until, self.clock(), batch, unbatched
+            ),
+            read_only=True,
+        )
+
+    def batch_choices(
+        self,
+        scope: RecordsScope,
+        search: str = "",
+        cursor: tuple[float, str] | None = None,
+        *,
+        alarm_revision: int | None = None,
+    ) -> Future[BatchChoices]:
+        authorize = self._alarm_access
+        if alarm_revision is not None:
+            if authorize is None:
+                raise IdentityError("Alarm History authorization unavailable")
+            authorize(alarm_revision)
+
+        def read(db: sqlite3.Connection) -> BatchChoices:
+            if alarm_revision is not None and authorize is not None:
+                authorize(alarm_revision)
+            result = records_query.batch_choices(
+                db,
+                scope,
+                search,
+                cursor,
+                self.clock(),
+                alarm_revision is not None and self._alarm_translations is not None,
+            )
+            if alarm_revision is not None and authorize is not None:
+                authorize(alarm_revision)
+            return result
+
+        return self._command(read, read_only=True)
+
+    def associated_audit(
+        self, scope: RecordsScope, records: tuple[AuditRecord, ...]
+    ) -> Future[tuple[AuditRecord, ...]]:
+        return self._command(
+            lambda db: records_query.associated_audit(db, scope, records),
+            read_only=True,
+        )
+
+    def batch_detail(
+        self, batch: str, offset: int = 0, run_anchor: int | None = None
+    ) -> Future[BatchDetail]:
+        def read(db: sqlite3.Connection) -> BatchDetail:
+            with self._lock:
+                loss = self._loss_run
+            return batch_review.detail(db, batch, offset, loss, run_anchor)
+
+        return self._command(read, read_only=True)
+
+    def update_batch_information(
+        self,
+        batch: str,
+        expected: BatchInformation,
+        requested: BatchInformation,
+        authorize: Callable[[str, BatchInformation], AbstractContextManager[None]],
+    ) -> Future[None]:
+        def write(db: sqlite3.Connection) -> None:
+            label, actual = batch_review.information(db, batch)
+            with authorize(label, actual):
+                if db.execute("SELECT 1 FROM runs WHERE outcome='open'").fetchone():
+                    raise ApplicationStateError(
+                        "Batch editing requires idle Production"
+                    )
+                if actual != expected:
+                    raise BatchInformationConflict(
+                        "Batch information changed; refresh before editing"
+                    )
+                # Complete the business transaction before the audit owner records success.
+                with db:
+                    batch_review.save_information(db, batch, requested)
+
+        return self._command(write, reserved=False)
+
+    def defect_report_scope(self, filters: HistoryQuery) -> Future[DefectScope]:
+        return self._command(lambda db: defect_scope(db, filters), read_only=True)
+
+    def capture_report(
+        self, batch: str | ReportRequest, snapshot: Path, cancel: Event
+    ) -> Future[None]:
         def capture(db: sqlite3.Connection) -> None:
             with self._lock:
                 loss_run = self._loss_run
-            batch_records.capture_report(
-                db, batch, snapshot, self.clock(), loss_run, cancel
+            capture_report(
+                db,
+                ReportRequest("batch", "capsule", batch)
+                if isinstance(batch, str)
+                else batch,
+                snapshot,
+                self.clock(),
+                loss_run,
+                cancel,
             )
 
         return self._command(capture, read_only=True)
 
+    def capture_alarm_report(
+        self,
+        request: AlarmReportRequest,
+        snapshot: Path,
+        cancel: Event,
+        revision: int | None = None,
+    ) -> Future[None]:
+        authorize = self._alarm_access
+        if authorize is None:
+            raise RuntimeError("Alarm review requires an authenticated History owner")
+        ticket = authorize(revision)
+
+        def capture(db: sqlite3.Connection) -> None:
+            authorize(ticket)
+            capture_alarm(
+                db,
+                request,
+                snapshot,
+                self.clock(),
+                cancel,
+                available=self._alarm_translations is not None,
+            )
+            authorize(ticket)
+
+        return self._command(capture, read_only=True)
+
+    def capture_audit_links(self, snapshot: Path, cancel: Event) -> Future[None]:
+        """Freeze only the existing association evidence; never wait on Audit here."""
+        from .audit_report import capture_links
+
+        return self._command(
+            lambda db: capture_links(db, snapshot, cancel), read_only=True
+        )
+
     def select_batch(self, label: str | None) -> Future[BatchSelection | None]:
         return self._command(lambda db: batch_records.select(db, label, self.clock()))
+
+    def batch_setup(self, label: str) -> Future[BatchSetup]:
+        return self._command(
+            lambda db: batch_review.setup(db, label.strip()), read_only=True
+        )
+
+    def setup_batch(
+        self,
+        label: str,
+        expected: BatchSetup,
+        requested: BatchInformation,
+        authorize: Callable[[str, BatchInformation], AbstractContextManager[None]],
+    ) -> Future[BatchSelection | None]:
+        def write(db: sqlite3.Connection) -> BatchSelection | None:
+            actual = batch_review.setup(db, label)
+            with authorize(label, actual.information):
+                if actual != expected:
+                    raise BatchInformationConflict(
+                        "Batch information changed; refresh before editing"
+                    )
+                if db.execute("SELECT 1 FROM runs WHERE outcome='open'").fetchone():
+                    raise ApplicationStateError(
+                        "Batch editing requires idle Production"
+                    )
+                # Selection and information are one transaction, committed before
+                # the authorization/audit context reports success.
+                with db:
+                    selection = batch_records.select(db, label, self.clock())
+                    assert selection is not None
+                    if actual.information != requested:
+                        batch_review.save_information(db, selection.uuid, requested)
+                return selection
+
+        return self._command(write, reserved=False)
 
     def start_run(
         self,
@@ -370,13 +552,20 @@ class ProductionHistory:
         run: str,
         recipe: ConfigurationIdentity,
         reporting: ReportingSettings | None,
+        account: StartAccount | None = None,
     ) -> Future[None]:
         observed = self.clock()
-        return self._command(
-            lambda db: batch_records.start_run(
-                db, batch, run, observed, recipe, reporting
-            )
-        )
+
+        def write(db: sqlite3.Connection) -> None:
+            batch_records.start_run(db, batch, run, observed, recipe, reporting)
+            db.execute("INSERT INTO run_coverage VALUES (?,0,0,0)", (run,))
+            if account is not None:
+                db.execute(
+                    "INSERT INTO run_start_accounts VALUES (?,?,?)",
+                    (run, account.account_id, account.username),
+                )
+
+        return self._command(write)
 
     def finish_run(self, run: str, outcome: str, uncertain: bool) -> Future[None]:
         observed = self.clock()
@@ -435,9 +624,13 @@ class ProductionHistory:
 
     def offer_group(self, run: str, group: CompletedReportingBatch) -> None:
         observed = self.clock()
-        self._offer_fact(
-            _Fact(run, lambda db: batch_records.group(db, run, group, observed))
-        )
+
+        def write(db: sqlite3.Connection) -> None:
+            batch_records.group(db, run, group, observed)
+            if self._has_classification:
+                defect_records.reconcile(db, run, group.identity.cycle_id)
+
+        self._offer_fact(_Fact(run, write))
 
     def query(self, query: HistoryQuery | None = None) -> Future[HistoryPageData]:
         future: Future[HistoryPageData] = Future()
@@ -514,6 +707,7 @@ class ProductionHistory:
     def _open(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.path, timeout=0.2)
+        register_result_filter(connection)
         try:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 2, 3) or (
@@ -548,11 +742,20 @@ class ProductionHistory:
                 )
             with connection:
                 batch_records.recover(connection, self.clock())
+                batch_records.initialize_run_positions(connection)
+                batch_review.initialize(connection)
+                defect_records.initialize(connection)
             columns = {
                 row[1] for row in connection.execute("PRAGMA table_info(alarm_events)")
             }
             if columns:
                 self._alarm_translations = "translations" in columns
+            self._has_classification = (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='cycle_classification'"
+                ).fetchone()
+                is not None
+            )
             self._has_images = (
                 connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_images'"
@@ -634,6 +837,16 @@ class ProductionHistory:
                 ),
             )
 
+            if not self._has_classification:
+                defect_records.create(connection)
+            defect_records.record_cycle(connection, context.run_id, result)
+            defect_records.reconcile(connection, context.run_id, result.cycle_id)
+            if context.batch_label is not None:
+                batch_review.observed(
+                    connection, context.batch_segment, context.completed_at
+                )
+
+        self._has_classification = True
         return True
 
     def _image_failure(
@@ -748,18 +961,7 @@ class ProductionHistory:
                 args,
             ).fetchall(),
         )
-        if query.batch_segment is not None:
-            clauses.append("batch_segment = ?")
-            args.append(query.batch_segment)
-        if query.result in ("OK", "NG"):
-            clauses.append("judgment = ?")
-            args.append(query.result)
-        elif query.result == "ERROR":
-            clauses.append("technical = 'ERROR'")
-        elif query.result in ("EMPTY", "UNKNOWN"):
-            clauses.append(
-                "empty_count > 0" if query.result == "EMPTY" else "unknown_count > 0"
-            )
+        clauses, args = query.conditions()
         if query.cursor is not None:
             clauses.append(
                 "(completed_at,id) " + (">" if query.newer else "<") + " (?,?)"
@@ -926,7 +1128,15 @@ class ProductionHistory:
                     try:
                         item.execute(connection)
                     except Exception as exc:
-                        if not item.read_only:
+                        if not item.read_only and not isinstance(
+                            exc,
+                            (
+                                BatchInformationConflict,
+                                IdentityError,
+                                ApplicationStateError,
+                                AuditUnavailable,
+                            ),
+                        ):
                             self._failure(exc)
                         item.failed(exc)
                 elif isinstance(item, _Read):

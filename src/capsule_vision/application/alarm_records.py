@@ -48,6 +48,31 @@ class AlarmQuery:
     batch: str = ""
     cursor: int | None = None
     newer: bool = False
+    batch_id: str | None = None
+    unbatched: bool = False
+
+    def conditions(self, cutoff: float) -> tuple[list[str], list[float | int | str]]:
+        clauses = ["observed >= ?"]
+        args: list[float | int | str] = [cutoff]
+        for expression, value in (
+            ("observed >= ?", self.since),
+            ("observed < ?", self.until),
+        ):
+            if value is not None:
+                clauses.append(expression)
+                args.append(value)
+        if self.category:
+            clauses.append("category = ?")
+            args.append(self.category)
+        if self.batch:
+            clauses.append("(batch_label = ? OR batch_id = ?)")
+            args.extend((self.batch, self.batch))
+        if self.batch_id is not None:
+            clauses.append("batch_id = ?")
+            args.append(self.batch_id)
+        if self.unbatched:
+            clauses.append("batch_id IS NULL")
+        return clauses, args
 
 
 _EVENT_COLUMNS = "observed,signal,state,category,zh,en,source,station,address,bit,definition,batch_id,batch_label,detail"
@@ -102,21 +127,7 @@ def append(db: sqlite3.Connection, events: tuple[AlarmEvent, ...]) -> None:
 def page(
     db: sqlite3.Connection, query: AlarmQuery, cutoff: float, *, translated: bool
 ) -> tuple[AlarmRecord, ...]:
-    clauses = ["observed >= ?"]
-    args: list[float | int | str] = [cutoff]
-    for expression, value in (
-        ("observed >= ?", query.since),
-        ("observed < ?", query.until),
-    ):
-        if value is not None:
-            clauses.append(expression)
-            args.append(value)
-    if query.category:
-        clauses.append("category = ?")
-        args.append(query.category)
-    if query.batch:
-        clauses.append("(batch_label = ? OR batch_id = ?)")
-        args.extend((query.batch, query.batch))
+    clauses, args = query.conditions(cutoff)
     if query.cursor is not None:
         clauses.append("id > ?" if query.newer else "id < ?")
         args.append(query.cursor)

@@ -57,6 +57,14 @@ def image_icon(tool: str, color: str = Style.primary) -> QIcon:
                 painter.drawLine(12, 13, 21, 4)
                 painter.drawLine(15, 4, 21, 4)
                 painter.drawLine(21, 4, 21, 10)
+            elif tool == "calendar":
+                painter.drawRoundedRect(3, 5, 18, 16, 2, 2)
+                painter.drawLine(3, 10, 21, 10)
+                painter.drawLine(8, 3, 8, 7)
+                painter.drawLine(16, 3, 16, 7)
+                for x in (8, 13, 18):
+                    painter.drawPoint(x, 14)
+                    painter.drawPoint(x, 18)
             elif tool == "refresh":
                 painter.drawArc(5, 5, 14, 14, 40 * 16, 290 * 16)
                 painter.drawLine(19, 4, 19, 10)

@@ -19,6 +19,7 @@ from tests.support.application import (
     prepared,
     production,
 )
+from tests.support.business import channel as business_channel
 from tests.support.business import mixed_result
 
 from capsule_vision.application import (
@@ -31,12 +32,12 @@ from capsule_vision.application.history import (
     HistoryQuery,
     HistorySubmission,
     ProductionHistory,
-    ResultFilter,
 )
 from capsule_vision.inspection import CycleId, CycleStatus
 from capsule_vision.inspection.production import (
     FindingSource,
     OccupancyResult,
+    OccupancyState,
     ProductJudgment,
     Reason,
     TechnicalStatus,
@@ -531,13 +532,16 @@ def test_bounded_filters_keyset_pages_and_incremental_wall_clock_retention(
             WAIT
         )
         assert newer.records == first.records and not newer.more
-        filters: tuple[ResultFilter, ...] = ("NG", "ERROR", "EMPTY", "UNKNOWN")
+        filters = ("OK", "NG", "ERROR", "EMPTY", "UNKNOWN")
         for result_filter in filters:
             rows = owner.query(
-                HistoryQuery(result=result_filter, batch_segment=shared.batch_segment)
+                HistoryQuery(
+                    result=frozenset((result_filter,)),
+                    batch_segment=shared.batch_segment,
+                )
             ).result(WAIT)
             assert len(rows.records) == 7
-        assert not owner.query(HistoryQuery(result="OK")).result(WAIT).records
+        assert not owner.query(HistoryQuery(result=frozenset())).result(WAIT).records
         assert not owner.query(HistoryQuery(since=1001)).result(WAIT).records
         assert not owner.query(HistoryQuery(until=1000)).result(WAIT).records
         assert len(first.batches) == 1
@@ -616,3 +620,106 @@ def test_unsupported_detail_shape_is_observable(
         finish(owner)
     with closing(sqlite3.connect(path)) as connection:
         assert connection.execute("SELECT count(*) FROM cycles").fetchone()[0] == 1
+
+
+def test_any_status_filter_uses_persisted_channels_before_paging_and_export(
+    tmp_path: Path,
+) -> None:
+    from capsule_vision.application.report_scope import (
+        ALL_RESULTS,
+        HistoryQuery,
+        ReportRequest,
+    )
+
+    owner = ProductionHistory(tmp_path / "history.sqlite3", clock=lambda: 1000.0)
+    ctx = context(stamp=1000.0)
+    try:
+        # Every mixed record contains OK, NG, EMPTY, UNKNOWN and independent ERR.
+        for i in range(1, 54):
+            assert owner.offer(ctx, mixed_result(i))
+        base = production(54)
+        only_ok = replace(
+            base,
+            cameras=tuple(
+                replace(
+                    camera,
+                    channels=tuple(
+                        business_channel(
+                            c,
+                            OccupancyState.PRESENT,
+                            TechnicalStatus.SUCCESS,
+                            ProductJudgment.OK,
+                        )
+                        for c in camera.channels
+                    ),
+                )
+                for camera in base.cameras
+            ),
+        )
+        assert owner.offer(ctx, only_ok)
+        empty = production(55, TechnicalStatus.DISABLED, ProductJudgment.UNKNOWN)
+        assert owner.offer(ctx, empty)
+        rows = owner.query(HistoryQuery(result=frozenset(("OK",)), limit=2)).result(
+            WAIT
+        )
+        assert [r.cycle_id for r in rows.records] == [54, 53] and rows.more
+        second = owner.query(
+            HistoryQuery(
+                result=frozenset(("OK",)),
+                cursor=(
+                    rows.records[-1].context.completed_at,
+                    rows.records[-1].record_id,
+                ),
+                limit=2,
+            )
+        ).result(WAIT)
+        assert [r.cycle_id for r in second.records] == [52, 51]
+        ng = owner.query(HistoryQuery(result=frozenset(("NG", "ERROR")))).result(WAIT)
+        assert len(ng.records) == 50 and ng.records[0].cycle_id == 53
+        all_rows = owner.query(HistoryQuery(result=ALL_RESULTS)).result(WAIT)
+        assert (
+            all_rows.records[0].cycle_id == 55
+        )  # All-enabled is genuinely unfiltered.
+        assert not owner.query(HistoryQuery(result=frozenset())).result(WAIT).records
+        assert (
+            not owner.query(
+                HistoryQuery(result=frozenset(("OK",)), batch_segment="different")
+            )
+            .result(WAIT)
+            .records
+        )
+        assert (
+            not owner.query(HistoryQuery(result=frozenset(("OK",)), until=1000))
+            .result(WAIT)
+            .records
+        )
+        # Export captures the same ANY query over the full scope, ignoring its page.
+        target = tmp_path / "snapshot.sqlite3"
+        owner.capture_report(
+            ReportRequest(
+                "defects",
+                "detections",
+                filters=HistoryQuery(
+                    result=frozenset(("OK", "ERROR")), limit=2, cursor=(1000, 40)
+                ),
+            ),
+            target,
+            Event(),
+        ).result(WAIT)
+        with closing(sqlite3.connect(target)) as db:
+            assert db.execute("SELECT count(*) FROM cycles").fetchone() == (54,)
+            assert db.execute("SELECT result FROM meta").fetchone() == ("OK, ERR",)
+    finally:
+        finish(owner)
+    # The same legacy payload read path works across restart without a migration.
+    owner = ProductionHistory(tmp_path / "history.sqlite3", clock=lambda: 1000.0)
+    try:
+        assert (
+            owner.query(HistoryQuery(result=frozenset(("OK",))))
+            .result(WAIT)
+            .records[0]
+            .cycle_id
+            == 54
+        )
+    finally:
+        finish(owner)

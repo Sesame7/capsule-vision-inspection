@@ -149,6 +149,10 @@ class PilotCounters:
     channel_empty: int = 0
     channel_unknown: int = 0
 
+    @property
+    def inspected(self) -> int:
+        return self.channel_ok + self.channel_ng
+
     @staticmethod
     def final_channels(
         batch: CompletedReportingBatch,

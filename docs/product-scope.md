@@ -34,7 +34,7 @@ they are not a release checklist claiming completion.
 | PLC group | An attributable physical group of four Cycles, established by the reporting owner under the equipment phase/counter contract; not the operator's production Batch |
 | PLC counter | W48/W148 value used in attribution; wraps/repeats and is not a globally unique group identity |
 | Final group outcome | One OK/NG/EMPTY product outcome per channel in a completed attributable PLC group; distinct from per-Cycle business/technical evidence |
-| PLC reporting / production export | Respectively, protocol result delivery to the PLC / a manually requested Excel summary |
+| PLC reporting / production export | Respectively, protocol result delivery to the PLC / a manually requested Excel or PDF production report |
 
 Inspection retains ownership of per-Cycle evidence and judgments. Reporting owns
 PLC-group membership, progress, completion timing and the authoritative reject
@@ -168,6 +168,13 @@ for an explicitly approved change. The product requirements are:
 
 ### 6.1 Inspection History
 
+- Records opens on **Batches**. All roles may review a named Batch, its attributable production totals and associated Runs. Show actual inspection observations, Run start/end, Start Account and outcome. Preserve the admitted username and account identity for historical review. Old Runs can have unavailable account evidence.
+- Keep independent, durable four-cycle Run summaries in Batch detail and reports:
+  Inspected, OK, NG and Pass Rate. Update Run and Batch totals from the same
+  eligible group fact. Detail expiry must not erase these summaries, and incomplete
+  historical evidence must not be turned into guessed capsule counts.
+- Operators and above can maintain optional product name, specification and notes outside an active Run. View Inspections opens the exact persisted Batch without changing Production selection. Retain Audit evidence of information edits.
+
 - **One History record per Cycle** remains the storage and detail unit. Keep the existing camera/channel detail matrix, per-Cycle reasons, time filtering and result lookup.
 - Associate the four observed Run/Cycle identities with their eligible physical group regardless of History arrival order. Retain group timing and final outcomes for the same 30-day detail window.
 - Persist enough association to distinguish the production Batch, Run, PLC group and Cycle identities defined above; PLC counter text alone is not a group key.
@@ -183,16 +190,42 @@ for an explicitly approved change. The product requirements are:
 
 ### 6.3 Manual production export
 
-- **Manual export only**. Neither Stop nor production Batch change automatically writes a report.
-- Operators and higher roles can export an ordinary **Excel (.xlsx)** file with a concise production summary and a PLC-group results sheet. Photos and individual Cycle details stay in their existing stores. The [History contract](architecture.md#production-history) defines the workbook fields and counting basis.
-- Summarize a **single explicitly identified production Batch** across all its Runs, including Runs after application restart. Include Run start/stop observations, Recipe identity where relevant, and one final OK/NG/EMPTY result per channel per attributable completed PLC group.
-- Retain Batch and Run identities and cumulative occurrence and physical-group totals across restarts and detail expiry. Date each snapshot, identify interrupted Runs and uncertain totals, and distinguish retained group detail from durable completed groups.
+- **Manual export only**. Stop and Batch changes do not write reports automatically.
+- Operator and higher roles use one Export action whose meaning follows the
+  Records tab. Batches exports the entire selected Batch regardless of discovery
+  dates. Inspection exports a defect-category summary for the effective shared
+  dates/Batch and result filter. The implemented Alarm and Audit tabs also
+  provide customer exports: Alarms requires Operator or higher authorization,
+  while Audit requires Engineer or Administrator authorization. The dialog offers
+  PDF (default), Excel and independently selected Simplified Chinese/English;
+  it does not repeat a report-type or Batch chooser.
+- The customer Batch report presents trustworthy product information, recorded
+  inspection span, Run-start accounts, Inspected, OK, NG and Pass Rate. Omit absent
+  optional fields and a standalone EMPTY metric. Multiple Runs use a compact
+  operator/start/end-observation table including the same Run production counts.
+  Show material recorded exceptions and
+  blank paper signature/review fields, without implying electronic approval.
+- Defect reports summarize effective ViMo labels and traditional NG categories.
+  Default affected capsule-position counting requires the entire selected scope
+  to comprise complete trustworthy four-cycle groups. Partial groups, unattributed
+  Cycles or an empty scope permit Detection Count only, with an explanation.
+  Detection Count is also available for a complete group scope. Category overlap
+  is distinct from total NG; missing historical classification is never inferred.
+- Ordinary customer reports should fit approximately one landscape A4 page. More
+  Runs, categories or genuine business content may require additional pages;
+  individual Cycle/group/channel rows are not included. PDF and Excel share scope
+  and basis; Excel retains typed numeric values. Preserve user-defined business
+  names and labels, while excluding opaque IDs, hashes and internal diagnostics.
+- Preserve durable Batch/Run identity and cumulative counts, evidence coverage,
+  consistent dated snapshots, cancellation, authorization and safe publication.
+  See the [History contract](architecture.md#production-history) for implemented
+  counting, attribution and retention boundaries. Photos remain in their store.
 
 ## 7. Audit Trail and alarms
 
-- History page becomes three clear tabs/branches: **Inspection History**, **Audit Trail**, and **Alarm History**; keep the five existing primary navigation destinations.
+- Records contains **Batches**, **Inspection**, **Audit** and **Alarms** within the existing five primary navigation destinations.
 - Audit Trail records meaningful human/security events: important account/session actions, Production Start/Stop/new/continued Batch/Recipe selection, Recipe/Model/Vision/Communication changes, manual PLC writes, and necessary failures/authorization rejections. Do **not** record navigation clicks, routine refreshes, every photo, or other trivial interactions.
-- Each audit entry should have time, actor, action, target, result, and a short informative description. For material configuration changes, use meaningful before/after values when affordable; never record passwords or sensitive secrets. Audit is locally persistent, with no dedicated export feature initially.
+- Each audit entry should have time, actor, action, target, result, and a short informative description. For material configuration changes, use meaningful before/after values when affordable; never record passwords or sensitive secrets. Audit is locally persistent, and Engineer or Administrator can export matching records as customer PDF or Excel reports.
 - Alarm monitoring is **independent of PLC detection-result reporting**. When configured and enabled, it can run after software startup while Production is READY, RUNNING, or stopped; unavailable communication is an **unknown/unavailable monitor state**, not proof that all PLC alarms cleared.
 - PLC retains responsibility for equipment/mechanical safety response. Software displays actual PLC alarm signals and important software faults, recording alarm occurrence and recovery transitions rather than every poll. Preserve current application FAULT/cleanup semantics for serious software failures. Do not add alarm acknowledgment, complex severity editors, sound systems, or remote notifications in the first implementation.
 - PLC alarm reads must preserve the timing and ownership of critical four-Cycle reporting reads and writes. Enabling both on the same PLC requires field confirmation that it can serve two independent FINS/TCP connections concurrently and meet reporting deadlines.
@@ -203,6 +236,7 @@ for an explicitly approved change. The product requirements are:
 ### 8.1 Product UX
 
 - Retain the current PySide6 shell, shared theme tokens, icon style, page structure, and meaningful engineering actions. No speculative new UI framework or general component-system redesign.
+- Keep the five localized navigation actions on one row with the current user, theme and language controls. Pointer activation must remain visually distinct from a persistent selection and from keyboard focus.
 - Normal operation should be compact in *steps*, not necessarily compact in pixels. There is ample vertical space; do not collapse mature Recipe/engineering cards merely to reduce visible controls.
 - Reduce redundant text in routine views. Keep failures, configuration/operational distinctions, actionable next steps, and important states plainly visible.
 
@@ -212,7 +246,7 @@ for an explicitly approved change. The product requirements are:
 - Distribute remaining space according to content need, instead of rigid equal fractions or a globally fixed narrow width for a data-heavy column. Do not let an excessively long optional value steal space required for a short but essential column.
 - Preserve the ability to read core values **without relying on tooltips** when the window has sufficient room. Long, genuinely unbounded dynamic text may elide with full tooltip/accessibility text.
 - If the viewport genuinely cannot fit sensible column minima, prefer a deliberate responsive fallback (layout reflow or table horizontal scrolling where appropriate) over squeezing columns to unreadable widths. Do not increase the application's minimum supported screen requirement casually.
-- Apply this rule especially to **History** (all three branches), **PLC Diagnostics Watch**, **Recipe/model tables**, and any future Alarm/Audit tables.
+- Apply this rule especially to the four **Records** tabs, **PLC Diagnostics Watch** and **Recipe/model tables**.
 
 ### 8.3 Language-change stability
 
@@ -224,7 +258,7 @@ for an explicitly approved change. The product requirements are:
 
 ### 8.4 Visual validation expectations
 
-- Validate relevant changed pages with **native Qt measurements and real screenshots**, not only static source inspection. Use the existing supported **1080-logical-pixel** layout target and a wider **1920-logical-pixel** case where appropriate; retain the repository's stated field UI validation safeguards.
+- Validate relevant changed pages with **native Qt measurements and real screenshots** on the two Windows workstation profiles: portrait 1080×1920 at 100% and landscape 3840×2160 at 200% (approximately 1920×1080 logical pixels). Retain the field UI validation safeguards.
 - Include simplified Chinese, English and selected longer localized captions/scripts as representative cases, plus available-width checks. Prefer automated width-budget tests over manually inspecting all 64 languages; do not claim coverage that was not run.
 - Review whether a column is disproportionately compressed, whether relevant headers/values are legible, and whether switching languages/state visibly moves stable action groups despite available room. Do not declare success merely because no control overlaps or because full text appears in tooltips.
 - A Windows field workstation can provide human screenshot/interaction confirmation when needed. **Isolated UI previews must not connect cameras, send PLC commands, change live configuration or touch customer data**; follow [field UI validation](field-ui-validation.md).

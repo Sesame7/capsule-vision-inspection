@@ -12,21 +12,17 @@ from time import time
 from uuid import uuid4
 
 import pytest
-from PySide6.QtCore import QDate, QLocale, QPoint, QRect, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPalette, QPixmap
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPixmap
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QHeaderView,
-    QLineEdit,
     QStyle,
     QStyledItemDelegate,
-    QStyleOptionComboBox,
     QStyleOptionViewItem,
-    QTableView,
     QTableWidget,
-    QToolButton,
 )
 from tests.support.application import WAIT, production
 from tests.support.business import channel as business_channel
@@ -61,6 +57,7 @@ from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.history_page import HistoryPage
+from capsule_vision.ui.records_filters import RecordsFilters
 from capsule_vision.ui.style import Style, Theme, apply_theme, theme_colors
 
 
@@ -204,6 +201,7 @@ def test_history_filters_pagination_selection_and_presentation(
     before = startup.application.snapshot()
     try:
         window.navigate(3)
+        window.history_tabs.setCurrentWidget(window.history)
         page = window.history
         until(lambda: not page.busy)
         assert window.pages.currentWidget() is window.history_tabs
@@ -223,42 +221,55 @@ def test_history_filters_pagination_selection_and_presentation(
             Qt.MouseButton.LeftButton,
             pos=page.channels.visualItemRect(item).center(),
         )
-        assert "execution_error" in page.channel_detail.toPlainText()
-        assert (
-            "NG" in page.channel_detail.toPlainText()
-            and "ERROR" in page.channel_detail.toPlainText()
-        )
+        assert page.channel_detail.toPlainText().splitlines() == [
+            text("records_model_defect", "zh"),
+            text("execution_error", "zh"),
+        ]
+        assert "NG · ERR" in item.text()
         assert (
             cycle_record(page).context.active.model_sha256 == first.active.model_sha256
         )
-        assert page.batch.count() == 3 and page.batch.itemData(
-            1
-        ) != page.batch.itemData(2)
         page.older.click()
         until(lambda: not page.busy)
-        assert page.cycles.rowCount() == 2 and page.newer.isEnabled()
+        assert page.cycles.rowCount() == 3 and page.newer.isEnabled()
         page.newer.click()
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 50 and not page.newer.isEnabled()
-        page.all_dates.click()
-        until(lambda: not page.busy)
-        assert not page.date.isEnabled() and page.batch.count() == 4
-        page.batch.setCurrentIndex(page.batch.findData(old.batch_segment))
+        filters = window.records_filters
+        assert filters.start.value is filters.end.value is None
+        filters.select_batch(old.batch_segment, old.batch_label or "")
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 1 and cycle_record(page).context == old
-        assert page.batch.currentData() == old.batch_segment
-        page.batch.setCurrentIndex(page.batch.findData(second.batch_segment))
+        assert filters.scope.batch == old.batch_segment
+        filters.select_batch(second.batch_segment, second.batch_label or "")
         until(lambda: not page.busy)
         assert (
             page.cycles.rowCount() == 1
             and cycle_record(page).context.run_id == second.run_id
         )
-        page.batch.setCurrentIndex(0)
-        page.result.setCurrentIndex(page.result.findData("OK"))
+        filters.select_batch(None)
+        page.result.showPopup()
+        view = page.result.view()
+        for index in (1, 4):
+            item = page.result.model().index(index, 0)
+            QTest.mouseClick(
+                view.viewport(),
+                Qt.MouseButton.LeftButton,
+                pos=view.visualRect(item).center(),
+            )
+            until(lambda: not page.busy)
+            assert view.isVisible()
+        assert page.cycles.rowCount() == 50
+        page.result.hidePopup()
+        page.result.set_selected(frozenset(("OK",)))
         until(lambda: not page.busy)
-        assert page.cycles.rowCount() == 1 and channel_at(page, 0, 1).judgment == "OK"
-        assert "execution_error" not in page.channel_detail.toPlainText()
-        page.result.setCurrentIndex(page.result.findData("EMPTY"))
+        assert page.cycles.rowCount() == 50
+        assert {c.business for c in cycle_record(page).channels} >= {"OK", "NG"}
+        page.result.set_selected(frozenset())
+        until(lambda: not page.busy)
+        assert page.cycles.rowCount() == 0 and page.channels.rowCount() == 0
+        assert page.channel_detail.isHidden() and not page.channel_detail.toPlainText()
+        page.result.set_selected(frozenset(("EMPTY",)))
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 50 and startup.application.snapshot() == before
         assert history.snapshot().accepted == history.snapshot().persisted == 53
@@ -371,10 +382,16 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
                 item = page.cycles.item(row, col)
                 assert item is not None
                 assert metrics.horizontalAdvance(item.text()) + 12 <= widths[col]
-                assert bool(item.toolTip()) == (col in (2, 3, 4))
-        assert widths[1] < widths[0] < min(widths[3:5])
-        assert max(widths[3:5]) < 1.25 * min(widths[3:5])
-        assert widths[5] >= max(widths[3:5])
+                assert item.toolTip() == item.data(
+                    Qt.ItemDataRole.AccessibleDescriptionRole
+                )
+                assert item.toolTip()
+                if col == 0:
+                    full = datetime.fromisoformat(item.toolTip())
+                    assert full.utcoffset() is not None
+                    assert full.strftime("%m-%d %H:%M:%S.%f")[:-3] == item.text()
+        assert max(widths[1:3]) < widths[0]
+        assert max(widths[1:3]) < min(widths[3:])
         camera_width = page.channels.columnWidth(0)
         if size[0] == 1080:
             assert 80 <= camera_width <= 100
@@ -403,17 +420,19 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             assert not header_mask.contains(QPoint(0, 0))
             assert header_mask.contains(table.horizontalHeader().rect().center())
             assert not viewport_mask.contains(table.viewport().rect().bottomLeft())
-            assert not viewport_mask.contains(table.viewport().rect().bottomRight())
+            # The reserved scroll gutter owns the outer right corner of the Cycle list.
+            corner = (
+                table.verticalScrollBar().parentWidget()
+                if table.verticalScrollBar().isVisible()
+                else table.viewport()
+            )
+            assert corner and not corner.mask().contains(corner.rect().bottomRight())
             assert viewport_mask.contains(table.viewport().rect().center())
             frame = table.grab().toImage()
             scale = frame.devicePixelRatio()
             assert frame.pixelColor(int(table.width() // 2 * scale), 0) == QColor(
                 theme_colors(page).border
             )
-        if viewport >= 1800:
-            assert widths[0] > 0.12 * viewport and widths[1] > 0.05 * viewport
-            assert widths[5] >= 0.25 * viewport
-
         # Exercise the real delegate with a painter: count fields have equal
         # pixel widths/right edges even when values change from one to two digits.
         drawn: list[tuple[QRect, Qt.AlignmentFlag, str]] = []
@@ -476,7 +495,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             .contains(page.channels.viewport().rect().bottomRight())
         )
         # Secondary edge case: long identifiers elide without consuming all
-        # surplus or losing their full tooltip. New data triggers allocation.
+        # surplus, losing their full tooltip or moving the columns.
         long_context = replace(
             context,
             completed_at=context.completed_at + 1,
@@ -487,6 +506,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         assert history.offer(long_context, result)
         page.refresh()
         until(lambda: not page.busy)
+        assert [page.cycles.columnWidth(i) for i in range(6)] == resized
         for col, value in (
             (3, long_context.batch_label),
             (4, long_context.recipe_name),
@@ -576,36 +596,38 @@ def test_stored_recipe_names_missing_names_and_content_sized_channel_details(
         )
         assert (
             missing_name_item is not None
-            and missing_name_item.text() == "ID: recipe-internal-id"
+            and missing_name_item.text() == "—"
+            and "recipe-internal-id" in missing_name_item.toolTip()
+            and missing_name_item.data(Qt.ItemDataRole.AccessibleDescriptionRole)
+            == missing_name_item.toolTip()
         )
         assert (
             text("history_recipe_name_missing", language) in missing_name_item.toolTip()
         )
         qapp.processEvents()
-        normal_height = page.channel_detail.height()
-        assert 28 <= normal_height <= 36
-        assert page.channel_detail.toPlainText() == "CAM1 · CH01 · OK"
+        assert page.channel_detail.isHidden() and not page.channel_detail.toPlainText()
         page.channels.setCurrentCell(0, 2)
-        assert page.channel_detail.toPlainText() == "CAM1 · CH02 · EMPTY"
-        assert page.channel_detail.height() == normal_height
+        assert page.channel_detail.isHidden() and not page.channel_detail.toPlainText()
+        defect, failure = (
+            text("records_model_defect", language),
+            text("execution_error", language),
+        )
         for col, expected in (
-            (6, "CAM1 · CH06 · NG\ndefect_region"),
-            (5, "CAM1 · CH05 · UNKNOWN · ERROR\nexecution_error"),
-            (4, "CAM1 · CH04 · NG · ERROR\ndefect_region, execution_error"),
+            (6, [defect]),
+            (5, [failure]),
+            (4, [defect, failure]),
         ):
             page.channels.setCurrentCell(0, col)
-            assert page.channel_detail.toPlainText() == expected
+            assert page.channel_detail.isVisible()
+            assert page.channel_detail.toPlainText().splitlines() == expected
             assert (
-                normal_height
-                < page.channel_detail.height()
-                <= normal_height + 3 * page.channel_detail.fontMetrics().lineSpacing()
+                24
+                <= page.channel_detail.height()
+                <= 4 * page.channel_detail.fontMetrics().lineSpacing()
             )
         qapp.processEvents()
         assert not page.channels.horizontalScrollBar().isVisible()
         page.grab()
-        print(
-            f"History {language}, page {page.width()}, camera column {page.channels.columnWidth(0)}, detail normal/abnormal {normal_height}/{page.channel_detail.height()}"
-        )
         page.channels.setCurrentCell(-1, -1)
         assert (
             not page.channel_detail.isVisible()
@@ -626,12 +648,12 @@ def test_stored_recipe_names_missing_names_and_content_sized_channel_details(
     "scenario,expected",
     [
         ("mixed", "OK 6 · NG 12 · EMPTY 6 · UNKNOWN 12 · ERR 12"),
-        ("ok", "OK 36 · NG 0 · EMPTY 0"),
+        ("ok", "OK 36 · NG 0"),
         ("empty", "OK 0 · NG 0 · EMPTY 36"),
-        ("unknown", "OK 0 · NG 0 · EMPTY 0 · UNKNOWN 36"),
-        ("unassigned", "OK 36 · NG 0 · EMPTY 0"),
-        ("cycle_error", "OK 36 · NG 0 · EMPTY 0 · 周期 ERR · 周期 UNKNOWN"),
-        ("timed_out", "OK 36 · NG 0 · EMPTY 0 · TIMED_OUT · 周期 ERR · 周期 UNKNOWN"),
+        ("unknown", "OK 0 · NG 0 · UNKNOWN 36"),
+        ("unassigned", "OK 36 · NG 0"),
+        ("cycle_error", "OK 36 · NG 0 · 周期 ERR · 周期 UNKNOWN"),
+        ("timed_out", "OK 36 · NG 0 · 周期超时 · 周期 ERR · 周期 UNKNOWN"),
     ],
 )
 def test_business_counts_independent_errors_and_cycle_anomalies(
@@ -725,9 +747,13 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
         )
         # Exceptional warnings can elide at narrow widths; the full summary
         # remains accessible, independently of the fixed-width count rendering.
-        assert not result_item.toolTip()
-        counts = expected.split(" · ")[
-            : 5 if scenario == "mixed" else 4 if scenario == "unknown" else 3
+        assert (
+            result_item.toolTip()
+            == result_item.data(Qt.ItemDataRole.AccessibleTextRole)
+            == expected
+        )
+        counts = [
+            part for part in expected.split(" · ") if part.rpartition(" ")[2].isdigit()
         ]
         assert (
             page.cycles.columnWidth(5)
@@ -760,23 +786,31 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             errors = [c for c in stored.channels if c.technical == "ERROR"]
             assert len(errors) == 12 and sum(c.business == "NG" for c in errors) == 6
             page.channels.setCurrentCell(0, 4)
-            assert (
-                page.channel_detail.toPlainText()
-                == "CAM1 · CH04 · NG · ERROR\ndefect_region, execution_error"
-            )
+            assert page.channel_detail.toPlainText().splitlines() == [
+                text("records_model_defect", "zh"),
+                text("execution_error", "zh"),
+            ]
             assert "NG · ERR" in content(page.channels, 0, 4)
         elif scenario in ("ok", "empty"):
             assert (
-                page.channel_detail.toPlainText()
-                == f"CAM1 · CH01 · {'OK' if scenario == 'ok' else 'EMPTY'}"
+                page.channel_detail.isHidden() and not page.channel_detail.toPlainText()
             )
         elif scenario == "unassigned":
             assert stored.judgment == stored.cameras[0].judgment == "OK"
             assert "unassigned_defect" in stored.cameras[0].unassigned_labels
             assert all(not c.reasons for c in stored.channels)
+            page.channels.setCurrentCell(0, 0)
+            assert (
+                text("records_unassigned", "zh").format(labels="unassigned_defect")
+                in page.channel_detail.toPlainText()
+            )
+            page.channels.setCurrentCell(0, 1)
+            assert page.channel_detail.isHidden()
         elif scenario in ("cycle_error", "timed_out"):
             assert "周期 ERR" in content(page.cycles, 0, 5)
         if scenario == "cycle_error":
+            page.channels.setCurrentCell(0, 0)
+            assert text("collection_short", "zh") in page.channel_detail.toPlainText()
             item = page.channels.item(0, 0)
             assert (
                 item is not None
@@ -784,7 +818,9 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             )
         if scenario in ("cycle_error", "timed_out"):
             page.set_language("en")
-            assert content(page.cycles, 0, 5) == expected.replace("周期", "Cycle")
+            assert content(page.cycles, 0, 5) == expected.replace(
+                "周期超时", text("cycle_timeout", "en")
+            ).replace("周期", "Cycle")
             assert "Cycle" in content(page.cycles, 0, 5)
     finally:
         page.dispose()
@@ -839,7 +875,7 @@ def test_historical_camera_ng_keeps_its_stored_judgment(
     try:
         page.activate()
         until(lambda: not page.busy)
-        assert content(page.cycles, 0, 5) == "OK 36 · NG 0 · EMPTY 0 · 周期 NG"
+        assert content(page.cycles, 0, 5) == "OK 36 · NG 0 · 周期 NG"
         stored = cycle_record(page)
         assert stored.judgment == stored.cameras[0].judgment == "NG"
         assert stored.cameras[0].unassigned_labels == ("background",)
@@ -943,21 +979,17 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
         assert channel_at(page, 0, 1).channel == 6
         assert channel_at(page, 0, 6).channel == 1
         page.channels.setCurrentCell(0, 4)
-        assert (
-            f"CAM{camera_count}" in page.channel_detail.toPlainText()
-            and "CH03" in page.channel_detail.toPlainText()
-        )
-        assert (
-            "NG" in page.channel_detail.toPlainText()
-            and "ERROR" in page.channel_detail.toPlainText()
-        )
-        assert "execution_error" in page.channel_detail.toPlainText()
+        assert "NG · ERR" in content(page.channels, 0, 4)
+        assert page.channel_detail.toPlainText().splitlines() == [
+            text("records_model_defect", page.language),
+            text("execution_error", page.language),
+        ]
         page.grab()
         page.cycles.clearSelection()
         page.cycles.setCurrentCell(-1, -1)
         page.cycles.clearSelection()
         # A no-result filter must clear every old detail, not reuse the previous cycle.
-        page.result.setCurrentIndex(page.result.findData("OK"))
+        page.result.set_selected(frozenset())
         until(lambda: not page.busy)
         assert page.channels.rowCount() == 0 and not page.channel_detail.toPlainText()
     finally:
@@ -988,6 +1020,14 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
     )
     history = ProductionHistory(tmp_path / "history.sqlite3")
     page = HistoryPage(history)
+    shared = RecordsFilters(history)
+    page.filter_bar.insertWidget(0, shared)
+
+    def update_scope() -> None:
+        page.scope = shared.scope
+        page.refresh()
+
+    shared.changed.connect(update_scope)
     apply_theme(page, "dark")
     page.resize(*size)
     page.show()
@@ -1007,31 +1047,18 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         until(lambda: not page.busy)
         qapp.processEvents()
         assert page.width() == size[0]
-        assert page.batch.count() == 4
-        labels = [page.batch.itemText(i) for i in range(1, 4)]
-        assert len(set(labels)) == 3 and all("LOT-" not in label for label in labels)
-        first_index = page.batch.findData(context.batch_segment)
-        assert datetime.fromtimestamp(stamp).strftime(
-            "%m-%d %H:%M:%S"
-        ) in page.batch.itemText(first_index)
-        assert "abcdef1" in page.batch.itemText(first_index)
-        tooltip = page.batch.itemData(first_index, Qt.ItemDataRole.ToolTipRole)
-        assert context.batch_label is not None
-        assert (
-            isinstance(tooltip, str)
-            and context.batch_segment in tooltip
-            and context.batch_label in tooltip
-        )
-        assert text("history_segment_observed", "zh") in tooltip
+        assert shared.start.value is shared.end.value is None
+        assert shared.scope.batch is None
+        assert shared.batch.text() == text("records_all_batches", "zh")
         page.cycles.selectRow(1)
         page.channels.setCurrentCell(0, 4)
         selected = channel_at(page, 0, 4)
         assert selected.business == "NG" and selected.technical == "ERROR"
         qapp.processEvents()  # Settle the normal-to-abnormal detail height change.
         widgets = (
-            page.date,
-            page.all_dates,
-            page.batch,
+            shared.start,
+            shared.end,
+            shared.batch,
             page.result,
             page.newer,
             page.older,
@@ -1048,7 +1075,7 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         )
         columns = tuple(page.cycles.columnWidth(i) for i in range(6))
         matrix_columns = tuple(page.channels.columnWidth(i) for i in range(7))
-        assert page.batch.width() == page.result.width()
+        assert shared.batch.width() == 208 and page.result.width() == 176
         assert (
             len(
                 {
@@ -1060,9 +1087,9 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         )
         assert not page.refresh_button.icon().isNull()
         filters = (
-            page.date.date(),
-            page.batch.currentData(),
-            page.result.currentData(),
+            shared.start.value,
+            shared.scope.batch,
+            page.result.selected,
         )
         assert not page.status.isVisible() and not page.status.text()
         assert not hasattr(page, "identity")
@@ -1078,6 +1105,7 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         assert page.older.isEnabled() and not page.newer.isEnabled()
         page.grab()
         page.set_language("en")
+        shared.set_language("en")
         qapp.processEvents()
         assert not page.busy
         localized_geometry = tuple(
@@ -1101,35 +1129,43 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         assert columns == tuple(page.cycles.columnWidth(i) for i in range(6))
         assert matrix_columns == tuple(page.channels.columnWidth(i) for i in range(7))
         assert filters == (
-            page.date.date(),
-            page.batch.currentData(),
-            page.result.currentData(),
+            shared.start.value,
+            shared.scope.batch,
+            page.result.selected,
         )
         assert channel_at(page, 0, 4) == selected
-        assert "execution_error" in page.channel_detail.toPlainText()
+        assert (
+            text("execution_error", page.language) in page.channel_detail.toPlainText()
+        )
         page.grab()
         toolbar_geometry = tuple(
             QRect(widget.mapTo(page, QPoint()), widget.size()) for widget in widgets[:7]
         )
         for language in LANGUAGES:
             page.set_language(language)
+            shared.set_language(language)
+            assert columns == tuple(page.cycles.columnWidth(i) for i in range(6))
+            result_header = page.cycles.horizontalHeaderItem(5)
+            assert result_header and result_header.data(
+                Qt.ItemDataRole.AccessibleTextRole
+            ) == text("history_result", language)
             time_header = page.cycles.horizontalHeaderItem(0)
             cycle_header = page.cycles.horizontalHeaderItem(1)
             assert time_header is not None and cycle_header is not None
             assert time_header.text() == text("short_time", language)
             assert text("history_clock", language) in time_header.toolTip()
-            assert not page.date.toolTip() and not page.channels.toolTip()
-            assert cycle_header.text() == "#" and cycle_header.toolTip() == text(
-                "history_cycle", language
-            )
-            assert tuple(page.result.itemText(i) for i in range(1, 6)) == (
+            assert shared.start.toolTip() and not page.channels.toolTip()
+            assert cycle_header.text() == text(
+                "records_cycle", language
+            ) and cycle_header.toolTip() == text("history_cycle", language)
+            assert tuple(page.result.itemText(i) for i in range(5)) == (
                 "OK",
                 "NG",
-                "ERROR",
                 "EMPTY",
                 "UNKNOWN",
+                "ERR",
             )
-            assert page.result.itemData(4, Qt.ItemDataRole.ToolTipRole) == text(
+            assert page.result.itemData(2, Qt.ItemDataRole.ToolTipRole) == text(
                 "history_empty", language
             )
             for button, key in (
@@ -1143,62 +1179,34 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
                     button.accessibleName() == button.toolTip() == text(key, language)
                 )
             qapp.processEvents()
-            date_text = page.date.findChild(QLineEdit)
-            assert date_text is not None
-            assert (
-                date_text.fontMetrics().horizontalAdvance(date_text.text())
-                <= date_text.contentsRect().width() - 4
-            )
-
+            assert shared.start.accessibleName() == text("records_from", language)
+            assert shared.end.accessibleName() == text("records_to", language)
             assert toolbar_geometry == tuple(
                 QRect(widget.mapTo(page, QPoint()), widget.size())
                 for widget in widgets[:7]
             ), language
-            assert page.all_dates.text() == text("history_all_dates", language)
-            for combo in (page.batch, page.result):
-                option = QStyleOptionComboBox()
-                combo.initStyleOption(option)
-                contents = combo.style().subControlRect(
-                    QStyle.ComplexControl.CC_ComboBox,
-                    option,
-                    QStyle.SubControl.SC_ComboBoxEditField,
-                    combo,
-                )
-                for index in range(combo.count()):
-                    if combo is page.batch and index != 0:
-                        continue  # Dynamic segment names remain bounded with full tooltips.
-                    assert (
-                        combo.fontMetrics().horizontalAdvance(combo.itemText(index))
-                        <= contents.width()
-                    ), (language, combo.itemText(index))
             assert (
-                page.all_dates.accessibleName()
-                == page.all_dates.toolTip()
-                == text("history_all_dates", language)
-            )
+                page.result.width() == 176
+            )  # Rare captions elide; full descriptions remain.
             assert (
                 page.refresh_button.accessibleName()
                 == page.refresh_button.toolTip()
                 == text("history_refresh", language)
             )
             assert filters == (
-                page.date.date(),
-                page.batch.currentData(),
-                page.result.currentData(),
+                shared.start.value,
+                shared.scope.batch,
+                page.result.selected,
             )
             assert channel_at(page, 0, 4) == selected and not page.busy
         page.set_language("en")
-        page.batch.showPopup()
-        until(page.batch.view().isVisible)
-        page.batch.view().window().grab()
-        page.batch.hidePopup()
-        second_index = page.batch.findData("abcdef2-second")
-        page.batch.setCurrentIndex(second_index)
+        shared.set_language("en")
+        shared.select_batch("abcdef2-second", "LOT-20261020-003")
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 1 and content(page.cycles, 0, 1) == "52"
         page.set_language("zh")
-        assert page.batch.currentData() == "abcdef2-second"
-        page.batch.setCurrentIndex(0)
+        assert shared.scope.batch == "abcdef2-second"
+        shared.select_batch(None)
         until(lambda: not page.busy)
         page.older.click()
         until(lambda: not page.busy)
@@ -1211,121 +1219,10 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 50 and not page.newer.isEnabled()
 
-        if size[0] == 1920:
-            cases: tuple[tuple[Theme, Language], ...] = (
-                ("dark", "zh"),
-                ("light", "zh"),
-                ("light", "en"),
-            )
-            for theme, language in cases:
-                apply_theme(page, theme)
-                page.set_language(language)
-                original_date = page.date.date()
-                calendar = page.date.calendarWidget()
-                assert calendar.locale().language() == (
-                    QLocale.Language.Chinese
-                    if language == "zh"
-                    else QLocale.Language.English
-                )
-                assert calendar.firstDayOfWeek() == calendar.locale().firstDayOfWeek()
-                QTest.mouseClick(
-                    page.date,
-                    Qt.MouseButton.LeftButton,
-                    pos=QPoint(page.date.width() - 8, page.date.height() // 2),
-                )
-                until(calendar.isVisible)
-                qapp.processEvents()
-                view = calendar.findChild(QTableView, "qt_calendar_calendarview")
-                month = calendar.findChild(QToolButton, "qt_calendar_monthbutton")
-                assert view is not None and month is not None and month.text()
-
-                def luminance(color: QColor) -> float:
-                    values = [
-                        v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
-                        for v in (color.redF(), color.greenF(), color.blueF())
-                    ]
-                    return sum(
-                        v * weight
-                        for v, weight in zip(
-                            values, (0.2126, 0.7152, 0.0722), strict=True
-                        )
-                    )
-
-                palette = view.palette()
-                for foreground, background in (
-                    (QPalette.ColorRole.Text, QPalette.ColorRole.Base),
-                    (QPalette.ColorRole.HighlightedText, QPalette.ColorRole.Highlight),
-                ):
-                    a, b = sorted(
-                        (
-                            luminance(palette.color(foreground)),
-                            luminance(palette.color(background)),
-                        )
-                    )
-                    assert (b + 0.05) / (a + 0.05) >= 4.5
-                assert palette.color(
-                    QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text
-                ) != palette.color(QPalette.ColorRole.Base)
-                calendar.grab()
-                # Click a mid-month date via the actual calendar view, then
-                # use keyboard navigation/Enter on the reopened popup.
-                model = view.model()
-                assert model is not None
-                target = QDate(original_date.year(), original_date.month(), 15)
-                for row in range(1, model.rowCount()):
-                    for column in range(model.columnCount()):
-                        day = model.index(row, column)
-                        rect = view.visualRect(day)
-                        if rect.isValid() and rect.width() > 0:
-                            QTest.mouseClick(
-                                view.viewport(),
-                                Qt.MouseButton.LeftButton,
-                                pos=rect.center(),
-                            )
-                            until(lambda current=calendar: not current.isVisible())
-                            if page.date.date().month() == target.month() and (
-                                page.date.date().day() == 15
-                            ):
-                                break
-                            page.date.setDate(original_date)
-                            QTest.mouseClick(
-                                page.date,
-                                Qt.MouseButton.LeftButton,
-                                pos=QPoint(
-                                    page.date.width() - 8, page.date.height() // 2
-                                ),
-                            )
-                            until(calendar.isVisible)
-                            qapp.processEvents()
-                    if page.date.date().month() == target.month() and (
-                        page.date.date().day() == 15
-                    ):
-                        break
-                until(
-                    lambda current=calendar: not current.isVisible() and not page.busy
-                )
-                assert page.date.date() == QDate(
-                    original_date.year(), original_date.month(), 15
-                )
-                QTest.mouseClick(
-                    page.date,
-                    Qt.MouseButton.LeftButton,
-                    pos=QPoint(page.date.width() - 8, page.date.height() // 2),
-                )
-                until(calendar.isVisible)
-                view.setFocus()
-                QTest.keyClick(view, Qt.Key.Key_Right)
-                assert calendar.selectedDate().day() == 16
-                QTest.keyClick(view, Qt.Key.Key_Return)
-                until(
-                    lambda current=calendar: not current.isVisible() and not page.busy
-                )
-                assert page.date.date().day() == 16
-                page.date.setDate(original_date)
-                until(lambda: not page.busy)
+        # Calendar keyboard and clear semantics are covered by the shared-filter test.
     finally:
-        page.date.calendarWidget().hide()
-        page.batch.hidePopup()
+        shared.start.popup.hide()
+        shared.popup.hide()
         page.dispose()
         page.close()
         history.request_stop()
@@ -1359,11 +1256,11 @@ def test_loading_stale_delivery_empty_unavailable_and_warning(
         responsive = Event()
         QTimer.singleShot(0, responsive.set)
         until(responsive.is_set)
-        page.result.setCurrentIndex(page.result.findData("NG"))
-        page.result.setCurrentIndex(page.result.findData("EMPTY"))
+        page.result.set_selected(frozenset(("NG",)))
+        page.result.set_selected(frozenset(("EMPTY",)))
         release.set()
         until(lambda: not page.busy)
-        assert queries[-1].result == "EMPTY"
+        assert queries[-1].result == frozenset(("EMPTY",))
         assert page.status.text() == text("history_none", "zh")
         assert page.cycles.rowCount() == page.channels.rowCount() == 0
         history.request_stop()
@@ -1394,3 +1291,115 @@ def test_loading_stale_delivery_empty_unavailable_and_warning(
     finally:
         unavailable.dispose()
         unavailable.deleteLater()
+
+
+def test_result_popup_keeps_multi_selection_open_and_keyboard_accessible(
+    qapp: QApplication,
+) -> None:
+    from capsule_vision.application.report_scope import (
+        ALL_RESULTS,
+        RESULT_STATES,
+        ResultFilter,
+    )
+    from capsule_vision.ui.history_result_filter import HistoryResultFilter
+
+    selector = HistoryResultFilter()
+    selector.resize(176, 44)
+    selector.show()
+    changes: list[object] = []
+    selector.changed.connect(lambda: changes.append(selector.selected))
+    try:
+        assert selector.selected == ALL_RESULTS
+        selector.showPopup()
+        view = selector.view()
+        for row in (1, 4):
+            index = selector.model().index(row, 0)
+            assert index.flags() & Qt.ItemFlag.ItemIsUserCheckable
+            QTest.mouseClick(
+                view.viewport(),
+                Qt.MouseButton.LeftButton,
+                pos=view.visualRect(index).center(),
+            )
+            assert view.isVisible()
+            assert (
+                selector.itemData(row, Qt.ItemDataRole.CheckStateRole)
+                == Qt.CheckState.Unchecked
+            )
+        assert selector.selected == frozenset(("OK", "EMPTY", "UNKNOWN"))
+        assert len(changes) == 2
+        view.setCurrentIndex(selector.model().index(0, 0))
+        QTest.keyClick(view, Qt.Key.Key_Space)
+        assert "OK" not in selector.selected and view.isVisible()
+        QTest.keyClick(view, Qt.Key.Key_Escape)
+        assert not view.isVisible()
+        for language in ("zh", "en", "de"):
+            selector.set_language(language)
+            assert selector.accessibleDescription() == selector.toolTip()
+            assert selector.selected == frozenset(("EMPTY", "UNKNOWN"))
+        selections: tuple[ResultFilter, ...] = (frozenset(), ALL_RESULTS)
+        for states in selections:
+            selector.set_selected(states)
+            assert selector.selected == states
+            assert all(
+                selector.itemData(i, Qt.ItemDataRole.CheckStateRole)
+                == (Qt.CheckState.Checked if s in states else Qt.CheckState.Unchecked)
+                for i, s in enumerate(RESULT_STATES)
+            )
+    finally:
+        selector.hidePopup()
+        selector.close()
+        selector.deleteLater()
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_result_popup_draws_plain_checkmarks_without_selection_boxes(
+    qapp: QApplication, theme: Theme
+) -> None:
+    from capsule_vision.ui.history_result_filter import HistoryResultFilter
+
+    ensure_test_fonts()
+    selector = HistoryResultFilter()
+    apply_theme(selector, theme)
+    colors = theme_colors(selector)
+    selector.set_selected(frozenset(("OK",)))
+    view = selector.view()
+    option = QStyleOptionViewItem()
+    option.widget = view
+    option.rect = QRect(0, 0, 176, 44)
+    option.font = view.font()
+    option.state = QStyle.StateFlag.State_Enabled
+
+    def rendered(row: int) -> QImage:
+        image = QImage(176, 44, QImage.Format.Format_ARGB32)
+        image.fill(QColor("magenta"))
+        painter = QPainter(image)
+        selector.itemDelegate().paint(painter, option, selector.model().index(row, 0))
+        painter.end()
+        return image
+
+    try:
+        unchecked = rendered(1)
+        assert all(
+            unchecked.pixelColor(x, y) == QColor(colors.surface)
+            for x in range(140, 176)
+            for y in range(44)
+        )
+        checked = rendered(0)
+        option.state |= QStyle.StateFlag.State_Selected
+        assert rendered(0) == checked  # Current row adds no persistent fill/box.
+        assert any(
+            checked.pixelColor(x, y) != QColor(colors.surface)
+            for x in range(146, 166)
+            for y in range(10, 34)
+        )
+        # The empty border around the glyph excludes a native checkbox square.
+        assert all(
+            checked.pixelColor(x, y) == QColor(colors.surface)
+            for x in range(140, 176)
+            for y in (1, 2, 41, 42)
+        )
+        option.state |= QStyle.StateFlag.State_MouseOver
+        assert rendered(0).pixelColor(80, 4) == QColor(colors.raised)
+    finally:
+        selector.close()
+        selector.deleteLater()

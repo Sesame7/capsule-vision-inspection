@@ -60,7 +60,7 @@ from capsule_vision.inspection.production.capsule import (
     measure_capsule,
     median_hue,
 )
-from capsule_vision.localization.catalog import text
+from capsule_vision.localization.catalog import CAPSULE_REASON_KEYS, text
 from capsule_vision.localization.languages import Language
 
 from .image_tools import ImageToolbar, image_icon
@@ -69,21 +69,6 @@ from .style import Style, camera_icon, theme_colors
 
 type PreviewMode = Literal["size", "color"]
 type ReferenceKind = Literal["folder", "runtime", "import"]
-
-_REASON_LABELS = {
-    leaf: f"preview_{leaf}"
-    for leaf in (
-        "missing_body",
-        "competing_bodies",
-        "truncated_body",
-        "invalid_geometry",
-        "insufficient_foreground",
-        "unusable",
-        "length",
-        "ambiguous_body",
-        "tolerance",
-    )
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -617,7 +602,7 @@ class RecipeTuning(QWidget):
                 explanation = " · ".join(
                     dict.fromkeys(
                         text(
-                            _REASON_LABELS.get(
+                            CAPSULE_REASON_KEYS.get(
                                 code.rsplit(".", 1)[-1], "preview_unavailable"
                             ),
                             self.language,

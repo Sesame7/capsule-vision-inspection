@@ -97,7 +97,157 @@ IDENTITY_UI_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "customer_length",
+    "customer_color",
+    "customer_batch_total",
+    "customer_classification_unavailable",
+    "batch_create",
+    "batch_continue",
+    "batch_run",
+    "batch_recent_end",
+    "batch_information",
+    "customer_statistics_unavailable",
+    "customer_end",
+    "customer_unit",
+    "run_statistics_unavailable",
+    "customer_batch",
+    "customer_defects",
+    "customer_audit",
+    "customer_alarm",
+    "customer_alarm_period",
+    "alarm_no_matches",
+    "customer_audit_batch",
+    "customer_audit_account",
+    "customer_audit_from",
+    "customer_audit_before",
+    "customer_audit_excluded",
+    "customer_audit_required",
+    "customer_audit_slot",
+    "customer_audit_capacity",
+    "customer_positions",
+    "customer_first",
+    "customer_last",
+    "customer_total_ng",
+    "customer_classified_ng",
+    "customer_prepared",
+    "customer_reviewed",
+    "customer_batch_basis",
+    "customer_accounts_missing",
+    "customer_unattributed",
+    "customer_errors",
+    "customer_group_coverage",
+    "customer_cycle_coverage",
+    "customer_unclassified",
+    "customer_missing_ng",
+    "customer_detection_only",
+    "customer_entire_batch",
+    "customer_deferred",
+    "customer_select_batch",
+    "records_all_accounts",
+    "records_find_account",
+    "records_all_batches",
+    "records_from",
+    "records_to",
+    "records_find_batch",
+    "records_no_batch",
+    "records_audit_scope",
+    "batch_info_failed",
+    "batch.information",
+    "batch_first_run",
+    "batch_recent_run",
+    "batch_first_run_hint",
+    "batch_recent_run_hint",
+    "batch_inspection_span",
+    "batch_start_account",
+    "batch_product",
+    "batch_specification",
+    "batch_notes",
+    "batch_edit_info",
+    "batch_view_inspections",
+    "batch_no_groups",
+    "batch_info_conflict",
+    "batch_edit_idle",
+    "batch_report_deferred",
+    "export_filtered_hint",
+    "export_type",
+    "export_batch",
+    "export_groups",
+    "export_cycles",
+    "export_basis",
+    "export_capsule",
+    "export_defects",
+    "export_detections",
+    "export_format",
+    "export_language",
+    "export_run",
+    "export_evidence",
+    "export_classified_groups",
+    "export_explained",
+    "export_conservative",
+    "export_unknown_ng",
+    "export_category",
+    "export_source",
+    "export_traditional",
+    "export_affected",
+    "export_occurrences",
+    "export_note_defects",
+    "export_note_detections",
+    "export_note_capsule",
+    "export_durable",
+    "export_retained",
+    "export_measured_cycles",
+    "export_no_evidence",
+    "export_no_groups",
+    "export_complete",
+    "export_channel_detail",
+    "export_member_cycles",
+    "export_period",
+    "export_from",
+    "export_before",
+    "export_all",
+    "export_none",
+    "export_group_categories",
+    "export_cycle_categories",
+    "export_category_totals",
+    "export_value",
+    "export_count",
+    "export_total",
+    "export_items",
+    "export_page",
+    "report_page_total",
+    "report_exported",
+    "report_workstation",
+    "report_reference",
+    "report_system_generated",
+    "report_signature_date",
     *base_resources.AUDIT_ACTIONS,
+    "records_account_id",
+    "records_action_code",
+    "records_signal",
+    "records_definition",
+    "records_batch_id",
+    "records_bit",
+    "records_batch_report",
+    "records_create_alarm_file",
+    "records_success",
+    "records_uncertain",
+    "records_unresolved",
+    "records_seen_active",
+    "records_seen_clear",
+    "records_after_gap",
+    "records_occupancy",
+    "records_model_defect",
+    "records_missing_frame",
+    "records_deadline",
+    "records_cycle_failed",
+    "records_unassigned",
+    "records_technical",
+    "records_config_error",
+    "records_config_io",
+    "records_sources",
+    "records_layout",
+    "records_software",
+    "records_run",
     "alarm_history",
     "alarm_monitor",
     "alarm_file",
@@ -110,8 +260,6 @@ OPTIONAL_UI_KEYS = {
     "alarm_file_unavailable",
     "alarm_all_types",
     "alarm_type",
-    "alarm_name",
-    "alarm_state",
     "alarm_details",
     "alarm_station",
     "alarm_startup",
@@ -133,10 +281,7 @@ OPTIONAL_UI_KEYS = {
     "audit_inspection",
     "audit_time",
     "audit_actor",
-    "audit_action",
     "audit_all_actions",
-    "audit_outcome",
-    "audit_target",
     "audit_before",
     "audit_after",
     "audit_requested",
@@ -154,7 +299,6 @@ OPTIONAL_UI_KEYS = {
     "audit_denied",
     "audit_unresolved",
     "audit_uncertain",
-    "history_group",
     "history_open_image",
     "history_no_image",
     "history_image_missing",
@@ -325,6 +469,7 @@ def test_identity_regional_catalogs_preserve_independent_terms_and_scripts() -> 
 
 # These tokens may inherit canonical English; native overrides remain explicit.
 TECHNICAL_TOKEN_KEYS = {
+    "nav_plc",
     "production_ok",
     "production_ng",
     "production_empty",
@@ -1094,6 +1239,27 @@ def test_optional_ui_text_uses_existing_english_fallback() -> None:
             )
 
 
+def test_record_captions_distinguish_witnessed_transitions_and_audit_outcomes() -> None:
+    for language in LANGUAGES:
+        for keys in (
+            (
+                "records_seen_active",
+                "records_seen_clear",
+                "alarm_activated",
+                "alarm_recovered",
+            ),
+            (
+                "records_success",
+                "audit_failed",
+                "audit_denied",
+                "records_uncertain",
+                "records_unresolved",
+            ),
+        ):
+            assert len({text(key, language) for key in keys}) == len(keys)
+        assert "Chip" in text("records_unassigned", language).format(labels="Chip")
+
+
 def test_technical_tokens_use_fallback_and_preserve_native_overrides() -> None:
     for language in EXTRA_STRINGS:
         for key in TECHNICAL_TOKEN_KEYS:
@@ -1156,6 +1322,33 @@ def test_compact_captions_preserve_full_context_resources() -> None:
             assert text(full, language).strip()
             if language not in ("zh", "en"):
                 assert compact in EXTRA_STRINGS[language]
+
+
+def test_navigation_has_native_short_captions_and_one_protocol_identifier() -> None:
+    keys = ("nav_inspect", "page_recipe", "nav_plc", "nav_records", "nav_cameras")
+    assert tuple(text(key, "zh") for key in keys) == (
+        "检测",
+        "配方",
+        "PLC",
+        "记录",
+        "相机",
+    )
+    assert tuple(text(key, "en") for key in keys) == (
+        "Inspect",
+        "Recipe",
+        "PLC",
+        "Records",
+        "Cameras",
+    )
+    for language in LANGUAGES:
+        captions = tuple(text(key, language) for key in keys)
+        assert len(set(captions)) == 5 and captions[2] == "PLC"
+        assert all(caption.strip() and "…" not in caption for caption in captions)
+        if language not in ("zh", "en"):
+            assert set(keys) - {"nav_plc"} <= EXTRA_STRINGS[language].keys()
+    assert text("nav_records", "zh-TW") == "紀錄"
+    assert text("nav_records", "pt-BR") == "Registros"
+    assert text("nav_records", "pt-PT") == "Registos"
 
 
 @pytest.mark.parametrize("language", tuple(EXTRA_STRINGS))
@@ -1394,7 +1587,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 631
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 791
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

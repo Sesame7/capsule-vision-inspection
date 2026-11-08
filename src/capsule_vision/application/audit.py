@@ -10,7 +10,7 @@ from itertools import zip_longest
 from pathlib import Path
 from queue import Queue
 from sqlite3 import connect
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import cast
 from uuid import uuid4
 
@@ -131,6 +131,16 @@ class AuditRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class AuditAccount:
+    actor_id: str
+    username: str
+
+    @property
+    def cursor(self) -> tuple[str, str]:
+        return self.username, self.actor_id
+
+
+@dataclass(frozen=True, slots=True)
 class AuditQuery:
     since: str = ""
     until: str = ""
@@ -138,6 +148,34 @@ class AuditQuery:
     action: str = ""
     before: int | None = None
     newer: bool = False
+    associated_only: bool = False
+    account: AuditAccount | None = None
+
+    def conditions(self) -> tuple[list[str], list[str | int]]:
+        clauses: list[str] = []
+        args: list[str | int] = []
+        if self.associated_only:
+            clauses.append(
+                "o.action IN ('production.start','production.stop','batch.select','batch.end','batch.information','production.clear_statistics')"
+            )
+        for column, value in (
+            ("o.utc >= ?", self.since),
+            ("o.utc < ?", self.until),
+            ("o.action = ?", self.action),
+        ):
+            if value:
+                clauses.append(column)
+                args.append(value)
+        if self.actor:
+            clauses.append("(o.username = ? OR o.actor_id = ?)")
+            args.extend((self.actor, self.actor))
+        if self.account is not None:
+            clauses.append("o.actor_id = ? AND o.username = ?")
+            args.extend((self.account.actor_id, self.account.username))
+        if self.before is not None:
+            clauses.append("o.rowid > ?" if self.newer else "o.rowid < ?")
+            args.append(self.before)
+        return clauses, args
 
 
 def error_outcome(error: BaseException) -> str:
@@ -197,7 +235,7 @@ class AuditTrail:
             try:
                 with db:
                     result = fn(db)
-            except IdentityError as exc:
+            except (IdentityError, CancelledError) as exc:
                 done.set_exception(exc)
             except Exception as exc:
                 with self._lock:
@@ -360,6 +398,34 @@ class AuditTrail:
         future.add_done_callback(finished)
         return future
 
+    def accounts(
+        self,
+        search: str = "",
+        cursor: tuple[str, str] | None = None,
+        revision: int | None = None,
+    ) -> Future[tuple[AuditAccount, ...]]:
+        """Discover recorded actors, independently of current accounts or record filters."""
+        revision = self._authorize_review(revision)
+
+        def read(db: sqlite3.Connection) -> tuple[AuditAccount, ...]:
+            self._authorize_review(revision)
+            clauses = ["instr(lower(username),lower(?))>0"]
+            args = [search]
+            if cursor is not None:
+                clauses.append("(username,actor_id)>(?,?)")
+                args.extend(cursor)
+            rows = db.execute(
+                "SELECT DISTINCT actor_id,username FROM operations WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY username,actor_id LIMIT 51",
+                args,
+            )
+            accounts = tuple(AuditAccount(*row) for row in rows)
+            self._authorize_review(revision)
+            return accounts
+
+        return self._submit(read, write=False)
+
     def page(
         self, query: AuditQuery, revision: int | None = None
     ) -> Future[tuple[AuditRecord, ...]]:
@@ -367,22 +433,7 @@ class AuditTrail:
 
         def read(db: sqlite3.Connection) -> tuple[AuditRecord, ...]:
             self._authorize_review(revision)
-            clauses: list[str] = []
-            args: list[str | int] = []
-            for column, value in (
-                ("o.utc >= ?", query.since),
-                ("o.utc < ?", query.until),
-                ("o.action = ?", query.action),
-            ):
-                if value:
-                    clauses.append(column)
-                    args.append(value)
-            if query.actor:
-                clauses.append("(o.username = ? OR o.actor_id = ?)")
-                args.extend((query.actor, query.actor))
-            if query.before is not None:
-                clauses.append("o.rowid > ?" if query.newer else "o.rowid < ?")
-                args.append(query.before)
+            clauses, args = query.conditions()
             where = " WHERE " + " AND ".join(clauses) if clauses else ""
             order = "ASC" if query.newer else "DESC"
             rows = db.execute(
@@ -400,6 +451,47 @@ class AuditTrail:
             return records
 
         return self._submit(read, write=False)
+
+    def capture_report(
+        self, query: AuditQuery, snapshot: Path, cancel: Event, revision: int
+    ) -> Future[None]:
+        """Freeze matching operation/completion facts on the existing Audit owner."""
+        self._authorize_review(revision)
+
+        def capture(db: sqlite3.Connection) -> None:
+            self._authorize_review(revision)
+            if cancel.is_set():
+                raise CancelledError()
+            clauses, args = query.conditions()
+            db.execute("ATTACH DATABASE ? AS report", (str(snapshot),))
+            try:
+                with db:
+                    db.execute("BEGIN")
+                    db.set_progress_handler(lambda: int(cancel.is_set()), 4096)
+                    db.execute(
+                        """CREATE TABLE report.audit_records AS SELECT
+                        o.rowid AS cursor,o.actor_id,o.username,o.action,o.target,
+                        o.old_value,o.new_value,o.id,o.utc,coalesce(c.outcome,'unresolved') AS outcome,
+                        coalesce(c.utc,'') AS completed,coalesce(c.detail,'') AS detail
+                        FROM operations o LEFT JOIN completions c USING(id) WHERE """
+                        + (" AND ".join(clauses) or "1"),
+                        args,
+                    )
+                    db.execute(
+                        "CREATE UNIQUE INDEX report.audit_cursor ON audit_records(cursor)"
+                    )
+                    self._authorize_review(revision)
+                    if cancel.is_set():
+                        raise CancelledError()
+            except sqlite3.OperationalError:
+                if cancel.is_set():
+                    raise CancelledError() from None
+                raise
+            finally:
+                db.set_progress_handler(None, 0)
+                db.execute("DETACH DATABASE report")
+
+        return self._submit(capture, write=False)
 
     def close(self) -> None:
         """Drain accepted records; only called off dispatch by the owning worker."""

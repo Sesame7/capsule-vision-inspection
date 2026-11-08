@@ -59,26 +59,24 @@ from capsule_vision.ui.identity_controls import (
 )
 from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.ui.production_bridge import QtProductionBridge
-from capsule_vision.ui.shell import NavigationBar, NavigationMode
+from capsule_vision.ui.shell import NavigationBar
 from capsule_vision.ui.style import Style, apply_theme, theme_colors
 
 SECRET = "isolated UI test credential"
 NEW_SECRET = "replacement UI test credential"
 
 
-@pytest.mark.parametrize(
-    "font_pixels,mode", [(15, "comfortable"), (26, "compact"), (34, "two_row")]
-)
-def test_account_menu_theme_and_language_in_each_navigation_mode(
+@pytest.mark.parametrize("width,height", [(1080, 1920), (1920, 1080)])
+def test_account_menu_theme_and_language_in_workstation_navigation(
     identity_screen: tuple[MainWindow, LocalIdentity],
-    font_pixels: int,
-    mode: NavigationMode,
+    width: int,
+    height: int,
 ) -> None:
     window, owner = identity_screen
     bar, ui = window.navbar, window.identity_controls
-    bar.setStyleSheet(f"QWidget {{font-size: {font_pixels}px;}}")
+    window.resize(width, height)
     QApplication.processEvents()
-    assert bar.mode == mode
+    user_slot = bar.user.geometry()
     before = window.bridge.application.snapshot()
     selected: list[int] = []
     bar.page_selected.connect(selected.append)
@@ -86,7 +84,7 @@ def test_account_menu_theme_and_language_in_each_navigation_mode(
     submit(ui, username="Admin", password=SECRET)
     until(lambda: ui.form is None)
     assert owner.snapshot().role is Role.ADMINISTRATOR
-    assert bar.mode == mode and "Admin" in bar.user.accessibleName()
+    assert bar.user.geometry() == user_slot and "Admin" in bar.user.accessibleName()
     ui.menu.popup(bar.user.mapToGlobal(QPoint(0, bar.user.height())))
     until(ui.menu.isVisible)
     assert (
@@ -105,7 +103,7 @@ def test_account_menu_theme_and_language_in_each_navigation_mode(
             assert window.language == language and window.pages.currentIndex() == 0
     ui.controls["identity_logout"].trigger()
     assert owner.snapshot().role is Role.GUEST
-    assert bar.mode == mode and selected == []
+    assert bar.user.geometry() == user_slot and selected == []
     assert window.bridge.application.snapshot() == before
 
 

@@ -1,7 +1,7 @@
 """Saved Web preferences and independent observations of the one runtime owner."""
 
 from PySide6.QtCore import QEvent, QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPainter, QPaintEvent
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -12,8 +12,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
-    QStyle,
-    QStyleOptionComboBox,
     QVBoxLayout,
     QWidget,
 )
@@ -25,6 +23,7 @@ from capsule_vision.web.hosts import local_ipv4_addresses
 from capsule_vision.web.runtime import WebRuntime, WebState
 
 from .style import (
+    ChevronComboBox,
     Style,
     button_width,
     production_icon,
@@ -32,26 +31,6 @@ from .style import (
     shell_icon,
     theme_colors,
 )
-
-
-class _AddressSelector(QComboBox):
-    """Use the shell's painted chevron while retaining native combo hit testing."""
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-        super().paintEvent(event)
-        option = QStyleOptionComboBox()
-        self.initStyleOption(option)
-        area = self.style().subControlRect(
-            QStyle.ComplexControl.CC_ComboBox,
-            option,
-            QStyle.SubControl.SC_ComboBoxArrow,
-            self,
-        )
-        painter = QPainter(self)
-        shell_icon("chevron", theme_colors(self).secondary).paint(
-            painter, area.adjusted(10, 10, -10, -10)
-        )
-        painter.end()
 
 
 class WebSettingsPanel(QFrame):
@@ -106,7 +85,7 @@ class WebSettingsPanel(QFrame):
         header.addWidget(self.power)
         root.addLayout(header)
         grid = QGridLayout()
-        self.addresses = _AddressSelector()
+        self.addresses = ChevronComboBox()
         self.addresses.setEditable(True)
         self.addresses.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.addresses.setObjectName("webAddress")

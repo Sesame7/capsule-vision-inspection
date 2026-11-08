@@ -13,7 +13,7 @@ from time import time
 import pytest
 from development_records import SAMPLE, example_id, populate
 from openpyxl import load_workbook
-from populate_development_data import provision_accounts
+from populate_development_data import provision_accounts, review_records
 from tests.support.startup import saved_data
 
 from capsule_vision.application._security_lock import SecurityLease
@@ -123,6 +123,7 @@ def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
         ).fetchall()
         assert len(groups) == 80
         channel_ids = set(range(1, cameras * 6 + 1))
+        empty_counts: set[int] = set()
         for run, first, observed, encoded in groups:
             members = db.execute(
                 "SELECT m.slot,c.cycle_id,c.completed_at,c.detail FROM group_members m JOIN cycles c ON (c.run_id,c.cycle_id)=(m.run,m.cycle) WHERE m.run=? AND m.first_cycle=? ORDER BY m.slot",
@@ -134,6 +135,7 @@ def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
             assert members[-1][2] == observed
             actual = dict(json.loads(encoded))
             assert set(actual) == channel_ids
+            empty_counts.add(sum(state == "EMPTY" for state in actual.values()))
             cycles = [
                 {c[2]: c[3] for c in json.loads(zlib.decompress(detail))[0]}
                 for _, _, _, detail in members
@@ -148,6 +150,16 @@ def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
                     else "OK"
                 )
                 assert final == expected
+        assert empty_counts >= {0, 1, 2, 3}
+        anomaly = db.execute(
+            "SELECT detail FROM cycles WHERE run_id=? AND cycle_id=27",
+            (example_id("run/11"),),
+        ).fetchone()
+        anomalous_channels = [
+            c for c in json.loads(zlib.decompress(anomaly[0]))[0] if c[4] == "ERROR"
+        ]
+        assert {c[3] for c in anomalous_channels} == {"NG", "UNKNOWN"}
+        assert all("occupancy.execution_error" in c[6] for c in anomalous_channels)
         for uuid, positions, occurrences in db.execute(
             "SELECT uuid,positions,occurrences FROM batches"
         ):
@@ -173,23 +185,68 @@ def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
             s.id: s for s in load_alarm_definitions(data.root / TEMPLATE.name).signals
         }
         alarms = db.execute(
-            "SELECT signal,state,category,station,address,bit,detail FROM alarm_events ORDER BY id"
+            "SELECT signal,state,category,station,address,bit,detail,source,batch_label FROM alarm_events ORDER BY id"
         ).fetchall()
         assert (
             len(alarms) == 144
             and sum(row[1] == "observed_recovered" for row in alarms) == 2
         )
-        for signal, _, category, station, address, bit, detail in alarms:
+        software = [row for row in alarms if row[7] == "application"]
+        assert len(software) == 4
+        assert {row[1] for row in software} == {"activated", "recovered"}
+        assert {row[8] for row in software} == {None, "DEV-LOT-F"}
+        for (
+            signal,
+            state,
+            category,
+            station,
+            address,
+            bit,
+            detail,
+            source,
+            label,
+        ) in alarms:
+            if source == "application":
+                assert (signal, category, station, address, bit) == (
+                    "production_fault",
+                    "software",
+                    None,
+                    None,
+                    None,
+                )
+                assert detail == "startup · TimeoutError"
+                continue
+            assert source.startswith("fins_tcp://")
             assert (category, bit) == (signals[signal].category, signals[signal].bit)
-            assert (station, address) == (1, 18) and detail.startswith(SAMPLE)
+            assert (station, address) == (1, 18)
+            if state == "observed_recovered":
+                assert "communication gap" in detail
+            elif label is None:
+                assert detail == SAMPLE
     with closing(sqlite3.connect(data.audit)) as db:
         assert db.execute(
-            "SELECT count(*) FROM operations JOIN completions USING(id) WHERE detail=? AND operations.utc<=completions.utc",
-            (SAMPLE,),
+            "SELECT count(*) FROM operations JOIN completions USING(id) WHERE username LIKE 'DEV-Example-%' AND operations.utc<=completions.utc",
         ).fetchone() == (139,)
+        assert dict(
+            db.execute(
+                "SELECT action,detail FROM operations JOIN completions USING(id) WHERE outcome='failed'"
+            )
+        ) == {
+            "communication.save": "ConfigurationIOError",
+            "vision.sources": "ConfigurationError",
+        }
         assert db.execute(
             "SELECT id FROM operations ORDER BY rowid DESC LIMIT 1"
         ).fetchone() == (original.id,)
+        trainee = example_id("DEV-Example-Trainee-1")
+        assert db.execute(
+            "SELECT action,new_value FROM operations WHERE target=? ORDER BY utc",
+            (trainee,),
+        ).fetchall() == [
+            ("account.create", "DEV-Example-Trainee-1 · OPERATOR · enabled"),
+            ("account.role", "ENGINEER"),
+            ("account.enabled", "False"),
+        ]
 
     owner = ProductionHistory(data.history)
     try:
@@ -198,16 +255,28 @@ def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
         path = tmp_path / "report.xlsx"
         write_report(owner, batch.uuid, path, "en", Event(), lambda: None)
         with closing(load_workbook(path)) as book:
-            summary, detail = book.worksheets
+            (summary,) = book.worksheets
+            rows = list(summary.values)
+            metrics = next(i for i, row in enumerate(rows) if row[0] == "Inspected")
             group = batch.groups
-            assert [c.value for c in summary[9][:5]] == [
-                16,
-                group.channel_ok + group.channel_ng,
+            assert group.batches_completed == 16
+            assert tuple(rows[metrics][col] for col in (0, 2, 4, 6)) == (
+                "Inspected",
+                "OK",
+                "NG",
+                "Pass Rate",
+            )
+            assert tuple(rows[metrics + 1][col] for col in (0, 2, 4, 6)) == (
+                group.inspected,
                 group.channel_ok,
                 group.channel_ng,
-                group.channel_empty,
-            ]
-            assert detail.max_row == 17 and detail.max_column == cameras * 6 + 8
+                group.channel_ok / group.inspected,
+            )
+            assert summary.title == "Batch Production Report"
+            assert summary.max_row < 30 and summary.max_column == 9
+            assert not any(row[0] == "EMPTY" for row in rows)
+            assert "DEV-Example-Operator" in str(rows)
+            assert "DEV-Example-Engineer" in str(rows)
         owner.select_batch(None).result()
     finally:
         owner.request_stop()
@@ -254,3 +323,34 @@ def test_busy_legacy_and_conflicting_destination(tmp_path: Path) -> None:
             ).fetchone()
             is None
         )
+
+
+def test_review_writes_a_fresh_pair_without_touching_installed_records(
+    tmp_path: Path,
+) -> None:
+    source = saved_data(tmp_path / "installation")
+    populate(source)
+    # An older installed example can have a different observation for this same ID.
+    with closing(sqlite3.connect(source.audit)) as db, db:
+        db.execute(
+            "UPDATE completions SET detail='Earlier sample' WHERE id=?",
+            (example_id("audit/0/0"),),
+        )
+    populate(source)
+    with closing(sqlite3.connect(source.audit)) as db:
+        assert db.execute(
+            "SELECT detail FROM completions WHERE id=?", (example_id("audit/0/0"),)
+        ).fetchone() == ("Earlier sample",)
+    originals = {p: p.read_bytes() for p in (source.audit, source.history)}
+    first = review_records(source, tmp_path / "outputs")
+    second = review_records(source, tmp_path / "outputs")
+    assert first.root != second.root != source.root
+    for sample in (first, second):
+        assert not sample.security.exists()
+        with closing(sqlite3.connect(sample.history)) as db:
+            assert db.execute("SELECT count(*) FROM group_members").fetchone() == (320,)
+        with closing(sqlite3.connect(sample.audit)) as db:
+            assert db.execute(
+                "SELECT count(*) FROM completions WHERE outcome='failed'"
+            ).fetchone() == (2,)
+    assert all(p.read_bytes() == value for p, value in originals.items())

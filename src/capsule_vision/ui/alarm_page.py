@@ -1,28 +1,44 @@
 """Read-only, session-fenced Alarm History inside the existing History destination."""
 
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
-from PySide6.QtCore import QEvent, QObject, Qt, Slot
-from PySide6.QtWidgets import QTableWidgetItem
+from PySide6.QtCore import Qt, Slot
 
 from capsule_vision.application import ProductionApplication
-from capsule_vision.application.alarm_records import AlarmQuery, AlarmRecord
+from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
 from capsule_vision.application.identity_models import Role
+from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.configuration.alarm_definitions import CATEGORIES
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 from .future_delivery import FutureDelivery
-from .history_event_table import HistoryEventTable
-from .style import Style
+from .history_event_table import (
+    HistoryEventTable,
+    readable_value,
+    record_reason,
+    record_time,
+)
+
+
+def _source_caption(event: AlarmEvent, language: Language) -> str:
+    if event.source == "application":
+        return text("records_software", language)
+    if event.source.startswith("fins_tcp://") or event.source == "PLC":
+        if event.address is None:
+            return "PLC"
+        bit = f".{event.bit}" if event.bit is not None else ""
+        return f"PLC · W{event.address}{bit}"
+    return readable_value(event.source) or "—"
 
 
 class AlarmPage(HistoryEventTable):
     def __init__(self, application: ProductionApplication) -> None:
         super().__init__("alarm")
         self.application = application
+        self.scope = RecordsScope()
+        self.search.hide()
         self.language: Language = "zh"
         self.rows: tuple[AlarmRecord, ...] = ()
         self._token = 0
@@ -38,10 +54,7 @@ class AlarmPage(HistoryEventTable):
         )
         self.table.itemSelectionChanged.connect(self._details)
         self.refresh_button.clicked.connect(self.refresh)
-        self.search.returnPressed.connect(self.refresh)
         self.kind.activated.connect(self.refresh)
-        self.date.dateChanged.connect(self.refresh)
-        self.all_dates.toggled.connect(self.refresh)
         self.newer.clicked.connect(lambda: self._turn(True))
         self.older.clicked.connect(lambda: self._turn(False))
         self.clear()
@@ -53,7 +66,7 @@ class AlarmPage(HistoryEventTable):
         self._error = ""
         self.table.setRowCount(0)
         self.search.clear()
-        self.details.clear()
+        self.clear_details()
         self.message.clear()
         self.message.setToolTip("")
         self.message.hide()
@@ -72,55 +85,34 @@ class AlarmPage(HistoryEventTable):
             self.kind.addItem(text("alarm_" + category, language), category)
         self.kind.setCurrentIndex(max(0, self.kind.findData(selected)))
         self.kind.setAccessibleName(text("alarm_type", language))
-        self.table.setHorizontalHeaderLabels(
-            [
-                text(k, language)
-                for k in ("audit_time", "alarm_name", "alarm_state", "batch_id")
-            ]
+        self.columns(
+            language,
+            (
+                ("short_time", "2026-12-31 23:59:59", "2026-12-31 23:59:59", 1),
+                ("comm_source", "PLC · W18.5", "PLC · W118.15", 2),
+                (
+                    "alarm_name",
+                    "Low air pressure",
+                    "Transfer valve actuation phase not set",
+                    5,
+                ),
+                ("alarm_state", "Recovered", "Observed active", 2),
+                ("batch_id", "DEV-LOT-F", "LOT-20261020-003", 3),
+            ),
         )
         self.table.setAccessibleName(text("alarm_history", language))
         self.details.setAccessibleName(text("alarm_details", language))
-        self._size_columns()
         self._render()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange):
-            self._size_columns()
-        return super().eventFilter(watched, event)
-
-    def _size_columns(self) -> None:
-        body = self.table.fontMetrics()
-        samples = (
-            "2026-12-28 18:58:59",
-            text("alarm_name", self.language),
-            text("alarm_observed_recovered", self.language),
-            text("batch_id", self.language),
-        )
-        widths = [
-            max(body.horizontalAdvance(sample), 70) + 2 * Style.space
-            for sample in samples
-        ]
-        extra = max(0, self.table.viewport().width() - sum(widths))
-        widths[1] += 2 * extra // 3
-        widths[3] += extra - 2 * extra // 3
-        for col, width in enumerate(widths):
-            if self.table.columnWidth(col) != width:
-                self.table.setColumnWidth(col, width)
 
     @Slot()
     def refresh(self) -> None:
-        any_date = self.all_dates.isChecked()
-        self.date.setEnabled(not any_date)
-        day = self.date.date()
-        start = datetime(day.year(), day.month(), day.day(), tzinfo=UTC)
         self._read(
             AlarmQuery(
-                None if any_date else start.timestamp(),
-                None
-                if any_date or start.date() == date.max
-                else (start + timedelta(days=1)).timestamp(),
+                self.scope.since,
+                self.scope.until,
                 self.kind.currentData() or "",
-                self.search.text().strip(),
+                batch_id=self.scope.batch,
+                unbatched=self.scope.unbatched,
             )
         )
 
@@ -180,17 +172,23 @@ class AlarmPage(HistoryEventTable):
         self.table.setRowCount(len(self.rows))
         for row, record in enumerate(self.rows):
             e = record.event
-            values = (
-                datetime.fromtimestamp(e.observed, UTC).strftime("%Y-%m-%d %H:%M:%S"),
-                e.label(lang),
-                text("alarm_" + e.state, lang),
-                e.batch_label or "—",
+            clock, full_time = record_time(e.observed)
+            state_key = "alarm_" + e.state
+            short_state = {
+                "observed_active": "records_seen_active",
+                "observed_recovered": "records_seen_clear",
+            }.get(e.state, state_key)
+            self.set_values(
+                row,
+                (
+                    clock,
+                    _source_caption(e, lang),
+                    readable_value(e.label(lang)) or "—",
+                    text(short_state, lang),
+                    readable_value(e.batch_label) or "—",
+                ),
+                {0: full_time, 3: text(state_key, lang)},
             )
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setToolTip(value)
-                item.setData(Qt.ItemDataRole.AccessibleTextRole, value)
-                self.table.setItem(row, col, item)
         if self.rows and self.table.currentRow() < 0:
             self.table.selectRow(0)
         self._details()
@@ -203,38 +201,36 @@ class AlarmPage(HistoryEventTable):
         if self._error or (issue and not lost):
             msg = (msg + "  " + text("history_unavailable", self.language)).strip()
         self.message.setText(
-            msg or ("" if self.rows else text("audit_no_matches", self.language))
+            msg or ("" if self.rows else text("history_none", self.language))
         )
         self.message.setToolTip(self._error or issue)
         self.message.setVisible(bool(self.message.text()))
 
     def _details(self) -> None:
         row = self.table.currentRow()
-        if not 0 <= row < len(self.rows):
-            self.details.clear()
+        if not self.table.selectedItems() or not 0 <= row < len(self.rows):
+            self.clear_details()
             return
-        e = self.rows[row].event
-        source = (
-            e.source
-            if e.station is None
-            else f"{e.source}   {text('alarm_station', self.language)} {e.station}   W{e.address}.{e.bit}"
-        )
-        self.details.setPlainText(
-            "\n".join(
-                filter(
-                    None,
-                    (
-                        f"{e.label(self.language)}   ·   {text('alarm_' + e.category, self.language)}",
-                        f"{source}   ·   {e.signal}",
-                        e.definition,
-                        e.detail,
-                        f"{text('batch_id', self.language)}   {e.batch_label}   {e.batch_id}"
-                        if e.batch_id
-                        else "",
-                    ),
-                )
-            )
-        )
+        event = self.rows[row].event
+        note = event.detail.strip()
+        if note in (
+            event.label(self.language),
+            event.en,
+            event.zh,
+            event.source,
+            event.state,
+            event.signal,
+            event.definition,
+            event.batch_id,
+            event.batch_label,
+            text("alarm_" + event.state, self.language),
+        ):
+            note = ""
+        elif event.source == "application":
+            note = record_reason(note, self.language)
+        elif note == "First observation after a communication gap":
+            note = text("records_after_gap", self.language)
+        self.show_details(self.language, (("", note),))
 
     def dispose(self) -> None:
         self._delivery.detach()

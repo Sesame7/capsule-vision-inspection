@@ -5,7 +5,10 @@ import getpass
 import sqlite3
 import sys
 import warnings
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import mkdtemp
+from uuid import uuid4
 
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import Role, StorageState
@@ -104,14 +107,105 @@ def provision_accounts(data: ApplicationData) -> None:
             identity.join()
 
 
+def review_records(configuration: ApplicationData, outputs: Path) -> ApplicationData:
+    """Build a fresh report-design dataset. Only read definitions from the checkout."""
+    from development_records import populate
+
+    outputs.mkdir(parents=True, exist_ok=True)
+    review = ApplicationData.at_entry(
+        Path(mkdtemp(prefix="records-review-", dir=outputs))
+    )
+    review.root.mkdir()
+    populate(review, configuration=configuration)
+    return review
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("populate", "accounts"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "populate",
+            "accounts",
+            "review",
+            "showcase",
+            "preview-showcase",
+            "replace-showcase",
+            "verify-showcase",
+        ),
+    )
+    parser.add_argument(
+        "--anchor",
+        type=date.fromisoformat,
+        default=date.today() - timedelta(days=1),
+        help="Last showcase day (YYYY-MM-DD); defaults to yesterday",
+    )
+    parser.add_argument(
+        "--utc-offset",
+        default=datetime.now().astimezone().strftime("%z"),
+        help="Fixed scenario timezone, e.g. +08:00",
+    )
+    parser.add_argument(
+        "--profile", choices=("production", "stress"), default="production"
+    )
+    parser.add_argument(
+        "--stage", type=Path, help="Previously generated showcase directory"
+    )
+    parser.add_argument(
+        "--confirm", help="SHA-256 of the reviewed replacement-plan.json"
+    )
     args = parser.parse_args()
+    if (
+        args.command in ("preview-showcase", "replace-showcase", "verify-showcase")
+        and args.stage is None
+    ):
+        parser.error("--stage is required for this command")
+    if args.command == "replace-showcase" and not args.confirm:
+        parser.error("--confirm is required; preview the exact replacement first")
     try:
         data = checkout_data()
-        if args.command == "accounts":
+        if args.command == "showcase":
+            from development_showcase import build, schedule
+
+            offset = datetime.strptime(args.utc_offset, "%z").utcoffset()
+            if offset is None:
+                raise ValueError("Expected a UTC offset")
+            directory = data.root.parent / "outputs" / ("showcase-" + uuid4().hex)
+            manifest = build(
+                data,
+                directory,
+                schedule(
+                    args.anchor, timezone(offset), stress=args.profile == "stress"
+                ),
+            )
+            print(
+                f"Isolated synthetic showcase: {directory}\nIndependent expectations: {manifest}"
+            )
+        elif args.command in (
+            "preview-showcase",
+            "replace-showcase",
+            "verify-showcase",
+        ):
+            from development_replacement import install, preview
+            from development_showcase import digest, verify
+
+            directory = Path(args.stage).resolve()
+            if args.command == "preview-showcase":
+                plan = preview(data, directory)
+                print(plan.read_text(encoding="utf-8"))
+                print(f"Plan: {plan}\nConfirmation SHA-256: {digest(plan)}")
+            elif args.command == "replace-showcase":
+                backup = install(data, directory, args.confirm)
+                print(
+                    f"Installed verified synthetic records. Previous databases retained: {backup}"
+                )
+            else:
+                print(verify(directory))
+        elif args.command == "accounts":
             provision_accounts(data)
+        elif args.command == "review":
+            review = review_records(data, data.root.parent / "outputs")
+            print(f"Review databases: {review.root}")
         else:
             from development_records import populate
 

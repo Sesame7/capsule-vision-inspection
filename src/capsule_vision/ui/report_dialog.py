@@ -1,40 +1,62 @@
-"""Choose a durable named Batch independently of the Cycle browser's filters."""
+"""Compact, context-driven customer export; file publication stays on its worker."""
 
 from concurrent.futures import CancelledError
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Event
+from typing import cast
 
-from PySide6.QtCore import QSize, Qt, Slot
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from capsule_vision.application import ProductionApplication
-from capsule_vision.application.batch_records import ReportBatches
+from capsule_vision.application.alarm_report import AlarmReportRequest, NoAlarmRecords
+from capsule_vision.application.audit_report import AuditReportRequest, NoAuditRecords
+from capsule_vision.application.report_identification import suggested_report_filename
+from capsule_vision.application.report_scope import (
+    ALL_RESULTS,
+    DefectScope,
+    HistoryQuery,
+    ReportBasis,
+    ReportRequest,
+    result_code,
+)
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 from .future_delivery import FutureDelivery
-from .image_tools import image_icon
 from .permissions import failure_key
-from .style import Style, theme_colors
+from .style import ChevronComboBox, Style
 
 
 class ReportDialog(QDialog):
     def __init__(
-        self, app: ProductionApplication, language: Language, parent: QWidget
+        self,
+        app: ProductionApplication,
+        language: Language,
+        parent: QWidget,
+        filters: HistoryQuery,
+        batch: tuple[str, str] | None = None,
+        *,
+        audit: AuditReportRequest | None = None,
+        audit_label: str = "",
+        alarm: AlarmReportRequest | None = None,
+        alarm_label: str = "",
     ) -> None:
         super().__init__(parent)
-        self.app = app
+        self.app, self.filters, self.batch = app, filters, batch
+        self.audit, self.audit_label = audit, audit_label
+        self.alarm, self.alarm_label = alarm, alarm_label
+        self._classification_batch: tuple[str, str] | None = None
         self.language: Language = language
         self.revision = app.session_revision
         self._delivery = FutureDelivery()
@@ -47,35 +69,43 @@ class ReportDialog(QDialog):
         )
         self._cancel: Event | None = None
         self._chooser: QFileDialog | None = None
-        self._request = 0
-        self._reading = False
-        self._dismissed = False
-        self._cursor: str | None = None
-        self._back = False
-        self._more = False
+        self._dismissed = self._attributable = False
+        self._reading = batch is None and audit is None and alarm is None
+        self._scope_ready = not self._reading
+        self._filter_label: str | None = None
         self._feedback_key = self._detail = ""
-
         layout = QVBoxLayout(self)
-        filters = QHBoxLayout()
-        self.search = QLineEdit()
-        self.search.setClearButtonEnabled(True)
-        filters.addWidget(self.search, 1)
-        self.previous, self.next = QPushButton(), QPushButton()
-        for button in (self.previous, self.next):
-            button.setFixedSize(Style.touch, Style.touch)
-            button.setIconSize(QSize(Style.icon, Style.icon))
-            button.setAutoDefault(False)
-            filters.addWidget(button)
-        layout.addLayout(filters)
-        self.batches = QListWidget()
-        self.batches.setObjectName("reportBatches")
-        layout.addWidget(self.batches)
-        self.feedback = QLabel()
-        self.feedback.setTextFormat(Qt.TextFormat.PlainText)
-        self.feedback.setWordWrap(True)
-        self.feedback.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+        layout.setSpacing(Style.space)
+        self.scope_label, self.hint, self.feedback = QLabel(), QLabel(), QLabel()
+        for label in (self.scope_label, self.hint, self.feedback):
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setWordWrap(True)
+        layout.addWidget(self.scope_label)
+        form = QFormLayout()
+        layout.addLayout(form)
+        self.basis, self.format, self.output_language = (
+            ChevronComboBox() for _ in range(3)
         )
+        self.labels: dict[str, QLabel] = {}
+        for key, combo in (
+            ("export_basis", self.basis),
+            ("export_format", self.format),
+            ("export_language", self.output_language),
+        ):
+            label = QLabel()
+            label.setBuddy(combo)
+            self.labels[key] = label
+            combo.setObjectName("reportChoice")
+            combo.setMinimumHeight(Style.touch)
+            form.addRow(label, combo)
+        self.basis.setVisible(batch is None)
+        self.labels["export_basis"].setVisible(batch is None)
+        self.format.addItem("PDF (.pdf)", "pdf")
+        self.format.addItem("Excel (.xlsx)", "xlsx")
+        self.output_language.addItem("简体中文", "zh")
+        self.output_language.addItem("English", "en")
+        self.output_language.setCurrentIndex(int(language != "zh"))
+        layout.addWidget(self.hint)
         layout.addWidget(self.feedback)
         actions = QHBoxLayout()
         actions.addStretch()
@@ -88,28 +118,148 @@ class ReportDialog(QDialog):
         self.export.setDefault(True)
         self.cancel.clicked.connect(self._cancel_export)
         self.export.clicked.connect(self._choose_file)
-        self.search.textChanged.connect(self._search_changed)
-        self.previous.clicked.connect(lambda: self._turn(True))
-        self.next.clicked.connect(lambda: self._turn(False))
-        self.batches.currentRowChanged.connect(self._controls)
-        self.resize(470, 350)
         self.set_language(language)
-        self._read()
+        self.resize(500, self.sizeHint().height())
+        if self._reading:
+            self._message("history_loading")
+            try:
+                future = app.defect_report_scope(filters, revision=self.revision)
+            except Exception as exc:
+                self._completed("scope", None, exc)
+            else:
+                self._delivery.watch("scope", future)
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        self.setWindowTitle(text("report_export", language))
-        self.batches.setAccessibleName(text("batch_input", language))
-        label = text("report_search", language)
-        self.search.setPlaceholderText(label)
-        self.search.setAccessibleName(label)
-        for button, icon, key in (
-            (self.previous, "previous", "previous_page"),
-            (self.next, "next", "next_page"),
-        ):
-            button.setIcon(image_icon(icon, theme_colors(self).primary))
-            button.setAccessibleName(text(key, language))
-            button.setToolTip(button.accessibleName())
+        self.setWindowTitle(
+            text(
+                "customer_alarm"
+                if self.alarm is not None
+                else "customer_audit"
+                if self.audit is not None
+                else "customer_batch"
+                if self.batch
+                else "customer_defects",
+                language,
+            )
+        )
+        for key, label in self.labels.items():
+            label.setText(text(key, language))
+            label.buddy().setAccessibleName(label.text())
+        for i in range(self.basis.count()):
+            self.basis.setItemText(
+                i,
+                text(
+                    "customer_positions"
+                    if self.basis.itemData(i) == "capsule"
+                    else "export_detections",
+                    language,
+                ),
+            )
+        entire_batch = self.batch or self._classification_batch
+        self.basis.setVisible(
+            entire_batch is None and self.audit is None and self.alarm is None
+        )
+        self.labels["export_basis"].setVisible(
+            entire_batch is None and self.audit is None and self.alarm is None
+        )
+        if entire_batch:
+            scope = text("customer_entire_batch", language).format(
+                batch=entire_batch[1]
+            )
+        else:
+            start, end = (
+                (self.alarm.filters.since, self.alarm.filters.until)
+                if self.alarm
+                else (self.audit.filters.since, self.audit.filters.until)
+                if self.audit
+                else (self.filters.since, self.filters.until)
+            )
+            dates = (
+                (
+                    datetime.fromtimestamp(start).strftime("%Y-%m-%d")
+                    if start is not None
+                    else "…"
+                )
+                + " — "
+                + (
+                    (datetime.fromtimestamp(end) - timedelta(microseconds=1)).strftime(
+                        "%Y-%m-%d"
+                    )
+                    if end is not None
+                    else "…"
+                )
+            )
+            scope = " · ".join(
+                (
+                    dates
+                    if start is not None or end is not None
+                    else text("history_all_dates", language),
+                    text("records_no_batch", language)
+                    if self.filters.unbatched
+                    else self._filter_label or text("records_all_batches", language),
+                    result_code(self.filters.result)
+                    if self.filters.result != ALL_RESULTS
+                    else text("history_all", language),
+                )
+            )
+            if self.audit is not None:
+                batch_scope = (
+                    text("customer_audit_batch", language) + ": " + self.audit_label
+                    if self.audit.filters.batch
+                    else text(
+                        "records_no_batch"
+                        if self.audit.filters.unbatched
+                        else "records_all_batches",
+                        language,
+                    )
+                )
+                scope = " · ".join(
+                    (
+                        dates
+                        if start is not None or end is not None
+                        else text("history_all_dates", language),
+                        batch_scope,
+                        self.audit.account.username
+                        if self.audit.account
+                        else text("records_all_accounts", language),
+                    )
+                )
+            if self.alarm is not None:
+                scope = " · ".join(
+                    (
+                        dates
+                        if start is not None or end is not None
+                        else text("history_all_dates", language),
+                        self.alarm_label or "—"
+                        if self.alarm.filters.batch
+                        else text(
+                            "records_no_batch"
+                            if self.alarm.filters.unbatched
+                            else "records_all_batches",
+                            language,
+                        ),
+                        text(
+                            "alarm_" + self.alarm.category
+                            if self.alarm.category
+                            else "alarm_all_types",
+                            language,
+                        ),
+                    )
+                )
+        self.scope_label.setText(scope)
+        self.scope_label.setToolTip(scope)
+        self.scope_label.setAccessibleName(scope)
+        self.hint.setText(
+            text("customer_detection_only", language)
+            if self.audit is None
+            and self.alarm is None
+            and not entire_batch
+            and self._scope_ready
+            and not self._attributable
+            else ""
+        )
+        self.hint.setVisible(bool(self.hint.text()))
         self.cancel.setText(text("cancel", language))
         self.export.setText(text("report_export", language))
         self._message(self._feedback_key, self._detail)
@@ -121,47 +271,12 @@ class ReportDialog(QDialog):
         self.feedback.setText(f"{value} · {detail}" if detail else value)
         self.feedback.setVisible(bool(value))
 
-    @Slot()
     def _controls(self) -> None:
         idle = self._cancel is None and self._chooser is None
-        ready = idle and not self._reading and self.batches.currentRow() >= 0
-        self.previous.setEnabled(
-            ready and (self._more if self._back else self._cursor is not None)
-        )
-        self.next.setEnabled(
-            ready and (self._cursor is not None if self._back else self._more)
-        )
-        self.export.setEnabled(ready)
-        self.search.setEnabled(idle)
-        self.batches.setEnabled(idle and not self._reading)
+        self.export.setEnabled(idle and self._scope_ready and not self._reading)
+        for combo in (self.basis, self.format, self.output_language):
+            combo.setEnabled(idle and not self._reading)
         self.cancel.setVisible(self._cancel is not None)
-
-    @Slot()
-    def _search_changed(self) -> None:
-        self._cursor, self._back = None, False
-        self._request += 1
-        if not self._reading:
-            self._read()
-
-    def _turn(self, back: bool) -> None:
-        if self.batches.count():
-            item = self.batches.item(0 if back else self.batches.count() - 1)
-            self._cursor, self._back = item.text(), back
-            self._request += 1
-            self._read()
-
-    def _read(self) -> None:
-        self._reading = True
-        self._controls()
-        self._message("history_loading")
-        try:
-            future = self.app.report_batches(
-                self.search.text(), self._cursor, self._back, revision=self.revision
-            )
-        except Exception as exc:
-            self._completed(str(self._request), None, exc)
-        else:
-            self._delivery.watch(str(self._request), future)
 
     @Slot()
     def _choose_file(self) -> None:
@@ -169,9 +284,22 @@ class ReportDialog(QDialog):
             return
         chooser = self._chooser = QFileDialog(self, self.windowTitle())
         chooser.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
-        chooser.setNameFilter("Excel (*.xlsx)")
-        chooser.setDefaultSuffix("xlsx")
-        chooser.selectFile(self.windowTitle() + ".xlsx")
+        ext = str(self.format.currentData())
+        chooser.setNameFilter("Excel (*.xlsx)" if ext == "xlsx" else "PDF (*.pdf)")
+        chooser.setDefaultSuffix(ext)
+        entire_batch = self.batch or self._classification_batch
+        batch_label = (
+            entire_batch[1]
+            if entire_batch
+            else self.audit_label
+            if self.audit and self.audit.filters.batch
+            else self.alarm_label
+            if self.alarm and self.alarm.filters.batch
+            else None
+        )
+        chooser.selectFile(
+            suggested_report_filename(self.windowTitle(), batch_label, ext)
+        )
         chooser.finished.connect(self._file_chosen)
         self._controls()
         chooser.open()
@@ -186,17 +314,28 @@ class ReportDialog(QDialog):
         self._controls()
         if self._dismissed or result != QDialog.DialogCode.Accepted or not files:
             return
-        if self.batches.currentRow() < 0:
+        destination = Path(files[0])
+        if destination.suffix.lower() != "." + str(self.format.currentData()):
+            self._message("report_failed", self.format.currentText())
             return
-        item = self.batches.currentItem()
         self._cancel = Event()
         self._message("report_writing")
         self._controls()
         try:
+            entire_batch = self.batch or self._classification_batch
             future = self.app.export_report(
-                item.data(Qt.ItemDataRole.UserRole),
-                Path(files[0]),
-                self.language,
+                self.audit
+                or self.alarm
+                or ReportRequest(
+                    "batch" if self.batch else "defects",
+                    "capsule"
+                    if entire_batch
+                    else cast(ReportBasis, self.basis.currentData()),
+                    entire_batch[0] if entire_batch else None,
+                    self.filters,
+                ),
+                destination,
+                cast(Language, self.output_language.currentData()),
                 revision=self.revision,
                 cancel=self._cancel,
             )
@@ -209,37 +348,50 @@ class ReportDialog(QDialog):
     def _completed(self, kind: str, value: object, error: object) -> None:
         if self._dismissed:
             return
-        if kind == "export":
-            self._cancel = None
-            if isinstance(error, CancelledError):
-                self._message("report_cancelled")
-            elif error is not None:
-                self._message(
-                    failure_key(error, "report_failed", "permission_operator"),
-                    str(error),
-                )
-            else:
-                self._message("report_saved", str(value))
-        else:
+        if kind == "scope":
             self._reading = False
-            if kind != str(self._request):
-                self._read()
-                return
-            self.batches.clear()
-            self._more = False
-            if isinstance(value, ReportBatches):
-                self._more = value.more
-                for uuid, label in value.choices:
-                    item = QListWidgetItem(label, self.batches)
-                    item.setData(Qt.ItemDataRole.UserRole, uuid)
-                    item.setToolTip(f"{label}\n{uuid}")
-                self.batches.setCurrentRow(0)
-                self._message("" if value.choices else "report_no_batches")
+            self._scope_ready = isinstance(value, DefectScope) and error is None
+            if isinstance(value, DefectScope) and error is None:
+                self._attributable = value.attributable
+                self._filter_label = value.batch_label
+                if (
+                    value.batch_label is not None
+                    and self.filters.batch_segment is not None
+                ):
+                    self._classification_batch = (
+                        self.filters.batch_segment,
+                        value.batch_label,
+                    )
+                self.basis.clear()
+                if value.attributable:
+                    self.basis.addItem("", "capsule")
+                self.basis.addItem("", "detections")
+                self._message("")
+                self.set_language(self.language)
             else:
                 self._message(
                     failure_key(error, "history_unavailable", "permission_operator"),
                     str(error),
                 )
+        else:
+            self._cancel = None
+            if isinstance(error, CancelledError):
+                self._message("report_cancelled")
+            elif isinstance(error, NoAuditRecords):
+                self._message("audit_no_matches")
+            elif isinstance(error, NoAlarmRecords):
+                self._message("alarm_no_matches")
+            elif error is not None:
+                self._message(
+                    failure_key(
+                        error,
+                        "report_failed",
+                        "permission_engineer" if self.audit else "permission_operator",
+                    ),
+                    str(error),
+                )
+            else:
+                self._message("report_saved", str(value))
         self._controls()
 
     def _cancel_export(self) -> None:

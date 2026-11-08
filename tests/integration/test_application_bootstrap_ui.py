@@ -539,7 +539,7 @@ def test_language_switches_persist_without_saving_other_drafts(
                 "page_production", language
             )
             if language == "zh-TW":
-                assert window.history.date.locale().name() == "zh_TW"
+                assert window.records_filters.start.calendar.locale().name() == "zh_TW"
             assert window.width() == size[0]
             page = window.recipe_page
             for button in page.buttons.values():

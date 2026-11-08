@@ -9,7 +9,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import NAMESPACE_URL, uuid5
 
-from capsule_vision.application import alarm_records
+from capsule_vision.application import (
+    alarm_records,
+    batch_records,
+    batch_review,
+    defect_records,
+)
 from capsule_vision.application._security_lock import SecurityLease
 from capsule_vision.application.alarm_records import AlarmEvent
 from capsule_vision.application.audit import AuditOperation, AuditQuery, AuditTrail
@@ -70,6 +75,7 @@ from capsule_vision.inspection.production.occupancy import occupancy_rect
 
 # One shift per day. C is ended before the unbatched shift and reselected afterwards.
 LOTS = ("A", "A", "B", "B", "C", None, "C", "D", "D", "E", "F", "F")
+ALARM_CHECKS_PER_SHIFT = (0, 4, 5, 12, 6, 4, 8, 6, 3, 12, 4, 8)
 SAMPLE = "Fictitious commissioning sample"
 
 
@@ -83,6 +89,13 @@ class Shift:
     run: str
     label: str | None
     start: float
+
+    @property
+    def start_account(self) -> batch_review.StartAccount:
+        username = (
+            "DEV-Example-Operator" if self.index % 2 == 0 else "DEV-Example-Engineer"
+        )
+        return batch_review.StartAccount(example_id(username), username)
 
     @property
     def grouped(self) -> bool:
@@ -211,10 +224,31 @@ def cycle_result(
 ) -> ProductionInspectionResult:
     cameras: list[CameraInspectionResult] = []
     group, slot = divmod(cycle - 1, 4)
-    pattern = shift.index * 8 + group
-    count = 6 * len(config.layout.cameras)
-    empty_id = 1 + pattern * 11 % count if pattern % 3 else 0
-    defect_id = 1 + (pattern * 11 + 5) % count if pattern % 3 == 1 and slot == 2 else 0
+    pattern = shift.index * 7 + group
+    positions = tuple(
+        r.channel_id for camera in config.layout.cameras for r in camera.slots
+    )
+
+    def position(offset: int) -> int:
+        return positions[(pattern * 5 + offset) % len(positions)]
+
+    # Empty pockets stay empty while the same carriers rotate. Some defects
+    # appear in only one view of the rotation; the reporting owner still does the OR.
+    empty_count = (0, 1, 0, 2, 0, 1, 3, 0)[pattern % 8]
+    empty = {position(i) for i in range(empty_count)}
+    defects = {position(5)} if pattern % 4 == 0 and slot == 2 else set[int]()
+    if pattern % 9 == 3 and slot in (0, 3):
+        defects.add(position(6 + slot))
+    errors: set[int] = set()
+    if shift.index == 3 and cycle == 9:
+        errors.add(
+            position(10)
+        )  # Per-Cycle inspection without physical group identity.
+    if shift.index == 11 and cycle == 27:
+        errors.update((position(10), position(11)))
+        defects.add(
+            position(11)
+        )  # Definite NG and technical ERROR on the same channel.
     for camera in config.layout.cameras:
         frame = FrameId(CycleId(cycle), camera.camera_id, cycle)
         channels = tuple(
@@ -222,9 +256,9 @@ def cycle_result(
                 config,
                 r,
                 frame,
-                r.channel_id == empty_id,
-                r.channel_id == defect_id,
-                shift.index in (3, 10) and cycle == 9 and r.channel_id == count,
+                r.channel_id in empty,
+                r.channel_id in defects,
+                r.channel_id in errors,
             )
             for r in camera.slots
         )
@@ -263,11 +297,33 @@ def alarm_events(
     definitions: AlarmDefinitions,
     selection: AlarmPreferences,
 ) -> Iterator[AlarmEvent]:
-    # Six commissioning checks before inspection; lost contact has no fabricated bit transition.
-    for i in range(6):
+    checks = ALARM_CHECKS_PER_SHIFT[shift.index]
+    for i in range(checks):
         signal = definitions.signals[(shift.index * 3 + i) % len(definitions.signals)]
-        gap = shift.index in (2, 8) and i == 3
-        at = shift.start - 120 + i * 14
+        gap = (shift.index, i) in ((2, 3), (8, 1))
+        at = shift.start - 120 + i * 9
+        if shift.index in (5, 11) and i == checks - 1:
+            # A startup fault and explicit reset precede a successful Run.
+            # Neither observation has a PLC address or changes a physical group.
+            event = AlarmEvent(
+                at,
+                "production_fault",
+                "activated",
+                "software",
+                "生产应用故障",
+                "Production application fault",
+                "application",
+                None,
+                None,
+                None,
+                "application/1",
+                batch,
+                shift.label,
+                "startup · TimeoutError",
+            )
+            yield event
+            yield replace(event, observed=at + 6, state="recovered")
+            continue
         event = AlarmEvent(
             at,
             signal.id,
@@ -282,16 +338,17 @@ def alarm_events(
             f"{definitions.origin}/{definitions.version}  SHA-256 {definitions.digest}",
             batch,
             shift.label,
-            SAMPLE,
+            SAMPLE if batch is None else "",
             signal.translations,
         )
         yield event
         yield replace(
             event,
-            observed=at + 8,
+            observed=at + 3 + i % 5,
             state="observed_recovered" if gap else "recovered",
-            detail=SAMPLE
-            + ("; first observation after a communication gap" if gap else ""),
+            detail="First observation after a communication gap"
+            if gap
+            else event.detail,
         )
 
 
@@ -320,7 +377,9 @@ def make_history(
             settings = (
                 four if shift.grouped else per_cycle if shift.index == 3 else None
             )
-            history.start_run(batch, shift.run, identity, settings).result()
+            history.start_run(
+                batch, shift.run, identity, settings, shift.start_account
+            ).result()
             reports: list[FirstStationReport] = []
             for cycle in range(1, shift.count + 1):
                 result = cycle_result(config, shift, cycle)
@@ -381,37 +440,54 @@ def make_history(
         history.join()
 
 
+@dataclass(frozen=True)
+class AuditExample:
+    operation: AuditOperation
+    completed: str
+    outcome: str
+    detail: str
+
+
 def audit_examples(
-    schedule: tuple[Shift, ...], recipe: str
-) -> Iterator[tuple[AuditOperation, str]]:
+    schedule: tuple[Shift, ...], recipe: str, recipe_name: str
+) -> Iterator[AuditExample]:
     previous = ""
     for shift in schedule:
         admin, engineer, operator = (
             "DEV-Example-Admin",
             "DEV-Example-Engineer",
-            "DEV-Example-Operator",
+            shift.start_account.username,
         )
         trainee = f"DEV-Example-Trainee-{shift.index // 3 + 1}"
         account_action, old, new = (
-            ("account.create", "", "Operator"),
-            ("account.role", "Operator", "Engineer"),
+            ("account.create", "", f"{trainee} · OPERATOR · enabled"),
+            ("account.role", "OPERATOR", "ENGINEER"),
             ("account.enabled", "True", "False"),
+        )[shift.index % 3]
+        old_timeout, new_timeout = ((1.0, 2.0), (2.0, 1.0))[(shift.index // 3) % 2]
+        engineering = (
+            (
+                "recipe.save",
+                recipe,
+                "",
+                f"display_name = {recipe_name}"
+                if shift.index == 0 and recipe_name
+                else "",
+            ),
+            ("vision.sources", "CameraSources", "", ""),
+            (
+                "communication.save",
+                "CommunicationPreferences",
+                f"diagnostic.timeout = {old_timeout}",
+                f"diagnostic.timeout = {new_timeout}",
+            ),
         )[shift.index % 3]
         events = [
             (-300, admin, "session.login", example_id(admin), "", ""),
-            (-280, admin, account_action, trainee, old, new),
+            (-280, admin, account_action, example_id(trainee), old, new),
             (-270, admin, "session.logout", example_id(admin), "", ""),
             (-260, engineer, "session.login", example_id(engineer), "", ""),
-            (
-                -240,
-                engineer,
-                ("recipe.save", "vision.sources", "communication.save")[
-                    shift.index % 3
-                ],
-                (recipe, "CameraSources", "CommunicationPreferences")[shift.index % 3],
-                "",
-                "",
-            ),
+            (-240, engineer, *engineering),
             (-220, engineer, "session.logout", example_id(engineer), "", ""),
             (-190, operator, "session.login", example_id(operator), "", ""),
             (-170, operator, "production.recipe", recipe, "", recipe),
@@ -433,7 +509,15 @@ def audit_examples(
         events.append((115, operator, "session.logout", example_id(operator), "", ""))
         for seq, (offset, actor, action, target, before, after) in enumerate(events):
             stamp = datetime.fromtimestamp(shift.start + offset, UTC)
-            yield (
+            # Keep the original example IDs, including when upgrading this script.
+            # A failed save is a requested change only. The Run uses its own captured settings.
+            failed = offset == -240 and shift.index in (4, 11)
+            issue = (
+                ("ConfigurationError" if shift.index == 4 else "ConfigurationIOError")
+                if failed
+                else ""
+            )
+            yield AuditExample(
                 AuditOperation(
                     example_id(actor),
                     actor,
@@ -447,6 +531,8 @@ def audit_examples(
                 (stamp + timedelta(milliseconds=120)).isoformat(
                     timespec="microseconds"
                 ),
+                "failed" if failed else "success",
+                issue,
             )
         previous = shift.label or ""
 
@@ -504,14 +590,25 @@ def append_history(db: sqlite3.Connection) -> None:
         )
     columns = {row[1] for row in db.execute("PRAGMA table_info(alarm_events)")}
     alarm_records.create(db, legacy=bool(columns and "translations" not in columns))
+    defect_records.create(db)
+    batch_review.initialize(db)
+    db.execute(batch_records.RUN_POSITIONS_SCHEMA)
     db.execute("UPDATE batches SET selected=0 WHERE selected=1")
     for table in (
         "batches",
         "batch_ends",
         "runs",
+        "run_positions",
+        "run_start_accounts",
+        "batch_inspection_times",
+        "batch_information",
         "plc_groups",
         "group_members",
         "cycles",
+        "cycle_classification",
+        "group_classification",
+        "batch_coverage",
+        "batch_categories",
         "alarm_events",
     ):
         # Local auto-increment identifiers belong to the destination. Run/Cycle, Batch and group keys travel together.
@@ -526,13 +623,13 @@ def append_history(db: sqlite3.Connection) -> None:
 
 
 def append_audit(
-    db: sqlite3.Connection, staged: Path, rows: tuple[tuple[AuditOperation, str], ...]
+    db: sqlite3.Connection, staged: Path, rows: tuple[AuditExample, ...]
 ) -> None:
     owner = AuditTrail(staged, lambda _: 0)
     try:
-        for op, _ in rows:
-            owner.intent(op).result()
-            owner.complete(op, "success", SAMPLE).result()
+        for row in rows:
+            owner.intent(row.operation).result()
+            owner.complete(row.operation, row.outcome, row.detail).result()
     finally:
         owner.close()
     db.execute("ATTACH DATABASE ? AS sample_audit", (str(staged),))
@@ -549,12 +646,15 @@ def append_audit(
     db.executemany(
         "INSERT INTO audit.completions(id,utc,outcome,detail) "
         "SELECT id,?,outcome,detail FROM sample_audit.completions WHERE id=?",
-        ((completed, op.id) for op, completed in rows),
+        ((row.completed, row.operation.id) for row in rows),
     )
 
 
-def populate(data: ApplicationData) -> None:
+def populate(
+    data: ApplicationData, *, configuration: ApplicationData | None = None
+) -> None:
     print(f"Offline commissioning examples for {data.root}")
+    source = configuration or data
     with (
         SecurityLease(data.security),
         TemporaryDirectory(prefix="capsule-review-") as scratch,
@@ -585,15 +685,19 @@ def populate(data: ApplicationData) -> None:
                 ).fetchone()
                 schedule = shifts(first)
             else:
-                prepared = active_configuration(data)
+                prepared = active_configuration(source)
                 recipe = prepared[0].recipe_id
                 if row := db.execute(
                     "SELECT utc FROM audit.operations WHERE id=?", (first_op,)
                 ).fetchone():
                     schedule = shifts(datetime.fromisoformat(row[0]).timestamp() + 300)
-            rows = tuple(audit_examples(schedule, recipe))
+            rows = tuple(
+                audit_examples(
+                    schedule, recipe, prepared[0].display_name if prepared else ""
+                )
+            )
             has_audit = installed(
-                db, "audit.operations", "id", tuple(op.id for op, _ in rows)
+                db, "audit.operations", "id", tuple(row.operation.id for row in rows)
             )
             if has_history and has_audit:
                 print(
@@ -602,11 +706,11 @@ def populate(data: ApplicationData) -> None:
                 return
             if prepared is not None:
                 prefs = (
-                    load_communication_preferences(data.communication)
-                    if data.communication.exists()
+                    load_communication_preferences(source.communication)
+                    if source.communication.exists()
                     else CommunicationPreferences()
                 )
-                definitions = load_alarm_definitions(data.root / TEMPLATE.name)
+                definitions = load_alarm_definitions(source.root / TEMPLATE.name)
                 # These are historical example settings, never persisted CommunicationPreferences.
                 four = prefs.reporting.settings
                 if not isinstance(

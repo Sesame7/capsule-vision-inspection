@@ -2,13 +2,13 @@
 
 from concurrent.futures import Future
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from threading import Event
 from threading import enumerate as threads
 
 import pytest
-from PySide6.QtCore import QDate, QUrl
+from PySide6.QtCore import QDate, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT, ReplayEngine
@@ -99,7 +99,7 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             width = bar.alarm.width()
             assert (
                 not page.alarm_enabled.isEnabled()
-                and not window.history_tabs.isTabEnabled(2)
+                and not window.history_tabs.isTabEnabled(3)
             )
             for command in (app.create_alarm_definitions, app.alarm_definitions_path):
                 with pytest.raises(AuthorizationError):
@@ -119,11 +119,11 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             window.identity_controls.refresh()
             assert (
                 not page.alarm_enabled.isEnabled()
-                and window.history_tabs.isTabEnabled(2)
+                and window.history_tabs.isTabEnabled(3)
             )
             with pytest.raises(AuthorizationError):
                 app.create_alarm_definitions()
-            assert not window.history_tabs.isTabEnabled(1)
+            assert not window.history_tabs.isTabEnabled(2)
             app.start_batch("Batch P").result(WAIT)
             identity.login("Tech", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
@@ -193,7 +193,7 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             assert load_communication_preferences(data.communication).alarm.enabled
             assert (
                 app.alarm_snapshot().state == "online"
-                and not window.history_tabs.isTabEnabled(2)
+                and not window.history_tabs.isTabEnabled(3)
             )
             identity.login("Tech", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
@@ -347,8 +347,9 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
     app, delivery = startup.application, FutureDelivery()
     history, identity = app.history, app.identity
     assert history and identity
-    today = datetime.now(UTC)
+    today = datetime.now().astimezone()
     when = today.timestamp()
+    long_label = "Reciprocating axis stroke not set after the secondary transfer station returned to its reference position"
     provision_account(identity, "Line", Role.OPERATOR, TEST_PASSWORD)
     for i in range(57):
         history.offer_alarms(
@@ -359,14 +360,15 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
                     "observed_active",
                     "startup",
                     "往复轴行程未设置",
-                    "Reciprocating axis stroke not set",
+                    long_label if i == 55 else "Reciprocating axis stroke not set",
                     "fins_tcp://127.0.0.1:9600",
                     2,
                     118,
                     5,
                     "equipment/v1 SHA-256 fixture",
-                    "stable-id",
+                    "stable-id" if i else "other-id",
                     "P" if i else "Q",
+                    detail="Reciprocating axis stroke not set" if i == 56 else "",
                     translations=(("de", "Hub nicht eingestellt"),),
                 ),
             )
@@ -377,36 +379,62 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
     try:
         window.show()
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentIndex(3)
         until(lambda: len(page.rows) == 50)
-        page.search.setText("P")
         page.kind.setCurrentIndex(page.kind.findData("startup"))
-        page.date.setDate(QDate(today.year, today.month, today.day))
-        page.all_dates.setChecked(False)
+        window.records_filters.start.set_date(QDate(today.year, today.month, today.day))
+        window.records_filters.end.set_date(QDate(today.year, today.month, today.day))
+        window.records_filters.select_batch("stable-id", "P")
         page.refresh()
         until(lambda: len(page.rows) == 50 and page.older.isEnabled())
         newer = page.rows
+        # Compare languages at one viewport. Other pages' translated minimum
+        # sizes can grow a normally shown test window during a language switch.
+        page.table.setFixedWidth(page.table.width())
+        columns = [page.table.columnWidth(col) for col in range(5)]
         page.older.click()
         until(lambda: len(page.rows) == 6)
         assert all(r.event.batch_label == "P" for r in page.rows)
+        assert columns == [page.table.columnWidth(col) for col in range(5)]
         page.newer.click()
         until(lambda: page.rows == newer)
-        assert (
-            "W118.5" in page.details.toPlainText()
-            and "stable-id" in page.details.toPlainText()
-        )
+        assert page.details.isHidden() and not page.details.toPlainText()
+        assert page.rows[0].event.definition == "equipment/v1 SHA-256 fixture"
         window.set_language("zh")
-        item = page.table.item(0, 1)
+        state = page.table.item(0, 3)
+        assert state and state.text() == text("records_seen_active", "zh")
+        assert (
+            state.toolTip()
+            == state.data(Qt.ItemDataRole.AccessibleTextRole)
+            == text("alarm_observed_active", "zh")
+        )
+        source = page.table.item(0, 1)
+        assert source and source.text() == "PLC · W118.5"
+        item = page.table.item(0, 2)
         assert item is not None and item.text() == "往复轴行程未设置"
-        assert page.table.horizontalScrollBar().maximum() == 0
+        assert page.table.horizontalScrollBar().maximum() == 0, (
+            window.width(),
+            page.table.viewport().width(),
+            [page.table.columnWidth(i) for i in range(5)],
+        )
         window.set_language("de")
-        item = page.table.item(0, 1)
+        item = page.table.item(0, 2)
         assert item is not None and item.text() == "Hub nicht eingestellt"
-        assert item.text() in page.details.toPlainText()
+        assert item.text() == item.toolTip() and page.details.isHidden()
         window.set_language("zh-TW")
-        item = page.table.item(0, 1)
+        item = page.table.item(0, 2)
         assert item is not None and item.text() == "Reciprocating axis stroke not set"
-        assert item.text() in page.details.toPlainText()
+        assert item.text() == item.toolTip() and page.details.isHidden()
+        outlier = page.table.item(1, 2)
+        assert (
+            outlier
+            and outlier.text()
+            == outlier.toolTip()
+            == outlier.data(Qt.ItemDataRole.AccessibleTextRole)
+            == long_label
+        )
+        assert page.table.fontMetrics().horizontalAdvance(long_label) > columns[2]
+        assert columns == [page.table.columnWidth(col) for col in range(5)]
         late: Future[tuple[AlarmRecord, ...]] = Future()
 
         def delayed(
@@ -423,7 +451,8 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
         assert (
             not page.rows
             and not page.details.toPlainText()
-            and not window.history_tabs.isTabEnabled(2)
+            and page.details.isHidden()
+            and not window.history_tabs.isTabEnabled(3)
         )
     finally:
         close_window(window)

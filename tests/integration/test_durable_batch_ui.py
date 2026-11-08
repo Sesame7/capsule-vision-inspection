@@ -393,3 +393,152 @@ def test_batch_dialog_revision_confirmation_and_restart(
     finally:
         close_window(window)
         delivery.detach()
+
+
+def test_production_batch_setup_metadata_enter_continue_and_dismissal(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from capsule_vision.application.batch_review import BatchInformation
+
+    def labels(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+        return ("Chip",)
+
+    monkeypatch.setattr(recipe_page, "read_model_labels", labels)
+    startup = authenticated_startup(saved_data(tmp_path))
+    app = startup.application
+    assert app.history is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        window.show()
+        until(lambda: window.buttons["batch"].isEnabled())
+
+        def create(dialog: BatchDialog) -> int:
+            dialog.show()
+            dialog.label.setText(" New Batch ")
+            until(lambda: dialog.select.isEnabled())
+            assert dialog.expected is not None and dialog.expected.uuid is None
+            assert dialog.mode.text() == text("batch_create", dialog.language)
+            for field, value in zip(
+                dialog.inputs, ("Capsules A", "Size 0", "Day shift"), strict=True
+            ):
+                field.setText(value)
+            QTest.keyClick(dialog.inputs[-1], Qt.Key.Key_Return)
+            return dialog.result()
+
+        monkeypatch.setattr(BatchDialog, "exec", create)
+        window.buttons["batch"].click()
+        until(
+            lambda: (
+                window.snapshot.batch_id == "New Batch"
+                and not window.snapshot.batch_pending
+            )
+        )
+        uid = app.snapshot().batch_uuid
+        assert uid
+        saved = app.history.batch_detail(uid).result(WAIT)
+        assert saved.info == BatchInformation("Capsules A", "Size 0", "Day shift")
+
+        def edit(dialog: BatchDialog) -> int:
+            dialog.show()
+            until(lambda: dialog.select.isEnabled())
+            assert dialog.expected and dialog.expected.uuid == uid
+            assert [f.text() for f in dialog.inputs] == [
+                "Capsules A",
+                "Size 0",
+                "Day shift",
+            ]
+            assert dialog.mode.text() == text("batch_continue", dialog.language)
+            dialog.inputs[2].setText("Evening shift")
+            QTest.mouseClick(dialog.select, Qt.MouseButton.LeftButton)
+            return dialog.result()
+
+        monkeypatch.setattr(BatchDialog, "exec", edit)
+        window.buttons["batch"].click()
+        until(lambda: not app.snapshot().batch_pending)
+        assert app.snapshot().batch_uuid == uid
+        edited = app.history.batch_detail(uid).result(WAIT)
+        assert (
+            edited.info.notes == "Evening shift"
+            and edited.batch.totals == saved.batch.totals
+        )
+        for closing in ("escape", "close"):
+
+            def dismiss(dialog: BatchDialog, how: str = closing) -> int:
+                dialog.show()
+                until(lambda: dialog.select.isEnabled())
+                dialog.inputs[0].setText("Unsaved")
+                if how == "escape":
+                    QTest.keyClick(dialog, Qt.Key.Key_Escape)
+                else:
+                    dialog.close()
+                return dialog.result()
+
+            monkeypatch.setattr(BatchDialog, "exec", dismiss)
+            window.buttons["batch"].click()
+            assert app.history.batch_detail(uid).result(WAIT) == edited
+            assert app.snapshot().batch_uuid == uid
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_batch_metadata_lookup_is_bounded_and_cancel_does_not_publish(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import Future
+
+    from capsule_vision.application.batch_review import BatchInformation, BatchSetup
+
+    data = saved_data(tmp_path)
+    startup = authenticated_startup(data)
+    app = startup.application
+    assert app.history is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    pending: list[tuple[str, Future[BatchSetup]]] = []
+
+    def lookup(label: str) -> Future[BatchSetup]:
+        assert not pending or pending[-1][1].done()
+        future: Future[BatchSetup] = Future()
+        pending.append((label, future))
+        return future
+
+    monkeypatch.setattr(app.history, "batch_setup", lookup)
+    before = app.snapshot()
+    dialog = BatchDialog(before, "en", window, app)
+    try:
+        dialog.show()
+        dialog.label.setText("A")
+        until(lambda: len(pending) == 1)
+        dialog.label.setText("B")
+        assert not dialog.select.isEnabled()
+        pending[0][1].set_result(BatchSetup("old", BatchInformation("Wrong product")))
+        until(lambda: len(pending) == 2)
+        assert pending[1][0] == "B" and not dialog.inputs[0].text()
+        pending[1][1].set_result(
+            BatchSetup("batch-b", BatchInformation("Correct product"))
+        )
+        until(dialog.select.isEnabled)
+        assert dialog.inputs[0].text() == "Correct product"
+        dialog.label.setText("C")
+        until(lambda: len(pending) == 3)
+        pending[2][1].set_exception(OSError("Unavailable"))
+        until(lambda: dialog.mode.text() == text("history_unavailable", "en"))
+        assert not dialog.select.isEnabled()
+        qapp.processEvents()
+        assert len(pending) == 3  # A failed read never continuously retries.
+        dialog.label.setText("D")
+        until(lambda: len(pending) == 4)
+        dialog.close()
+        pending[3][1].set_result(BatchSetup(None, BatchInformation()))
+        qapp.processEvents()
+        assert app.snapshot() == before
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        close_window(window)
+        delivery.detach()

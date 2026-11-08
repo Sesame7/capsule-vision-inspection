@@ -2,19 +2,16 @@
 
 from collections import Counter
 from dataclasses import replace
-from datetime import datetime, timedelta
-from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QDate,
     QEvent,
-    QLocale,
     QModelIndex,
     QObject,
     QPersistentModelIndex,
     QRect,
     QRectF,
+    QSignalBlocker,
     QSize,
     Qt,
     QTimer,
@@ -25,53 +22,112 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QFontMetrics,
-    QFontMetricsF,
     QPainter,
     QPainterPath,
     QRegion,
-    QTextCharFormat,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
-    QComboBox,
-    QDateEdit,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QStyle,
     QStyledItemDelegate,
-    QStyleOptionComboBox,
     QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
-    QToolButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from capsule_vision.application import ProductionApplication
+from capsule_vision.application.alarm_report import AlarmReportRequest
+from capsule_vision.application.audit_report import AuditReportRequest
 from capsule_vision.application.history import (
+    HistoryCamera,
     HistoryChannel,
     HistoryPageData,
     HistoryQuery,
     HistoryRecord,
     ProductionHistory,
-    ResultFilter,
 )
 from capsule_vision.application.identity_models import Role
-from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.application.records_query import RecordsScope
+from capsule_vision.application.report_scope import ALL_RESULTS
+from capsule_vision.localization.catalog import CAPSULE_REASON_KEYS, text
+from capsule_vision.localization.languages import Language
 
 from .future_delivery import FutureDelivery
+from .history_event_table import (
+    fit_record_columns,
+    readable_value,
+    record_time,
+)
+from .history_result_filter import HistoryResultFilter
 from .image_tools import image_icon
 from .permissions import permits
 from .report_dialog import ReportDialog
 from .style import Style, button_width, theme_colors
+
+_CYCLE_COLUMNS = (
+    ("short_time", "12-31 23:59:59.999", "12-31 23:59:59.999", 1),
+    ("records_cycle", "9999", "99999", 1),
+    ("history_group", "9999 · 4/4", "9999 · 4/4", 1),
+    ("batch_id", "DEV-LOT-F", "LOT-20261020-003", 6),
+    ("page_recipe", "Yellow", "黄色胶囊-规格B-灯检方案", 7),
+    (
+        "audit_outcome",
+        "OK 36 · NG 0 · EMPTY 6",
+        "OK 12 · NG 13 · EMPTY 10 · UNKNOWN 1 · ERR 12",
+        4,
+    ),
+)
+
+
+def _inspection_reason(code: str, language: Language) -> str:
+    keys = {
+        "defect_region": "records_model_defect",
+        "execution_error": "execution_error",
+        "invalid_result": "invalid_result",
+        "result_unavailable": "result_unavailable",
+        "cycle_timed_out": "cycle_timeout",
+        "cycle_failed": "records_cycle_failed",
+        "cycle_shutdown": "cycle_shutdown",
+        "basler.shutdown_unfinished": "cycle_shutdown",
+        "basler.missing_camera": "records_missing_frame",
+        "basler.inspection_deadline": "records_deadline",
+    }
+    if code in keys:
+        return text(keys[code], language)
+    if code == "camera_collection_error":
+        return f"{text('collection_short', language)} · {text('execution_error', language)}"
+    parts = code.split(".")
+    if (
+        len(parts) == 2
+        and parts[0] in ("occupancy", "capsule")
+        and parts[1] in ("execution_error", "result_unavailable")
+    ):
+        check = "records_occupancy" if parts[0] == "occupancy" else "traditional_short"
+        return f"{text(check, language)} · {text(parts[1], language)}"
+    if (
+        parts[0] == "capsule"
+        and (len(parts) == 3 or len(parts) == 4 and parts[1] in ("size", "color"))
+        and parts[-2] in ("upper", "lower")
+        and parts[-1] in CAPSULE_REASON_KEYS
+    ):
+        return f"{text('preview_' + parts[-2], language)} · {text(CAPSULE_REASON_KEYS[parts[-1]], language)}"
+    # Preserve free-form explanations from older records. Opaque codes stay in History.
+    if (
+        code.isascii()
+        and not any(c.isspace() for c in code)
+        and any(c in code for c in "_.:")
+    ):
+        return ""
+    return readable_value(code)
 
 
 class _ResultDelegate(QStyledItemDelegate):
@@ -82,9 +138,10 @@ class _ResultDelegate(QStyledItemDelegate):
     @staticmethod
     def counts(record: HistoryRecord) -> tuple[tuple[str, int], ...]:
         counts = Counter(c.business for c in record.channels)
-        parts = [(state, counts[state]) for state in ("OK", "NG", "EMPTY")]
-        if counts["UNKNOWN"]:
-            parts.append(("UNKNOWN", counts["UNKNOWN"]))
+        parts = [(state, counts[state]) for state in ("OK", "NG")]
+        parts.extend(
+            (state, counts[state]) for state in ("EMPTY", "UNKNOWN") if counts[state]
+        )
         errors = sum(c.technical == "ERROR" for c in record.channels)
         if errors:
             parts.append(("ERR", errors))
@@ -139,21 +196,28 @@ class _ResultDelegate(QStyledItemDelegate):
         painter.setClipRect(rect)
         painter.setFont(option.font)
         painter.setPen(QColor(theme_colors(option.widget).primary))
-        x = rect.x()
-        for value, width, alignment in self.spans(
+        spans = self.spans(
             option.fontMetrics,
             self.counts(record),
             warnings if isinstance(warnings, str) else "",
-        ):
-            available = rect.right() - x + 1
-            if available <= 0:
-                break
+        )
+        if sum(width for _, width, _ in spans) > rect.width():
+            caption = option.fontMetrics.elidedText(
+                str(index.data()), Qt.TextElideMode.ElideRight, rect.width()
+            )
             painter.drawText(
-                QRect(x, rect.y(), min(width, available), rect.height()),
+                rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                caption,
+            )
+            painter.restore()
+            return
+        x = rect.x()
+        for value, width, alignment in spans:
+            painter.drawText(
+                QRect(x, rect.y(), width, rect.height()),
                 alignment | Qt.AlignmentFlag.AlignVCenter,
-                option.fontMetrics.elidedText(
-                    value, Qt.TextElideMode.ElideRight, available
-                ),
+                value,
             )
             x += width
         painter.restore()
@@ -223,6 +287,14 @@ class HistoryPage(QWidget):
         super().__init__()
         self.owner = owner
         self.application = application
+        self.export_available = True
+        self.export_batch: tuple[str, str] | None = None
+        self.export_audit: AuditReportRequest | None = None
+        self.export_audit_label = ""
+        self.export_alarm: AlarmReportRequest | None = None
+        self.export_alarm_label = ""
+        self.export_requires_batch = False
+        self.scope = RecordsScope()
         self.report_dialog: ReportDialog | None = None
         self.language: Language = "zh"
         self.busy = False
@@ -260,33 +332,15 @@ class HistoryPage(QWidget):
         self.toolbar_layout.setColumnStretch(0, 1)
         self._toolbar_wrapped: bool | None = None
         self.filters = QWidget()
-        top = QHBoxLayout(self.filters)
+        top = self.filter_bar = QHBoxLayout(self.filters)
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(Style.small)
-        self.date = QDateEdit(QDate.currentDate())
-        self.date.setObjectName("historyDate")
-        self.date.setCalendarPopup(True)
-        self.date.setDisplayFormat("yyyy-MM-dd")
-        calendar = self.date.calendarWidget()
-        calendar.setObjectName("historyCalendar")
-        calendar.setMinimumSize(8 * Style.touch, 8 * Style.touch)
-        self.all_dates = QCheckBox()
         self.refresh_button = QPushButton()
-        for widget in (self.date, self.all_dates, self.refresh_button):
-            widget.setMinimumHeight(Style.touch)
-        top.addWidget(self.date)
-        top.addWidget(self.all_dates)
-        self.batch = QComboBox()
-        self.batch.setMinimumHeight(Style.touch)
-        self.batch.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.batch.setMinimumContentsLength(12)
-        self.result = QComboBox()
+        self.refresh_button.setMinimumHeight(Style.touch)
+        self.result = HistoryResultFilter()
         self.result.setMinimumHeight(Style.touch)
-        for value in ("all", "OK", "NG", "ERROR", "EMPTY", "UNKNOWN"):
-            self.result.addItem(value, value)
-        for widget in (self.batch, self.result):
+        for widget in (self.result,):
+            widget.setObjectName("recordFilter")
             widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             top.addWidget(widget)
         self.pagination_tools = QWidget()
@@ -298,10 +352,10 @@ class HistoryPage(QWidget):
             button.setMinimumHeight(Style.touch)
             actions.addWidget(button)
         actions.addWidget(self.refresh_button)
-        self.export_button = QPushButton()
+        self.export_button = QPushButton(self)
         self.export_button.setMinimumHeight(Style.touch)
         self.export_button.clicked.connect(self._open_export)
-        actions.addWidget(self.export_button)
+        self.export_button.hide()  # The Records tab widget hosts this shared action.
         root.addWidget(self.toolbar)
         self.warning = QLabel()
         self.warning.setTextFormat(Qt.TextFormat.PlainText)
@@ -311,6 +365,11 @@ class HistoryPage(QWidget):
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         root.addWidget(self.status)
         self.cycles = self._table(6, "historyCycles")
+        self.cycles.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.cycles.horizontalHeader().setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.cycles.horizontalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         self.cycles.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Fixed
         )
@@ -325,7 +384,9 @@ class HistoryPage(QWidget):
             QHeaderView.ResizeMode.Fixed
         )
         root.addWidget(self.channels)
-        self.channel_detail = QPlainTextEdit()
+        self.channel_detail = QTextEdit()
+        self.channel_detail.setObjectName("channelEvidence")
+        self.channel_detail.setTabChangesFocus(True)
         self.channel_detail.setReadOnly(True)
         detail = QHBoxLayout()
         detail.addWidget(self.channel_detail, 1)
@@ -343,16 +404,13 @@ class HistoryPage(QWidget):
                 QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly
             ):
                 child.installEventFilter(self)
-        self.date.dateChanged.connect(self.refresh)
-        self.all_dates.toggled.connect(self.refresh)
-        self.batch.currentIndexChanged.connect(self.refresh)
-        self.result.currentIndexChanged.connect(self.refresh)
+        self.result.changed.connect(self.refresh)
         self.refresh_button.clicked.connect(self.refresh)
         self.newer.clicked.connect(lambda: self._turn(True))
         self.older.clicked.connect(lambda: self._turn(False))
         self.cycles.itemSelectionChanged.connect(self._selected)
         self.channels.currentCellChanged.connect(self._channel_selected)
-        self.channels.itemSelectionChanged.connect(self._image_selection_changed)
+        self.channels.itemSelectionChanged.connect(self._channel_selected)
         self.timer = QTimer(self)
         self.timer.setInterval(500)
         self.timer.timeout.connect(
@@ -379,7 +437,10 @@ class HistoryPage(QWidget):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if hasattr(self, "channel_detail"):
-            if event.type() is QEvent.Type.Resize and watched in (
+            if event.type() in (
+                QEvent.Type.Resize,
+                QEvent.Type.FontChange,
+            ) and watched in (
                 self.cycles.viewport(),
                 self.channels.viewport(),
             ):
@@ -411,193 +472,9 @@ class HistoryPage(QWidget):
                 interior.translated(-child.x(), -child.y()).intersected(child.rect())
             )
 
-    def _size_cycles(self) -> None:
-        metrics = self.cycles.fontMetrics()
-        padding = 2 * Style.small + 8
-        time_width = (
-            max(
-                metrics.horizontalAdvance("12-31 23:59:59.999"),
-                max(
-                    (
-                        metrics.horizontalAdvance(item.text())
-                        for row in range(self.cycles.rowCount())
-                        if (item := self.cycles.item(row, 0)) is not None
-                    ),
-                    default=0,
-                ),
-            )
-            + padding
-        )
-        cycle_width = (
-            max(
-                metrics.horizontalAdvance("#"),
-                min(
-                    max(
-                        (
-                            metrics.horizontalAdvance(str(r.cycle_id))
-                            for r in self._data.records
-                        ),
-                        default=0,
-                    ),
-                    metrics.horizontalAdvance("99999999"),
-                ),
-            )
-            + padding
-        )
-        counts_width = metrics.horizontalAdvance("OK 36 · NG 36 · EMPTY 36")
-        result_width = counts_width
-        for record in self._data.records:
-            counts = _ResultDelegate.counts(record)
-            counts_width = max(
-                counts_width,
-                sum(width for _, width, _ in _ResultDelegate.spans(metrics, counts)),
-            )
-            for lang in ("zh", "en", self.language):
-                result_width = max(
-                    result_width,
-                    sum(
-                        width
-                        for _, width, _ in _ResultDelegate.spans(
-                            metrics,
-                            counts,
-                            " · ".join(self._cycle_warnings(record, lang)),
-                        )
-                    ),
-                )
-        names = [
-            max(
-                max(
-                    metrics.horizontalAdvance(text(key, lang))
-                    for lang in ("zh", "en", self.language)
-                ),
-                min(
-                    max(
-                        (
-                            metrics.horizontalAdvance(item.text())
-                            for row in range(self.cycles.rowCount())
-                            if (item := self.cycles.item(row, column)) is not None
-                        ),
-                        default=0,
-                    ),
-                    metrics.horizontalAdvance("M" * 22),
-                ),
-            )
-            + padding
-            for column, key in ((3, "batch_id"), (4, "page_recipe"))
-        ]
-        group_min = (
-            max(
-                metrics.horizontalAdvance("2265 · 4/4"),
-                *(
-                    metrics.horizontalAdvance(text("history_group", lang))
-                    for lang in ("zh", "en", self.language)
-                ),
-            )
-            + padding
-        )
-        group_preferred = min(
-            max(
-                (
-                    metrics.horizontalAdvance(self._group_caption(r)) + padding
-                    for r in self._data.records
-                ),
-                default=group_min,
-            ),
-            metrics.horizontalAdvance("99999999 · 4/4") + padding,
-        )
-        minimums = [
-            time_width,
-            cycle_width,
-            group_min,
-            max(
-                max(
-                    metrics.horizontalAdvance(text("batch_id", lang))
-                    for lang in ("zh", "en", self.language)
-                ),
-                metrics.horizontalAdvance("000000"),
-            )
-            + padding,
-            max(
-                max(
-                    metrics.horizontalAdvance(text("page_recipe", lang))
-                    for lang in ("zh", "en", self.language)
-                ),
-                metrics.horizontalAdvance("胶囊A"),
-            )
-            + padding,
-            counts_width + padding,
-        ]
-        preferred = [
-            time_width,
-            cycle_width,
-            group_preferred,
-            *names,
-            result_width + padding,
-        ]
-        preferred = [max(a, b) for a, b in zip(preferred, minimums, strict=True)]
-        available = self.cycles.viewport().width()
-        if available >= sum(preferred):
-            widths = preferred
-            # Surplus benefits every column; results get the largest share.
-            weights = [2, 1, 1, 3, 3, 5]
-        else:
-            widths = minimums
-            weights = [p - m for p, m in zip(preferred, minimums, strict=True)]
-        surplus = max(0, available - sum(widths))
-        total = max(1, sum(weights))
-        accumulated = 0
-        for column, (width, weight) in enumerate(zip(widths, weights, strict=True)):
-            extra = (
-                surplus * (accumulated + weight) // total
-                - surplus * accumulated // total
-            )
-            accumulated += weight
-            width += extra
-            self.cycles.setColumnWidth(column, width)
-
     def _size_content(self) -> None:
-        self._size_cycles()
-        metrics = self.cycles.fontMetrics()
+        fit_record_columns(self.cycles, _CYCLE_COLUMNS)
         padding = 2 * Style.small + 8
-        date_metrics = QFontMetricsF(self.date.font())
-        date_samples: list[str] = []
-        for lang in LANGUAGES:
-            locale = QLocale(lang)
-            locale.setNumberOptions(QLocale.NumberOption.OmitGroupSeparator)
-            # A date sample containing narrow zeroes underbudgets proportional digits.
-            digit = max(
-                (locale.toString(i) for i in range(10)),
-                key=date_metrics.horizontalAdvance,
-            )
-            date_samples.append(f"{digit * 4}-{digit * 2}-{digit * 2}")
-        self.date.setFixedWidth(
-            ceil(max(date_metrics.horizontalAdvance(value) for value in date_samples))
-            + Style.touch
-        )
-        all_dates = text("history_all_dates", self.language)
-        self.all_dates.setAccessibleName(all_dates)
-        self.all_dates.setToolTip(all_dates)
-        filter_width = (
-            max(
-                metrics.horizontalAdvance("12-31 23:59:59"),
-                *(
-                    metrics.horizontalAdvance(text(key, lang))
-                    for key in (
-                        "history_all_batches",
-                        "history_all",
-                        "history_ok",
-                        "history_ng",
-                        "history_error",
-                        "history_empty",
-                        "history_unknown",
-                    )
-                    for lang in ("zh", "en")
-                ),
-            )
-            + 40
-        )
-        self.batch.setFixedWidth(filter_width)
-        self.result.setFixedWidth(filter_width)
         width = Style.touch
         for button, key in (
             (self.newer, "history_newer"),
@@ -619,88 +496,15 @@ class HistoryPage(QWidget):
             )
             button.setAccessibleName(text(key, self.language))
             button.setToolTip(text(key, self.language))
-        desired_dates = (
-            max(
-                ceil(
-                    QFontMetricsF(self.all_dates.font()).horizontalAdvance(
-                        text("history_all_dates", lang)
-                    )
-                )
-                for lang in LANGUAGES
-            )
-            + Style.touch
-        )
-        filter_insets: list[int] = []
-        for combo in (self.batch, self.result):
-            option = QStyleOptionComboBox()
-            combo.initStyleOption(option)
-            contents = combo.style().subControlRect(
-                QStyle.ComplexControl.CC_ComboBox,
-                option,
-                QStyle.SubControl.SC_ComboBoxEditField,
-                combo,
-            )
-            filter_insets.append(combo.width() - contents.width())
-        desired_filter = (
-            max(
-                ceil(QFontMetricsF(combo.font()).horizontalAdvance(text(key, lang)))
-                for combo in (self.batch, self.result)
-                for lang in LANGUAGES
-                for key in (
-                    "history_all_batches",
-                    "history_all",
-                    "history_ok",
-                    "history_ng",
-                    "history_error",
-                    "history_empty",
-                    "history_unknown",
-                )
-            )
-            + max(filter_insets)
-            + Style.small
-        )
-        # Decide wrapping from full fixed captions, then spend only the space
-        # belonging to the filters' actual row. Pagination on another row must
-        # not consume that budget.
-        desired_row = (
-            self.date.width() + desired_dates + 2 * desired_filter + 3 * Style.small
-        )
-        self.export_button.setFixedWidth(
-            max(
-                self.export_button.fontMetrics().horizontalAdvance(
-                    text("report_export", lang)
-                )
-                for lang in ("zh", "en", self.language)
-            )
-            + 4 * Style.small
-        )
+        self.result.setFixedWidth(176)
+        desired_row = self.filter_bar.sizeHint().width()
         self.image_button.setFixedWidth(
             button_width(
                 self.image_button, ("history_open_image",), languages=("zh", "en")
             )
         )
-        action_width = 3 * width + self.export_button.width() + 4 * Style.small
+        action_width = 3 * width + 3 * Style.small
         wrapped = self.workspace.width() < desired_row + action_width
-        available = self.workspace.width() - (0 if wrapped else action_width)
-        dates_width = min(
-            desired_dates,
-            max(0, available - self.date.width() - 2 * filter_width - 3 * Style.small),
-        )
-        spare = max(
-            0,
-            available
-            - self.date.width()
-            - dates_width
-            - 2 * filter_width
-            - 3 * Style.small,
-        )
-        self.all_dates.setFixedWidth(dates_width)
-        self.all_dates.setText(
-            metrics.elidedText(all_dates, Qt.TextElideMode.ElideRight, dates_width - 30)
-        )
-        filter_width = min(desired_filter, filter_width + spare // 2)
-        self.batch.setFixedWidth(filter_width)
-        self.result.setFixedWidth(filter_width)
         if wrapped != self._toolbar_wrapped:
             self._toolbar_wrapped = wrapped
             self.toolbar_layout.removeWidget(self.filters)
@@ -794,98 +598,36 @@ class HistoryPage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        locale = QLocale(
-            {"zh": "zh_CN", "zh-TW": "zh_TW", "en": "en_US", "pt-BR": "pt_BR"}.get(
-                language, language
-            )
-        )
-        self.date.setLocale(locale)
-        calendar = self.date.calendarWidget()
-        calendar.setLocale(locale)
-        calendar.setFirstDayOfWeek(locale.firstDayOfWeek())
-        calendar.setPalette(self.palette())
-        header = QTextCharFormat()
-        header.setForeground(QColor(theme_colors(self).secondary))
-        header.setBackground(QColor(theme_colors(self).raised))
-        calendar.setHeaderTextFormat(header)
-        for day in (Qt.DayOfWeek.Saturday, Qt.DayOfWeek.Sunday):
-            calendar.setWeekdayTextFormat(day, QTextCharFormat())
-        for name, icon in (
-            ("qt_calendar_prevmonth", "previous"),
-            ("qt_calendar_nextmonth", "next"),
-        ):
-            button = calendar.findChild(QToolButton, name)
-            if button is not None:
-                button.setIcon(image_icon(icon, theme_colors(self).primary))
-                button.setIconSize(QSize(Style.icon, Style.icon))
-        self.all_dates.setText(text("history_all_dates", language))
-        self.date.setAccessibleName(text("history_date", language))
-        self.batch.setAccessibleName(text("history_batch", language))
-        self.result.setAccessibleName(text("history_result", language))
+        self.result.set_language(language)
         self.export_button.setText(text("report_export", language))
+        self.export_button.setFixedWidth(
+            button_width(self.export_button, ("report_export",))
+        )
         self.image_button.setText(text("history_open_image", language))
         self.image_button.setAccessibleName(self.image_button.text())
         self.identity_changed()
         if self.report_dialog is not None:
             self.report_dialog.set_language(language)
-        for index, key in enumerate(
-            (
-                "history_all",
-                "history_ok",
-                "history_ng",
-                "history_error",
-                "history_empty",
-                "history_unknown",
-            )
-        ):
-            self.result.setItemText(
-                index,
-                text(key, language)
-                if index == 0
-                else ("OK", "NG", "ERROR", "EMPTY", "UNKNOWN")[index - 1],
-            )
-            self.result.setItemData(
-                index, text(key, language), Qt.ItemDataRole.ToolTipRole
-            )
-        self.result.setToolTip(
-            str(self.result.currentData(Qt.ItemDataRole.ToolTipRole))
+        full_headers = (
+            "history_time",
+            "history_cycle",
+            "history_group",
+            "batch_id",
+            "page_recipe",
+            "history_result",
         )
-        self.cycles.setHorizontalHeaderLabels(
-            [
-                "#"
-                if k == "history_cycle"
-                else text(
-                    {"history_time": "short_time", "history_batch": "batch_id"}.get(
-                        k, k
-                    ),
-                    language,
-                )
-                for k in (
-                    "history_time",
-                    "history_cycle",
-                    "history_group",
-                    "history_batch",
-                    "page_recipe",
-                    "history_result",
-                )
-            ]
-        )
-        for column, key in enumerate(
-            (
-                "history_time",
-                "history_cycle",
-                "history_group",
-                "history_batch",
-                "page_recipe",
-                "history_result",
-            )
+        for column, ((key, _, _, _), full) in enumerate(
+            zip(_CYCLE_COLUMNS, full_headers, strict=True)
         ):
-            item = self.cycles.horizontalHeaderItem(column)
-            assert item is not None
-            item.setToolTip(
-                text(key, language)
-                + ("\n" + text("history_clock", language) if column == 0 else "")
+            item = QTableWidgetItem(text(key, language))
+            if column == 1:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            description = text(full, language) + (
+                "\n" + text("history_clock", language) if column == 0 else ""
             )
+            item.setToolTip(description)
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, description)
+            self.cycles.setHorizontalHeaderItem(column, item)
         self.channels.setHorizontalHeaderLabels(
             ["CAM", *(str(i + 1) for i in range(6))]
         )
@@ -894,23 +636,48 @@ class HistoryPage(QWidget):
         camera_header.setToolTip(text("history_camera", language))
         self.channel_detail.setAccessibleName(text("history_channel", language))
         self.channel_detail.setPlaceholderText(text("history_select_channel", language))
-        self._batches()
         self._present()
 
     def activate(self) -> None:
-        if not self._loaded:
+        if not self._loaded and not self.busy:
             self.refresh()
+
+    def view_batch(self, batch: str, label: str) -> None:
+        """Open this exact Batch without changing the shared calendar bounds."""
+        self.scope = replace(self.scope, batch=batch, unbatched=False)
+        with QSignalBlocker(self.result):
+            self.result.set_selected(ALL_RESULTS)
+        self.refresh()
 
     def identity_changed(self) -> None:
         app = self.application
-        allowed = app is not None and permits(app, Role.OPERATOR)
-        self.export_button.setEnabled(self.owner is not None and allowed)
+        audit = self.export_audit is not None
+        allowed = app is not None and permits(
+            app, Role.ENGINEER if audit else Role.OPERATOR
+        )
+        available = (
+            (app is not None and app.identity is not None)
+            if audit
+            else self.owner is not None
+        )
+        self.export_button.setEnabled(
+            available
+            and allowed
+            and self.export_available
+            and (not self.export_requires_batch or self.export_batch is not None)
+        )
         self.export_button.setToolTip(
             text(
                 "history_unavailable"
-                if self.owner is None or app is None
+                if not available or app is None
+                else "customer_deferred"
+                if not self.export_available and allowed
+                else "customer_select_batch"
+                if self.export_requires_batch and self.export_batch is None and allowed
                 else "report_export"
                 if allowed
+                else "permission_engineer"
+                if audit
                 else "permission_operator",
                 self.language,
             )
@@ -926,7 +693,17 @@ class HistoryPage(QWidget):
         if self.application is None or not self.export_button.isEnabled():
             return
         if self.report_dialog is None:
-            self.report_dialog = ReportDialog(self.application, self.language, self)
+            self.report_dialog = ReportDialog(
+                self.application,
+                self.language,
+                self,
+                self._filters(),
+                self.export_batch,
+                audit=self.export_audit,
+                audit_label=self.export_audit_label,
+                alarm=self.export_alarm,
+                alarm_label=self.export_alarm_label,
+            )
             self.report_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
             self.report_dialog.finished.connect(self._report_closed)
         self.report_dialog.show()
@@ -940,43 +717,16 @@ class HistoryPage(QWidget):
     def refresh(self) -> None:
         self._revision += 1
         self._query = self._filters()
-        self.date.setEnabled(not self.all_dates.isChecked())
-        self.result.setToolTip(
-            str(self.result.currentData(Qt.ItemDataRole.ToolTipRole))
-        )
-        self.batch.setToolTip(
-            str(
-                self.batch.currentData(Qt.ItemDataRole.ToolTipRole)
-                or self.batch.currentText()
-            )
-        )
         if not self.busy:
             self._submit()
 
     def _filters(self) -> HistoryQuery:
-        since = until = None
-        if not self.all_dates.isChecked():
-            value = self.date.date()
-            start = datetime(value.year(), value.month(), value.day())
-            since, until = start.timestamp(), (start + timedelta(days=1)).timestamp()
-        batch: object = self.batch.currentData()
-        result: object = self.result.currentData()
-        # All options are owned here; do not interpret arbitrary display text.
-        filters: tuple[ResultFilter, ...] = (
-            "all",
-            "OK",
-            "NG",
-            "ERROR",
-            "EMPTY",
-            "UNKNOWN",
-        )
-        selected: ResultFilter = "all"
-        for value in filters:
-            if value == result:
-                selected = value
-                break
         return HistoryQuery(
-            since, until, batch if isinstance(batch, str) else None, selected
+            self.scope.since,
+            self.scope.until,
+            self.scope.batch,
+            self.result.selected,
+            unbatched=self.scope.unbatched,
         )
 
     def _turn(self, newer: bool) -> None:
@@ -1014,48 +764,7 @@ class HistoryPage(QWidget):
             if isinstance(data, HistoryPageData)
             else HistoryPageData((), (), False)
         )
-        self._batches()
         self._present()
-
-    def _batches(self) -> None:
-        selected: object = self.batch.currentData()
-        self.batch.blockSignals(True)
-        self.batch.clear()
-        self.batch.addItem(text("history_all_batches", self.language), None)
-        stamps = Counter(
-            datetime.fromtimestamp(first).strftime("%m-%d %H:%M:%S")
-            for _, _, first in self._data.batches
-        )
-        for segment, label, completed in self._data.batches:
-            stamp = datetime.fromtimestamp(completed).strftime("%m-%d %H:%M:%S")
-            display = stamp
-            if stamps[stamp] > 1:
-                length = 6
-                while length < len(segment) and any(
-                    other != segment and other.startswith(segment[:length])
-                    for other, _, _ in self._data.batches
-                ):
-                    length += 1
-                display += f" · {segment[:length]}"
-            self.batch.addItem(display, segment)
-            self.batch.setItemData(
-                self.batch.count() - 1,
-                f"{label or '—'}\n{datetime.fromtimestamp(completed).isoformat(timespec='milliseconds')}\n{text('history_segment_observed', self.language)}\nID: {segment}",
-                Qt.ItemDataRole.ToolTipRole,
-            )
-        if isinstance(selected, str):
-            index = self.batch.findData(selected)
-            if index < 0:
-                self.batch.addItem(f"ID: {selected[:8]}", selected)
-                index = self.batch.count() - 1
-                self.batch.setItemData(index, selected, Qt.ItemDataRole.ToolTipRole)
-            self.batch.setCurrentIndex(index)
-        self.batch.blockSignals(False)
-        current = str(
-            self.batch.currentData(Qt.ItemDataRole.ToolTipRole)
-            or self.batch.currentText()
-        )
-        self.batch.setToolTip(current)
 
     def _present(self) -> None:
         language = self.language
@@ -1092,27 +801,32 @@ class HistoryPage(QWidget):
         self.cycles.blockSignals(True)
         self.cycles.setRowCount(len(self._data.records))
         for row, record in enumerate(self._data.records):
+            clock, full_time = record_time(
+                record.context.completed_at, milliseconds=True
+            )
             values = (
-                datetime.fromtimestamp(record.context.completed_at).strftime(
-                    "%m-%d %H:%M:%S.%f"
-                )[:-3],
+                clock,
                 str(record.cycle_id),
                 self._group_caption(record),
-                record.context.batch_label or "—",
-                record.context.recipe_name or f"ID: {record.context.active.recipe_id}",
+                readable_value(record.context.batch_label) or "—",
+                readable_value(record.context.recipe_name) or "—",
                 self._summary(record),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                if column == 0:
+                    item.setToolTip(full_time)
                 if column == 3:
-                    item.setToolTip(value)
+                    item.setToolTip(record.context.batch_label or value)
                 if column == 2:
                     description = f"Run ID: {record.context.run_id}\n{text('history_group', language)}: {value}"
                     item.setToolTip(description)
-                    item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, description)
                 if column == 1:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setToolTip(value)
                 if column == 5:
+                    item.setToolTip(value)
+                    item.setData(Qt.ItemDataRole.AccessibleTextRole, value)
                     item.setData(Qt.ItemDataRole.UserRole, record)
                     item.setData(
                         _ResultDelegate.warnings_role,
@@ -1125,6 +839,10 @@ class HistoryPage(QWidget):
                             or text("history_recipe_name_missing", language)
                         )
                         + f"\nID: {record.context.active.recipe_id}"
+                    )
+                if item.toolTip():
+                    item.setData(
+                        Qt.ItemDataRole.AccessibleDescriptionRole, item.toolTip()
                     )
                 self.cycles.setItem(row, column, item)
         if self._data.records:
@@ -1150,7 +868,12 @@ class HistoryPage(QWidget):
         language = language or self.language
         warnings: list[str] = []
         if record.status != "COMPLETE":
-            warnings.append(record.status)
+            status_key = {
+                "FAILED": "records_cycle_failed",
+                "TIMED_OUT": "cycle_timeout",
+                "SHUTDOWN": "cycle_shutdown",
+            }.get(record.status)
+            warnings.append(text(status_key, language) if status_key else record.status)
         if record.technical == "ERROR" and not any(
             c.technical == "ERROR" for c in record.channels
         ):
@@ -1170,7 +893,7 @@ class HistoryPage(QWidget):
     @Slot()
     def _selected(self) -> None:
         index = self.cycles.currentRow()
-        if not 0 <= index < len(self._data.records):
+        if not self.cycles.selectedItems() or not 0 <= index < len(self._data.records):
             self._detail_record_id = None
             self.channels.setRowCount(0)
             self.channel_detail.clear()
@@ -1192,6 +915,7 @@ class HistoryPage(QWidget):
             item = QTableWidgetItem(camera.camera)
             if same_record and old_camera == camera.camera:
                 selected = (row, 0)
+            item.setData(Qt.ItemDataRole.UserRole, camera)
             item.setToolTip(camera.camera)
             self.channels.setItem(row, 0, item)
             for channel in record.channels:
@@ -1209,25 +933,24 @@ class HistoryPage(QWidget):
         self._channel_selected()
         self._size_content()
 
-    def _channel_text(self, channel: HistoryChannel) -> str:
-        parts = [channel.camera, f"CH{channel.channel:02d}", channel.business]
-        if channel.technical != "SUCCESS":
-            parts.append(channel.technical)
-        if channel.business == "UNKNOWN" and channel.judgment != "UNKNOWN":
-            parts.append(
-                f"{text('history_judgment', self.language)}: {channel.judgment}"
-            )
-        value = " · ".join(parts)
-        if channel.reasons:
-            value += "\n" + ", ".join(channel.reasons)
-        return value
-
     @Slot()
     def _channel_selected(self) -> None:
         item = self.channels.currentItem()
-        channel: object = item.data(Qt.ItemDataRole.UserRole) if item else None
+        selected: object = (
+            item.data(Qt.ItemDataRole.UserRole) if item and item.isSelected() else None
+        )
+        reasons: list[str] = []
+        if isinstance(selected, (HistoryChannel, HistoryCamera)):
+            reasons.extend(
+                _inspection_reason(code, self.language) for code in selected.reasons
+            )
+            if isinstance(selected, HistoryCamera) and selected.unassigned_labels:
+                labels = ", ".join(selected.unassigned_labels)
+                reasons.append(
+                    text("records_unassigned", self.language).format(labels=labels)
+                )
         self.channel_detail.setPlainText(
-            self._channel_text(channel) if isinstance(channel, HistoryChannel) else ""
+            "\n".join(dict.fromkeys(v for v in reasons if v))
         )
         self._image_selection_changed()
         self._size_detail()
@@ -1273,7 +996,7 @@ class HistoryPage(QWidget):
                 issue = "history_image_open_failed"
         except OSError:
             issue = "history_image_open_failed"
-        self.channel_detail.appendPlainText(text(issue, self.language))
+        self.channel_detail.append(text(issue, self.language))
         self._size_detail()
 
     @Slot()

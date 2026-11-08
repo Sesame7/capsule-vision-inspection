@@ -24,11 +24,11 @@ accuracy remain separate commissioning responsibilities.
 
 | Workspace | Purpose |
 | --- | --- |
-| Production | Select and prepare saved Recipes, run inspection and review results |
+| Production | Select and prepare saved Recipes; set or continue a Batch with optional product, specification and notes while idle (Operator or above); run inspection and review results |
 | Recipe | Edit and save Recipe definitions, models and inspection rules |
 | Vision | Configure sources, camera layouts and channel ROIs |
 | Communication | Configure PLC diagnostics, reporting, read-only alarm monitoring and the Web observer |
-| History | All roles can browse inspection records. Operators and higher roles can review Alarm History and export named Batches to Excel. Engineers and Administrators can review the local Audit Trail. |
+| Records | All roles can browse named Batches, their read-only information, Runs and inspection records. Operators and above can review Alarm History and export customer Batch and filtered defect reports. Engineers and Administrators can review the local Audit Trail. |
 
 ## Quick Start
 
@@ -137,8 +137,57 @@ uv run --no-sync python app.py --help
 uv run --no-sync capsule-vision --help
 ```
 
-For a UI review on a **development checkout**, close `app.py` and run these
-commands from its repository root:
+For realistic Records and customer-report review on a **Windows development
+checkout**, generate an isolated showcase from the repository root:
+
+```powershell
+uv run --no-sync python scripts/populate_development_data.py showcase --anchor 2026-11-06 --utc-offset +08:00
+uv run --no-sync python scripts/populate_development_data.py verify-showcase --stage outputs/showcase-<generated-id>
+```
+
+The anchor is the last day of the two-week scenario (default: yesterday).
+The fixed UTC offset makes regeneration reproducible. Ten named Batches, 25
+Runs, three fictional production accounts and sparse engineering/alarm events
+include continuation, an interrupted Run and unbatched activity. Independent
+Run/Batch/category and overlap expectations live in `expected.json`, outside
+customer presentation. A SQLite application ID marks both stores as synthetic.
+Only the saved Recipe's enabled checks and verified model-package labels are
+used. Unsupported offline label metadata stops generation; it never invokes
+the SDK. These are simulated evidence, not acquired frames, actual PLC reads,
+successful ACKs or mechanical ejection. No camera archives are generated.
+
+To **replace recognized development records**, close the application and all
+database owners, inspect the exact paths/counts printed by the preview, then
+explicitly confirm that preview's SHA-256:
+
+```powershell
+uv run --no-sync python scripts/populate_development_data.py preview-showcase --stage outputs/showcase-<generated-id>
+uv run --no-sync python scripts/populate_development_data.py replace-showcase --stage outputs/showcase-<generated-id> --confirm <printed-plan-sha256>
+```
+
+Replacement accepts only the checkout's entry-relative `data/` and a validated
+stage under its `outputs/`. It refuses unknown/customer Batches, additional
+non-synthetic Runs, open owners, redirected files, changed previews, future or
+expired scenarios, and the stress profile. There is no force override. The
+security maintenance lease and native open-file checks protect ownership.
+History and Audit are replaced together in a single SQLite rollback-journal
+transaction; their previous files remain in a unique `before-*` backup in the
+stage. Credentials, configuration, model artifacts, licenses and images are
+untouched. Synthetic historical personnel are not newly provisioned login
+accounts. Keep installed records development-only; never copy this workflow
+to a field/customer installation.
+
+For a **separate** one-Batch/100-Run fixture, add `--profile stress` to `showcase`.
+It remains isolated and is not part of the ordinary showcase. Use a recent
+anchor when opening generated stores in the normal application, whose usual
+30-day detail retention still applies.
+
+The earlier compact commissioning fixtures remain available for boundary
+tests and isolated review. Their account provisioning is optional and prompts
+for credentials; it is not needed to generate or install the showcase:
+
+The legacy `populate` command adds `DEV-*` examples to installed records. Do not
+mix it into a showcase installation; use `review` for those isolated fixtures.
 
 ```powershell
 uv run --no-sync python scripts/populate_development_data.py accounts
@@ -155,10 +204,18 @@ be changed at first login. Existing accounts keep their credentials.
 Recipe, verified model and channel layout in this checkout's `data/`. The first
 import selects `DEV-LOT-F`. Re-running keeps the original dates and any later
 Batch selection. Conflicting sample identities or incompatible History schemas
-stop the import. In History, choose **All dates** to page through the examples;
-use Administrator to review both Audit and Alarm History. `DEV-LOT-*` Batches
+stop the import. In Records, leave both shared dates empty to browse examples across shifts.
+Use Administrator to review both Audit and Alarm History. `DEV-LOT-*` Batches
 and `DEV-Example-*` audit actors identify the samples. The usual History
 retention period applies.
+
+For isolated UI or report review, run
+`uv run --no-sync python scripts/populate_development_data.py review`.
+It reads the checkout's saved configuration and writes a fresh History and Audit
+pair under `outputs/records-review-*/data/`, leaving installed records intact.
+The scenarios include multi-Run Batches, four-exposure groups, mixed defects and
+empty channels, technical errors, alarm transitions and unsuccessful saves.
+Group evidence represents eligibility for reporting. The examples issue no PLC requests.
 
 The normal repository quality gates are:
 

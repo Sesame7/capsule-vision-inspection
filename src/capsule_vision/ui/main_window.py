@@ -48,6 +48,8 @@ from capsule_vision.application import (
     PreparedConfiguration,
     ProductionApplicationSnapshot,
 )
+from capsule_vision.application.alarm_report import AlarmReportRequest
+from capsule_vision.application.audit_report import AuditReportRequest
 from capsule_vision.application.basler_connection import ConnectionState
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.folder_replay import FolderSourceError
@@ -71,6 +73,7 @@ from capsule_vision.web.runtime import WebRuntime, WebState
 from .alarm_page import AlarmPage
 from .audit_page import AuditPage
 from .batch_dialog import BatchDialog
+from .batches_page import BatchesPage
 from .camera_card import CameraCard
 from .communication_page import CommunicationPage
 from .editing import EditingCoordinator
@@ -86,6 +89,7 @@ from .production_presentation import (
 )
 from .production_recipes import ProductionRecipes
 from .recipe_page import ModelLabelReader, RecipePage
+from .records_filters import RecordsFilters
 from .shell import PAGES, NavigationBar, StatusBar
 from .style import (
     Style,
@@ -201,9 +205,9 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._presenting_identity = False
         self.setMinimumSize(*Style.minimum)
-        self.setWindowTitle("Capsule Vision Inspection · Production")
+        self.setWindowTitle("Capsule Vision Inspection")
         font = QFont()
-        font.setFamilies(["Microsoft YaHei UI", "Segoe UI", "sans-serif"])
+        font.setFamilies(Style.font_families)
         self.setFont(font)
         apply_theme(self, self.theme)
         shell = QWidget()
@@ -417,16 +421,40 @@ class MainWindow(QMainWindow):
         self.communication = CommunicationPage(application=bridge.application)
         self.identity_controls.session_changed.connect(self._session_changed)
         self.history = HistoryPage(bridge.application.history, bridge.application)
-        self.audit_page = AuditPage(bridge.application.identity)
+        self.batches_page = BatchesPage(bridge.application)
+        self.history.export_requires_batch = True
+        self.batches_page.selection_changed.connect(self._report_context)
+        self.audit_page = AuditPage(
+            bridge.application.identity, bridge.application.history
+        )
+        self.audit_page.accounts.changed.connect(self._report_context)
         self.alarm_page = AlarmPage(bridge.application)
+        self.alarm_page.kind.activated.connect(self._report_context)
         self.history.timer.timeout.connect(self.alarm_page.refresh_status)
         self.history.timer.timeout.connect(self.audit_page.refresh_status)
         self.history_tabs = QTabWidget()
         self.history_tabs.setObjectName("historyTabs")
+        self.history_tabs.tabBar().setObjectName("recordTypes")
+        self.history_tabs.setIconSize(QSize(20, 20))
+        self.history_tabs.setElideMode(Qt.TextElideMode.ElideRight)
+        self.history_tabs.addTab(self.batches_page, "")
         self.history_tabs.addTab(self.history, "")
         self.history_tabs.addTab(self.audit_page, "")
         self.history_tabs.addTab(self.alarm_page, "")
+        # QTabWidget reserves its corner from sizeHint(). A bare button's
+        # language-specific hint can be smaller than its fixed touch area.
+        report_corner = QWidget()
+        report_layout = QHBoxLayout(report_corner)
+        report_layout.setContentsMargins(0, 0, 0, 0)
+        report_layout.addWidget(self.history.export_button)
+        self.history_tabs.setCornerWidget(report_corner, Qt.Corner.TopRightCorner)
+        self.history.export_button.show()
         self.history_tabs.currentChanged.connect(self._history_tab_changed)
+        self.records_filters = RecordsFilters(
+            bridge.application.history, bridge.application.identity
+        )
+        self.records_filters.changed.connect(self._records_filter_changed)
+        self.batches_page.filter_bar.insertWidget(0, self.records_filters)
         self._history_access()
         if self.communication.reporting_panel is not None:
             self.communication.reporting_panel.update_state(self.snapshot.state)
@@ -557,6 +585,7 @@ class MainWindow(QMainWindow):
         self._render()
 
     def _history_access(self) -> None:
+        self.records_filters.identity_changed()
         self.audit_page.clear()
         self.alarm_page.clear()
         identity = self.bridge.application.identity
@@ -564,27 +593,117 @@ class MainWindow(QMainWindow):
         allowed = role >= Role.ENGINEER
         alarms = role >= Role.OPERATOR
         index = self.history_tabs.currentIndex()
-        if (index == 1 and not allowed) or (index == 2 and not alarms):
+        if (index == 2 and not allowed) or (index == 3 and not alarms):
             self.history_tabs.setCurrentIndex(0)
-        self.history_tabs.setTabEnabled(1, allowed)
-        self.history_tabs.setTabEnabled(2, alarms)
-        if allowed and self.history_tabs.currentIndex() == 1:
+        self.history_tabs.setTabEnabled(2, allowed)
+        self.history_tabs.setTabEnabled(3, alarms)
+        if allowed and self.history_tabs.currentIndex() == 2:
             self.audit_page.refresh()
-        if alarms and self.history_tabs.currentIndex() == 2:
+        if alarms and self.history_tabs.currentIndex() == 3:
             self.alarm_page.refresh()
+
+    def _records_filter_changed(self) -> None:
+        if self.history.report_dialog is not None:
+            self.history.report_dialog.reject()
+        for page in (self.batches_page, self.history, self.audit_page, self.alarm_page):
+            page.scope = self.records_filters.scope
+        self._history_tab_changed(self.history_tabs.currentIndex())
 
     def _history_tab_changed(self, index: int) -> None:
-        if index == 1:
-            self.audit_page.refresh()
+        page = (self.batches_page, self.history, self.audit_page, self.alarm_page)[
+            index
+        ]
+        # One set of controls/state occupies the same first row in each tab.
+        # Reparenting preserves QTabWidget's native tabs and Export corner.
+        page.filter_bar.insertWidget(0, self.records_filters)
+        self.records_filters.show()
+        self._report_context()
+        if index == 0:
+            self.batches_page.refresh()
         elif index == 2:
+            self.audit_page.refresh()
+        elif index == 3:
             self.alarm_page.refresh()
         else:
-            self.history.activate()
+            self.history.refresh()
+
+    def _report_context(self) -> None:
+        index = self.history_tabs.currentIndex()
+        selected = self.batches_page.selected_batch if index == 0 else None
+        audit = (
+            AuditReportRequest(
+                self.records_filters.scope, self.audit_page.accounts.selected
+            )
+            if index == 2
+            else None
+        )
+        alarm = (
+            AlarmReportRequest(
+                self.records_filters.scope,
+                str(self.alarm_page.kind.currentData() or ""),
+            )
+            if index == 3
+            else None
+        )
+        changed = (
+            self.history.export_requires_batch != (index == 0)
+            or self.history.export_available != (index in (0, 1, 2, 3))
+            or self.history.export_batch != selected
+            or self.history.export_audit != audit
+            or self.history.export_alarm != alarm
+        )
+        if changed and self.history.report_dialog is not None:
+            self.history.report_dialog.reject()
+        self.history.export_available = index in (0, 1, 2, 3)
+        self.history.export_requires_batch = index == 0
+        self.history.export_batch = selected
+        self.history.export_audit = audit
+        self.history.export_audit_label = self.records_filters.label
+        self.history.export_alarm = alarm
+        self.history.export_alarm_label = self.records_filters.label
+        self.history.identity_changed()
 
     def _history_language(self) -> None:
-        self.history_tabs.setTabText(0, text("audit_inspection", self.language))
-        self.history_tabs.setTabText(1, text("audit_trail", self.language))
-        self.history_tabs.setTabText(2, text("alarm_history", self.language))
+        self.records_filters.set_language(self.language)
+        colors = theme_colors(self)
+        for index, (caption, destination, icon) in enumerate(
+            (
+                (
+                    "records_batches",
+                    "records_batches",
+                    shell_icon("folder", colors.primary),
+                ),
+                (
+                    "records_inspection",
+                    "audit_inspection",
+                    shell_icon("brand", colors.primary),
+                ),
+                (
+                    "records_audit",
+                    "audit_trail",
+                    production_icon("cycles", colors.primary),
+                ),
+                (
+                    "records_alarms",
+                    "alarm_history",
+                    production_icon("FAULT", colors.primary),
+                ),
+            )
+        ):
+            name = text(destination, self.language)
+            label = text(caption, self.language)
+            self.history_tabs.setTabText(index, label)
+            # The long destination may use English fallback. Keep an elided
+            # tab's full native caption available in that case.
+            tip = (
+                label
+                if self.language != "en" and name == text(destination, "en")
+                else name
+            )
+            self.history_tabs.setTabToolTip(index, tip)
+            self.history_tabs.tabBar().setAccessibleTabName(index, label)
+            self.history_tabs.setTabIcon(index, icon)
+        self.batches_page.set_language(self.language)
         self.alarm_page.set_language(self.language)
         self.audit_page.set_language(self.language)
 
@@ -622,7 +741,13 @@ class MainWindow(QMainWindow):
         if index == 4:
             self.open_vision()
         if index == 3:
-            self._history_tab_changed(self.history_tabs.currentIndex())
+            if (
+                self.pages.currentWidget() is not self.history_tabs
+                and self.history_tabs.currentIndex() != 0
+            ):
+                self.history_tabs.setCurrentIndex(0)
+            else:
+                self._history_tab_changed(self.history_tabs.currentIndex())
         if index == 0:
             self.production_recipes.reload()
         self.pages.setCurrentIndex(index)
@@ -1045,7 +1170,7 @@ class MainWindow(QMainWindow):
             or selection.batch_pending
         ):
             return
-        dialog = BatchDialog(selection, self.language, self)
+        dialog = BatchDialog(selection, self.language, self, self.bridge.application)
         try:
             if dialog.exec():
                 if dialog.action == "clear":
@@ -1053,7 +1178,12 @@ class MainWindow(QMainWindow):
                 elif dialog.action == "end":
                     self.bridge.end_batch(revision, selection.batch_uuid)
                 else:
-                    self.bridge.start_batch(dialog.label.text(), revision)
+                    self.bridge.start_batch(
+                        dialog.label.text(),
+                        revision,
+                        expected=dialog.expected,
+                        information=dialog.information,
+                    )
         finally:
             dialog.deleteLater()
 
@@ -1191,6 +1321,7 @@ class MainWindow(QMainWindow):
             )
 
     def _render(self) -> None:
+        self.batches_page.refresh_state(self.snapshot)
         self.production_recipes.refresh_state()
         colors = theme_colors(self)
         self.navbar.present(self.language, self.theme, self.pages.currentIndex())
@@ -1886,8 +2017,7 @@ class MainWindow(QMainWindow):
             watched is self.centralWidget()
             and event.type() is QEvent.Type.LayoutRequest
         ):
-            # The second navigation row must not squeeze existing page controls
-            # when a short window or larger text needs more vertical space.
+            # Keep page controls usable when larger fonts need vertical space.
             self.setMinimumHeight(
                 max(Style.minimum[1], self.minimumSizeHint().height())
             )
@@ -1933,6 +2063,8 @@ class MainWindow(QMainWindow):
             self.bridge.detach()
             self.identity_controls.dispose()
             self.communication.dispose()
+            self.batches_page.dispose()
+            self.records_filters.dispose()
             self.history.dispose()
             self.audit_page.dispose()
             self.alarm_page.dispose()

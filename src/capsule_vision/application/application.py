@@ -22,8 +22,11 @@ from capsule_vision.localization.languages import Language
 
 from .alarm_monitor import AlarmMonitor, AlarmSnapshot
 from .alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
+from .alarm_report import AlarmReportRequest
 from .audit import AuditOperation, error_outcome
+from .audit_report import AuditReportRequest
 from .batch_records import BatchSelection, ReportBatches
+from .batch_review import BatchInformation, BatchSetup, StartAccount
 from .history import HistoryContext, ProductionHistory
 from .identity import LocalIdentity
 from .identity_models import Role, SessionSnapshot, StaleSessionError
@@ -48,6 +51,7 @@ from .models import (
     ProductionApplicationSnapshot,
     ProductionCounters,
 )
+from .report_scope import DefectScope, HistoryQuery, ReportRequest
 from .session import ProductionCycle, RuntimeSession, lifecycle_error
 from .vision_dependencies import VisionPreparationRequired
 
@@ -414,41 +418,64 @@ class ProductionApplication:
                 raise ApplicationStateError("History unavailable")
             return self.history.report_batches(prefix, cursor, previous)
 
+    def defect_report_scope(
+        self, filters: HistoryQuery, *, revision: int | None = None
+    ) -> Future[DefectScope]:
+        with self._condition, self._admission(Role.OPERATOR, revision):
+            if self.history is None:
+                raise ApplicationStateError("History unavailable")
+            return self.history.defect_report_scope(filters)
+
     def export_report(
         self,
-        batch: str,
+        batch: str | ReportRequest | AuditReportRequest | AlarmReportRequest,
         path: Path,
         language: Language,
         *,
         revision: int | None = None,
         cancel: Event | None = None,
     ) -> Future[Path]:
-        with self._condition, self._admission(Role.OPERATOR, revision) as actor:
+        minimum = (
+            Role.ENGINEER if isinstance(batch, AuditReportRequest) else Role.OPERATOR
+        )
+        with self._condition, self._admission(minimum, revision) as actor:
             history = self.history
-            if history is None:
+            if isinstance(batch, AuditReportRequest):
+                if self.identity is None:
+                    raise ApplicationStateError("Audit unavailable")
+            elif history is None:
                 raise ApplicationStateError("History unavailable")
             if self._export_thread is not None and self._export_thread.is_alive():
                 raise ApplicationStateError(
                     "A production report is already being exported"
                 )
-            if path.suffix.lower() != ".xlsx":
-                raise ValueError("Select an .xlsx file")
+            if path.suffix.lower() not in (".xlsx", ".pdf"):
+                raise ValueError("Select an .xlsx or .pdf file")
             actor_revision = actor.revision if actor else None
             stop = cancel if cancel is not None else Event()
             future = _promise(Future[Path]())
 
-            def admit_publication() -> None:
-                with self._condition, self._admission(Role.OPERATOR, actor_revision):
+            @contextmanager
+            def admit_publication() -> Generator[None]:
+                with self._condition, self._admission(minimum, actor_revision):
                     if stop.is_set():
                         raise CancelledError()
+                    yield
 
             def export() -> None:
                 try:
-                    # The optional operation loads the spreadsheet library on its own worker.
+                    # Load document libraries only on the export worker.
                     from .production_report import write_report
 
                     write_report(
-                        history, batch, path, language, stop, admit_publication
+                        history,
+                        batch,
+                        path,
+                        language,
+                        stop,
+                        admit_publication,
+                        identity=self.identity,
+                        revision=actor_revision,
                     )
                 except BaseException as exc:
                     future.set_exception(exc)
@@ -463,9 +490,75 @@ class ProductionApplication:
             return future
 
     def start_batch(
-        self, batch_id: str, *, revision: int | None = None
+        self,
+        batch_id: str,
+        *,
+        revision: int | None = None,
+        expected: BatchSetup | None = None,
+        information: BatchInformation | None = None,
     ) -> Future[None]:
-        return self._change_batch(batch_id.strip(), revision)
+        if (expected is None) != (information is None):
+            raise ValueError("Batch setup requires the original information")
+        return self._change_batch(
+            batch_id.strip(), revision, setup=expected, information=information
+        )
+
+    def update_batch_information(
+        self,
+        batch: str,
+        expected: BatchInformation,
+        requested: BatchInformation,
+        *,
+        revision: int | None = None,
+    ) -> Future[None]:
+        action = "batch.information"
+        with (
+            self._condition,
+            self._admission(
+                Role.OPERATOR, revision, action=action, target=batch
+            ) as actor,
+        ):
+            self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
+            if self.history is None or self._restoring or self._batch_pending:
+                raise ApplicationStateError("Batch editing is unavailable")
+            identity = self.identity
+            admitted = actor.revision if actor is not None else None
+
+            @contextmanager
+            def authorize(label: str, actual: BatchInformation) -> Generator[None]:
+                # Audit and SQLite work run on their own workers. Reserve the Batch
+                # change until commit so Start cannot race the off-dispatch edit.
+                before, after = actual.changes(requested)
+                with (
+                    identity.change(
+                        action, label, admitted, before, after, role=Role.OPERATOR
+                    )
+                    if identity
+                    else nullcontext()
+                ):
+                    with self._condition:
+                        self._require(
+                            ApplicationState.UNCONFIGURED, ApplicationState.READY
+                        )
+                    yield
+
+            done = _promise(Future[None]())
+            self._batch_pending = True
+            change = self.history.update_batch_information(
+                batch, expected, requested, authorize
+            )
+
+        def finished(result: Future[None]) -> None:
+            error = result.exception()
+            with self._condition:
+                self._batch_pending = False
+            if error:
+                done.set_exception(error)
+            else:
+                done.set_result(None)
+
+        change.add_done_callback(finished)
+        return done
 
     def end_batch(
         self, *, revision: int | None = None, expected_batch: str | None = None
@@ -515,7 +608,13 @@ class ProductionApplication:
                 )
 
     def _change_batch(
-        self, label: str | None, revision: int | None, expected_batch: str | None = None
+        self,
+        label: str | None,
+        revision: int | None,
+        expected_batch: str | None = None,
+        *,
+        setup: BatchSetup | None = None,
+        information: BatchInformation | None = None,
     ) -> Future[None]:
         action = "batch.select" if label is not None else "batch.end"
         with (
@@ -554,6 +653,10 @@ class ProductionApplication:
                 raise
             done: Future[None] = _promise(Future())
             if self.history is None:
+                if setup is not None:
+                    raise ApplicationStateError(
+                        "Batch information storage is unavailable"
+                    )
                 if label != self._batch:
                     self._install_batch(None)
                     self._batch = label
@@ -567,7 +670,35 @@ class ProductionApplication:
                 done.set_result(None)
                 return done
             self._batch_pending = True
-            change = self.history.select_batch(label)
+            if setup is not None and information is not None and label is not None:
+                identity = self.identity
+                admitted = actor.revision if actor is not None else None
+
+                @contextmanager
+                def authorize(target: str, actual: BatchInformation) -> Generator[None]:
+                    before, after = actual.changes(information)
+                    if identity and actual == information:
+                        with identity.admission(Role.OPERATOR, admitted):
+                            pass
+                    with (
+                        identity.change(
+                            "batch.information",
+                            target,
+                            admitted,
+                            before,
+                            after,
+                            role=Role.OPERATOR,
+                        )
+                        if identity and actual != information
+                        else nullcontext()
+                    ):
+                        with self._condition:
+                            self._require(ApplicationState.READY)
+                        yield
+
+                change = self.history.setup_batch(label, setup, information, authorize)
+            else:
+                change = self.history.select_batch(label)
 
         def confirmed(future: Future[BatchSelection | None]) -> None:
             error = future.exception()
@@ -1194,6 +1325,11 @@ class ProductionApplication:
                             run_id,
                             ConfigurationIdentity.from_prepared(prepared),
                             self._run_reporting(),
+                            StartAccount(
+                                start_operation.actor_id, start_operation.username
+                            )
+                            if start_operation
+                            else None,
                         )
                         try:
                             recording.result()

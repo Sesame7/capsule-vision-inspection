@@ -16,6 +16,7 @@ from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_da
 from capsule_vision.application import ProductionApplication
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.audit import (
+    AuditAccount,
     AuditOperation,
     AuditQuery,
     AuditTrail,
@@ -95,6 +96,47 @@ os._exit(23)
         (row,) = audit.page(AuditQuery(actor="Lin", action="plc.write")).result(WAIT)
         assert row.outcome == "success" and row.detail == "ACK"
         assert not audit.page(AuditQuery(since="9999", actor="Lin")).result(WAIT)
+    finally:
+        audit.close()
+
+
+def test_historical_account_discovery_and_exact_selection(tmp_path: Path) -> None:
+    audit = AuditTrail(tmp_path / "audit.sqlite3", lambda _: 1)
+    try:
+        accounts = [AuditAccount(f"id-{i}", f"Archived {i:03}") for i in range(65)]
+        accounts.extend(
+            (
+                AuditAccount("same-id", "Historical name"),
+                AuditAccount("other", "same-id"),
+                AuditAccount("percent", "Past % operator"),
+            )
+        )
+        for account in accounts:
+            for action in ("recipe.save", "session.login"):
+                audit.record(
+                    AuditOperation(account.actor_id, account.username, action, "saved"),
+                    "success",
+                )
+            audit.page(AuditQuery()).result(
+                WAIT
+            )  # Keep fixture writes within the real queue bound.
+        first = audit.accounts().result(WAIT)
+        assert len(first) == 51
+        rest = audit.accounts(cursor=first[49].cursor).result(WAIT)
+        assert set(first[:50] + rest) == set(accounts)
+        assert audit.accounts("Archived 064").result(WAIT) == (accounts[64],)
+        assert audit.accounts("%").result(WAIT) == (accounts[-1],)
+        selected = AuditAccount("same-id", "Historical name")
+        records = audit.page(AuditQuery(account=selected)).result(WAIT)
+        assert len(records) == 2 and {r.operation.action for r in records} == {
+            "recipe.save",
+            "session.login",
+        }
+        assert all(
+            r.operation.actor_id == "same-id"
+            and r.operation.username == "Historical name"
+            for r in records
+        )
     finally:
         audit.close()
 
@@ -182,11 +224,14 @@ def test_manual_command_records_original_actor_after_logout_and_fences_queued_re
         holding = identity.audit.intent(AuditOperation.by(actor, "hold", "fixture"))
         assert entered.wait(WAIT)
         queued = identity.audit_page(AuditQuery())
+        queued_accounts = identity.audit.accounts()
         identity.logout()
         release.set()
         holding.result(WAIT)
         with pytest.raises(StaleSessionError):
             queued.result(WAIT)
+        with pytest.raises(StaleSessionError):
+            queued_accounts.result(WAIT)
     finally:
         release.set()
         close(startup.application)

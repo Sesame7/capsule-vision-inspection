@@ -11,6 +11,7 @@ from capsule_vision.application import (
     ProductionApplicationSnapshot,
 )
 from capsule_vision.application.basler_connection import SourceConnectionCommands
+from capsule_vision.application.batch_review import BatchInformation, BatchSetup
 from capsule_vision.application.image_archive import (
     ArchiveSnapshot,
     ImageArchiveCommands,
@@ -180,9 +181,19 @@ class QtProductionBridge(QObject):
     def reset(self) -> None:
         self._immediate("reset", self.application.reset_fault)
 
-    def start_batch(self, batch_id: str, revision: int | None = None) -> None:
+    def start_batch(
+        self,
+        batch_id: str,
+        revision: int | None = None,
+        *,
+        expected: BatchSetup | None = None,
+        information: BatchInformation | None = None,
+    ) -> None:
         self._command(
-            "batch", lambda: self.application.start_batch(batch_id, revision=revision)
+            "batch",
+            lambda: self.application.start_batch(
+                batch_id, revision=revision, expected=expected, information=information
+            ),
         )
 
     def end_batch(self, revision: int | None, expected_batch: str | None) -> None:

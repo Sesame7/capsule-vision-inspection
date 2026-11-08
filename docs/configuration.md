@@ -340,8 +340,8 @@ ID in the compact detail payload. Renaming a Recipe does not relabel past cycles
 The current detail payload contains channel evidence, camera evidence and an
 optional Recipe name. Exactly three elements are required; former two-element
 payloads are unsupported and follow the existing corrupt-record query error
-behavior. A current null name remains valid and displays the existing missing-name
-Recipe ID presentation. History never looks up a current file to invent a name.
+behavior. A null name in the current format remains valid. The Inspection table
+shows a dash and exposes the stored Recipe ID in its tooltip.
 
 The same database stores the selected Production Batch, Run lifecycle and cumulative
 totals. Startup restores the selection by UUID. Labels are unique per IPC after
@@ -356,8 +356,64 @@ persist independently of this window. An optional table in supported v2/v3
 History databases associates newly published archive paths with their exact
 Run, Cycle and camera. Existing detail payloads are unchanged. Paths expire
 with detail; the [archived PNGs](architecture.md#image-archiving) have separate ownership.
-The manual [production report](architecture.md#production-history) reads these
-records for one saved Batch and writes an operator-selected `.xlsx` file.
+The History owner adds companion tables for durable Run position summaries,
+Run start accounts, named Batch
+information and observed inspection spans on supported v2/v3 stores. Existing
+Run rows and Batch identities keep their original values. Old Runs without
+account evidence show a dash. New completion observations extend the stored
+Batch span independently of detail retention. Product name and specification
+each accept up to 96 printable characters, and notes accept up to 384.
+Run summaries use the existing eligible-group transaction and survive detail
+expiry. Legacy recovery requires complete retained evidence reconciled to the
+named Batch's durable totals; missing coverage stays unavailable. This addition
+does not change the v2/v3 version or Run Batch-nullability rules. See the
+[accounting contract](architecture.md#production-history) for completeness and
+unbatched behavior.
+The same owner initializes scalar classification companion tables on supported
+v2/v3 History before retention. Per-Cycle and per-group rows expire with their
+parent detail. Batch and Run category counts and coverage persist independently;
+Run category counts use the eligible group's transaction and final NG channels.
+Traditional customer categories collapse to Length/Color before position counting;
+ViMo labels keep their historical Model and artifact identity. Legacy Run recovery
+requires complete retained group classification reconciled to an independently
+known durable Run summary. Missing coverage stays unavailable, without deriving
+Run categories from Batch aggregates or current Models. The manual
+[production report](architecture.md#production-history) writes a selected
+Batch production summary or Inspection defect-category summary to an
+operator-selected `.pdf` (default) or `.xlsx` file. Whole-Batch totals ignore
+discovery filters. Inspection with an exact selected Batch exports its entire
+durable classification and all associated Runs in one table. Without a named
+Batch selection, Inspection uses its effective filters across all matching pages;
+position counting requires a complete attributable group scope, otherwise only
+Detection Count is available. Format, basis and independently selected
+Chinese/English report language apply to that export only. The existing save dialog
+suggests the localized report type, known selected Batch label when available and
+local time at dialog opening; unsafe filename characters are replaced and long
+suggestions are bounded without modifying stored labels. The operator can change
+the filename/path, and the existing overwrite confirmation and atomic publication
+rules remain. PDF-only export workstation/reference metadata has no saved setting
+or separate identity store; see the [report contract](architecture.md#production-history).
+The first-page **System Generated** mark is fixed presentation. The engineering
+renderer can explicitly mark sample PDFs; normal application exports never enable
+SAMPLE and there is no customer watermark preference.
+Reports do not append
+Cycle/group/channel detail or change persisted accounting.
+The Audit tab uses the same compact export dialog, with Engineer-level service
+authorization. Its PDF/Excel report contains every operation matching the effective
+date, exact Batch-association and historical-account filters, not just the visible
+page. Audit and necessary History association evidence are frozen by their existing
+owners. Empty results do not publish a file; cancellation or a superseded session
+cannot replace an existing destination. Output choices are not saved preferences
+and export does not change Audit evidence. See the
+[Audit contract](architecture.md#audit-trail) and
+[report contract](architecture.md#production-history) for association and publication
+limits. The Alarms tab exports every retained event matching its shared dates,
+exact persisted Batch association and category filter, with Operator-level
+authorization. Its PDF/Excel content preserves observed states, transitions and
+meaningful recorded details without inferring alarm durations or missing recoveries.
+The existing History owner freezes this scope; the same session/cancellation and
+safe-publication checks apply. Output choices do not change alarm preferences or
+stored events. See the [Alarm contract](architecture.md#alarm-monitoring-and-history).
 History has no retention settings or JSON preferences. Isolated demonstration
 compositions may omit persistence. See
 [ownership and bounds](architecture.md#production-history) for shutdown, loss
