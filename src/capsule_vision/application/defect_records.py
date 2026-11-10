@@ -180,7 +180,7 @@ def record_cycle(
 def reconcile(db: sqlite3.Connection, run: str, cycle: int) -> None:
     group = db.execute(
         """
-        SELECT g.first_cycle,g.final_channels, r.batch FROM group_members m
+        SELECT g.first_cycle,g.final_channels,r.batch,r.reporting_mode FROM group_members m
         JOIN plc_groups g USING(run,first_cycle) JOIN runs r ON r.uuid=m.run
         LEFT JOIN group_classification done USING(run,first_cycle)
         WHERE m.run=? AND m.cycle=? AND done.run IS NULL""",
@@ -188,7 +188,9 @@ def reconcile(db: sqlite3.Connection, run: str, cycle: int) -> None:
     ).fetchone()
     if group is None:
         return
-    first, encoded, batch = group
+    first, encoded, batch, mode = group
+    # Before single_cycle existed, every admitted group fact had four members.
+    size = 1 if mode == "single_cycle" else 4
     members = db.execute(
         """
         SELECT e.channel_mask,e.complete,e.findings,c.model_id,c.model_sha FROM group_members m
@@ -199,7 +201,11 @@ def reconcile(db: sqlite3.Connection, run: str, cycle: int) -> None:
     ).fetchall()
     finals: dict[int, str] = dict(json.loads(encoded))
     mask = sum(1 << (ch - 1) for ch in finals)
-    if len(members) != 4 or any(m[0] != mask or not m[1] for m in members):
+    if (
+        not size
+        or len(members) != size
+        or any(m[0] != mask or not m[1] for m in members)
+    ):
         return
     hits: set[tuple[int, str, str, str, str]] = set()
     for _, _, data, model, sha in members:

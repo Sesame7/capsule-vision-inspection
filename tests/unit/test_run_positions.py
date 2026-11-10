@@ -25,12 +25,12 @@ from capsule_vision.communication.reporting import (
 )
 
 
-def fact(first: int, cameras: int) -> CompletedReportingBatch:
+def fact(first: int, cameras: int, size: int = 4) -> CompletedReportingBatch:
     reports = tuple(
         FirstStationReport.from_result(
             1, mixed_result(first + slot, camera_count=cameras)
         )
-        for slot in range(4)
+        for slot in range(size)
     )
     return CompletedReportingBatch(
         reports[0].identity, 7, reports, reports[0].reject_words, 125
@@ -38,23 +38,27 @@ def fact(first: int, cameras: int) -> CompletedReportingBatch:
 
 
 @pytest.mark.parametrize("cameras", [5, 6])
+@pytest.mark.parametrize("mode", [ReportingMode.SINGLE_CYCLE, ReportingMode.FOUR_CYCLE])
 def test_run_and_batch_counts_share_dedup_restart_and_expiry(
-    tmp_path: Path, cameras: int
+    tmp_path: Path, cameras: int, mode: ReportingMode
 ) -> None:
     path = tmp_path / "history.sqlite3"
     now = 2_000_000_000.0
     owner = ProductionHistory(path, clock=lambda: now)
-    group = fact(11, cameras)
+    size = mode.group_size
+    assert size is not None
+    settings = replace(FOUR_CYCLE, mode=mode)
+    group = fact(11, cameras, size)
     expected = PilotCounters().completed(group)
     try:
         batch = owner.select_batch("Lot A").result(WAIT)
         assert batch
         for run in ("first", "second"):
-            owner.start_run(batch.uuid, run, RECIPE, FOUR_CYCLE).result(WAIT)
+            owner.start_run(batch.uuid, run, RECIPE, settings).result(WAIT)
             owner.offer_group(run, group)
             owner.offer_group(run, group)
             context = HistoryContext(now, batch.uuid, batch.label, run, RECIPE)
-            for cycle in (14, 11, 12, 13):
+            for cycle in (14, 11, 12, 13) if size == 4 else (11,):
                 assert owner.offer(context, mixed_result(cycle, camera_count=cameras))
             if run == "second":
                 now += 31 * 86400
@@ -67,7 +71,7 @@ def test_run_and_batch_counts_share_dedup_restart_and_expiry(
         assert review.batch.totals == expected.completed(group)
         assert not review.uncertain and review.expired
         owner.select_batch(None).result(WAIT)
-        owner.start_run(None, "unbatched", RECIPE, FOUR_CYCLE).result(WAIT)
+        owner.start_run(None, "unbatched", RECIPE, settings).result(WAIT)
         owner.offer_group("unbatched", group)
         owner.finish_run("unbatched", "stopped", False).result(WAIT)
         owner.select_batch("Later lot").result(WAIT)

@@ -1,0 +1,16 @@
+{
+  "version": "2026-09-05",
+  "signals": [
+    {"id": "reciprocating_axis_alarm", "bit": 0, "active_high": true, "category": "equipment", "zh": "往复轴报警", "en": "Reciprocating axis alarm"},
+    {"id": "capsule_rotation_axis_alarm", "bit": 1, "active_high": true, "category": "equipment", "zh": "转囊轴报警", "en": "Capsule rotation axis alarm"},
+    {"id": "emergency_stop", "bit": 2, "active_high": true, "category": "interlock", "zh": "急停", "en": "Emergency stop"},
+    {"id": "low_air_pressure", "bit": 3, "active_high": true, "category": "equipment", "zh": "气压低", "en": "Low air pressure"},
+    {"id": "material_shortage_stop", "bit": 4, "active_high": true, "category": "interlock", "zh": "缺料停机", "en": "Stopped for lack of material"},
+    {"id": "reciprocating_stroke_unset", "bit": 5, "active_high": true, "category": "startup", "zh": "往复轴行程未设置", "en": "Reciprocating axis stroke not set"},
+    {"id": "transfer_valve_phase_unset", "bit": 6, "active_high": true, "category": "startup", "zh": "输送阀动作相位未设置", "en": "Transfer valve actuation phase not set"},
+    {"id": "homing_required", "bit": 7, "active_high": true, "category": "startup", "zh": "未寻零，禁止启动", "en": "Start inhibited: homing required"},
+    {"id": "inspection_not_enabled", "bit": 8, "active_high": true, "category": "startup", "zh": "未开启检测，禁止启动", "en": "Start inhibited: inspection not enabled"},
+    {"id": "software_offline", "bit": 9, "active_high": true, "category": "software", "zh": "软件掉线", "en": "Software offline"},
+    {"id": "software_alarm", "bit": 10, "active_high": true, "category": "software", "zh": "软件报警", "en": "Software alarm"}
+  ]
+}

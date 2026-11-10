@@ -1,0 +1,11 @@
+{
+  "version": "example-alternate-6",
+  "signals": [
+    {"id": "reciprocating_axis_alarm", "bit": 0, "active_high": true, "category": "equipment", "zh": "往复驱动故障", "en": "Reciprocating drive fault", "translations": {"de": "Hubantrieb gestört"}},
+    {"id": "guard_open", "bit": 2, "active_high": false, "category": "interlock", "zh": "防护门未关闭", "en": "Guard door open", "translations": {"de": "Schutztür offen"}},
+    {"id": "low_air_pressure", "bit": 5, "active_high": false, "category": "equipment", "zh": "供气压力不足", "en": "Supply pressure low", "translations": {"de": "Versorgungsdruck zu niedrig"}},
+    {"id": "feeder_fault", "bit": 8, "active_high": true, "category": "equipment", "zh": "供料器故障", "en": "Feeder fault"},
+    {"id": "homing_required", "bit": 12, "active_high": true, "category": "startup", "zh": "等待回零", "en": "Awaiting homing", "translations": {"de": "Referenzfahrt erforderlich"}},
+    {"id": "cooling_fault", "bit": 15, "active_high": true, "category": "equipment", "zh": "冷却装置故障", "en": "Cooling unit fault"}
+  ]
+}

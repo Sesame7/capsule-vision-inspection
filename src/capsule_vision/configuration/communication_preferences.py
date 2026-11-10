@@ -14,6 +14,7 @@ from capsule_vision.communication.endpoints import (
     FinsUdpEndpoint,
     validate_endpoint,
 )
+from capsule_vision.communication.fins import FinsMemoryArea, validate_word_range
 from capsule_vision.communication.modbus_tcp import ModbusSettings
 from capsule_vision.communication.reporting import (
     ReportingMode,
@@ -54,26 +55,45 @@ class WebPreferences:
 
 
 @dataclass(frozen=True, slots=True)
-class AlarmPreferences:
+class StatusPreferences:
     enabled: bool = False
-    station: int = 1
     endpoint: FinsTcpEndpoint = FinsTcpEndpoint()
+    word_address: int = 18
+    heartbeat_address: int = 46
+    fault_address: int = 47
 
     def __post_init__(self) -> None:
-        if (
-            type(self.enabled) is not bool
-            or type(self.station) is not int
-            or self.station not in (1, 2)
-        ):
-            raise ValueError("Expected alarm enabled flag and station 1 or 2")
+        if type(self.enabled) is not bool:
+            raise ValueError("Expected status enabled flag")
         if not isinstance(validate_endpoint(self.endpoint), FinsTcpEndpoint):
-            raise ValueError("Alarm monitoring requires FINS/TCP")
+            raise ValueError("PLC status requires FINS/TCP")
         if self.endpoint.timeout > 1.0:
-            raise ValueError("Alarm monitor timeout must be at most one second")
+            raise ValueError("PLC status timeout must be at most one second")
+        addresses = (self.word_address, self.heartbeat_address, self.fault_address)
+        for address in addresses:
+            validate_word_range(address, 1, 1, FinsMemoryArea.W)
+        if len(set(addresses)) != 3:
+            raise ValueError("PLC status addresses must be distinct")
 
-    @property
-    def address(self) -> int:
-        return 18 if self.station == 1 else 118
+    def validate_reporting(self, settings: ReportingSettings) -> None:
+        """Reserve the configured FINS reporting window, including group counter."""
+        endpoint = settings.endpoint
+        if isinstance(endpoint, ModbusSettings) or (endpoint.host, endpoint.port) != (
+            self.endpoint.host,
+            self.endpoint.port,
+        ):
+            return
+        base = settings.require_base_address()
+        start = base if settings.mode is ReportingMode.PER_CYCLE else base - 1
+        if any(
+            start <= address < base + 4
+            for address in (
+                self.word_address,
+                self.heartbeat_address,
+                self.fault_address,
+            )
+        ):
+            raise ValueError("PLC status ranges overlap automatic reporting")
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +107,11 @@ class CommunicationPreferences:
     )
     diagnostic: Endpoint = FinsTcpEndpoint()
     web: WebPreferences = WebPreferences(enabled=False)
-    alarm: AlarmPreferences = AlarmPreferences()
+    status: StatusPreferences = StatusPreferences()
+
+    def __post_init__(self) -> None:
+        if self.reporting.enabled and self.status.enabled:
+            self.status.validate_reporting(self.reporting.settings)
 
 
 # Existing documents, including {}, must keep their original UDP interpretation.
@@ -187,34 +211,54 @@ def _reporting(value: dict[str, object]) -> ReportingSettings:
     )
 
 
-def _alarm(value: object) -> AlarmPreferences:
-    alarm = _object(
+def _status(value: object) -> StatusPreferences:
+    status = _object(
         value,
-        {"enabled", "station", "protocol", "host", "port", "timeout"},
-        "alarm",
+        {
+            "enabled",
+            "word_address",
+            "heartbeat_address",
+            "fault_address",
+            "protocol",
+            "host",
+            "port",
+            "timeout",
+        },
+        "status",
     )
+    if "fault_address" not in status:
+        raise ValueError("status.fault_address is required")
     endpoint = _endpoint(
         {
             "protocol": "fins_tcp",
-            **{k: v for k, v in alarm.items() if k not in ("enabled", "station")},
+            **{
+                k: v
+                for k, v in status.items()
+                if k
+                not in ("enabled", "word_address", "heartbeat_address", "fault_address")
+            },
         }
     )
     if not isinstance(endpoint, FinsTcpEndpoint):
-        raise ValueError("Alarm monitoring requires FINS/TCP")
-    return AlarmPreferences(
-        _boolean(alarm.get("enabled", False), "alarm.enabled"),
-        _integer(alarm.get("station", 1), "alarm.station"),
+        raise ValueError("PLC status requires FINS/TCP")
+    return StatusPreferences(
+        _boolean(status.get("enabled", False), "status.enabled"),
         endpoint,
+        _integer(status.get("word_address", 18), "status.word_address"),
+        _integer(status.get("heartbeat_address", 46), "status.heartbeat_address"),
+        _integer(status["fault_address"], "status.fault_address"),
     )
 
 
 def load_communication_preferences(
-    path: Path, *, alarm_error: Callable[[str], None] | None = None
+    path: Path, *, status_error: Callable[[str], None] | None = None
 ) -> CommunicationPreferences:
     """Missing/invalid files are reported; the startup owner chooses recovery."""
     try:
         raw = read_json(path, duplicate_message="Duplicate field: {key}")
-        obj = _object(raw, {"reporting", "diagnostic", "web", "alarm"}, "communication")
+        obj = _object(
+            raw, {"reporting", "diagnostic", "web", "status"}, "communication"
+        )
         reporting = _object(
             obj.get("reporting", {}),
             {
@@ -234,19 +278,24 @@ def load_communication_preferences(
         web = _object(
             obj.get("web", {}), {"enabled", "host", "port", "interval_ms"}, "web"
         )
+        selected_reporting = ReportingSelection(
+            _boolean(reporting.get("enabled", False), "reporting.enabled"),
+            _reporting(reporting),
+        )
         try:
-            alarm = _alarm(obj.get("alarm", {}))
+            status = _status(obj["status"]) if "status" in obj else StatusPreferences()
+            if selected_reporting.enabled and status.enabled:
+                status.validate_reporting(selected_reporting.settings)
         except (ValueError, TypeError) as exc:
-            if alarm_error is None:
+            if status_error is None:
                 raise
-            alarm_error(f"Invalid alarm settings {path}: {exc}")
-            alarm = AlarmPreferences()
+            status_error(f"Invalid PLC status settings {path}: {exc}")
+            status = StatusPreferences()
+            # Preserve valid reporting without creating a conflicting service.
+            # The returned selection remains disabled; loading does not repair disk.
         defaults = _PERSISTED_DEFAULTS
         return CommunicationPreferences(
-            ReportingSelection(
-                _boolean(reporting.get("enabled", False), "reporting.enabled"),
-                _reporting(reporting),
-            ),
+            selected_reporting,
             _endpoint(obj.get("diagnostic", {})),
             WebPreferences(
                 _boolean(web.get("enabled", defaults.web.enabled), "web.enabled"),
@@ -256,7 +305,7 @@ def load_communication_preferences(
                     web.get("interval_ms", defaults.web.interval_ms), "web.interval_ms"
                 ),
             ),
-            alarm,
+            status,
         )
     except OSError as exc:
         raise ConfigurationIOError(
@@ -322,12 +371,15 @@ def save_communication_preferences(path: Path, value: CommunicationPreferences) 
     }
     if web:
         payload["web"] = web
-    if value.alarm != defaults.alarm:
-        payload["alarm"] = {
-            **_endpoint_json(value.alarm.endpoint),
-            "station": value.alarm.station,
-            "enabled": value.alarm.enabled,
+    if value.status != defaults.status:
+        status: dict[str, object] = {
+            **_endpoint_json(value.status.endpoint),
+            "word_address": value.status.word_address,
+            "heartbeat_address": value.status.heartbeat_address,
+            "fault_address": value.status.fault_address,
+            "enabled": value.status.enabled,
         }
+        payload["status"] = status
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")

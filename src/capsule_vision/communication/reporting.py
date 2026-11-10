@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from threading import Condition, Thread, current_thread
 from time import perf_counter
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inspection import CycleId, CycleStatus
@@ -44,7 +44,15 @@ from .operations import CommunicationRequest
 
 class ReportingMode(Enum):
     PER_CYCLE = "per_cycle"
+    SINGLE_CYCLE = "single_cycle"
     FOUR_CYCLE = "four_cycle"
+
+    @property
+    def group_size(self) -> Literal[1, 4] | None:
+        """Only attributed PLC modes have physical group membership."""
+        return (
+            1 if self is self.SINGLE_CYCLE else 4 if self is self.FOUR_CYCLE else None
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,15 +74,15 @@ class ReportingSettings:
             raise ValueError("max_pending must be a positive integer")
         if type(self.mode) is not ReportingMode:
             raise ValueError("Unsupported reporting mode")
-        self.validate_four_cycle()
+        self.validate_group()
 
-    def validate_four_cycle(self) -> None:
-        if self.mode is ReportingMode.FOUR_CYCLE and (
+    def validate_group(self) -> None:
+        if self.mode.group_size is not None and (
             not isinstance(self.endpoint, FinsTcpEndpoint)
             or self.base_address not in (49, 149)
         ):
             raise ValueError(
-                "Four-cycle reporting requires FINS/TCP and commit base W49 or W149"
+                "PLC group reporting requires FINS/TCP and commit base W49 or W149"
             )
 
     def require_base_address(self) -> int:
@@ -97,7 +105,7 @@ class ReportingSelection:
             raise ValueError("Reporting enabled must be bool")
         if self.enabled:
             self.settings.require_base_address()
-            self.settings.validate_four_cycle()
+            self.settings.validate_group()
 
 
 class ReportingWriteProtectedError(PermissionError):
@@ -184,7 +192,7 @@ class FirstStationReport:
 
 @dataclass(frozen=True, slots=True)
 class CompletedReportingBatch:
-    """Four eligible scalar results at the pre-write attribution boundary.
+    """One or four eligible scalar results at the pre-write attribution boundary.
 
     reject_words is the worker's existing OR projection, not a new projection.
     Completion is independent of subsequent transport success or uncertainty.
@@ -197,14 +205,14 @@ class CompletedReportingBatch:
     duration_ms: float | None = None
 
     def __post_init__(self) -> None:
-        if len(self.reports) != 4 or any(
+        if len(self.reports) not in (1, 4) or any(
             report.identity.generation != self.identity.generation
             or report.identity.cycle_id != self.identity.cycle_id + index
             or len(report.reject_words) != len(self.reject_words)
             for index, report in enumerate(self.reports)
         ):
             raise ValueError(
-                "Completed reporting group requires four consecutive same-generation/layout results"
+                "Completed reporting group requires one or four consecutive same-generation/layout results"
             )
 
 
@@ -221,6 +229,7 @@ class ReportingGroupProgress:
     reports: tuple[FirstStationReport | None, ...]
     eligible: bool = False
     invalidated: bool = False
+    group_size: Literal[1, 4] = 4
 
     def channel_states(self, channel: ChannelId) -> tuple[str, ...]:
         states: list[str] = []
@@ -238,7 +247,7 @@ class ReportingGroupProgress:
                 states.append("empty")
             else:
                 states.append("ok")
-        return tuple(states + ["pending"] * (4 - len(states)))
+        return tuple(states + ["pending"] * (self.group_size - len(states)))
 
 
 class ReportOutcome(Enum):
@@ -404,7 +413,7 @@ class FirstStationReportingWorker:
     ) -> None:
         ReportIdentity(generation, CycleId(0))
         if settings.mode is not ReportingMode.PER_CYCLE:
-            raise ValueError("Per-cycle worker cannot execute a four-cycle selection")
+            raise ValueError("Per-cycle worker cannot execute a PLC group selection")
         settings.require_base_address()  # Reject missing address before any owner/I/O.
         self.generation, self.settings = generation, settings
         self._factory = client_factory

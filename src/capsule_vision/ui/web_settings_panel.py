@@ -28,6 +28,8 @@ from .style import (
     button_width,
     production_icon,
     set_button_caption,
+    set_service_status,
+    set_service_title,
     shell_icon,
     theme_colors,
 )
@@ -56,9 +58,16 @@ class WebSettingsPanel(QFrame):
         root.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
         root.setSpacing(Style.small)
         header = QHBoxLayout()
+        header.setSpacing(Style.small)
+        self.title_icon = QLabel()
+        header.addWidget(self.title_icon)
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 18px; font-weight: 600;")
         header.addWidget(self.title)
+        self.status_indicator = QLabel()
+        header.addWidget(self.status_indicator)
+        self.actual = QLabel()
+        header.addWidget(self.actual)
         self.open_browser = QPushButton()
         self.open_browser.setMinimumHeight(Style.touch)
         self.open_browser.setMinimumWidth(0)
@@ -74,8 +83,6 @@ class WebSettingsPanel(QFrame):
         url_row.setContentsMargins(0, 0, 0, 0)
         url_row.addWidget(self.open_browser)
         header.addWidget(url_area, 1)
-        self.actual = QLabel()
-        header.addWidget(self.actual)
         self.power = QPushButton()
         self.power.setMinimumHeight(Style.touch)
         self.power.setObjectName("webPower")
@@ -221,6 +228,7 @@ class WebSettingsPanel(QFrame):
     def refresh(self) -> None:
         observed = self.runtime.snapshot() if self.runtime else None
         colors = theme_colors(self)
+        set_service_title(self.title_icon, self.title, "globe")
         presentation = (
             observed,
             self.saved,
@@ -247,10 +255,24 @@ class WebSettingsPanel(QFrame):
                 if observed.state is WebState.STOPPING
                 else "web_" + observed.state.name.lower()
             )
-        self.actual.setText("OFF" if key == "web_stopped" else text(key, self.language))
-        self.actual.setStyleSheet(
-            f"color: {colors.warning if self.operation_error or (observed is not None and (observed.state is WebState.FAILED or observed.error)) else colors.accent if self.available else colors.secondary};"
+        set_service_status(
+            self.status_indicator,
+            self.actual,
+            text(
+                {"web_stopped": "service_off", "web_failed": "service_error"}.get(
+                    key, key
+                ),
+                self.language,
+            ),
+            colors.secondary
+            if key == "web_stopped"
+            else colors.ok
+            if self.available
+            else colors.fault
+            if key == "web_failed"
+            else colors.warning,
         )
+        self.actual.setAccessibleName(text(key, self.language))
         blocked = (
             not self.can_manage
             or not self.editable

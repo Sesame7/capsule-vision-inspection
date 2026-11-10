@@ -288,6 +288,10 @@ def _changes(action: str, value: str, language: Language) -> str:
         "diagnostic": "comm_diagnostics",
         "web": "Web",
         "alarm": "alarm_monitor",
+        "status": "status_service",
+        "word_address": "status_alarm_address",
+        "heartbeat_address": "status_heartbeat",
+        "fault_address": "status_fault",
         "station": "alarm_station",
         "host": "comm_host",
         "port": "comm_port",
@@ -334,6 +338,7 @@ def _changes(action: str, value: str, language: Language) -> str:
                     "basler": "vision_basler_mode",
                     "per_cycle": "plc_mode_per_cycle",
                     "four_cycle": "plc_mode_four_cycle",
+                    "single_cycle": "plc_mode_single_cycle",
                 }
                 protocols = {
                     "FinsUdpEndpoint": "FINS/UDP",

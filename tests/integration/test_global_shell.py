@@ -50,7 +50,7 @@ def test_compact_status_roles_reserve_remaining_width_for_global_feedback(
     window, _ = screen
     before = window.bridge.application.snapshot()
     bar = window.event_frame
-    labels = (bar.state, bar.plc, bar.web)
+    labels = (bar.state, bar.plc, bar.alarm)
     parents: list[QWidget] = []
     for label in (*labels, window.event_label):
         parent = label.parentWidget()
@@ -58,6 +58,7 @@ def test_compact_status_roles_reserve_remaining_width_for_global_feedback(
         parents.append(parent)
     status_groups, event_group = parents[:3], parents[3]
     previous_window_width = previous_event_width = 0
+    minimum_feedback = 0
     fixed_geometry: dict[Language, tuple[int, ...]] = {}
     # Presentation-only captions exercise every role without opening a source,
     # dispatching a report, or creating a Web owner.
@@ -69,21 +70,21 @@ def test_compact_status_roles_reserve_remaining_width_for_global_feedback(
                 window.set_theme(theme)
                 for language in LANGUAGES:
                     window.set_language(language)
-                    for source, plc, web in (
-                        ("source_folder_status", "service_off", "service_off"),
-                        ("UNCONFIGURED", "service_next_start", "web_starting"),
-                        ("state_RUNNING", "web_running", "web_running"),
-                        ("state_FAULT", "technical_error", "technical_error"),
+                    for source, plc, alarm in (
+                        ("source_folder_status", "—", "alarm_off"),
+                        ("UNCONFIGURED", "0", "alarm_waiting"),
+                        ("state_RUNNING", "9999", "alarm_online"),
+                        ("state_FAULT", "65535", "alarm_unavailable"),
                     ):
-                        failed = plc == "technical_error"
+                        failed = plc == "65535"
                         if failed:
                             window.bridge.command_failed.emit("stop", TimeoutError())
                         else:
                             window.bridge.command_finished.emit("stop")
                         captions = (
                             text(source, language),
-                            f"PLC · {text(plc, language)}",
-                            f"Web · {text(web, language)}",
+                            f"HR 65532 · {plc}",
+                            text(alarm, language),
                         )
                         for label, caption in zip(labels, captions, strict=True):
                             label.setText(caption)
@@ -102,10 +103,8 @@ def test_compact_status_roles_reserve_remaining_width_for_global_feedback(
                             language,
                             plc,
                         )
-                        # Each language's concise states share stable budgets,
-                        # while feedback retains a useful narrow-window
-                        # region and receives every additional resize pixel.
-                        assert event_group.width() >= bar.width() // 4
+                        minimum_feedback = bar.width() // 4
+                        assert event_group.width() >= minimum_feedback
                         assert bar.height() == 44
                         assert window.width() == size[0]
                         for label, caption in zip(labels, captions, strict=True):
@@ -146,7 +145,7 @@ def test_compact_status_roles_reserve_remaining_width_for_global_feedback(
     assert bar.state.text().endswith("…")
     assert bar.state.accessibleName() == long_caption
     assert not bar.state.toolTip()
-    assert event_group.width() >= bar.width() // 4
+    assert event_group.width() >= minimum_feedback
 
 
 @pytest.mark.parametrize("language,size", [("zh", (1080, 1920)), ("en", (1920, 1080))])
@@ -164,10 +163,8 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
     timers = window.findChildren(QTimer)
     panel = window.communication.web_panel
     assert panel.runtime is None and not panel.available
-    assert window.event_frame.web.accessibleName().endswith(
-        text("service_off", language)
-    )
-    assert panel.actual.text() == "OFF"
+    assert not hasattr(window.event_frame, "web")
+    assert panel.actual.text() == text("service_off", language)
     assert not panel.power.isEnabled()
     assert panel.apply_changes.isHidden() and not panel.apply_changes.isEnabled()
     assert panel.open_browser.isHidden() and not panel.open_browser.isEnabled()
@@ -184,15 +181,13 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
             window.bridge.command_failed.emit("stop", TimeoutError("native shutdown"))
             feedback = window.event_label.toolTip()
             assert "TimeoutError" in feedback
-            for state, key in (
+            for state, _key in (
                 (WebState.STARTING, "web_starting"),
                 (WebState.RUNNING, "web_running"),
                 (WebState.STOPPING, "STOPPING"),
                 (WebState.STOPPED, "service_off"),
                 (WebState.FAILED, "technical_error"),
             ):
-                window.event_frame.web.setToolTip("stale service diagnostics")
-                window.event_frame.web_icon.setToolTip("stale URL")
                 observed[0] = WebRuntimeSnapshot(
                     state=state,
                     configuration=WebPreferences(port=8876, interval_ms=1000),
@@ -200,10 +195,15 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
                     error="bind failed" if state is WebState.FAILED else "",
                 )
                 window.bridge.timer.timeout.emit()
-                label = window.event_frame.web
-                assert label.accessibleName() == f"Web · {text(key, language)}"
+                label = panel.actual
+                assert label.accessibleName() == text(
+                    "web_" + state.name.lower()
+                    if state is not WebState.STOPPING
+                    else "STOPPING",
+                    language,
+                )
                 assert "ms" not in label.text() and "http" not in label.text()
-                assert not label.toolTip() and not window.event_frame.web_icon.toolTip()
+                assert not label.toolTip()
                 assert not window.communication.web_panel.actual.toolTip()
                 assert runtime.snapshot() == observed[0]
                 assert (
@@ -216,11 +216,8 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
             # A failed restart may restore a running owner and retain its error.
             observed[0] = replace(observed[0], state=WebState.RUNNING, restored=True)
             window.bridge.timer.timeout.emit()
-            assert (
-                window.event_frame.web.accessibleName()
-                == f"Web · {text('web_running', language)}"
-            )
-            assert not window.event_frame.web.toolTip()
+            assert panel.actual.accessibleName() == text("web_running", language)
+            assert not panel.actual.toolTip()
             assert (
                 runtime.snapshot().restored
                 and runtime.snapshot().error == "bind failed"
@@ -229,10 +226,12 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
             # Even without an error string, FAILED must not look disabled.
             observed[0] = WebRuntimeSnapshot(state=WebState.FAILED)
             window.bridge.timer.timeout.emit()
-            assert (
-                window.event_frame.web.accessibleName()
-                == f"Web · {text('technical_error', language)}"
-            )
+            assert panel.actual.text() == text("service_error", language)
+            window.bridge.command_finished.emit("stop")
+            assert text("web_failed", language) in window.event_label.toolTip()
+            observed[0] = WebRuntimeSnapshot()
+            window.bridge.timer.timeout.emit()
+            assert not window.event_label.toolTip()
             assert set(window.findChildren(QTimer)) == set(timers)
     finally:
         runtime.request_close()
@@ -270,8 +269,8 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         )
         assert window.event_frame.isVisible()
         assert window.event_frame.state.text() == window.state_label.text()
-        assert "PLC" in window.event_frame.plc.text()
-        assert "Web" in window.event_frame.web.text()
+        assert window.event_frame.plc.text() == "— · —"
+        assert not hasattr(window.event_frame, "web")
         assert not window.event_label.text() and not window.event_label.wordWrap()
         assert window.bridge.application.snapshot() == ready
         if page == 2:
@@ -300,8 +299,8 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
                 window.event_frame.state,
                 window.event_frame.plc_icon,
                 window.event_frame.plc,
-                window.event_frame.web_icon,
-                window.event_frame.web,
+                window.event_frame.alarm_icon,
+                window.event_frame.alarm,
                 window.event_label,
             ):
                 assert window.event_frame.rect().contains(
@@ -593,8 +592,10 @@ def test_reporting_observation_is_not_a_connectivity_or_application_state_claim(
         assert not window.event_frame.plc.toolTip()
         assert not window.event_frame.plc_icon.toolTip()
         assert (
-            window.event_frame.plc.accessibleName()
-            == f"PLC · {text('service_off' if outcome is ReportOutcome.ACKNOWLEDGED else 'technical_error', language)}"
+            window.event_frame.plc.accessibleName() == "— · —"
+            # A synthetic ACK with no frozen target cannot be labeled or guessed.
+            and window.event_frame.plc.accessibleDescription()
+            == text("plc_commit_observation", language)
         )
         assert window.snapshot.state is ApplicationState.READY
         assert window.bridge.application.snapshot() == before

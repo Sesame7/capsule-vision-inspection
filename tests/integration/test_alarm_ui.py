@@ -1,6 +1,6 @@
 """Guest startup monitoring, authorized saves and History in the real shell."""
 
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -8,9 +8,8 @@ from threading import Event
 from threading import enumerate as threads
 
 import pytest
-from PySide6.QtCore import QDate, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtWidgets import QApplication, QMenu
 from tests.support.application import WAIT, ReplayEngine
 from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import close_window, until
@@ -28,13 +27,18 @@ from capsule_vision.application.audit import (
     AuditQuery,
     AuditUnavailable,
 )
-from capsule_vision.application.identity_models import AuthorizationError, Role
+from capsule_vision.application.identity_models import (
+    AuthorizationError,
+    Role,
+    StaleSessionError,
+)
 from capsule_vision.application.startup import load_startup
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
+from capsule_vision.configuration import ConfigurationError
 from capsule_vision.configuration.alarm_definitions import TEMPLATE
 from capsule_vision.configuration.communication_preferences import (
-    AlarmPreferences,
     CommunicationPreferences,
+    StatusPreferences,
     load_communication_preferences,
     save_communication_preferences,
 )
@@ -49,7 +53,7 @@ def test_guest_close_waits_for_the_inflight_alarm_owner(tmp_path: Path) -> None:
         peer.hold_next("read")
         saved = replace(
             CommunicationPreferences(),
-            alarm=AlarmPreferences(True, 1, FinsTcpEndpoint(port=peer.port)),
+            status=StatusPreferences(True, FinsTcpEndpoint(port=peer.port)),
         )
         save_communication_preferences(data.communication, saved)
         app = load_startup(data).application
@@ -63,7 +67,7 @@ def test_guest_close_waits_for_the_inflight_alarm_owner(tmp_path: Path) -> None:
             peer.release.set()
             app.close().result(WAIT)
             assert app.join(WAIT)
-        assert all(t.name != "PLCAlarmMonitor" for t in threads())
+        assert all(t.name != "PLCStatusService" for t in threads())
 
 
 def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
@@ -74,11 +78,11 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
     with TcpPeer() as first, TcpPeer() as second:
         saved = replace(
             CommunicationPreferences(),
-            alarm=AlarmPreferences(True, 1, FinsTcpEndpoint(port=first.port)),
+            status=StatusPreferences(True, FinsTcpEndpoint(port=first.port)),
         )
         save_communication_preferences(data.communication, saved)
         first.set_words(18, (4,))
-        second.set_words(118, (1 << 7,))
+        second.set_words(211, (1 << 7,))
         startup = load_startup(data, engine_factory=lambda _: ReplayEngine())
         app = startup.application
         identity = app.identity
@@ -104,7 +108,7 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             for command in (app.create_alarm_definitions, app.alarm_definitions_path):
                 with pytest.raises(AuthorizationError):
                     command()
-            assert not page.alarm_file.isEnabled()
+            assert not page.alarm_panel.findChildren(QMenu)
             with pytest.raises(AuthorizationError):
                 app.alarm_page(AlarmQuery())
             with pytest.raises(AuthorizationError):
@@ -127,20 +131,20 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             app.start_batch("Batch P").result(WAIT)
             identity.login("Tech", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
-            page.alarm_create.trigger()
-            until(lambda: not page.busy)
+            with ThreadPoolExecutor(max_workers=1) as worker:
+                worker.submit(app.create_alarm_definitions).result(WAIT)
             path = app.alarm_definitions_path()
             assert path.read_bytes() == TEMPLATE.read_bytes()
-            assert text("alarm_file_created", "en") in page.preferences_status.text()
             assert len(app.alarm_page(AlarmQuery()).result(WAIT)) == 1
-            # Editing while live does not reactivate it. A different saved station does.
+            # Editing while live does not reactivate it. A saved target change does.
             content = path.read_text(encoding="utf-8").replace(
                 '"en": "Start inhibited: homing required"',
                 '"en": "Start inhibited: homing required", "translations": {"de": "Referenzfahrt erforderlich"}',
             )
             path.write_text(content, encoding="utf-8")
             page.alarm_port.setValue(second.port)
-            page.alarm_station.setCurrentIndex(1)
+            page.alarm_address.setValue(211)
+            assert page.alarm_address.value() == 211
             assert (
                 page.dirty
                 and not second.packets
@@ -149,10 +153,10 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             page.reload_settings()
             assert (
                 page.alarm_port.value() == first.port
-                and page.alarm_station.currentIndex() == 0
+                and page.alarm_address.value() == 18
             )
             page.alarm_port.setValue(second.port)
-            page.alarm_station.setCurrentIndex(1)
+            page.alarm_address.setValue(211)
             page.persist_settings()
             until(
                 lambda: (
@@ -161,7 +165,11 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
                     and app.alarm_snapshot().active[0].id == "homing_required"
                 )
             )
-            assert load_communication_preferences(data.communication).alarm.station == 2
+            assert (
+                load_communication_preferences(data.communication).status.word_address
+                == 211
+            )
+            assert app.alarm_snapshot().selection.word_address == 211
             window.set_language("de")
             until(lambda: "Referenzfahrt erforderlich" in bar.alarm.toolTip())
             assert "Referenzfahrt erforderlich" in bar.alarm.accessibleDescription()
@@ -170,7 +178,8 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             )
             assert (
                 ops[0].operation.username == "Tech"
-                and "alarm.station" in ops[0].operation.after
+                and "alarm.station" not in ops[0].operation.after
+                and "status.word_address" in ops[0].operation.after
             )
             events = app.alarm_page(AlarmQuery()).result(WAIT)
             assert events[0].event.batch_label == "Batch P"
@@ -180,7 +189,7 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             assert events[-1].event.batch_id is None
             identity.logout()
             window.identity_controls.refresh()
-            second.set_words(118, (0,))
+            second.set_words(211, (0,))
             until(
                 lambda: (
                     app.alarm_snapshot().state == "online"
@@ -190,7 +199,7 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             assert bar.height() == 44 and bar.alarm.width() == width
             page.alarm_enabled.setChecked(False)
             page.persist_settings()
-            assert load_communication_preferences(data.communication).alarm.enabled
+            assert load_communication_preferences(data.communication).status.enabled
             assert (
                 app.alarm_snapshot().state == "online"
                 and not window.history_tabs.isTabEnabled(3)
@@ -199,14 +208,14 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
             window.identity_controls.refresh()
             page.persist_settings()
             until(lambda: not page.busy and app.alarm_snapshot().state == "off")
-            assert not load_communication_preferences(data.communication).alarm.enabled
+            assert not load_communication_preferences(data.communication).status.enabled
         finally:
             close_window(window)
             delivery.detach()
 
 
-def test_local_alarm_file_menu_feedback_authorization_and_audit(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_alarm_file_commands_remain_authorized_without_a_card_menu(
+    qapp: QApplication, tmp_path: Path
 ) -> None:
     data = saved_data(tmp_path)
     startup = authenticated_startup(data)
@@ -214,37 +223,25 @@ def test_local_alarm_file_menu_feedback_authorization_and_audit(
     assert identity is not None
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
-    page = window.communication
-    opened: list[Path] = []
-
-    def open_folder(url: QUrl) -> bool:
-        opened.append(Path(url.toLocalFile()))
-        return True
-
-    monkeypatch.setattr(QDesktopServices, "openUrl", open_folder)
-    path = app.alarm_definitions_path()
+    page, path = window.communication, app.alarm_definitions_path()
     try:
-        # A file action must leave this separate draft alone.
+        assert not page.alarm_panel.findChildren(QMenu)
         page.alarm_port.setValue(10001)
-        page.alarm_open.trigger()
-        until(lambda: not page.busy)
-        assert opened == [path.parent] and not path.exists()
-        assert text("alarm_file_missing", "en") in page.preferences_status.text()
-        page.alarm_create.trigger()
-        until(lambda: not page.busy)
-        assert path.read_bytes() == TEMPLATE.read_bytes() and page.dirty
-        page.alarm_create.trigger()
-        until(lambda: not page.busy)
-        assert text("alarm_file_exists", "en") in page.preferences_status.text()
-        path.write_bytes(b"{broken")
-        page.alarm_create.trigger()
-        until(lambda: not page.busy)
-        assert text("alarm_file_invalid", "en") in page.preferences_status.text()
-        page.alarm_open.trigger()
-        until(lambda: not page.busy)
-        assert path.read_bytes() == b"{broken" and opened == [path.parent] * 2
-        assert text("alarm_file_invalid", "en") in page.preferences_status.text()
-        assert str(path) in page.preferences_status.accessibleDescription()
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            assert (
+                worker.submit(app.preview_alarm_definitions).result(WAIT).origin
+                == "bundled"
+            )
+            worker.submit(app.create_alarm_definitions).result(WAIT)
+            assert path.read_bytes() == TEMPLATE.read_bytes() and page.dirty
+            with pytest.raises(FileExistsError):
+                worker.submit(app.create_alarm_definitions).result(WAIT)
+            path.write_bytes(b"{broken")
+            with pytest.raises(ConfigurationError):
+                worker.submit(app.create_alarm_definitions).result(WAIT)
+            assert path.read_bytes() == b"{broken"
+            with pytest.raises(ConfigurationError):
+                worker.submit(app.preview_alarm_definitions).result(WAIT)
         ops = identity.audit_page(AuditQuery(action="alarm_definitions.create")).result(
             WAIT
         )
@@ -254,43 +251,12 @@ def test_local_alarm_file_menu_feedback_authorization_and_audit(
             for row in ops
         )
         assert not data.communication.exists() and app.alarm_snapshot().state == "off"
-
-        with monkeypatch.context() as denied:
-
-            def inaccessible(_path: Path, *, bundled_fallback: bool) -> None:
-                raise PermissionError("isolated access denial")
-
-            denied.setattr(
-                "capsule_vision.ui.communication_page.load_alarm_definitions",
-                inaccessible,
-            )
-            page.alarm_open.trigger()
-            until(lambda: not page.busy)
-            assert (
-                text("alarm_file_unavailable", "en") in page.preferences_status.text()
-            )
-            assert len(opened) == 2
-
-        # A folder launch is a separate side effect on queued delivery.
-        release, reading = Event(), Event()
-
-        def wait_for_logout(_path: Path, *, bundled_fallback: bool) -> None:
-            reading.set()
-            assert release.wait(WAIT)
-
-        monkeypatch.setattr(
-            "capsule_vision.ui.communication_page.load_alarm_definitions",
-            wait_for_logout,
-        )
-        page.alarm_open.trigger()
-        try:
-            until(reading.is_set)
-            identity.logout()
-            window.identity_controls.refresh()
-        finally:
-            release.set()
-        until(lambda: not page.busy)
-        assert opened == [path.parent] * 2
+        identity.logout()
+        with pytest.raises(AuthorizationError):
+            app.alarm_definitions_path()
+        with pytest.raises(AuthorizationError):
+            app.create_alarm_definitions()
+        assert path.read_bytes() == b"{broken"
     finally:
         close_window(window)
         delivery.detach()
@@ -304,7 +270,7 @@ def test_creating_alarm_file_requires_durable_intent_and_current_session(
     assert identity is not None
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
-    page, path = window.communication, app.alarm_definitions_path()
+    path = app.alarm_definitions_path()
     try:
         gate: Future[None] = Future()
         entered = Event()
@@ -313,17 +279,18 @@ def test_creating_alarm_file_requires_durable_intent_and_current_session(
             entered.set()
             return gate
 
-        with monkeypatch.context() as held:
+        with monkeypatch.context() as held, ThreadPoolExecutor(max_workers=1) as worker:
             held.setattr(identity.audit, "intent", pending)
-            page.alarm_create.trigger()
+            creating = worker.submit(app.create_alarm_definitions)
             try:
                 until(entered.is_set)
                 identity.logout()
                 window.identity_controls.refresh()
             finally:
                 gate.set_result(None)
-            until(lambda: not page.busy)
-            assert not path.exists() and not page.alarm_file.isEnabled()
+            with pytest.raises(StaleSessionError):
+                creating.result(WAIT)
+            assert not path.exists()
         identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
 
         def no_audit(_op: AuditOperation) -> Future[None]:

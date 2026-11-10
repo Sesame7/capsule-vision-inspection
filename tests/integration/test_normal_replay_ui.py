@@ -21,7 +21,7 @@ from capsule_vision.application.source_control import (
     SourceControlState,
 )
 from capsule_vision.application.startup import ApplicationData, load_startup
-from capsule_vision.communication.reporting import ReportingMode, ReportStage
+from capsule_vision.communication.reporting import ReportStage
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
@@ -427,9 +427,9 @@ def test_normal_paused_reporting_ack_and_overload_use_genuine_stop(
         peer.hold_next(ReportStage.BITMAP)
         panel = window.communication.reporting_panel
         assert panel is not None
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # This replay exercises per-cycle reporting.
+        panel.merge_count.setCurrentIndex(
+            0
+        )  # This replay exercises per-cycle reporting.
         panel.protocol.setCurrentIndex(0)  # Reporting peer uses FINS/UDP.
         panel.port.setValue(peer.port)
         panel.timeout.setValue(2)

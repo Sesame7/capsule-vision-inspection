@@ -41,7 +41,6 @@ from capsule_vision.communication.operations import (
     RequestKind,
 )
 from capsule_vision.communication.reporting import (
-    ReportingMode,
     ReportingSelection,
     ReportingSettings,
     ReportStage,
@@ -118,13 +117,12 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         assert commands.reporting_selection() == startup.communication.reporting
         assert panel.protocol.currentText() == "FINS/TCP"
         assert commands.reporting_snapshot() is None
-        assert panel.service_status.text() == "OFF"
+        assert panel.service_status.text() == text("service_off", window.language)
         assert (
             text("plc_disabled", window.language)
             == panel.service_status.accessibleName()
         )
-        assert "ACK --" in panel.summary.text()
-        assert not panel.summary.toolTip()
+        assert window.event_frame.plc.text() == "W49 · —"
         before = {p: p.read_bytes() for p in startup.data.root.rglob("*.json")}
         startup.application.start().result(WAIT)
         assert engine.entered.wait(WAIT)
@@ -133,9 +131,7 @@ def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(
         startup.application.stop().result(WAIT)
         panel.update_state(ApplicationState.READY)
         panel.port.setValue(19600)
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         assert not commands.reporting_selection().enabled
         assert panel.selection().enabled
@@ -166,7 +162,7 @@ def test_automatic_reporting_and_stop_continue_when_audit_cannot_write(
         page = window.communication
         panel.protocol.setCurrentIndex(0)
         panel.port.setValue(peer.port)
-        panel.mode_buttons[ReportingMode.PER_CYCLE].click()
+        panel.merge_count.setCurrentIndex(0)
         panel.enabled.setChecked(True)
         page.persist_settings()
         until(lambda: not page.busy)
@@ -258,9 +254,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         panel.timeout.setValue(0.2)
         panel.source[1].setValue(3)
         panel.source[2].setValue(7)
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -293,9 +287,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         assert (
             text("plc_active", window.language) == panel.service_status.accessibleName()
         )
-        assert "ACK 89" in panel.summary.text()
-        assert not panel.summary.toolTip()
-        assert not panel.summary.toolTip()
+        assert window.event_frame.plc.text() == "W49 · 89"
         packets = peer.packets[1:]  # Exclude the independent sequence seeding request.
         assert len(packets) == 3
         assert all(
@@ -376,9 +368,7 @@ def test_settings_locked_starting_stopping_then_restart_has_new_generation(
     ):
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -437,9 +427,7 @@ def test_reporting_failure_feedback_does_not_fault_production(
         peer.fail_next(ReportStage.INITIALIZATION, "plc")
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -458,18 +446,15 @@ def test_reporting_failure_feedback_does_not_fault_production(
         assert snapshot.latest_production_result is not None
         assert snapshot.counters.cycles_completed == 1
         window.navigate(2)
-        until(lambda: "ERR 1" in panel.summary.text())
-        assert "ACK --" in panel.summary.text()
-        assert not panel.summary.toolTip()
-        assert not panel.summary.toolTip()
+        until(lambda: bool(panel.feedback.text()))
+        assert "FinsPlcError" in panel.feedback.text()
+        assert window.event_frame.plc.text() == "W49 · —"
         assert panel.service_status.text() == text("state_RUNNING", window.language)
         assert (
             text("plc_active", window.language) == panel.service_status.accessibleName()
         )
-        assert "ERR 1" in panel.summary.text()
-        assert not panel.summary.toolTip()
-        assert not panel.summary.toolTip()
-        assert "FinsPlcError" not in window.event_label.toolTip()
+        assert not panel.feedback.isHidden()
+        assert "FinsPlcError" in window.event_label.toolTip()
 
 
 def test_active_report_drains_before_ready_and_restart_resnapshots(
@@ -485,9 +470,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
         panel.timeout.setValue(2)
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -527,8 +510,7 @@ def test_active_report_drains_before_ready_and_restart_resnapshots(
             text("plc_enabled", window.language)
             == panel.service_status.accessibleName()
         )
-        assert "ACK 51" in panel.summary.text()
-        assert not panel.summary.toolTip()
+        assert window.event_frame.plc.text() == "W49 · 51"
         panel.timeout.setValue(0.2)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -566,9 +548,7 @@ def test_manual_execution_rechecks_protection_after_dispatch(
     with server() as peer, normal_window(tmp_path, engine) as (startup, window, panel):
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
         panel.port.setValue(peer.port)
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -676,9 +656,9 @@ def test_tcp_application_stop_retains_active_reporting_owner_until_exit(
             panel.protocol.setCurrentIndex(1)
             panel.port.setValue(peer.port)
             panel.timeout.setValue(5)
-            panel.mode_buttons[
-                ReportingMode.PER_CYCLE
-            ].click()  # Explicit per-cycle protocol exercise.
+            panel.merge_count.setCurrentIndex(
+                0
+            )  # Explicit per-cycle protocol exercise.
             panel.enabled.setChecked(True)
             window.communication.persist_settings()
             until(lambda: not window.communication.busy)
@@ -724,9 +704,7 @@ def test_fault_and_closed_keep_preferences_locked(
 ) -> None:
     engine = Engine(fatal=True, hold=100)
     with normal_window(tmp_path, engine) as (startup, window, panel):
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -784,9 +762,7 @@ def test_independent_transports_capture_reservation_and_stop_start_generation(
         )
         panel.port.setValue(automatic.port)
         panel.timeout.setValue(0.2)
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         window.communication.persist_settings()
         until(lambda: not window.communication.busy)
@@ -962,9 +938,7 @@ def test_unsaved_reporting_draft_does_not_admit_or_change_active_session(
         until(lambda: not page.busy)
         before = startup.data.communication.read_bytes()
         original = panel.controller.reporting_selection()
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # Explicit per-cycle protocol exercise.
+        panel.merge_count.setCurrentIndex(0)  # Explicit per-cycle protocol exercise.
         panel.enabled.setChecked(True)
         panel.port.setValue(19600)
         startup.application.start().result(WAIT)

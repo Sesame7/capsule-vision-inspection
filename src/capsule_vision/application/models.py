@@ -1,4 +1,4 @@
-"""Immutable occurrence facts and attributed four-cycle channel-position totals."""
+"""Immutable occurrence facts and attributed PLC-group channel-position totals."""
 
 from dataclasses import dataclass, replace
 from enum import Enum, auto
@@ -7,6 +7,7 @@ from pathlib import Path
 from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
     ReportingGroupProgress,
+    ReportingMode,
 )
 from capsule_vision.configuration import (
     ResolvedInspectionConfiguration,
@@ -209,6 +210,7 @@ class ProductionApplicationSnapshot:
     candidate_requires_preparation: bool = False
     pilot_counters: PilotCounters = PilotCounters()
     pilot_counting: bool = False
+    reporting_mode: ReportingMode = ReportingMode.PER_CYCLE
     group_progress: ReportingGroupProgress | None = None
     batch_duration_ms: float | None = None
     batch_uuid: str | None = None
@@ -217,6 +219,10 @@ class ProductionApplicationSnapshot:
     detail_expired: bool = False
     batch_pending: bool = False
     unbatched_run_uncertain: bool = False
+
+    @property
+    def four_cycle_display(self) -> bool:
+        return self.pilot_counting and self.reporting_mode is ReportingMode.FOUR_CYCLE
 
     @property
     def has_pending_configuration(self) -> bool:

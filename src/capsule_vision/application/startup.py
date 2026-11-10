@@ -343,12 +343,12 @@ def _load_startup(
     communication = CommunicationPreferences()
     communication_error = ""
     try:
-        alarm_errors: list[str] = []
+        status_errors: list[str] = []
         communication = load_communication_preferences(
-            data.communication, alarm_error=alarm_errors.append
+            data.communication, status_error=status_errors.append
         )
-        if alarm_errors:
-            communication_error = alarm_errors[0]
+        if status_errors:
+            communication_error = status_errors[0]
             issues.append(
                 StartupIssue(
                     "startup_communication", communication_error, blocking=False
@@ -388,7 +388,7 @@ def _load_startup(
             diagnostics=diagnostics,
             identity=identity,
             initial_reporting=communication.reporting,
-            initial_alarm=communication.alarm,
+            initial_status=communication.status,
         )
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
         cameras = (
@@ -409,7 +409,7 @@ def _load_startup(
             replay_controls=True,
             initial_candidate=prepared,
             initial_reporting=communication.reporting,
-            initial_alarm=communication.alarm,
+            initial_status=communication.status,
         )
     if diagnostics:
         for issue in issues:

@@ -1,11 +1,13 @@
-"""Attributed four-cycle reporting. One socket owner, no retries or polling."""
+"""Attributed one/four-cycle reporting. One socket owner, no retries or polling."""
 
 from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, field
+from functools import reduce
 from threading import Condition, Thread, current_thread
 from time import perf_counter
+from typing import Literal
 
 from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inspection import CycleId, CycleStatus
@@ -22,7 +24,6 @@ from .reporting import (
     ReportingCapacityError,
     ReportingGroupProgress,
     ReportingIssue,
-    ReportingMode,
     ReportingSettings,
     ReportingSnapshot,
     ReportingStateError,
@@ -79,6 +80,7 @@ def _open_four_cycle_client(endpoint: Endpoint) -> FinsTcpClient:
 class FourCycleReportingWorker:
     """Admission only copies scalar identities; this thread owns every socket call.
 
+    The existing four-cycle owner also handles the fixed one-member mode.
     A lost association latches for this generation. Subsequent cycles remain
     inspectable, but produce local diagnostics until Stop and a known-phase Start.
     """
@@ -94,9 +96,13 @@ class FourCycleReportingWorker:
         diagnostics: RunDiagnostics | None = None,
     ) -> None:
         ReportIdentity(generation, CycleId(0))
-        settings.validate_four_cycle()
-        if settings.mode is ReportingMode.PER_CYCLE:
-            raise ValueError("Four-cycle worker requires four_cycle mode")
+        settings.validate_group()
+        group_size = settings.mode.group_size
+        if group_size is None:
+            raise ValueError(
+                "PLC group worker requires single_cycle or four_cycle mode"
+            )
+        self.group_size: Literal[1, 4] = group_size
         self.generation, self.settings = generation, settings
         self._base = settings.require_base_address()
         self._factory, self._attributable = client_factory, attributable
@@ -122,7 +128,9 @@ class FourCycleReportingWorker:
         self._last_skip: ReportObservation | None = None
         self._last_outcome: ReportObservation | None = None
         self._thread = Thread(
-            target=self._run, name=f"FourCycleReporting-{generation}", daemon=False
+            target=self._run,
+            name=f"{'FourCycle' if group_size == 4 else 'SingleCycle'}Reporting-{generation}",
+            daemon=False,
         )
 
     @property
@@ -202,6 +210,7 @@ class FourCycleReportingWorker:
             tuple(batch.reports.get(cycle) for cycle in batch.cycles),
             eligible=batch.inspection_complete,
             invalidated=batch.reason is not None and not batch.inspection_complete,
+            group_size=self.group_size,
         )
 
     def _identity(self, batch: _Batch) -> ReportIdentity:
@@ -211,7 +220,7 @@ class FourCycleReportingWorker:
         # Caller holds the condition. Never silently recover or reassign the counter.
         if self._diagnostics and self._phase_issue is None:
             self._diagnostics.record(
-                "four_cycle.phase_lost",
+                f"{self.settings.mode.value}.phase_lost",
                 reason=code,
                 last_admitted_cycle_id=self._last_cycle,
             )
@@ -226,7 +235,7 @@ class FourCycleReportingWorker:
         ReportIdentity(self.generation, cycle)
         with self._condition:
             if not self._started or self._stopping:
-                raise ReportingStateError("Four-cycle owner is not accepting cycles")
+                raise ReportingStateError("PLC group owner is not accepting cycles")
             if self._last_cycle is not None and cycle != self._last_cycle + 1:
                 self._lose_phase(
                     "Nonconsecutive or duplicate Basler CycleId", "nonconsecutive_cycle"
@@ -237,9 +246,9 @@ class FourCycleReportingWorker:
                 sum(len(batch.cycles) for batch in self._batches)
                 >= self.settings.max_pending + 1
             ):
-                self._lose_phase("Four-cycle reporting capacity exceeded", "capacity")
+                self._lose_phase("PLC group reporting capacity exceeded", "capacity")
                 raise ReportingCapacityError(self._phase_issue)
-            if not self._batches or len(self._batches[-1].cycles) == 4:
+            if not self._batches or len(self._batches[-1].cycles) == self.group_size:
                 if any(not batch.finished for batch in self._batches):
                     self._lose_phase(
                         "Next batch admitted before previous batch settled; late report suppressed",
@@ -255,7 +264,7 @@ class FourCycleReportingWorker:
             batch.cycles.append(cycle)
             if self._diagnostics and self._diagnostics.writer.detailed:
                 self._diagnostics.record(
-                    "four_cycle.member",
+                    f"{self.settings.mode.value}.member",
                     first_cycle_id=batch.cycles[0],
                     cycle_id=cycle,
                     exposure=len(batch.cycles),
@@ -289,7 +298,7 @@ class FourCycleReportingWorker:
             batch.reports[cycle] = report
             batch.terminals[cycle] = status.name
             batch.futures.append(completed)
-            if len(batch.reports) == 4:
+            if len(batch.reports) == self.group_size:
                 batch.completed_at = perf_counter()
             self._publish_progress(batch)
             self._condition.notify_all()
@@ -400,12 +409,13 @@ class FourCycleReportingWorker:
                     self._last_counter = retained
             with self._condition:
                 self._condition.wait_for(
-                    lambda: len(batch.terminals) == 4 or self._stopping
+                    lambda: len(batch.terminals) == self.group_size or self._stopping
                 )
-                if len(batch.cycles) != 4 or len(batch.terminals) != 4:
-                    batch.reason = (
-                        batch.reason or "Interrupted/incomplete four-cycle batch"
-                    )
+                if (
+                    len(batch.cycles) != self.group_size
+                    or len(batch.terminals) != self.group_size
+                ):
+                    batch.reason = batch.reason or "Interrupted/incomplete PLC group"
                 if batch.reason is not None:
                     raise ReportingStateError(batch.reason)
                 if retained is None:
@@ -416,8 +426,8 @@ class FourCycleReportingWorker:
                     self._lose_phase("Mixed channel layouts", "mixed_layouts")
                 raise ReportingStateError("Mixed channel layouts")
             merged = tuple(
-                a | b | c | d
-                for a, b, c, d in zip(*(r.reject_words for r in reports), strict=True)
+                reduce(lambda left, right: left | right, values)
+                for values in zip(*(r.reject_words for r in reports), strict=True)
             )
             words = (
                 (merged[0], merged[1])
@@ -448,7 +458,7 @@ class FourCycleReportingWorker:
                     self._failure_issue = ReportingIssue.from_error(exc)
             if self._diagnostics:
                 self._diagnostics.record(
-                    "four_cycle.completed",
+                    f"{self.settings.mode.value}.completed",
                     first_cycle_id=identity.cycle_id,
                     cycle_ids=tuple(batch.cycles),
                     plc_counter=retained,
@@ -554,7 +564,7 @@ class FourCycleReportingWorker:
         if trace:
             first = observation.identity.cycle_id
             trace.record(
-                "four_cycle.report",
+                f"{self.settings.mode.value}.report",
                 first_cycle_id=first,
                 cycle_ids=settled.cycles,
                 terminals=len(settled.terminal_outcomes),
@@ -573,7 +583,7 @@ class FourCycleReportingWorker:
                 # Publish existing stage clocks after the handshake, outside its fences.
                 for read in settled.reads:
                     trace.record(
-                        "four_cycle.counter_read",
+                        f"{self.settings.mode.value}.counter_read",
                         first_cycle_id=first,
                         stage=read.stage,
                         address=read.address,
@@ -583,7 +593,7 @@ class FourCycleReportingWorker:
                         duration_ms=(read.finished_at - read.started_at) * 1000,
                     )
                 trace.record(
-                    "four_cycle.writes",
+                    f"{self.settings.mode.value}.writes",
                     first_cycle_id=first,
                     reject_words=observation.reject_words,
                     plc_counter=observation.sequence,

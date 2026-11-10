@@ -11,12 +11,67 @@ from tests.support.production import source_frame
 from tests.unit.test_four_cycle_presentation import completed
 from tests.unit.test_web_snapshots import Source
 
-from capsule_vision.communication.reporting import ReportingGroupProgress
+from capsule_vision.communication.reporting import (
+    FirstStationReport,
+    ReportingGroupProgress,
+    ReportingMode,
+)
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CycleId
 from capsule_vision.ui.camera_card import CameraCard
 from capsule_vision.ui.style import Style
 from capsule_vision.web.publisher import SnapshotPublisher
+
+
+def test_single_group_uses_matching_single_frame_and_physical_metrics(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    result = mixed_result(11)
+    report = FirstStationReport.from_result(1, result)
+    source = Source()
+    source.value = replace(
+        source.value,
+        pilot_counting=True,
+        reporting_mode=ReportingMode.SINGLE_CYCLE,
+        latest_production_result=result,
+        active_prepared=prepared(tmp_path),
+        group_progress=ReportingGroupProgress(
+            report.identity, (result.cycle_id,), (report,), eligible=True, group_size=1
+        ),
+    )
+    store = LatestDisplayFrameStore(result.layout.camera_ids)
+    store.begin_generation(1, four_cycle=False)
+    camera = result.cameras[0]
+    store.publish(source_frame(camera.camera_id, cycle=11), generation=1)
+    frame = store.snapshot().frames[0]
+    card = CameraCard(result.layout.cameras[0])
+    card.show()
+    try:
+        card.present(frame, source.value, "zh")
+        assert card.result == camera and all(
+            button.states is None for button in card.indicators
+        )
+        publisher = SnapshotPublisher(source, store)
+        publisher.publish()
+        publication = publisher.latest()
+        assert publication
+        payload = json.loads(publication.metadata)
+        assert payload["group_counting"] and not payload["four_cycle"]
+        assert "metrics" in payload
+        row = payload["cameras"][0]
+        assert row["result_status"] == "matched" and "group_channels" not in row
+        assert row["image_identity"]["cycle_id"] == 11 and len(row["channels"]) == 6
+        # Advancing results never overlays an earlier image, even within one group mode.
+        source.value = replace(source.value, latest_production_result=mixed_result(12))
+        card.present(frame, source.value, "en")
+        assert card.result is None
+        publisher.publish()
+        publication = publisher.latest()
+        assert publication
+        row = json.loads(publication.metadata)["cameras"][0]
+        assert row["result_status"] == "pending" and row["channels"] == []
+    finally:
+        card.close()
 
 
 def test_lamps_do_not_depend_on_camera_image_and_keep_fourth_evidence(
@@ -40,6 +95,7 @@ def test_lamps_do_not_depend_on_camera_image_and_keep_fourth_evidence(
     source.value = replace(
         source.value,
         pilot_counting=True,
+        reporting_mode=ReportingMode.FOUR_CYCLE,
         group_progress=progress,
         active_prepared=prepared(tmp_path),
     )
@@ -128,7 +184,15 @@ def test_four_cycle_header_releases_height_to_viewport(qapp: QApplication) -> No
         original_viewport = card.viewport.geometry()
         original_header = card.indicator_group.height()
         for four_cycle in (True, False, True):
-            card.present(None, replace(snapshot, pilot_counting=four_cycle), "en")
+            card.present(
+                None,
+                replace(
+                    snapshot,
+                    pilot_counting=four_cycle,
+                    reporting_mode=ReportingMode.FOUR_CYCLE,
+                ),
+                "en",
+            )
             qapp.processEvents()
             group = card.indicator_group.geometry()
             viewport = card.viewport.geometry()

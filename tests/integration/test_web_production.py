@@ -18,7 +18,7 @@ from capsule_vision.application import startup as startup_module
 from capsule_vision.application.identity_models import AuthorizationError
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
-from capsule_vision.communication.reporting import ReportingMode, ReportStage
+from capsule_vision.communication.reporting import ReportStage
 from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
     WebPreferences,
@@ -152,9 +152,9 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         page = window.communication
         panel = page.reporting_panel
         assert panel is not None
-        panel.mode_buttons[
-            ReportingMode.PER_CYCLE
-        ].click()  # This replay exercises per-cycle reporting.
+        panel.merge_count.setCurrentIndex(
+            0
+        )  # This replay exercises per-cycle reporting.
         panel.protocol.setCurrentIndex(0)  # Reporting peer uses FINS/UDP.
         panel.port.setValue(peer.port)
         panel.enabled.setChecked(True)

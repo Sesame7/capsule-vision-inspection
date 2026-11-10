@@ -424,19 +424,20 @@ def test_obsolete_reporting_modes_rejected_without_replacing_file(
 
 @pytest.mark.parametrize("base", [49, 149])
 @pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("mode", [ReportingMode.SINGLE_CYCLE, ReportingMode.FOUR_CYCLE])
 def test_four_cycle_saved_layout_roundtrip(
-    tmp_path: Path, base: int, enabled: bool
+    tmp_path: Path, base: int, enabled: bool, mode: ReportingMode
 ) -> None:
     path = tmp_path / "communication.json"
     value = CommunicationPreferences(
         reporting=ReportingSelection(
             enabled,
-            ReportingSettings(FinsTcpEndpoint(), base, mode=ReportingMode.FOUR_CYCLE),
+            ReportingSettings(FinsTcpEndpoint(), base, mode=mode),
         )
     )
     save_communication_preferences(path, value)
     assert load_communication_preferences(path) == value
-    assert json.loads(path.read_text())["reporting"]["mode"] == "four_cycle"
+    assert json.loads(path.read_text())["reporting"]["mode"] == mode.value
 
 
 @pytest.mark.parametrize(
@@ -450,15 +451,16 @@ def test_four_cycle_saved_layout_roundtrip(
         ("fins_tcp", 150),
     ],
 )
+@pytest.mark.parametrize("mode", ["single_cycle", "four_cycle"])
 def test_four_cycle_invalid_transport_or_base_rejected_even_disabled(
-    tmp_path: Path, protocol: str, base: int
+    tmp_path: Path, protocol: str, base: int, mode: str
 ) -> None:
     path = tmp_path / "communication.json"
     path.write_text(
         json.dumps(
             {
                 "reporting": {
-                    "mode": "four_cycle",
+                    "mode": mode,
                     "protocol": protocol,
                     "base_address": base,
                 }

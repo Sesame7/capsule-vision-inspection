@@ -11,8 +11,8 @@ from threading import Event
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFontMetricsF
-from PySide6.QtTest import QTest
+from PySide6.QtGui import QDesktopServices, QFontMetricsF
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractSpinBox,
@@ -66,19 +66,20 @@ from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window, main
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
-from capsule_vision.ui.style import Style
+from capsule_vision.ui.style import Style, Theme, theme_colors
 from capsule_vision.web import ProductionSnapshotService
-from capsule_vision.web.runtime import WebRuntime, WebState
+from capsule_vision.web.runtime import WebRuntime, WebRuntimeSnapshot, WebState
 
 
 @pytest.mark.parametrize("language,size", [("zh", (1080, 1920)), ("en", (1920, 1080))])
-@pytest.mark.parametrize("modbus", [False, True])
+@pytest.mark.parametrize("modbus,base", [(False, 49), (False, 149), (True, 65532)])
 def test_global_reporting_state_and_communication_details(
     settings_window: tuple[Startup, MainWindow],
     monkeypatch: pytest.MonkeyPatch,
     language: Language,
     size: tuple[int, int],
     modbus: bool,
+    base: int,
 ) -> None:
     startup, window = settings_window
     window.set_language(language)
@@ -91,10 +92,10 @@ def test_global_reporting_state_and_communication_details(
     selected = (
         replace(
             original,
-            settings=ReportingSettings(base_address=100, endpoint=ModbusSettings()),
+            settings=ReportingSettings(base_address=base, endpoint=ModbusSettings()),
         )
         if modbus
-        else original
+        else replace(original, settings=replace(original.settings, base_address=base))
     )
     controller.set_reporting_selection(selected)
     panel = window.communication.reporting_panel
@@ -129,58 +130,115 @@ def test_global_reporting_state_and_communication_details(
     )
     observed: list[ReportingSnapshot | None] = [None]
     monkeypatch.setattr(controller, "reporting_snapshot", lambda: observed[0])
+
+    def frozen_settings(generation: int) -> ReportingSettings | None:
+        return selected.settings if generation == 1 else None
+
+    monkeypatch.setattr(
+        startup.application, "reporting_for_generation", frozen_settings
+    )
     QApplication.processEvents()
     header_controls = (
         panel.title,
+        panel.status_indicator,
         panel.mode_control,
-        *panel.mode_buttons.values(),
+        panel.merge_label,
+        panel.merge_count,
         panel.service_status,
         panel.enabled,
     )
     header_geometry = tuple(widget.geometry() for widget in header_controls)
+    strip_geometry = tuple(
+        parent.geometry()
+        for widget in (
+            window.event_frame.plc,
+            window.event_frame.alarm,
+            window.event_label,
+        )
+        if (parent := widget.parentWidget()) is not None
+    )
 
-    def check(key: str, observation: ReportingSnapshot | None) -> None:
+    def check(key: str, observation: ReportingSnapshot | None, health: str) -> None:
         observed[0] = observation
         window.event_frame.plc.setToolTip("stale diagnostics")
         window.bridge.timer.timeout.emit()
         label = window.event_frame.plc
-        assert label.accessibleName() == f"PLC · {text(key, language)}"
-        assert "ACK" not in label.text() and "42" not in label.text()
-        panel.summary.setToolTip("stale ACK and worker telemetry")
-        panel.summary.setAccessibleDescription("stale detail")
-        panel.refresh()
-        QApplication.processEvents()
-        assert tuple(widget.geometry() for widget in header_controls) == header_geometry
-        assert not label.toolTip() and not panel.service_status.toolTip()
-        assert not panel.summary.toolTip() and not panel.summary.accessibleDescription()
-        assert panel.service_status.accessibleName()
         expected_ack = (
             observation.last_acknowledged.sequence
             if observation and observation.last_acknowledged
-            else "--"
+            else "—"
         )
-        assert f"ACK {expected_ack}" in panel.summary.text()
+        assert label.text() == f"{'HR ' if modbus else 'W'}{base} · {expected_ack}"
+        assert label.accessibleName() == label.text()
+        panel.refresh()
+        QApplication.processEvents()
+        assert (
+            tuple(
+                parent.geometry()
+                for widget in (
+                    window.event_frame.plc,
+                    window.event_frame.alarm,
+                    window.event_label,
+                )
+                if (parent := widget.parentWidget()) is not None
+            )
+            == strip_geometry
+        )
+        assert tuple(widget.geometry() for widget in header_controls) == header_geometry
+        assert not label.toolTip() and not panel.service_status.toolTip()
+        assert panel.service_status.accessibleName()
+        assert health in panel.status_indicator.styleSheet()
+        assert panel.status_indicator.size().toTuple() == (8, 8)
+        assert not hasattr(panel, "summary")
         assert controller.reporting_snapshot() == observation
         assert startup.application.snapshot() == before
 
     try:
-        check("service_off", None)
+        colors = theme_colors(panel)
+        check("service_off", None, colors.secondary)
         controller.set_reporting_selection(replace(selected, enabled=True))
-        check("service_next_start", None)
-        check("service_next_start", report)
+        check("service_next_start", None, colors.warning)
+        check("service_next_start", report, colors.warning)
+        check(
+            "service_next_start",
+            replace(report, last_acknowledged=None),
+            colors.warning,
+        )
         live = replace(report, thread_alive=True, accepting=True)
-        check("web_running", live)
-        check("web_running", replace(live, last_acknowledged=replace(ack, sequence=43)))
+        check("web_running", live, colors.ok)
+        for number in (0, 9, 10, 9999, 65535):
+            check(
+                "web_running",
+                replace(live, last_acknowledged=replace(ack, sequence=number)),
+                colors.ok,
+            )
+        check(
+            "web_running",
+            replace(live, last_acknowledged=replace(ack, sequence=43)),
+            colors.ok,
+        )
         controller.set_reporting_selection(replace(selected, enabled=False))
-        check("web_running", live)
-        check("web_running", replace(live, accepting=False))
+        check("web_running", live, colors.ok)
+        check("web_running", replace(live, accepting=False), colors.warning)
         error = ReportingIssue("TimeoutError", "uncertain sequence ACK")
         for outcome in (ReportOutcome.FAILED, ReportOutcome.REJECTED):
             failure = replace(ack, outcome=outcome, issue=error)
-            check("technical_error", replace(live, last_outcome=failure))
+            check("technical_error", replace(live, last_outcome=failure), colors.ok)
         for field in ("failure_issue", "cleanup_issue"):
-            check("technical_error", replace(report, **{field: error}))
-        check("service_off", report)
+            check("technical_error", replace(report, **{field: error}), colors.fault)
+        check("service_off", report, colors.secondary)
+        controller.set_reporting_selection(
+            replace(
+                selected,
+                enabled=False,
+                settings=replace(
+                    selected.settings, mode=ReportingMode.PER_CYCLE, base_address=120
+                ),
+            )
+        )
+        check(
+            "service_off", report, colors.secondary
+        )  # Old ACK retains its actual target.
     finally:
         observed[0] = None
         controller.set_reporting_selection(original)
@@ -567,9 +625,213 @@ def settings_window(
         delivery.detach()
 
 
+@pytest.mark.parametrize("theme", ("dark", "light"))
+@pytest.mark.parametrize("language", ("zh", "en"))
+def test_web_service_dot_uses_observed_health_and_neutral_power_slots(
+    settings_window: tuple[Startup, MainWindow],
+    monkeypatch: pytest.MonkeyPatch,
+    theme: Theme,
+    language: Language,
+) -> None:
+    _, window = settings_window
+    window.set_theme(theme)
+    window.set_language(language)
+    page, panel = window.communication, window.communication.web_panel
+
+    def no_service(settings: WebPreferences) -> ProductionSnapshotService:
+        raise AssertionError("Presentation does not start a Web service")
+
+    runtime = WebRuntime(no_service)
+    window.bind_web_runtime(runtime)
+    observed = [WebRuntimeSnapshot()]
+    colors = theme_colors(panel)
+    with monkeypatch.context() as patch:
+        patch.setattr(runtime, "snapshot", lambda: observed[0])
+        panel.refresh()
+        QApplication.processEvents()
+        widgets = (panel.status_indicator, panel.actual, panel.power)
+        geometry = tuple(widget.geometry() for widget in widgets)
+        for state, color in (
+            (WebState.STOPPED, colors.secondary),
+            (WebState.STARTING, colors.warning),
+            (WebState.RUNNING, colors.ok),
+            (WebState.STOPPING, colors.warning),
+            (WebState.FAILED, colors.fault),
+        ):
+            observed[0] = WebRuntimeSnapshot(
+                state=state, owned=state is not WebState.STOPPED
+            )
+            panel.refresh()
+            QApplication.processEvents()
+            assert color in panel.status_indicator.styleSheet()
+            assert panel.status_indicator.size().toTuple() == (8, 8)
+            assert tuple(widget.geometry() for widget in widgets) == geometry
+        observed[0] = WebRuntimeSnapshot(state=WebState.RUNNING, owned=True)
+        panel.operation_error = "isolated preference save failure"
+        panel.refresh()
+        assert colors.ok in panel.status_indicator.styleSheet()
+        assert panel.actual.text() == text("web_running", language)
+        reporting = page.reporting_panel
+        assert reporting is not None
+        assert (
+            panel.power.size()
+            == reporting.enabled.size()
+            == page.alarm_panel.enabled.size()
+        )
+
+
+@pytest.mark.parametrize("width", (1080, 1920))
+def test_service_header_alignment_survives_language_theme_and_resize(
+    settings_window: tuple[Startup, MainWindow], width: int
+) -> None:
+    startup, window = settings_window
+    page = window.communication
+    reporting, web, alarms = page.reporting_panel, page.web_panel, page.alarm_panel
+    assert reporting is not None
+    groups = (
+        (
+            reporting,
+            reporting.status_indicator,
+            reporting.service_status,
+            reporting.enabled,
+        ),
+        (web, web.status_indicator, web.actual, web.power),
+        (alarms, alarms.status_indicator, alarms.status, alarms.enabled),
+    )
+    before = startup.application.snapshot()
+    window.resize(width, 1920 if width == 1080 else 1080)
+    with QSignalBlocker(window.bridge.timer):
+        slots: tuple[tuple[int, ...], ...] | None = None
+        for theme in ("dark", "light"):
+            window.set_theme(theme)
+            for language in LANGUAGES:
+                window.set_language(language)
+                QApplication.processEvents()
+                local = tuple(
+                    (
+                        status.width(),
+                        card.width() - action.x(),
+                        action.width(),
+                        action.height(),
+                    )
+                    for card, _dot, status, action in groups
+                )
+                assert local[0] == local[1] == local[2], (language, local)
+                if slots is None:
+                    slots = local
+                assert local == slots, (language, theme)
+                for card, dot, status, action in groups:
+                    assert dot.x() - card.title.geometry().right() == Style.small + 1
+                    assert dot.size().toTuple() == (8, 8)
+                    assert (
+                        status.fontMetrics().horizontalAdvance(status.text())
+                        <= status.width()
+                    )
+                    assert dot.geometry().right() < status.x()
+                    assert status.geometry().right() < action.x()
+                    assert card.rect().contains(action.geometry())
+                    assert action.height() >= Style.touch
+                    assert_full_caption(action, action.text())
+                stacked = page.service_layout.itemAtPosition(1, 0) is not None
+                expected_title_width = max(
+                    card.title.fontMetrics().horizontalAdvance(card.title.text()) + 1
+                    for card, *_ in groups
+                )
+                assert all(
+                    card.title.width() == expected_title_width for card, *_ in groups
+                )
+                assert len({dot.x() for _card, dot, _status, _action in groups}) == 1
+                if stacked:
+                    assert (
+                        len(
+                            {
+                                dot.mapTo(page.body, QPoint()).x()
+                                for _card, dot, _status, _action in groups
+                            }
+                        )
+                        == 1
+                    )
+                else:
+                    assert reporting.geometry().right() < web.x()
+                    assert (
+                        reporting.status_indicator.mapTo(page.body, QPoint()).x()
+                        < web.status_indicator.mapTo(page.body, QPoint()).x()
+                    )
+                assert alarms.title.text() == text("status_service", language)
+                assert (
+                    alarms.title.toolTip()
+                    == alarms.title.accessibleName()
+                    == text("status_service_tip", language)
+                )
+                assert page.scroll_area.horizontalScrollBar().maximum() == 0
+        for next_width in (1920, 1080, 1920, 1080, width):
+            window.resize(next_width, window.height())
+            QApplication.processEvents()
+            assert page.scroll_area.horizontalScrollBar().maximum() == 0
+            assert (page.service_layout.itemAtPosition(1, 0) is not None) == (
+                next_width == 1080
+            )
+        assert startup.application.snapshot() == before
+        assert reporting.controller.reporting_snapshot() is None
+        assert startup.application.alarm_snapshot().state == "off"
+
+
+@pytest.mark.parametrize("width", (1080, 1920))
+def test_service_titles_remeasure_on_font_change_and_keep_local_alignment(
+    settings_window: tuple[Startup, MainWindow],
+    monkeypatch: pytest.MonkeyPatch,
+    width: int,
+) -> None:
+    _, window = settings_window
+    page = window.communication
+    reporting, web, alarms = page.reporting_panel, page.web_panel, page.alarm_panel
+    assert reporting is not None
+    cards = (reporting, web, alarms)
+    window.resize(width, 1920 if width == 1080 else 1080)
+    window.set_language("en")
+    QApplication.processEvents()
+    original = reporting.title.width()
+    with QSignalBlocker(window.bridge.timer):
+        reporting.title.setStyleSheet("font-size: 24px; font-weight: 600;")
+        QApplication.processEvents()
+        assert reporting.title.width() > original
+        for language in ("zh", "en", "de", "ru"):
+            window.set_language(language)
+            QApplication.processEvents()
+            expected = max(
+                card.title.fontMetrics().horizontalAdvance(card.title.text()) + 1
+                for card in cards
+            )
+            assert all(card.title.width() == expected for card in cards)
+            geometry = tuple(card.status_indicator.geometry() for card in cards)
+            assert len({position.x() for position in geometry}) == 1
+
+            def unexpected_title_measurement() -> None:
+                pytest.fail("An unchanged service refresh remeasured a title")
+
+            with monkeypatch.context() as patch:
+                for card in cards:
+                    patch.setattr(
+                        card.title, "fontMetrics", unexpected_title_measurement
+                    )
+                for _ in range(3):
+                    for card in cards:
+                        card.refresh()
+                    QApplication.processEvents()
+                    assert (
+                        tuple(card.status_indicator.geometry() for card in cards)
+                        == geometry
+                    )
+            assert page.scroll_area.horizontalScrollBar().maximum() == 0
+        reporting.title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        window.set_language("en")
+        QApplication.processEvents()
+        assert all(card.title.width() == original for card in cards)
+
+
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("width", [1080, 1920])
-def test_reporting_segments_keyboard_draft_save_discard_and_header_slots(
+def test_reporting_merge_count_keyboard_draft_save_discard_and_header_slots(
     settings_window: tuple[Startup, MainWindow], language: Language, width: int
 ) -> None:
     startup, window = settings_window
@@ -578,45 +840,55 @@ def test_reporting_segments_keyboard_draft_save_discard_and_header_slots(
     window.resize(width, 1000)
     window.set_language(language)
     QApplication.processEvents()
-    per_cycle, four_cycle = (panel.mode_buttons[mode] for mode in ReportingMode)
-    assert (per_cycle.text(), four_cycle.text()) == (
-        ("逐次", "4次合并") if language == "zh" else ("Per cycle", "4-cycle")
-    )
-    assert four_cycle.isChecked() and not per_cycle.isChecked()
+    count = panel.merge_count
+    assert panel.merge_label.text() == ("合并" if language == "zh" else "Merge")
+    assert count.count() == 9 and count.currentIndex() == 4
+    assert count.currentText() == "4" and not count.isEditable()
+    for index in range(9):
+        item = count.model().index(index, 0)
+        flags = item.flags()
+        assert bool(flags & Qt.ItemFlag.ItemIsEnabled) is (index in (0, 1, 4))
+        assert bool(flags & Qt.ItemFlag.ItemIsSelectable) is (index in (0, 1, 4))
+        assert count.itemText(index) == str(index)
+        if index not in (0, 1, 4):
+            assert text("plc_merge_unsupported", language) in count.itemData(
+                index, Qt.ItemDataRole.AccessibleTextRole
+            )
+        assert count.itemData(index, Qt.ItemDataRole.AccessibleTextRole)
     assert not panel.enabled.isChecked()
-    assert panel.summary.text() == panel.summary.accessibleName()
+    assert panel.feedback.isHidden()
     neighbors = (
         panel.title,
         panel.mode_control,
-        per_cycle,
-        four_cycle,
+        panel.merge_label,
+        count,
         panel.service_status,
         panel.enabled,
     )
     geometry = tuple(widget.geometry() for widget in neighbors)
-    assert panel.summary.geometry().right() < panel.mode_control.x()
-    assert panel.mode_control.geometry().right() < panel.service_status.x()
+    assert panel.title.geometry().right() < panel.status_indicator.x()
+    assert panel.service_status.geometry().right() < panel.mode_control.x()
     assert panel.service_status.geometry().right() < panel.enabled.x()
     assert panel.mode_control.y() == panel.enabled.y()
     assert panel.host.y() > panel.mode_control.geometry().bottom()
-    for button in (per_cycle, four_cycle):
-        assert_full_caption(button, button.text())
-        assert button.height() >= Style.touch
-        assert panel.mode_control.rect().contains(button.geometry())
-        assert button.accessibleName() in button.toolTip()
+    assert count.height() >= Style.touch
+    assert panel.mode_control.rect().contains(count.geometry())
+    assert count.accessibleName() == text("plc_merge_count", language)
+    assert text("plc_next_start", language) in count.toolTip()
     before = startup.application.snapshot()
     selected = panel.controller.reporting_selection()
-    per_cycle.setFocus()
-    QTest.keyClick(per_cycle, Qt.Key.Key_Space)
-    assert per_cycle.hasFocus() and per_cycle.isChecked() and not four_cycle.isChecked()
+    count.setFocus()
+    QTest.keyClick(count, Qt.Key.Key_Up)
+    assert count.hasFocus() and count.currentIndex() == 1
+    assert panel.selection().settings.mode is ReportingMode.SINGLE_CYCLE
     assert page.dirty and panel.controller.reporting_selection() == selected
     assert not panel.enabled.isChecked() and not startup.data.communication.exists()
-    QTest.keyClick(per_cycle, Qt.Key.Key_Right)
-    assert (
-        four_cycle.hasFocus() and four_cycle.isChecked() and not per_cycle.isChecked()
-    )
-    QTest.keyClick(four_cycle, Qt.Key.Key_Left)
-    assert per_cycle.hasFocus() and per_cycle.isChecked()
+    QTest.keyClick(count, Qt.Key.Key_Down)
+    assert count.hasFocus() and count.currentIndex() == 4
+    QTest.keyClick(count, Qt.Key.Key_Down)
+    assert count.currentIndex() == 4  # Remaining visible entries are disabled.
+    QTest.keyClick(count, Qt.Key.Key_Up)
+    assert count.hasFocus() and count.currentIndex() == 1
     page.save_settings.click()
     until(lambda: not page.busy)
     assert not page.dirty
@@ -624,9 +896,11 @@ def test_reporting_segments_keyboard_draft_save_discard_and_header_slots(
         load_communication_preferences(
             startup.data.communication
         ).reporting.settings.mode
-        is ReportingMode.PER_CYCLE
+        is ReportingMode.SINGLE_CYCLE
     )
-    four_cycle.click()
+    saved = json.loads(startup.data.communication.read_text(encoding="utf-8"))
+    assert not {"group_count", "merge_count"} & saved["reporting"].keys()
+    count.setCurrentIndex(4)
     assert page.dirty and not panel.enabled.isChecked()
     page.request_discard()
     dialog = page.findChild(QMessageBox)
@@ -636,7 +910,7 @@ def test_reporting_segments_keyboard_draft_save_discard_and_header_slots(
         for button in dialog.buttons()
         if dialog.buttonRole(button) == QMessageBox.ButtonRole.AcceptRole
     ).click()
-    assert not page.dirty and per_cycle.isChecked() and not four_cycle.isChecked()
+    assert not page.dirty and count.currentIndex() == 1
     for theme in ("light", "dark"):
         window.set_theme(theme)
         panel.refresh()
@@ -647,7 +921,7 @@ def test_reporting_segments_keyboard_draft_save_discard_and_header_slots(
 
 
 @pytest.mark.parametrize("role", list(Role))
-def test_reporting_segments_permissions_and_runtime_locks(
+def test_reporting_merge_count_permissions_and_runtime_locks(
     settings_window: tuple[Startup, MainWindow], role: Role
 ) -> None:
     startup, window = settings_window
@@ -660,23 +934,19 @@ def test_reporting_segments_permissions_and_runtime_locks(
         provision_account(identity, "ModeEditor", role, "isolated test password")
         identity.login("ModeEditor", "isolated test password").result(5)
     window.identity_controls.refresh()
-    per_cycle = panel.mode_buttons[ReportingMode.PER_CYCLE]
-    assert per_cycle.isEnabled() is (role >= Role.ENGINEER)
-    per_cycle.click()
-    assert per_cycle.isChecked() is (role >= Role.ENGINEER)
+    count = panel.merge_count
+    assert count.isEnabled() is (role >= Role.ENGINEER)
+    count.setCurrentIndex(0)
+    assert (count.currentIndex() == 0) is (role >= Role.ENGINEER)
     window.communication.persist_settings()
     until(lambda: not window.communication.busy)
     assert startup.data.communication.exists() is (role >= Role.ENGINEER)
     for theme in ("light", "dark"):
         window.set_theme(theme)
         panel.update_state(ApplicationState.RUNNING)
-        colors: list[QColor] = []
-        for button in panel.mode_buttons.values():
-            image = button.grab().toImage()
-            dpr = image.devicePixelRatio()
-            colors.append(image.pixelColor(int(button.width() / 2 * dpr), int(6 * dpr)))
         # Locked controls must still reveal which reporting mode is selected.
-        assert colors[0] != colors[1]
+        assert count.currentText() == ("0" if role >= Role.ENGINEER else "4")
+        assert not count.grab().isNull()
     for state in (
         ApplicationState.STARTING,
         ApplicationState.RUNNING,
@@ -685,12 +955,106 @@ def test_reporting_segments_permissions_and_runtime_locks(
     ):
         panel.update_state(state)
         before = panel.selection()
-        for button in panel.mode_buttons.values():
-            assert not button.isEnabled()
-            button.click()
+        assert not count.isEnabled()
+        for index in (0, 1, 4):
+            count.setCurrentIndex(index)
         assert panel.selection() == before and not panel.enabled.isEnabled()
     panel.update_state(ApplicationState.READY)
-    assert per_cycle.isEnabled() is (role >= Role.ENGINEER)
+    assert count.isEnabled() is (role >= Role.ENGINEER)
+
+
+@pytest.mark.parametrize(
+    "mode,count",
+    (
+        (ReportingMode.PER_CYCLE, 0),
+        (ReportingMode.SINGLE_CYCLE, 1),
+        (ReportingMode.FOUR_CYCLE, 4),
+    ),
+)
+def test_reporting_merge_count_restores_saved_modes(
+    qapp: QApplication, tmp_path: Path, mode: ReportingMode, count: int
+) -> None:
+    data = saved_data(tmp_path)
+    selected = ReportingSelection(
+        True,
+        ReportingSettings(
+            endpoint=FinsTcpEndpoint(port=19600), base_address=149, mode=mode
+        ),
+    )
+    save_communication_preferences(
+        data.communication, CommunicationPreferences(reporting=selected)
+    )
+    original = data.communication.read_bytes()
+    startup = authenticated_startup(data)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        panel = window.communication.reporting_panel
+        assert panel is not None
+        assert panel.merge_count.currentIndex() == count
+        assert panel.merge_count.currentText() == str(count)
+        assert panel.enabled.isChecked()  # Zero is a mode, not a power action.
+        assert panel.selection() == selected
+        assert panel.controller.reporting_selection() == selected
+        assert panel.controller.reporting_snapshot() is None
+        assert data.communication.read_bytes() == original
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_reporting_unsupported_counts_cannot_select_or_publish(
+    settings_window: tuple[Startup, MainWindow],
+) -> None:
+    startup, window = settings_window
+    page, panel = window.communication, window.communication.reporting_panel
+    assert panel is not None
+    count = panel.merge_count
+    page.persist_settings()
+    until(lambda: not page.busy)
+    original = startup.data.communication.read_bytes()
+    selected = panel.controller.reporting_selection()
+    edited = QSignalSpy(panel.edited)
+    for index in (-1, 2, 3, 5, 6, 7, 8, 9):
+        count.setCurrentIndex(index)
+        assert count.currentIndex() == 4
+        assert panel.selection() == selected
+    assert edited.count() == 0
+
+    count.showPopup()
+    QApplication.processEvents()
+    view = count.view()
+    disabled_row = view.model().index(2, 0)
+    assert view.visualRect(disabled_row).isValid()
+    QTest.mouseClick(
+        view.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=view.visualRect(disabled_row).center(),
+    )
+    count.hidePopup()
+    assert count.currentIndex() == 4 and edited.count() == 0
+
+    # Even bypassing the UI change signal cannot turn a future count into a
+    # reporting definition. Save keeps the existing file and admitted selection.
+    with QSignalBlocker(count):
+        count.setCurrentIndex(2)
+    with pytest.raises(ValueError, match="Unsupported reporting merge count"):
+        panel.selection()
+    page.persist_settings()
+    until(lambda: not page.busy)
+    assert (
+        text("comm_settings_failed", window.language) in page.preferences_status.text()
+    )
+    assert startup.data.communication.read_bytes() == original
+    assert panel.controller.reporting_selection() == selected
+    count.setCurrentIndex(0)
+    panel.base_address.setValue(120)
+    count.setCurrentIndex(4)
+    count.setCurrentIndex(6)
+    assert count.currentIndex() == 4 and panel.base_address.value() == 120
+    with pytest.raises(ValueError, match="W49 or W149"):
+        panel.selection()
+    assert panel.controller.reporting_snapshot() is None
 
 
 def test_reporting_base_draft_save_discard_and_protocol_visibility(
@@ -706,9 +1070,9 @@ def test_reporting_base_draft_save_discard_and_protocol_visibility(
     assert panel.base_address.parentWidget() is panel.base_field
     assert panel.rect().contains(panel.base_field.geometry())
     assert panel.protocol.count() == page.protocol.count() == 3
-    panel.mode_buttons[
-        ReportingMode.PER_CYCLE
-    ].click()  # Arbitrary bases belong to per-cycle reporting.
+    panel.merge_count.setCurrentIndex(
+        0
+    )  # Arbitrary bases belong to per-cycle reporting.
     panel.base_address.setValue(120)
     assert (
         page.dirty
@@ -1207,10 +1571,9 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         if size[0] in (1080, 1920):
             assert initial_position == ((0, 1) if size[0] == 1920 else (1, 0))
         assert page.body.width() <= page.scroll_area.viewport().width()
-        assert panel.summary.y() == panel.service_status.y()
-        assert panel.title.geometry().right() < panel.summary.x()
-        assert panel.summary.geometry().right() < panel.service_status.x()
-        assert panel.summary.y() < panel.host.y()
+        assert panel.title.geometry().right() < panel.status_indicator.x()
+        assert panel.status_indicator.geometry().right() < panel.service_status.x()
+        assert panel.service_status.y() < panel.host.y()
         assert panel.host.isVisible() and panel.host.text() == "127.0.0.1"
         assert panel.port.accessibleName() == text("comm_port", window.language)
         for control in (panel.enabled, panel.port, panel.timeout):
@@ -1226,7 +1589,7 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         qapp.processEvents()
         panel = page.reporting_panel
         assert panel is not None
-        assert panel.summary.text() == "ACK -- · Successful 0 · ERR 0"
+        assert panel.feedback.isHidden()
         window.showMaximized()
         qapp.processEvents()
         # Maximization uses this platform's available geometry (offscreen/native
@@ -1239,10 +1602,7 @@ def test_first_navigation_uses_settled_geometry_then_resize_and_maximize(
         else:
             assert panel.width() == page.web_panel.width() == page.service_cards.width()
             assert panel.geometry().bottom() < page.web_panel.y()
-        # Offscreen maximization may expose only the minimum supported width;
-        # retain the full summary accessibly when the compact header elides it.
-        assert panel.summary.accessibleName() == "ACK -- · Successful 0 · ERR 0"
-        assert panel.summary.text().startswith("ACK --")
+        assert panel.feedback.isHidden() and not hasattr(panel, "summary")
         if size[0] == 1300:
             # Expanded controls must fit the viewport after first navigation,
             # language changes and shrinking from a previously wide grid.
@@ -1715,7 +2075,7 @@ def test_reporting_power_edits_only_draft_until_save_or_discard(
     assert panel.enabled.text() == text("plc_disable", window.language)
     assert load_communication_preferences(startup.data.communication) == original
     assert not panel.controller.reporting_selection().enabled
-    assert panel.service_status.text() == "OFF"
+    assert panel.service_status.text() == text("service_off", window.language)
     assert panel.service_status.accessibleName() == text(
         "plc_disabled", window.language
     )
@@ -1748,9 +2108,7 @@ def test_modbus_reporting_required_base_save_discard_and_protocol_fields(
     page = window.communication
     panel = page.reporting_panel
     assert panel is not None and panel.protocol.count() == 3
-    panel.mode_buttons[
-        ReportingMode.PER_CYCLE
-    ].click()  # Modbus remains a per-cycle protocol.
+    panel.merge_count.setCurrentIndex(0)  # Modbus remains a per-cycle protocol.
     panel.protocol.setCurrentIndex(2)
     assert panel.port.value() == 502 and panel.base_address.value() == -1
     assert (

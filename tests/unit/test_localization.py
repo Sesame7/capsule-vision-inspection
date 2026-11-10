@@ -97,6 +97,35 @@ IDENTITY_UI_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "status_service",
+    "status_service_tip",
+    "status_enable_tip",
+    "status_heartbeat",
+    "status_fault",
+    "status_alarm_address",
+    "status_heartbeat_tip",
+    "status_fault_tip",
+    "service_partial",
+    "alarm_signals",
+    "alarm_signal",
+    "alarm_active_count",
+    "alarm_enable_tip",
+    "alarm_stale_values",
+    "alarm_word",
+    "service_online",
+    "service_waiting",
+    "service_error",
+    "alarm_word_tip",
+    "alarm_preview",
+    "alarm_preview_waiting",
+    "alarm_preview_failed",
+    "alarm_preview_refresh",
+    "alarm_applied",
+    "alarm_current",
+    "alarm_stale",
+    "alarm_raw_bit",
+    "alarm_active",
+    "alarm_inactive",
     "customer_length",
     "customer_color",
     "customer_batch_total",
@@ -361,8 +390,14 @@ OPTIONAL_UI_KEYS = {
     "pilot_unknown",
     "pilot_raw_cycles",
     "plc_mode",
+    "plc_merge_count",
+    "plc_merge_unsupported",
+    "plc_commit_observation",
+    "plc_merge_count_tip",
     "plc_mode_per_cycle",
     "plc_mode_four_cycle",
+    "plc_mode_single_cycle",
+    "plc_group_hint",
     "plc_mode_per_cycle_short",
     "plc_mode_four_cycle_short",
     "plc_four_cycle_hint",
@@ -1587,7 +1622,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 791
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 826
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

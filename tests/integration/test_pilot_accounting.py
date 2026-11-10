@@ -223,6 +223,7 @@ def test_four_cycle_metrics_use_group_duration_and_language_accessibility(
     snapshot = replace(
         window.snapshot,
         pilot_counting=True,
+        reporting_mode=ReportingMode.FOUR_CYCLE,
         pilot_counters=PilotCounters(2, 6, 54, 12, 0),
         batch_duration_ms=125,
         counters=raw,

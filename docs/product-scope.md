@@ -31,7 +31,7 @@ they are not a release checklist claiming completion.
 | Production Batch | Operator-defined production scope with a durable identity separate from its displayed Batch ID text; may span Runs and application restarts |
 | Run | One successfully started inspection session; a new successful Start creates a new Run |
 | Cycle | One identified inspection occurrence with its configured camera results; the History detail unit |
-| PLC group | An attributable physical group of four Cycles, established by the reporting owner under the equipment phase/counter contract; not the operator's production Batch |
+| PLC group | An attributable physical group of one or four Cycles according to the selected reporting mode, established by the reporting owner under the equipment phase/counter contract; not the operator's production Batch |
 | PLC counter | W48/W148 value used in attribution; wraps/repeats and is not a globally unique group identity |
 | Final group outcome | One OK/NG/EMPTY product outcome per channel in a completed attributable PLC group; distinct from per-Cycle business/technical evidence |
 | PLC reporting / production export | Respectively, protocol result delivery to the PLC / a manually requested Excel or PDF production report |
@@ -69,7 +69,7 @@ prescribe a new service, database or framework.
 
 ### 3.1 Inspection flow and accepted baseline
 
-One PLC physical group contains **four exposure Cycles**. Each channel is
+In the four-Cycle workflow, one PLC physical group contains **four exposure Cycles**. Each channel is
 expected to retain the **same physical capsule rotating in place** across those
 exposures. Each camera image includes **six channels**; the upper and lower
 regions of each channel ROI are **two optical views obtained through a mirror
@@ -105,7 +105,7 @@ every-exposure target can be enforced.
 
 ### 3.2 Four-Cycle decision and source of truth
 
-- The product supports **per-Cycle reporting** and the formal **four-Cycle PLC-batch reporting** option. The former remains for supported alternative configurations; the latter is the normal intended hardware workflow.
+- The product supports **per-Cycle reporting**, **single-Cycle PLC-group reporting** and the formal **four-Cycle PLC-batch reporting** option. Per-Cycle and single-Cycle modes remain supported alternatives; four-Cycle mode is the normal intended hardware workflow.
 - The W48/W148 PLC counter identifies a physical group of four triggers **only when the reporting owner has established valid batch attribution under the agreed hardware phase/counter conditions**. A mere sequence of four observed CycleIds is not, by itself, proof of physical batch identity.
 - Use the **authoritative per-Cycle reject bitmaps and their bitwise OR**, not a second projection from displayed statuses. Verified EMPTY means the evidence-qualified non-reject case in the [PLC projection contract](communication.md#first-station-registers); a business EMPTY label alone is insufficient.
 
@@ -127,13 +127,19 @@ group attribution must not become a fabricated completed group or guessed PLC
 report. Inspection completion, report delivery and mechanical action remain
 distinct: a result-reporting **ACK does not prove mechanical ejection**.
 
-The [four-cycle reporting contract](communication.md#four-cycle-reporting) owns
+Single-Cycle group mode uses the same authoritative bitmap, final-channel rules
+and attribution safeguards for one required Cycle. It does not invent four
+observations or apply the four-rotation physical-process assumption to that mode.
+
+The [PLC group reporting contract](communication.md#four-cycle-reporting) owns
 implemented attribution, reject projection and completion timing; the
 [architecture contract](architecture.md#display-and-web) owns bounded presentation.
 
 ### 3.3 Production presentation
 
-- In four-Cycle mode, main counters are **Batches, OK, NG, EMPTY, Batch Duration**. Here Batches counts completed attributable PLC groups, not operator production Batches; count each channel once per group. Batch Duration runs from first Cycle admission to the fourth terminal result, using the reporting owner's monotonic clock. Publish it only for eligible groups; exclude subsequent attribution checks, writes and ACK. Cycle diagnostics remain separate.
+- In single-/four-Cycle group modes, main counters are **Batches, OK, NG, EMPTY, Batch Duration**. Here Batches counts completed attributable PLC groups, not operator production Batches; count each channel once per group. Batch Duration runs from first Cycle admission to the last required terminal result (one or four), using the reporting owner's monotonic clock. Publish it only for eligible groups; exclude subsequent attribution checks, writes and ACK. Cycle diagnostics remain separate.
+- Single-Cycle groups retain ordinary single-result indicators and the matching
+  single-Cycle image, with physical-group counters.
 - Keep 5/6 responsive camera cards and their six channels per camera. In four-Cycle mode each channel is represented by a stable **2 × 2 mini-tile**. Populate one cell per completed attributable Cycle: first top-left, second top-right, third bottom-left, fourth bottom-right. Green OK, red reject/NG, grey confirmed EMPTY, neutral for not-yet-observed. A new group's first completed Cycle resets the tile sequence.
 - In four-Cycle mode, update each camera's displayed image **once per completed group**, using the corresponding **fourth** frame. Overlays apply only to that displayed frame, never aggregate bounding boxes from earlier frames. The image may therefore remain from the preceding group while the new group's mini-tile advances; the UI must not misrepresent its identity.
 - A new eligible group clears any camera lacking its valid matching fourth frame to the startup empty-image state; other cameras display normally. Never substitute another exposure. Incomplete/invalidated groups do not count; phase loss neutralizes unconfirmed progress without retracting prior eligible completions or their retained images.
@@ -158,8 +164,8 @@ for an explicitly approved change. The product requirements are:
 
 - Communication is primarily an Engineer workspace: persist settings once, and have normal Production Start use the saved settings. Operator should not need to visit Communication each shift.
 - Retain **FINS/TCP**, **FINS/UDP**, and **Modbus/TCP**, with their existing applicable endpoint and validation rules. Preserve per-Cycle reporting.
-- Offer only `per_cycle` and `four_cycle` reporting, with a separate Enabled setting. New normal installations select four-cycle/FINS-TCP/W49 with reporting disabled. Obsolete `w48_observe` and `w48_active` settings are invalid, without migration or automatic replacement. Retire Observe-only execution and Pilot Evidence customer UI; preserve bounded engineering diagnostics and attribution evidence.
-- For the two IPCs, the configured four-Cycle FINS/TCP reporting commit base must support **W49 or W149**. Corresponding counter reads are **W48 or W148**. For 30 channels write two bitmap words; for 36 write three. The [current communication contract](communication.md#four-cycle-reporting) owns the implemented register, attribution and protection rules; equipment acceptance remains separate.
+- Offer only `per_cycle`, `single_cycle` and `four_cycle` reporting (Merge = 0, 1 and 4), with a separate Enabled setting. New normal installations select four-cycle/FINS-TCP/W49 with reporting disabled. Obsolete `w48_observe` and `w48_active` settings are invalid, without migration or automatic replacement. Retire Observe-only execution and Pilot Evidence customer UI; preserve bounded engineering diagnostics and attribution evidence.
+- For the two IPCs, the configured single-/four-Cycle FINS/TCP group-reporting commit base must support **W49 or W149**. Corresponding counter reads are **W48 or W148**. For 30 channels write two bitmap words; for 36 write three. The [current communication contract](communication.md#four-cycle-reporting) owns the implemented register, attribution and protection rules; equipment acceptance remains separate.
 - Engineer can save **reporting disabled** and still run pure inspection and statistics. Production clearly states **PLC reporting disabled**, without implying successful delivery. This does not itself disable independent alarm monitoring. Disabled reporting performs no automatic PLC reads/writes or group attribution; retain per-Cycle occurrence counting and Guest replay without inventing groups. Saved reporting edits activate at the next Start; do not unexpectedly mutate an active reporting worker.
 - Retain independent PLC Diagnostics endpoint, manual read/write, grouped watches, automatic refresh, DEC/HEX presentation, and ownership/authorization/write-protection behavior. Only targeted layout simplification is planned (including a compact, readable manual-write row).
 - Web Observer remains an **optional, read-only service for a trusted LAN**, without an independent Web login system or remote Production control. New four-Cycle presentation should reuse authoritative batch state, not invent Web-specific grouping.
@@ -169,14 +175,14 @@ for an explicitly approved change. The product requirements are:
 ### 6.1 Inspection History
 
 - Records opens on **Batches**. All roles may review a named Batch, its attributable production totals and associated Runs. Show actual inspection observations, Run start/end, Start Account and outcome. Preserve the admitted username and account identity for historical review. Old Runs can have unavailable account evidence.
-- Keep independent, durable four-cycle Run summaries in Batch detail and reports:
+- Keep independent, durable attributed-group Run summaries in Batch detail and reports:
   Inspected, OK, NG and Pass Rate. Update Run and Batch totals from the same
   eligible group fact. Detail expiry must not erase these summaries, and incomplete
   historical evidence must not be turned into guessed capsule counts.
 - Operators and above can maintain optional product name, specification and notes outside an active Run. View Inspections opens the exact persisted Batch without changing Production selection. Retain Audit evidence of information edits.
 
 - **One History record per Cycle** remains the storage and detail unit. Keep the existing camera/channel detail matrix, per-Cycle reasons, time filtering and result lookup.
-- Associate the four observed Run/Cycle identities with their eligible physical group regardless of History arrival order. Retain group timing and final outcomes for the same 30-day detail window.
+- Associate the required one or four observed Run/Cycle identities with their eligible physical group regardless of History arrival order. Retain group timing and final outcomes for the same 30-day detail window.
 - Persist enough association to distinguish the production Batch, Run, PLC group and Cycle identities defined above; PLC counter text alone is not a group key.
 - Do not convert a lack of verified physical association into a fictitious group. Where a reporting mode does not establish that association, keep Cycle records without an invented physical-group identity.
 - PRODUCT-0 requires no general migration of unsupported older inspection History formats. Any manual clearing of affected data belongs to a separately approved upgrade. This does not cover account storage or authorize cleanup now. The application must **not** silently delete the user's database or other assets during normal startup.
@@ -207,7 +213,7 @@ for an explicitly approved change. The product requirements are:
   blank paper signature/review fields, without implying electronic approval.
 - Defect reports summarize effective ViMo labels and traditional NG categories.
   Default affected capsule-position counting requires the entire selected scope
-  to comprise complete trustworthy four-cycle groups. Partial groups, unattributed
+  to comprise complete trustworthy one-/four-cycle groups according to each Run's saved mode. Partial groups, unattributed
   Cycles or an empty scope permit Detection Count only, with an explanation.
   Detection Count is also available for a complete group scope. Category overlap
   is distinct from total NG; missing historical classification is never inferred.

@@ -854,9 +854,13 @@ class HistoryPage(QWidget):
 
     @staticmethod
     def _group_caption(record: HistoryRecord) -> str:
-        if record.group_first_cycle is None or record.group_slot is None:
+        if (
+            record.group_first_cycle is None
+            or record.group_slot is None
+            or record.group_size not in (1, 4)
+        ):
             return "—"
-        return f"{record.group_first_cycle} · {record.group_slot}/4"
+        return f"{record.group_first_cycle} · {record.group_slot}/{record.group_size}"
 
     def _summary(self, record: HistoryRecord) -> str:
         parts = [f"{state} {count}" for state, count in _ResultDelegate.counts(record)]

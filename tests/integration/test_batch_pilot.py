@@ -7,6 +7,7 @@ from threading import Event
 from time import perf_counter
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 from tests.integration.test_basler_production import (
     SERIALS,
@@ -266,12 +267,14 @@ def test_disabled_four_cycle_selection_has_no_plc_owner_or_group_attribution(
 
 @pytest.mark.parametrize("role", list(Role))
 @pytest.mark.parametrize("base", [49, 149])
+@pytest.mark.parametrize("mode", [ReportingMode.SINGLE_CYCLE, ReportingMode.FOUR_CYCLE])
 def test_normal_authorization_warmup_controls_and_stop(
     qapp: QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     role: Role,
     base: int,
+    mode: ReportingMode,
 ) -> None:
     backend = PassiveBackend()
     monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
@@ -285,7 +288,7 @@ def test_normal_authorization_warmup_controls_and_stop(
             ReportingSettings(
                 endpoint=FinsTcpEndpoint(port=peer.port),
                 base_address=base,
-                mode=ReportingMode.FOUR_CYCLE,
+                mode=mode,
             ),
         )
         startup = authenticated_startup(data, engine_factory=lambda _: engine)
@@ -320,7 +323,7 @@ def test_normal_authorization_warmup_controls_and_stop(
             app.start().result(3)
             assert not peer.packets and peer.connections == 0
             for action in (app.pause_source, app.step_source, app.resume_source):
-                with pytest.raises(ApplicationStateError, match="Four-cycle"):
+                with pytest.raises(ApplicationStateError, match="PLC group"):
                     action()
             if role >= Role.ENGINEER:
                 for address in range(base - 1, base + 4):
@@ -335,7 +338,7 @@ def test_normal_authorization_warmup_controls_and_stop(
                             )
                         )
             peer.set_words(base - 1, (38,))
-            for cycle in range(1, 5):
+            for cycle in range(1, (mode.group_size or 0) + 1):
                 backend.expose(cycle)
                 until(
                     lambda cycle=cycle: (
@@ -355,11 +358,17 @@ def test_normal_authorization_warmup_controls_and_stop(
             assert snapshot is not None
             assert snapshot.acknowledged_count == 1
             counters = app.snapshot().counters
-            assert counters.channel_ok == 144
-            assert counters.business_ok + counters.business_empty == 144
+            assert counters.channel_ok == 36 * (mode.group_size or 0)
+            assert counters.business_ok + counters.business_empty == 36 * (
+                mode.group_size or 0
+            )
             assert counters.business_ng == counters.business_unknown == 0
             physical = app.snapshot().pilot_counters
             assert app.snapshot().pilot_counting
+            assert app.snapshot().reporting_mode is mode
+            assert app.snapshot().four_cycle_display is (
+                mode is ReportingMode.FOUR_CYCLE
+            )
             assert physical.batches_completed == 1
             assert physical.channel_ok + physical.channel_empty == 36
             assert physical.channel_ng == physical.channel_unknown == 0
@@ -376,8 +385,9 @@ def test_normal_authorization_warmup_controls_and_stop(
 
 
 @pytest.mark.parametrize("base", [49, 149])
+@pytest.mark.parametrize("mode", [ReportingMode.SINGLE_CYCLE, ReportingMode.FOUR_CYCLE])
 def test_folder_pilot_rejected_before_session_or_engine(
-    tmp_path: Path, base: int
+    tmp_path: Path, base: int, mode: ReportingMode
 ) -> None:
     data = saved_data(tmp_path)
     engine = Engine()
@@ -391,7 +401,7 @@ def test_folder_pilot_rejected_before_session_or_engine(
                 ReportingSettings(
                     endpoint=FinsTcpEndpoint(),
                     base_address=base,
-                    mode=ReportingMode.FOUR_CYCLE,
+                    mode=mode,
                 ),
             )
         )
@@ -408,8 +418,9 @@ def test_folder_pilot_rejected_before_session_or_engine(
         close(startup)
 
 
+@pytest.mark.parametrize("mode", [ReportingMode.SINGLE_CYCLE, ReportingMode.FOUR_CYCLE])
 def test_failed_warmup_never_reads_w48(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: ReportingMode
 ) -> None:
     backend = PassiveBackend()
     monkeypatch.setattr(_basler_sdk, "PylonBackend", lambda: backend)
@@ -428,7 +439,7 @@ def test_failed_warmup_never_reads_w48(
                     True,
                     ReportingSettings(
                         endpoint=FinsTcpEndpoint(port=peer.port),
-                        mode=ReportingMode.FOUR_CYCLE,
+                        mode=mode,
                     ),
                 )
             )
@@ -478,13 +489,12 @@ def test_four_cycle_ui_draft_save_localization_and_permission(
         page = window.communication
         panel = page.reporting_panel
         assert panel is not None
-        assert panel.mode_buttons[ReportingMode.FOUR_CYCLE].isChecked()
-        assert tuple(panel.mode_buttons) == tuple(ReportingMode)
-        assert panel.mode_group.exclusive()
+        assert panel.merge_count.currentIndex() == 4
+        assert panel.merge_count.count() == 9
         assert not panel.enabled.isChecked() and not hasattr(panel, "evidence")
-        panel.mode_buttons[ReportingMode.PER_CYCLE].click()
+        panel.merge_count.setCurrentIndex(0)
         panel.base_address.setValue(120)
-        panel.mode_buttons[ReportingMode.FOUR_CYCLE].click()
+        panel.merge_count.setCurrentIndex(4)
         assert panel.base_address.value() == 120  # No implicit address replacement.
         assert panel.base_choices.currentIndex() == -1
         with pytest.raises(ValueError, match="W49 or W149"):
@@ -507,13 +517,16 @@ def test_four_cycle_ui_draft_save_localization_and_permission(
         for language in LANGUAGES:
             window.set_language(language)
             qapp.processEvents()
-            assert panel.mode_buttons[ReportingMode.FOUR_CYCLE].isChecked()
+            assert panel.merge_count.currentIndex() == 4
             assert panel.mode_control.accessibleName()
-            for mode, button in panel.mode_buttons.items():
-                assert button.accessibleName() == text(
-                    "plc_mode_" + mode.value, language
-                )
-                assert button.accessibleName() in button.toolTip()
+            for index, mode in (
+                (0, ReportingMode.PER_CYCLE),
+                (1, ReportingMode.SINGLE_CYCLE),
+                (4, ReportingMode.FOUR_CYCLE),
+            ):
+                assert panel.merge_count.itemData(
+                    index, Qt.ItemDataRole.AccessibleTextRole
+                ) == (f"{index} · {text('plc_mode_' + mode.value, language)}")
             assert panel.base_choices.currentText() == "W149"
             assert panel.base_field.rect().contains(panel.base_choices.geometry())
         identity = startup.application.identity
@@ -527,7 +540,8 @@ def test_four_cycle_ui_draft_save_localization_and_permission(
             worker.snapshot(), phase_issue="W48 changed"
         )
         window.set_language("en")
-        assert window.event_frame.plc.text() == f"PLC · {text('technical_error', 'en')}"
+        assert window.event_frame.plc.text() == "W149 · —"
+        assert "W48 changed" in window.event_label.toolTip()
     finally:
         close_window(window)
         delivery.detach()

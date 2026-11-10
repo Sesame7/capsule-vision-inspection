@@ -43,8 +43,8 @@ from capsule_vision.configuration.alarm_definitions import (
 )
 from capsule_vision.configuration.catalog import RecipeCatalog, discover_models
 from capsule_vision.configuration.communication_preferences import (
-    AlarmPreferences,
     CommunicationPreferences,
+    StatusPreferences,
     load_communication_preferences,
 )
 from capsule_vision.configuration.preferences import read_preferences
@@ -295,7 +295,7 @@ def alarm_events(
     shift: Shift,
     batch: str | None,
     definitions: AlarmDefinitions,
-    selection: AlarmPreferences,
+    selection: StatusPreferences,
 ) -> Iterator[AlarmEvent]:
     checks = ALARM_CHECKS_PER_SHIFT[shift.index]
     for i in range(checks):
@@ -332,8 +332,8 @@ def alarm_events(
             signal.zh,
             signal.en,
             f"fins_tcp://{selection.endpoint.host}:{selection.endpoint.port}",
-            selection.station,
-            selection.address,
+            None,
+            selection.word_address,
             signal.bit,
             f"{definitions.origin}/{definitions.version}  SHA-256 {definitions.digest}",
             batch,
@@ -358,7 +358,7 @@ def make_history(
     config: ResolvedInspectionConfiguration,
     identity: ConfigurationIdentity,
     definitions: AlarmDefinitions,
-    alarm: AlarmPreferences,
+    alarm: StatusPreferences,
     four: ReportingSettings,
     per_cycle: ReportingSettings,
 ) -> None:
@@ -724,7 +724,7 @@ def populate(
                     schedule,
                     *prepared,
                     definitions,
-                    prefs.alarm,
+                    prefs.status,
                     four,
                     replace(four, mode=ReportingMode.PER_CYCLE),
                 )

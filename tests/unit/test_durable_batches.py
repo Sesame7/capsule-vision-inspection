@@ -127,7 +127,10 @@ def test_group_membership_dedup_and_expiry_are_independent_of_summaries(
         restored = history.select_batch("Batch").result(WAIT)
         assert restored and restored.counters == expected
         assert restored.groups == PilotCounters().completed(fact)
-        assert restored.duration_ms == 125 and restored.four_cycle
+        assert (
+            restored.duration_ms == 125
+            and restored.reporting_mode is ReportingMode.FOUR_CYCLE
+        )
         history.select_batch(None).result(WAIT)
         assert history.select_batch("Batch").result(WAIT) == restored
     finally:

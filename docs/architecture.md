@@ -300,15 +300,32 @@ and automatic PLC transactions do not produce entries.
 
 ## Alarm monitoring and history
 
-Normal Application composition owns one independent, read-only monitor for
-the [saved alarm selection](communication.md#plc-alarm-monitoring). Its worker
-captures definitions at activation and holds one observation and one connection
-at a time. A first active signal is recorded as observed active. Subsequent
+Normal Application composition owns one auxiliary serial FINS/TCP status service
+for the [saved status selection](communication.md#plc-status-service-and-alarm-monitoring).
+The existing alarm worker writes a fresh software heartbeat/Application FAULT
+pair, then reads the alarm word, with one connection and no periodic backlog.
+Application state is copied under its lock before each write, never during I/O.
+The Production reporting owner remains independent. Read/write health and last
+successful observations are separate; a partial failure never fabricates fresh
+alarm values or changes Application FAULT. Saved selection replacement and Close
+retire the socket on its owning thread; the old status-write range remains
+reserved until retirement. Invalid definitions prevent activation. This service
+uses no new database, audit stream or connection-sharing abstraction.
+Its worker captures definitions at activation and holds bounded observations
+and one connection at a time. A first active signal is recorded as observed active. Subsequent
 successful reads record changes only. During communication loss the last known
 active set remains available and is marked stale. The first valid reading after
 a gap reconciles differences as observed active or observed recovered. All
 timestamps are host observations. Pulses entirely between reads can be missed.
 A new activation starts a fresh observation baseline.
+
+The immutable monitor snapshot also carries its applied selection, frozen
+definitions, last successful raw word and observation time. The Communication
+card presents that same evidence without additional PLC reads. A failed alarm read
+retains the word/time as stale; a changed saved selection clears the old evidence
+before activation. Disabled-monitor definition previews are separate read-only
+file jobs on the Communication page's existing bounded worker/delivery path;
+they never substitute for active definitions, issue PLC requests or change History.
 
 One nonblocking handoff carries all transitions from a word to the existing
 History SQLite owner. Its bounded queue retains the lifecycle slot for Run
@@ -327,7 +344,11 @@ retain their labels and cursors. Changing the UI language selects from the
 labels captured with the observation, with English fallback. Reading History
 never consults the current equipment file.
 
-All roles can see the PLC alarm status in the existing 58-pixel strip. Operator,
+All roles can see the PLC alarm status and expand the Communication monitoring
+card to inspect signal names, bit positions, raw values and interpreted states;
+full word.bit addresses remain in tooltips and accessibility descriptions.
+Only Engineer and Administrator can edit its settings. The global status strip
+remains independent of the expanded card. Operator,
 Engineer and Administrator use the shared Records date range and Batch selection
 on the Alarms tab, with an additional signal-category filter. UI Batch selection
 matches the stored Batch UUID, never a label or a nearby timestamp. The explicit
@@ -503,15 +524,15 @@ or reports. PAUSING becomes PAUSED only after the admitted capture boundary,
 terminal inspection, actual camera-task return and accepted reporting settle.
 Reporting settlement may be ACK or an explicit failure; it is not PLC consumption.
 
-The explicitly enabled [four-cycle reporting mode](communication.md#four-cycle-reporting)
-uses an alternative serial communication worker under the same generation/session
+The explicitly enabled [single-/four-cycle PLC group modes](communication.md#plc-group-reporting)
+reuse the alternative serial communication worker under the same generation/session
 owner. Camera admission queues scalar CycleIds; terminal callbacks hand off the
 existing reject projection. Only the communication thread reads the selected
-W48/W148 counter or writes bitmap/commit words derived from W49/W149. Four observed
-cycles are associated under external phase assumptions, without changing
+W48/W148 counter or writes bitmap/commit words derived from W49/W149. One or four
+observed cycles, according to the frozen reporting mode, are associated under external phase assumptions, without changing
 scheduling, judgments, occurrence accounting or History.
 At the existing successful pre-write attribution check, the worker publishes one
-immutable four-result completion to Application. Separate `PilotCounters` classify
+immutable one-/four-result completion to Application. Separate `PilotCounters` classify
 each ChannelId once using those business statuses and the already merged reject
 words: every set reject bit means final NG (including conservative rejection),
 otherwise all verified EMPTY means EMPTY, otherwise OK with only OK/verified EMPTY
@@ -521,7 +542,7 @@ Application consumes the completion outside the reporting lock and without Qt;
 one generation-local CycleId high-water mark prevents duplicate/stale accounting.
 Incomplete or initially unattributable batches do not count. A subsequent bitmap
 or commit failure does not retract an already eligible inspection completion.
-Four-cycle reporting rejects Pause/Step/Resume at the Application boundary;
+PLC group reporting rejects Pause/Step/Resume at the Application boundary;
 Stop/Close and actual worker cleanup retain their existing ownership. Disabled reporting has
 no automatic owner, counter reads or group attribution, while per-Cycle inspection
 and occurrence counting continue. New normal installations select disabled
@@ -622,7 +643,7 @@ zero production results/counters. Only successful Start promotes the candidate;
 failed activation preserves last-known-good active identity and returns READY if
 cleanup is safe. Stop/Start or a Recipe change retains the selected Batch's totals.
 `ProductionCounters` describe cycle/channel occurrences, not physical
-products; enabled four-cycle reporting's separate conditional channel-position totals are
+products; enabled PLC group reporting's separate conditional channel-position totals are
 described above.
 
 Stop prevents inspection admission, finalizes incomplete collection and explicitly rejects
@@ -810,7 +831,15 @@ termination is recorded. Compact time captions omit the year; tooltips and
 accessible text retain the complete local observation and UTC offset. Account
 shows the stored initiating username on Run rows, without inventing a single
 account for the Batch.
-Inspected is durable four-cycle OK + NG, and pass rate is OK / Inspected.
+The existing Run reporting-mode value determines one- or four-member group
+coverage; membership is never inferred from however many detail rows remain.
+Before `single_cycle`, every persisted group fact had four members, including
+trusted compositions whose Run had no reporting selection. Those facts retain
+four-member interpretation; only explicit `single_cycle` Runs use one member.
+This does not grant per-cycle runtime reporting any physical-group attribution.
+Both modes update Run and Batch totals from the same deduplicated eligible fact.
+They reuse the existing tables without a schema migration or historical rewrite.
+Inspected is durable attributed-group OK + NG, and pass rate is OK / Inspected.
 Without attributable groups the quantities show a dash. A zero denominator
 leaves the rate unavailable.
 
@@ -946,8 +975,9 @@ Batch scope and signal category without another report or Batch selector.
   the effective shared Records date/unbatched and Inspection result filters,
   ignoring pagination.
   Affected capsule-position counting is offered and defaults only when the entire
-  nonempty scope is a union of complete, valid, attributable four-cycle groups.
-  Every group must have its four distinct stored members, exposure slots and valid
+  nonempty scope is a union of complete, valid, attributable PLC groups.
+  Every group must have exactly one or four distinct stored members and slots, as
+  required by its Run's persisted mode, and valid
   stored channel outcomes; a partial group or an unattributed Cycle makes the
   entire scope Detection Count only. This rule is checked again in the export
   snapshot; a changed scope fails explicitly instead of silently changing basis.
@@ -1131,8 +1161,8 @@ DPR-aware vector icons. Normal startup maximizes the native framed window, keepi
 taskbar clearance; portrait Production retains two columns and three rows. Theme
 switching is presentation-only and is not persisted. Language retains its existing
 preference behavior. The fixed bottom strip preserves source identification and
-connection counts, summarizes observed PLC worker, alarm monitor and Web states, and
-retains current feedback. The three service groups have no runtime tooltips;
+connection counts, summarizes observed production-reporting worker, alarm monitor
+and Web states, and retains current feedback. The three service groups have no runtime tooltips;
 actionable failures use the existing visible feedback. Reporting retains its
 visible lifecycle and ACK/success/ERR summary without runtime diagnostic tooltips;
 detailed observations stay with their existing owners.
@@ -1150,9 +1180,18 @@ Only the event group stretches when the window grows; status changes do not
 move the persistent groups.
 
 Compact captions use their surrounding page/card context: service cards show
-Reporting and Web, and field labels use IPv4, units and short localized names.
+Reporting, Web and Status; the bottom strip also labels production reporting
+as Reporting rather than PLC. Service-card dots, state captions and power actions
+share measured width/spacing budgets. Title slots use the widest current localized
+title measured with its Qt font and update only when captions/font metrics change.
+Stacked cards align their indicators; side-by-side cards retain local header
+coordinates and right-aligned actions. Runtime observations do not move the dots.
+Reporting's compact Merge count dropdown uses 0/1/4 for per-cycle/single-group/four-group mode
+choices, with unsupported counts visible but disabled; its independent power
+action and Save/next-Start lifecycle are unchanged.
+Field labels use IPv4, units and short localized names.
 Full localized meanings remain in tooltips and
-accessibility text. Routine disabled services show `OFF`; waiting for the next
+accessibility text. Routine disabled services show localized Off captions; waiting for the next
 Start, active transitions, failures and ACK observations remain distinct. Idle
 diagnostics omit no-request prose; watch success uses `OK` with its observation
 time, while read/write failures remain visible. The diagnostic target stays
@@ -1259,14 +1298,14 @@ timing displays `--`. Whole metric groups wrap when their text cannot fit one ro
 These are cumulative occurrences, retained by Stop/Start and Recipe changes and
 scoped to the selected Batch.
 
-An enabled four-cycle session instead presents completed **Batches** and
+An enabled single-/four-cycle session instead presents completed **Batches** and
 separate cumulative channel-position OK, NG and EMPTY totals. Final NG includes
 every authoritative reject bit, including conservative rejection. The Batches
 tooltip exposes the original raw inspection-cycle count. **Batch Duration** runs
-from the first Cycle admission to the arrival of all four terminal results at the reporting
+from the first Cycle admission to the arrival of all required terminal results at the reporting
 owner, excluding later attribution checks, writes and ACK. Unavailable timing is
 `--`; per-Cycle timing remains separate in camera diagnostics. The five metric
-groups and their wrapping behavior are unchanged. Chinese/English four-cycle captions
+groups and their wrapping behavior are unchanged. Chinese/English group-counting captions
 use the existing English fallback in other languages.
 
 The last successfully activated session determines the displayed counting unit,
@@ -1282,7 +1321,8 @@ mode and any persistence warning. It appends a routine Audit Trail action when
 available and leaves historical records and PLC registers intact.
 
 The History Cycle table shows Time, `#`, Group, Batch, Recipe and Result. Group
-shows the first CycleId and the Cycle's stored slot (for example, `2265 · 2/4`),
+shows the first CycleId and the Cycle's stored slot (for example, `2265 · 2/4`
+or `2265 · 1/1`), with group size read from the persisted Run reporting mode,
 or `—` when there is no persisted association. Its tooltip and accessible
 description include the full Run identity. The Time heading tooltip retains clock semantics, and elided
 Batch/Recipe names retain their full-value tooltips. Result filters show the original status codes with
@@ -1294,6 +1334,9 @@ detailed diagnostic evidence remains in the stored record.
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,
 dimensions and source key. Only matching evidence may overlay those pixels.
+Single-cycle PLC groups use the ordinary identity-matched single-Cycle image and
+single-result indicators, with authoritative physical-group counters. Group
+counting and four-exposure display are separate snapshot facts.
 In four-cycle mode the same store accepts only the reporting owner's actual fourth
 member: at most one candidate fourth image and one eligible display image per
 camera, plus their matching fourth result evidence. Eligibility promotes only
@@ -1360,6 +1403,9 @@ its identity. Confirmed service-thread exit releases the publication/cache; an
 incomplete join retains ownership and cache. There is no disk cache or image history.
 Application/display snapshots are sampled separately, not atomic multi-camera capture.
 Publisher ID, revision and source identities prevent old bytes/new evidence aliasing.
+Web exposes physical-group metrics for both attributed modes. Its `four_cycle`
+presentation flag applies only to four-member groups; `group_counting` governs
+metrics independently of the image/indicator presentation.
 Web four-cycle metadata carries the same group membership, scalar channel lamps,
 metrics and eligible fourth-image identities. Each 28×28 CSS-pixel slot centers
 the 24×24 lamp grid with 2 pixels of padding. The browser displays lamps independently

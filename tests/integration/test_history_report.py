@@ -45,6 +45,7 @@ from capsule_vision.application.report_scope import (
     HistoryQuery,
     ReportRequest,
 )
+from capsule_vision.communication.reporting import ReportingMode
 from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -52,8 +53,9 @@ from capsule_vision.ui.history_page import HistoryPage
 from capsule_vision.ui.report_dialog import ReportDialog
 
 
+@pytest.mark.parametrize("mode", [ReportingMode.SINGLE_CYCLE, ReportingMode.FOUR_CYCLE])
 def test_group_column_disambiguates_runs_and_has_no_inferred_members(
-    qapp: QApplication, tmp_path: Path
+    qapp: QApplication, tmp_path: Path, mode: ReportingMode
 ) -> None:
     history = ProductionHistory(tmp_path / "history.sqlite3")
     page = HistoryPage(history)
@@ -64,16 +66,37 @@ def test_group_column_disambiguates_runs_and_has_no_inferred_members(
         assert batch
         context = HistoryContext(time(), batch.uuid, batch.label, "run-1", RECIPE)
         for run, first in (("run-1", 2265), ("run-2", 2264)):
-            history.start_run(batch.uuid, run, RECIPE, FOUR_CYCLE).result(WAIT)
-            record_group(history, replace(context, run_id=run), first, 5, 8)
+            history.start_run(
+                batch.uuid, run, RECIPE, replace(FOUR_CYCLE, mode=mode)
+            ).result(WAIT)
+            if mode is ReportingMode.FOUR_CYCLE:
+                record_group(history, replace(context, run_id=run), first, 5, 8)
+            else:
+                result = mixed_result(first)
+                from capsule_vision.communication.reporting import (
+                    CompletedReportingBatch,
+                    FirstStationReport,
+                )
+
+                report = FirstStationReport.from_result(1, result)
+                history.offer_group(
+                    run,
+                    CompletedReportingBatch(
+                        report.identity, 8, (report,), report.reject_words
+                    ),
+                )
+                assert history.offer(replace(context, run_id=run), result)
             history.finish_run(run, "stopped", False).result(WAIT)
         history.start_run(batch.uuid, "run-3", RECIPE, None).result(WAIT)
         for cycle in range(2265, 2269):
             assert history.offer(replace(context, run_id="run-3"), mixed_result(cycle))
         page.activate()
         until(lambda: not page.busy)
-        assert page.cycles.rowCount() == 12 and page.cycles.columnCount() == 6
-        for row in range(12):
+        assert (
+            page.cycles.rowCount() == 2 * (mode.group_size or 0) + 4
+            and page.cycles.columnCount() == 6
+        )
+        for row in range(page.cycles.rowCount()):
             item, result = page.cycles.item(row, 2), page.cycles.item(row, 5)
             assert item and result
             record = result.data(Qt.ItemDataRole.UserRole)
@@ -82,7 +105,7 @@ def test_group_column_disambiguates_runs_and_has_no_inferred_members(
             expected = (
                 "—"
                 if run_id == "run-3"
-                else f"{first} · {record.cycle_id - first + 1}/4"
+                else f"{first} · {record.cycle_id - first + 1}/{mode.group_size}"
             )
             assert item.text() == expected and run_id in item.toolTip()
             assert (
@@ -134,7 +157,7 @@ def test_filename_suggestion_follows_effective_report_and_batch(
     parent = QWidget()
     batch_id = "private-batch-identity" if label else None
     pending: Future[DefectScope] = Future()
-    pending.set_result(DefectScope(4, 1, label))
+    pending.set_result(DefectScope(4, 1, label, 4))
 
     def read_scope(
         _query: HistoryQuery, *, revision: int | None = None
@@ -373,7 +396,7 @@ def test_defect_basis_selection_late_scope_and_export_dismissal(
         assert pending and not pending.export.isEnabled()
         identity.logout()
         until(lambda: page.report_dialog is None)
-        late.set_result(DefectScope(4, 1, "Complete"))
+        late.set_result(DefectScope(4, 1, "Complete", 4))
         qapp.processEvents()
         assert page.report_dialog is None and not page.export_button.isEnabled()
     finally:

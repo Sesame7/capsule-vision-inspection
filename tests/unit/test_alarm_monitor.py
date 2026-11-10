@@ -17,6 +17,7 @@ from tests.unit.test_batch_reporting import admit, owner, submit, wait
 
 from capsule_vision.application import (
     ApplicationError,
+    ApplicationState,
     ProductionApplication,
     alarm_records,
 )
@@ -31,7 +32,8 @@ from capsule_vision.configuration.alarm_definitions import (
     load_alarm_definitions,
 )
 from capsule_vision.configuration.communication_preferences import (
-    AlarmPreferences,
+    CommunicationPreferences,
+    StatusPreferences,
     load_communication_preferences,
     save_communication_preferences,
 )
@@ -54,8 +56,10 @@ def definitions(path: Path, *rows: dict[str, object], version: str = "site-1") -
     path.write_text(json.dumps({"version": version, "signals": rows}), encoding="utf-8")
 
 
-def selection(peer: TcpPeer, station: int = 1) -> AlarmPreferences:
-    return AlarmPreferences(True, station, FinsTcpEndpoint(port=peer.port, timeout=0.5))
+def selection(peer: TcpPeer, address: int = 18) -> StatusPreferences:
+    return StatusPreferences(
+        True, FinsTcpEndpoint(port=peer.port, timeout=0.5), address
+    )
 
 
 def test_bundled_workbook_mapping_override_and_persisted_selection(
@@ -86,10 +90,15 @@ def test_bundled_workbook_mapping_override_and_persisted_selection(
     comm = tmp_path / "communication.json"
     comm.write_text("{}", encoding="utf-8")
     old = load_communication_preferences(comm)
-    assert not old.alarm.enabled and old.alarm.address == 18
-    value = replace(old, alarm=AlarmPreferences(True, 2, FinsTcpEndpoint(port=19600)))
+    assert not old.status.enabled and old.status.word_address == 18
+    value = replace(
+        old, status=StatusPreferences(True, FinsTcpEndpoint(port=19600), 118)
+    )
     save_communication_preferences(comm, value)
-    assert value.alarm.address == 118 and load_communication_preferences(comm) == value
+    assert (
+        value.status.word_address == 118
+        and load_communication_preferences(comm) == value
+    )
 
 
 @pytest.mark.parametrize(
@@ -202,12 +211,17 @@ def test_unreadable_local_definitions_never_use_or_copy_the_bundle(
     "alarm",
     [
         {"enabled": 1},
-        {"station": True},
-        {"station": 3},
+        {"station": 1, "word_address": 18},
         {"protocol": "fins_udp"},
         {"host": "invalid"},
         {"timeout": 10},
         {"port": 0},
+        {"word_address": True},
+        {"word_address": -1},
+        {"word_address": 512},
+        {"word_address": 18.0},
+        {"word_address": "W18"},
+        {"word_address": None},
     ],
 )
 def test_invalid_alarm_preferences_are_explicit_and_isolated_at_startup(
@@ -216,15 +230,18 @@ def test_invalid_alarm_preferences_are_explicit_and_isolated_at_startup(
     path = tmp_path / "communication.json"
     path.write_text(
         json.dumps(
-            {"alarm": alarm, "reporting": {"enabled": True, "protocol": "fins_tcp"}}
+            {
+                "status": {"word_address": 18, "fault_address": 47, **alarm},
+                "reporting": {"enabled": True, "protocol": "fins_tcp"},
+            }
         ),
         encoding="utf-8",
     )
     with pytest.raises(ConfigurationError):
         load_communication_preferences(path)
     errors: list[str] = []
-    result = load_communication_preferences(path, alarm_error=errors.append)
-    assert errors and result.reporting.enabled and not result.alarm.enabled
+    result = load_communication_preferences(path, status_error=errors.append)
+    assert errors and result.reporting.enabled and not result.status.enabled
 
 
 def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None:
@@ -240,18 +257,27 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
         path,
         events.extend,
         lambda: (100.0, "batch-1", "Line A"),
+        state=lambda: ApplicationState.READY,
         interval=0.025,
         diagnostics=writer,
     )
     with TcpPeer() as peer:
         try:
-            monitor.apply_saved(selection(peer, 2))
+            monitor.apply_saved(selection(peer, 118))
             wait(lambda: len(events) == 1)
             assert events[0].signal == "air" and events[0].state == "observed_active"
-            assert (events[0].station, events[0].address, events[0].bit) == (2, 118, 3)
+            assert (events[0].station, events[0].address, events[0].bit) == (
+                None,
+                118,
+                3,
+            )
             assert events[0].batch_id == "batch-1" and events[0].batch_label == "Line A"
             assert "equipment/site-1" in events[0].definition
             assert monitor.snapshot().active[0].label("de") == "Luftdruck niedrig"
+            initial = monitor.snapshot()
+            assert initial.raw_word == 0 and initial.observed_at == 100.0
+            assert initial.definitions == load_alarm_definitions(path)
+            assert initial.selection == selection(peer, 118)
             definitions(
                 path,
                 signal(id="new", bit=15, translations={"de": "Neuer Alarm"}),
@@ -266,8 +292,11 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
             wait(lambda: len(peer.packets) >= 5)
             assert len(events) == 3
             peer.fail_next("read", "disconnect")
-            wait(lambda: monitor.snapshot().state == "unavailable")
+            wait(lambda: monitor.snapshot().state == "partial")
             assert [s.id for s in monitor.snapshot().active] == ["stop"]
+            stale = monitor.snapshot()
+            assert stale.raw_word == 12 and stale.observed_at == 100.0
+            assert stale.definitions == initial.definitions and stale.issue
             peer.set_words(118, (0,))
             wait(lambda: len(events) == 5)
             assert [e.state for e in events[-2:]] == [
@@ -279,9 +308,19 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
                 "Luftdruck niedrig"
             ] * 3
             assert all(
-                p[10:18] == bytes.fromhex("0101 b1 0076 00 0001") for p in peer.packets
+                p[10:18] == bytes.fromhex("0101 b1 0076 00 0001")
+                if p[10:12] == b"\x01\x01"
+                else p[10:18]
+                in (
+                    bytes.fromhex("0102 b1 002f 00 0001"),
+                    bytes.fromhex("0102 b1 002e 00 0001"),
+                )
+                for p in peer.packets
             )
-            monitor.apply_saved(AlarmPreferences())
+            monitor.apply_saved(StatusPreferences())
+            assert monitor.snapshot().raw_word is None
+            assert monitor.snapshot().observed_at is None
+            assert monitor.snapshot().definitions is None
             peer.set_words(18, (1 << 15,))
             monitor.apply_saved(selection(peer))
             wait(lambda: len(events) == 6)
@@ -298,13 +337,90 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
     ]
 
 
+@pytest.mark.parametrize("address", (0, 18, 77, 118, 511))
+def test_explicit_alarm_word_roundtrip(tmp_path: Path, address: int) -> None:
+    path = tmp_path / "communication.json"
+    alarm = StatusPreferences(enabled=True, word_address=address)
+    preferences = CommunicationPreferences(status=alarm)
+    save_communication_preferences(path, preferences)
+    assert load_communication_preferences(path) == preferences
+    encoded = json.loads(path.read_text(encoding="utf-8"))["status"]
+    assert encoded["word_address"] == address and "station" not in encoded
+
+
+def test_example_definitions_and_explicit_word_activation(tmp_path: Path) -> None:
+    examples = Path(__file__).parents[1] / "fixtures" / "alarms"
+    standard = load_alarm_definitions(examples / "standard-11.json")
+    alternate = load_alarm_definitions(examples / "alternate-6.json")
+    assert (examples / "standard-11.json").read_bytes() == TEMPLATE.read_bytes()
+    assert len(standard.signals) == 11 and len(alternate.signals) == 6
+    assert [s.bit for s in alternate.signals] == [0, 2, 5, 8, 12, 15]
+    assert alternate.signals[0].id == standard.signals[0].id
+    assert alternate.signals[0].en != standard.signals[0].en
+    assert "emergency_stop" not in {s.id for s in alternate.signals}
+    assert alternate.signals[1].label("de") == "Schutztür offen"
+    assert alternate.signals[1].label("it") == "Guard door open"
+    path = tmp_path / "alarm_definitions.json"
+    path.write_bytes((examples / "standard-11.json").read_bytes())
+    events: list[AlarmEvent] = []
+    monitor = AlarmMonitor(
+        path,
+        events.extend,
+        lambda: (123.0, None, None),
+        state=lambda: ApplicationState.READY,
+        interval=0.025,
+    )
+    with TcpPeer() as peer:
+        selected = replace(selection(peer, 118), word_address=211)
+        peer.set_words(211, (1,))
+        try:
+            monitor.apply_saved(selected)
+            wait(lambda: monitor.snapshot().state == "online")
+            assert monitor.snapshot().definitions == standard
+            path.write_bytes((examples / "alternate-6.json").read_bytes())
+            monitor.apply_saved(selected)
+            assert monitor.snapshot().definitions == standard
+            monitor.apply_saved(replace(selected, enabled=False))
+            assert monitor.snapshot().selection.word_address == 211
+            monitor.apply_saved(selected)
+            wait(
+                lambda: (
+                    monitor.snapshot().definitions == alternate
+                    and monitor.snapshot().state == "online"
+                )
+            )
+            assert [s.id for s in monitor.snapshot().active] == [
+                "reciprocating_axis_alarm",
+                "guard_open",
+                "low_air_pressure",
+            ]
+            assert all(e.address == 211 and e.station is None for e in events)
+            assert all(
+                p[10:18] == bytes.fromhex("0101 b1 00d3 00 0001")
+                if p[10:12] == b"\x01\x01"
+                else p[10:18]
+                in (
+                    bytes.fromhex("0102 b1 002f 00 0001"),
+                    bytes.fromhex("0102 b1 002e 00 0001"),
+                )
+                for p in peer.packets
+            )
+        finally:
+            monitor.request_stop()
+            assert monitor.join(2)
+
+
 def test_invalid_asset_never_contacts_plc_and_requires_reactivation(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "alarm_definitions.json"
     path.write_bytes(b"{bad")
     monitor = AlarmMonitor(
-        path, lambda _: None, lambda: (100.0, None, None), interval=0.02
+        path,
+        lambda _: None,
+        lambda: (100.0, None, None),
+        state=lambda: ApplicationState.READY,
+        interval=0.02,
     )
     with TcpPeer() as peer:
         try:
@@ -320,7 +436,7 @@ def test_invalid_asset_never_contacts_plc_and_requires_reactivation(
                 selection(peer)
             )  # Unrelated settings save is not a restart.
             assert monitor.snapshot().state == "unavailable" and peer.connections == 0
-            monitor.apply_saved(AlarmPreferences())
+            monitor.apply_saved(StatusPreferences())
             monitor.apply_saved(selection(peer))
             wait(lambda: monitor.snapshot().state == "online")
         finally:
@@ -336,6 +452,7 @@ def test_blocked_alarm_read_never_serializes_four_cycle_sequence(
         tmp_path / "local.json",
         events.extend,
         lambda: (100.0, None, None),
+        state=lambda: ApplicationState.READY,
         interval=0.03,
     )
     with TcpPeer(dual_session=True) as peer, owner(peer) as reporting:
@@ -343,7 +460,7 @@ def test_blocked_alarm_read_never_serializes_four_cycle_sequence(
         peer.hold_next("read")
         try:
             monitor.apply_saved(
-                AlarmPreferences(True, 1, FinsTcpEndpoint(port=peer.port, timeout=1.0))
+                StatusPreferences(True, FinsTcpEndpoint(port=peer.port, timeout=1.0))
             )
             assert peer.entered.wait(2)
             for group in range(8):
@@ -354,7 +471,7 @@ def test_blocked_alarm_read_never_serializes_four_cycle_sequence(
                 assert futures[-1].result(2).outcome is ReportOutcome.ACKNOWLEDGED
             assert not events and not peer.release.is_set()
             monitor.apply_saved(
-                AlarmPreferences()
+                StatusPreferences()
             )  # The held reply belongs to the previous selection.
             peer.release.set()
             writes = [
@@ -362,7 +479,7 @@ def test_blocked_alarm_read_never_serializes_four_cycle_sequence(
                 for p in peer.packets
                 if p[10:12] == b"\x01\x02"
             ]
-            assert writes == [50, 49] * 8
+            assert writes == [47, 46] + [50, 49] * 8
             assert reporting.snapshot().phase_issue is None
         finally:
             peer.release.set()
@@ -502,6 +619,7 @@ def test_legacy_alarm_history_reads_without_writing_and_freezes_new_translations
         assert history.initial_selection.result(3) == batch
         (old,) = history.alarm_page(AlarmQuery()).result(3)
         assert old.cursor == 17 and old.event.label("ja") == "Original air alarm"
+        assert (old.event.station, old.event.address) == (1, 18)
     finally:
         history.request_stop()
         assert history.join(3)

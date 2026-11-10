@@ -133,7 +133,7 @@ class SnapshotPublisher:
         images: list[EncodedImage] = []
         deliveries: list[_Delivery] = []
         rows: list[dict[str, object]] = []
-        progress = snapshot.group_progress if snapshot.pilot_counting else None
+        progress = snapshot.group_progress if snapshot.four_cycle_display else None
         if progress is not None and progress.identity.generation != snapshot.generation:
             progress = None
         prepared = snapshot.active_prepared or snapshot.candidate_prepared
@@ -147,7 +147,7 @@ class SnapshotPublisher:
                 "image_url": None,
                 "channels": [],
             }
-            if snapshot.pilot_counting and prepared is not None:
+            if snapshot.four_cycle_display and prepared is not None:
                 layout = next(
                     (
                         c
@@ -283,7 +283,8 @@ class SnapshotPublisher:
             "display_revision": display.revision,
             "configured_camera_ids": [str(camera) for camera in cameras],
             "cameras": rows,
-            "four_cycle": snapshot.pilot_counting,
+            "four_cycle": snapshot.four_cycle_display,
+            "group_counting": snapshot.pilot_counting,
             "group_progress": {
                 "generation": progress.identity.generation,
                 "first_cycle_id": int(progress.identity.cycle_id),

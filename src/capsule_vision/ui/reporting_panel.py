@@ -1,9 +1,8 @@
 """Compact next-Start preferences and bounded reporting-worker observations."""
 
-from PySide6.QtCore import QEvent, QObject, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QResizeEvent
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal, Slot
+from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
@@ -37,13 +36,22 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 from .style import (
+    ChevronComboBox,
     Style,
     button_width,
     navigation_icon,
     production_icon,
     set_button_caption,
+    set_service_status,
+    set_service_title,
     theme_colors,
 )
+
+_MERGE_MODES = {
+    0: ReportingMode.PER_CYCLE,
+    1: ReportingMode.SINGLE_CYCLE,
+    4: ReportingMode.FOUR_CYCLE,
+}
 
 
 class ReportingPanel(QFrame):
@@ -58,48 +66,50 @@ class ReportingPanel(QFrame):
         self._syncing = False
         self._modbus = False
         self._port_automatic = True
-        self._summary_text = ""
         self._draft = controller.reporting_selection()
+        self._merge_index = self._draft.settings.mode.group_size or 0
         self.setObjectName("commPanel")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root = QVBoxLayout(self)
         root.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
         root.setSpacing(Style.small)
         header = QHBoxLayout()
-        icon = QLabel()
-        icon.setPixmap(navigation_icon(2).pixmap(Style.icon, Style.icon))
-        header.addWidget(icon)
+        header.setSpacing(Style.small)
+        self.title_icon = QLabel()
+        header.addWidget(self.title_icon)
         self.title = QLabel()
         self.title.setStyleSheet("font-size: 18px; font-weight: 600;")
         header.addWidget(self.title)
-        self.summary = QLabel()
-        self.summary.setMinimumWidth(0)
-        self.summary.setSizePolicy(
-            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
-        )
-        header.addWidget(self.summary, 1)
+        self.status_indicator = QLabel()
+        header.addWidget(self.status_indicator)
+        self.service_status = QLabel()
+        header.addWidget(self.service_status)
         self.mode_control = QWidget()
         modes = QHBoxLayout(self.mode_control)
         modes.setContentsMargins(0, 0, 0, 0)
-        modes.setSpacing(0)
+        modes.setSpacing(Style.small)
         modes.addStretch()
-        self.mode_group = QButtonGroup(self)
-        self.mode_buttons: dict[ReportingMode, QPushButton] = {}
-        for index, mode in enumerate(ReportingMode):
-            button = QPushButton()
-            button.setCheckable(True)
-            button.setMinimumHeight(Style.touch)
-            button.setProperty("reportingSegment", "first" if index == 0 else "last")
-            self.mode_group.addButton(button, index)
-            self.mode_buttons[mode] = button
-            modes.addWidget(button)
+        self.merge_label = QLabel()
+        self.merge_count = ChevronComboBox()
+        self.merge_count.setObjectName("reportingMerge")
+        self.merge_count.setMinimumHeight(Style.touch)
+        self.merge_count.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.merge_count.setMinimumContentsLength(2)
+        self.merge_count.addItems([str(count) for count in range(9)])
+        model = self.merge_count.model()
+        assert isinstance(model, QStandardItemModel)
+        for count in range(9):
+            item = model.item(count)
+            assert item is not None
+            item.setEnabled(count in _MERGE_MODES)
+            item.setSelectable(count in _MERGE_MODES)
+        self.merge_label.setBuddy(self.merge_count)
+        modes.addWidget(self.merge_label)
+        modes.addWidget(self.merge_count)
         modes.addStretch()
         header.addWidget(self.mode_control, 1)
-        self.service_status = QLabel()
-        self.service_status.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        header.addWidget(self.service_status)
         self.enabled = QPushButton()
         self.enabled.setCheckable(True)
         self.enabled.setObjectName("reportingPower")
@@ -108,6 +118,10 @@ class ReportingPanel(QFrame):
         self.enabled.setMinimumHeight(Style.touch)
         header.addWidget(self.enabled)
         root.addLayout(header)
+        self.feedback = QLabel()
+        self.feedback.setWordWrap(True)
+        self.feedback.setTextFormat(Qt.TextFormat.PlainText)
+        root.addWidget(self.feedback)
         settings = root
         self._captions: list[tuple[str, QLabel]] = []
         self.host = QLineEdit()
@@ -201,12 +215,11 @@ class ReportingPanel(QFrame):
         port_edit.textEdited.connect(self._port_text_edited)
         self.enabled.toggled.connect(self._changed)
         self.protocol.currentIndexChanged.connect(self._protocol_changed)
-        self.mode_group.idClicked.connect(self._changed)
+        self.merge_count.currentIndexChanged.connect(self._merge_changed)
         self.base_choices.currentIndexChanged.connect(self._base_selected)
         self.host.textChanged.connect(self._changed)
         self._load_selection()
         self.set_language("zh")
-        self.summary.installEventFilter(self)
 
     @staticmethod
     def _address_fields() -> tuple[QSpinBox, QSpinBox, QSpinBox]:
@@ -226,7 +239,8 @@ class ReportingPanel(QFrame):
         self._syncing = True
         try:
             self.enabled.setChecked(selected.enabled)
-            self.mode_buttons[selected.settings.mode].setChecked(True)
+            self._merge_index = selected.settings.mode.group_size or 0
+            self.merge_count.setCurrentIndex(self._merge_index)
             endpoint = selected.settings.endpoint
             self.host.setText(endpoint.host)
             self.protocol.setCurrentIndex(
@@ -307,6 +321,23 @@ class ReportingPanel(QFrame):
         self.edited.emit()
 
     @Slot(int)
+    def _merge_changed(self, index: int) -> None:
+        if self._syncing:
+            return
+        if (
+            index not in _MERGE_MODES
+            or not self.can_manage
+            or self.state not in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
+        ):
+            # Native disabled items reject user selection. Also fence direct
+            # index changes without discarding an otherwise invalid field draft.
+            with QSignalBlocker(self.merge_count):
+                self.merge_count.setCurrentIndex(self._merge_index)
+            return
+        self._merge_index = index
+        self._changed()
+
+    @Slot(int)
     def _base_selected(self, index: int) -> None:
         if not self._syncing and index >= 0:
             self.base_address.setValue((49, 149)[index])
@@ -314,8 +345,8 @@ class ReportingPanel(QFrame):
     def _refresh_base(self) -> None:
         # A mode change never rewrites the existing address. Unsupported values
         # stay visible as a placeholder until the user explicitly selects a base.
-        four_cycle = self.mode_buttons[ReportingMode.FOUR_CYCLE].isChecked()
-        self.base_field.setCurrentIndex(int(four_cycle))
+        grouped = self.merge_count.currentIndex() in (1, 4)
+        self.base_field.setCurrentIndex(int(grouped))
         syncing, self._syncing = self._syncing, True
         try:
             base = self.base_address.value()
@@ -327,6 +358,9 @@ class ReportingPanel(QFrame):
             self._syncing = syncing
 
     def selection(self) -> ReportingSelection:
+        mode = _MERGE_MODES.get(self.merge_count.currentIndex())
+        if mode is None:
+            raise ValueError("Unsupported reporting merge count")
         common = (self.host.text().strip(), self.port.value(), self.timeout.value())
         endpoint = (
             ModbusSettings(*common, self.unit_id.value())
@@ -343,7 +377,7 @@ class ReportingPanel(QFrame):
             self.enabled.isChecked(),
             ReportingSettings(
                 endpoint=endpoint,
-                mode=tuple(ReportingMode)[self.mode_group.checkedId()],
+                mode=mode,
                 max_pending=self._draft.settings.max_pending,
                 base_address=None
                 if self._modbus and self.base_address.value() == -1
@@ -353,42 +387,53 @@ class ReportingPanel(QFrame):
 
     def set_language(self, language: Language) -> None:
         self.language = language
-        self.mode_control.setAccessibleName(text("plc_mode", language))
-        for mode, button in self.mode_buttons.items():
-            key = "plc_mode_" + mode.value
-            short_key = key + "_short"
-            set_button_caption(
-                button,
-                text(short_key, language),
-                max(
-                    Style.touch,
-                    button_width(button, (short_key,), languages=("zh", "en")),
-                ),
-            )
-            button.setAccessibleName(text(key, language))
-            button.setToolTip(
-                text(key, language) + "\n" + text("plc_next_start", language)
-            )
-        # Reserve the current language's lifecycle captions, independent of live
-        # ACKs/status and the selected draft mode. The summary can elide first.
-        self.service_status.setFixedWidth(
+        merge_caption = text("plc_merge_count", language)
+        merge_tip = (
+            text("plc_merge_count_tip", language)
+            + "\n"
+            + text("plc_next_start", language)
+        )
+        self.mode_control.setAccessibleName(merge_caption)
+        self.merge_label.setText(merge_caption)
+        self.merge_label.setToolTip(merge_tip)
+        self.merge_label.setFixedWidth(
             max(
-                self.service_status.fontMetrics().horizontalAdvance(caption)
-                for caption in (
-                    "OFF",
-                    *(
-                        text(key, language)
-                        for key in (
-                            "service_next_start",
-                            "web_starting",
-                            "STOPPING",
-                            "state_RUNNING",
-                            "plc_report_failed",
-                        )
-                    ),
+                self.merge_label.fontMetrics().horizontalAdvance(
+                    text("plc_merge_count", lang)
                 )
+                for lang in ("zh", "en")
             )
             + Style.small
+        )
+        self.merge_count.setAccessibleName(merge_caption)
+        self.merge_count.setAccessibleDescription(merge_tip)
+        self.merge_count.setToolTip(merge_tip)
+        for count in range(9):
+            mode = _MERGE_MODES.get(count)
+            caption = str(count)
+            meaning = (
+                f"{count} · {text('plc_mode_' + mode.value, language)}"
+                if mode
+                else f"{count} · {text('plc_merge_unsupported', language)}"
+            )
+            self.merge_count.setItemText(count, caption)
+            for role in (
+                Qt.ItemDataRole.ToolTipRole,
+                Qt.ItemDataRole.AccessibleTextRole,
+            ):
+                self.merge_count.setItemData(count, meaning, role)
+        self.merge_count.ensurePolished()
+        self.merge_count.setFixedWidth(
+            max(Style.touch, self.merge_count.sizeHint().width())
+        )
+        self.merge_count.view().setMinimumWidth(
+            max(
+                self.merge_count.fontMetrics().horizontalAdvance(
+                    self.merge_count.itemText(count)
+                )
+                for count in range(9)
+            )
+            + 2 * Style.space
         )
         self.enabled.setIcon(production_icon("power", theme_colors(self).primary))
         self._power_width = button_width(
@@ -399,9 +444,6 @@ class ReportingPanel(QFrame):
         self.title.setText(text("short_reporting", language))
         self.title.setToolTip(text("plc_reporting", language))
         self.title.setAccessibleName(self.title.toolTip())
-        self.summary.setMinimumWidth(
-            self.summary.fontMetrics().horizontalAdvance("ACK --") + Style.small
-        )
         self.advanced_button.setText("")
         self.advanced_button.setFixedSize(Style.touch, Style.touch)
         self.advanced_button.setIcon(navigation_icon(1, theme_colors(self).primary))
@@ -446,25 +488,9 @@ class ReportingPanel(QFrame):
         self.state = state
         self.refresh()
 
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._render_summary()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self.summary and event.type() is QEvent.Type.Resize:
-            self._render_summary()
-        return super().eventFilter(watched, event)
-
-    def _render_summary(self) -> None:
-        self.summary.setAccessibleName(self._summary_text)
-        self.summary.setText(
-            self.summary.fontMetrics().elidedText(
-                self._summary_text, Qt.TextElideMode.ElideRight, self.summary.width()
-            )
-        )
-
     @Slot()
     def refresh(self) -> None:
+        set_service_title(self.title_icon, self.title, "plc")
         self._refresh_base()
         editable = self.can_manage and self.state in (
             ApplicationState.READY,
@@ -521,7 +547,7 @@ class ReportingPanel(QFrame):
                 "plc_modbus_base_hint" if modbus else "plc_base_address", self.language
             )
         )
-        self.base_choices.setToolTip(text("plc_four_cycle_hint", self.language))
+        self.base_choices.setToolTip(text("plc_group_hint", self.language))
         for caption_key, caption in self._captions:
             if caption_key == "plc_base_address":
                 caption.setText(
@@ -547,38 +573,43 @@ class ReportingPanel(QFrame):
             key = "plc_report_failed"
         if snapshot is not None and snapshot.phase_issue:
             key = "plc_report_failed"
-        ack = snapshot.last_acknowledged if snapshot else None
-        self.service_status.setText(
-            "OFF"
+        colors = theme_colors(self)
+        status_keys = {
+            "plc_disabled": "service_off",
+            "plc_enabled": "service_next_start",
+            "plc_starting": "web_starting",
+            "plc_stopping": "STOPPING",
+            "plc_active": "state_RUNNING",
+            "plc_report_failed": "service_error",
+        }
+        set_service_status(
+            self.status_indicator,
+            self.service_status,
+            text(status_keys[key], self.language),
+            colors.secondary
             if key == "plc_disabled"
-            else text(
-                {
-                    "plc_enabled": "service_next_start",
-                    "plc_starting": "web_starting",
-                    "plc_stopping": "STOPPING",
-                    "plc_active": "state_RUNNING",
-                }.get(key, key),
-                self.language,
-            )
+            else colors.ok
+            if key == "plc_active"
+            else colors.fault
+            if key == "plc_report_failed"
+            else colors.warning,
         )
-        self._summary_text = (
-            f"ACK {ack.sequence if ack else '--'} · "
-            f"{text('plc_success', self.language)} {snapshot.acknowledged_count if snapshot else 0} · "
-            f"ERR {snapshot.failed_count if snapshot else 0}"
-        )
-        if snapshot is not None and snapshot.mode is not ReportingMode.PER_CYCLE:
-            self._summary_text += f" · SKIP {snapshot.skipped_count}"
-        warning = key == "plc_report_failed" or bool(
-            snapshot
-            and snapshot.last_outcome
-            and snapshot.last_outcome.outcome
-            in (ReportOutcome.FAILED, ReportOutcome.REJECTED)
-        )
-        self.summary.setStyleSheet(
-            f"color: {theme_colors(self).warning if warning else theme_colors(self).secondary};"
-        )
+        issue = None
+        phase = ""
+        if snapshot is not None:
+            phase = snapshot.phase_issue or ""
+            issue = snapshot.failure_issue or snapshot.cleanup_issue
+            outcome = snapshot.last_outcome
+            if (
+                issue is None
+                and outcome
+                and outcome.outcome in (ReportOutcome.FAILED, ReportOutcome.REJECTED)
+            ):
+                issue = outcome.issue
+        detail = phase or (f"{issue.exception_type}: {issue.message}" if issue else "")
+        self.feedback.setText(detail)
+        self.feedback.setAccessibleName(detail)
+        self.feedback.setVisible(bool(detail))
+        self.feedback.setStyleSheet(f"color: {colors.warning};")
         self.service_status.setToolTip("")
         self.service_status.setAccessibleName(text(key, self.language))
-        self.summary.setToolTip(snapshot.phase_issue or "" if snapshot else "")
-        self.summary.setAccessibleDescription(self.summary.toolTip())
-        self._render_summary()

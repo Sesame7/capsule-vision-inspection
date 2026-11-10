@@ -8,13 +8,15 @@ from pathlib import Path
 from threading import Condition, Event, Thread, current_thread
 from uuid import uuid4
 
-from capsule_vision.communication.reporting import ReportingSettings
+from capsule_vision.communication.reporting import ReportingMode, ReportingSettings
 from capsule_vision.configuration import CameraSources, MachineLayoutDefinition
 from capsule_vision.configuration.alarm_definitions import (
     TEMPLATE,
+    AlarmDefinitions,
     create_local_alarm_definitions,
+    load_alarm_definitions,
 )
-from capsule_vision.configuration.communication_preferences import AlarmPreferences
+from capsule_vision.configuration.communication_preferences import StatusPreferences
 from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inspection import CycleId, CycleStatus, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
@@ -93,7 +95,7 @@ class ProductionApplication:
         history: ProductionHistory | None = None,
         identity: LocalIdentity | None = None,
         initial_candidate: PreparedConfiguration | None = None,
-        initial_alarm: AlarmPreferences | None = None,
+        initial_status: StatusPreferences | None = None,
         diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
@@ -115,6 +117,7 @@ class ProductionApplication:
         self._batch_uncertain = self._detail_expired = False
         self._pilot_counters = PilotCounters()
         self._pilot_counting = False
+        self._counting_mode = ReportingMode.PER_CYCLE
         self._batch_duration_ms: float | None = None
         self._preparation_factory = preparation_factory
         self._model_management = False
@@ -147,9 +150,10 @@ class ProductionApplication:
                 history.path.with_name(TEMPLATE.name),
                 history.offer_alarms,
                 self._alarm_context,
+                state=self._status_state,
                 diagnostics=diagnostics,
             )
-            if history is not None and initial_alarm is not None
+            if history is not None and initial_status is not None
             else None
         )
         if initial_candidate is not None:
@@ -157,8 +161,12 @@ class ProductionApplication:
         if history is not None:
             history.initial_selection.add_done_callback(self._restored)
         self._thread.start()
-        if self._alarms is not None and initial_alarm is not None:
-            self._alarms.apply_saved(initial_alarm)
+        if self._alarms is not None and initial_status is not None:
+            self._alarms.apply_saved(initial_status)
+
+    def _status_state(self) -> ApplicationState:
+        with self._condition:
+            return self._state
 
     def _alarm_context(self) -> tuple[float, str | None, str | None]:
         with self._condition:
@@ -171,6 +179,14 @@ class ProductionApplication:
 
     def alarm_snapshot(self) -> AlarmSnapshot:
         return self._alarms.snapshot() if self._alarms is not None else AlarmSnapshot()
+
+    def preview_alarm_definitions(self) -> AlarmDefinitions:
+        """Read-only worker operation; neither activates nor changes the monitor."""
+        if self._alarms is None:
+            raise ApplicationStateError(
+                "Alarm definitions unavailable for this launcher"
+            )
+        return load_alarm_definitions(self._alarms.definitions_path)
 
     def alarm_definitions_path(self, revision: int | None = None) -> Path:
         with self._condition, self._admission(Role.ENGINEER, revision):
@@ -317,6 +333,7 @@ class ProductionApplication:
                 self._candidate_requires_preparation,
                 pilot_counters=self._pilot_counters,
                 pilot_counting=self._pilot_counting,
+                reporting_mode=self._counting_mode,
                 batch_duration_ms=self._batch_duration_ms,
                 batch_uuid=self._batch_segment if self._batch is not None else None,
                 run_id=self._run_id,
@@ -391,8 +408,9 @@ class ProductionApplication:
         self._batch_segment = selection.uuid if selection else uuid4().hex
         self._counters = selection.counters if selection else ProductionCounters()
         self._pilot_counters = selection.groups if selection else PilotCounters()
-        if selection and selection.four_cycle is not None:
-            self._pilot_counting = selection.four_cycle
+        if selection and selection.reporting_mode is not None:
+            self._counting_mode = selection.reporting_mode
+            self._pilot_counting = self._counting_mode.group_size is not None
         self._batch_duration_ms = selection.duration_ms if selection else None
         self._batch_uncertain = selection.uncertain if selection else False
         self._detail_expired = selection.detail_expired if selection else False

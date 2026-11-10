@@ -191,6 +191,7 @@ class MainWindow(QMainWindow):
         self.language: Language = language
         self.theme: Theme = "dark"
         self._service_presentation: tuple[object, ...] | None = None
+        self._service_issue: tuple[str, str] | None = None
         self._operation_presentation: tuple[object, ...] | None = None
         self.configuration_issue = configuration_issue
         self.configuration_messages = configuration_messages
@@ -1572,6 +1573,9 @@ class MainWindow(QMainWindow):
             if detail == message:
                 detail = ""
             self._event_message = message
+        if not message and self._service_issue is not None and not self._closing:
+            message, detail = self._service_issue
+            self._event_message, warning = message, True
         self.event_label.setToolTip(
             "\n".join(part for part in (message, detail) if part)
         )
@@ -1607,8 +1611,6 @@ class MainWindow(QMainWindow):
             bar.state_icon,
             bar.plc,
             bar.plc_icon,
-            bar.web,
-            bar.web_icon,
         ):
             if widget.toolTip():
                 widget.setToolTip("")
@@ -1618,46 +1620,55 @@ class MainWindow(QMainWindow):
             else None
         )
         report = self.bridge.reporting_snapshot
-        plc_key = (
-            "service_next_start" if selection and selection.enabled else "service_off"
+        settings = (
+            self.bridge.application.reporting_for_generation(report.generation)
+            if report
+            and isinstance(self.bridge.application, SourceProductionApplication)
+            else None
         )
+        acknowledged = report.last_acknowledged if report and settings else None
+        target = settings or (selection.settings if selection else None)
+        register = (
+            ("HR " if target.endpoint.protocol == "modbus_tcp" else "W")
+            + (str(target.base_address) if target.base_address is not None else "—")
+            if target
+            else "—"
+        )
+        plc = f"{register} · {acknowledged.sequence if acknowledged and acknowledged.sequence is not None else '—'}"
+        service_issue = None
+        report_detail = ""
         if report:
             outcome = report.last_outcome
-            if (
-                report.failure_issue
-                or report.cleanup_issue
-                or report.phase_issue
-                or (
-                    outcome
-                    and outcome.outcome
-                    in (ReportOutcome.FAILED, ReportOutcome.REJECTED)
+            issue = report.failure_issue or report.cleanup_issue
+            failed = outcome and outcome.outcome in (
+                ReportOutcome.FAILED,
+                ReportOutcome.REJECTED,
+            )
+            if issue is None and outcome and failed:
+                issue = outcome.issue
+            report_detail = report.phase_issue or (
+                f"{issue.exception_type}: {issue.message}" if issue else ""
+            )
+            if report_detail or failed:
+                service_issue = (
+                    text("plc_report_failed", self.language),
+                    report_detail,
                 )
-            ):
-                plc_key = "technical_error"
-            elif report.thread_alive:
-                plc_key = "web_running"
-        plc = text(plc_key, self.language)
         runtime = self.communication.web_panel.runtime
         observed = runtime.snapshot() if runtime else None
         self.communication.web_panel.refresh()
-        web_key = "service_off"
-        if observed is not None:
-            web_key = {
-                WebState.STOPPED: "service_off",
-                WebState.STARTING: "web_starting",
-                WebState.RUNNING: "web_running",
-                WebState.STOPPING: "STOPPING",
-                WebState.FAILED: "technical_error",
-            }[observed.state]
-        web = text(web_key, self.language)
+        if (
+            service_issue is None
+            and observed
+            and (observed.error or observed.state is WebState.FAILED)
+        ):
+            service_issue = (text("web_failed", self.language), observed.error)
         alarms = self.bridge.application.alarm_snapshot()
-        web_color = (
-            colors.warning
-            if observed is not None
-            and observed.state is not WebState.RUNNING
-            and observed.error
-            else colors.secondary
-        )
+        self.communication.update_alarm_snapshot(alarms)
+        if service_issue != self._service_issue:
+            self._service_issue = service_issue
+            self._render_status()
+            return
         state_text = self.state_label.text()
         state_color = (
             colors.fault
@@ -1718,8 +1729,7 @@ class MainWindow(QMainWindow):
             state_text,
             state_color,
             plc,
-            web,
-            web_color,
+            report_detail,
             alarms,
         )
         if identity == self._service_presentation:
@@ -1729,16 +1739,24 @@ class MainWindow(QMainWindow):
         bar.state_icon.setAccessibleName(bar.state.accessibleName())
         bar.state_icon.setPixmap(state_icon.pixmap(20, 20))
         bar.state.setStyleSheet(f"color: {state_color};")
-        bar.plc.setText(f"PLC · {plc}")
-        bar.web.setText(f"Web · {web}")
-        bar.web.setStyleSheet(f"color: {web_color};")
+        bar.plc.setText(plc)
+        bar.plc.setAccessibleDescription(text("plc_commit_observation", self.language))
+        bar.plc.setStyleSheet(
+            f"color: {colors.warning if report_detail else colors.secondary};"
+        )
+        bar.plc_icon.setAccessibleName(text("short_reporting", self.language))
         alarm_key = (
             "alarm_count"
-            if alarms.state == "online" and alarms.active
+            if alarms.read_ok and alarms.active
+            else "alarm_online"
+            if alarms.read_ok
+            else "alarm_unavailable"
+            if alarms.state == "partial"
             else "alarm_" + alarms.state
         )
         alarm_text = text(alarm_key, self.language).format(count=len(alarms.active))
         bar.alarm.setText(alarm_text)
+        bar.alarm_icon.setAccessibleName(text("alarm_monitor", self.language))
         alarm_detail = "\n".join(
             filter(
                 None,
@@ -1746,7 +1764,7 @@ class MainWindow(QMainWindow):
                     f"{text('alarm_monitor', self.language)} · {alarm_text}",
                     alarms.issue,
                     text("alarm_last_known", self.language)
-                    if alarms.state == "unavailable" and alarms.active
+                    if not alarms.read_ok and alarms.active
                     else "",
                     *(s.label(self.language) for s in alarms.active),
                 ),

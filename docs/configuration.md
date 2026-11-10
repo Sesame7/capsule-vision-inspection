@@ -10,7 +10,7 @@ fallback, automatic repair of saved geometry or fake inference is used for recov
 | File | Content |
 | --- | --- |
 | `data/app.json` | optional `last_applied_recipe_id`, `language` (codes below) |
-| `data/communication.json` | optional Production reporting, Diagnostics, Web and alarm-monitor preferences |
+| `data/communication.json` | optional Production reporting, Diagnostics, Web and PLC status-service preferences |
 | `data/alarm_definitions.json` | optional equipment-local replacement for the bundled alarm signal definitions |
 | `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
 | `data/security.sqlite3` | optional local accounts and versioned password verifiers; independent of History |
@@ -424,7 +424,7 @@ observations and query limits.
 `data/communication.json` is independent from `app.json`, Recipes, MachineLayout
 and CameraSources. Communication's explicit **Save settings** atomically replaces
 this file (same-directory temporary write, fsync, replace). A successful Save
-applies a changed alarm-monitor selection. Other network/reporting fields keep
+applies a changed auxiliary status-service selection. Other network/reporting fields keep
 their existing activation boundaries. The Web header's power action
 persists only `web.enabled` from the actual validated file, then requests runtime
 start/stop using saved Web network settings. It never saves unrelated drafts or
@@ -432,7 +432,7 @@ changes effective reporting selection. An invalid file is not silently replaced;
 first-use defaults can establish a missing file. Unsaved reporting edits never change next-Start admission; diagnostic
 requests continue to use the effective saved endpoint, not draft text. Save and
 reporting publication are serialized with Start under the existing Application
-lock. An unchanged reporting selection permits saving independent Web, alarm or diagnostic
+lock. An unchanged reporting selection permits saving independent Web, status or diagnostic
 preferences during Production. Active sessions keep their frozen settings.
 
 Confirmed Discard reloads the actual file through this codec, without writing or
@@ -441,29 +441,60 @@ file before the first Save), the complete draft is preserved. Default settings
 can be explicitly saved to establish that initial file. Save/Discard feedback
 and actions remain outside the scrolling content.
 
-The versionless object permits optional `reporting`, `diagnostic`, `web` and `alarm`
+The versionless object permits optional `reporting`, `diagnostic`, `web` and `status`
 sections; an existing `{}` means legacy UDP defaults, with reporting and Web
 disabled. Unknown or duplicate fields and invalid present types/ranges are rejected. Superseded
 `endpoint` envelopes, `transport` fields and protocol aliases are not accepted;
 startup reports them without rewriting the file. Explicit Save writes this format.
 
-The flat `alarm` section accepts `enabled` (default false), `station` (1 or 2),
-`protocol` (FINS/TCP only, encoded as `fins_tcp`), numeric IPv4 `host`, `port`
-and `timeout`. The initial endpoint is 127.0.0.1:9600. Its one-second default
-deadline can be shortened to 0.05 seconds. Only Engineer or Administrator can
-publish these settings, through the existing audited Save. At startup, a field
-validation error confined to this section disables monitoring and exposes the
-error while allowing valid reporting, Diagnostics and Web settings to load.
+The flat `status` section replaces the obsolete `alarm` section. It accepts
+`enabled` (false), `protocol` (`fins_tcp` only), numeric IPv4 `host`
+(127.0.0.1), `port` (9600), `timeout` (1.0 seconds, at most one second),
+`word_address` (alarm read, default 18), `heartbeat_address` (default 46) and
+`fault_address` (default 47 for an absent status section). A present `status`
+section must explicitly contain `fault_address`, even when disabled; other
+missing fields use their defaults. All three addresses are independent integers
+0–511. No address is derived from another. Booleans, null,
+invalid types/ranges, duplicate addresses and unknown fields are
+rejected. When both status and automatic FINS reporting are enabled on the same
+host/port, their configured ranges must be disjoint (including the group counter
+and the maximum reporting window). Disabled services perform no I/O.
+
+Old `alarm` sections, `station` fields, aliases and `status` sections without
+`fault_address` are rejected; there is no automatic migration or repair. Developers must update
+obsolete development configuration manually. Invalid files remain unchanged
+and startup exposes recovery feedback. A validation error confined to a new
+`status` section disables that service while other valid sections can load.
+An obsolete top-level section invalidates the document. An explicit authorized
+Save can publish the reviewed new definition.
+
+Save serializes nondefault status selections with explicit `fins_tcp`,
+`enabled`, `word_address`, `heartbeat_address` and `fault_address`. No runtime heartbeat value,
+FAULT state or observations are persisted. The existing Engineer/Administrator
+Save/Discard authorization and atomic publication remain authoritative. Save
+applies status communication independently of Production Start; reporting keeps
+its next-Start boundary. Runtime reservations also protect retiring status
+writes and frozen active reporting ranges. See the [status service contract](communication.md#plc-status-service-and-alarm-monitoring).
+
+```json
+{"status": {"enabled": true, "protocol": "fins_tcp", "host": "192.168.251.1", "word_address": 18, "heartbeat_address": 46, "fault_address": 47}}
+```
+
+The Status card provides one common Protocol/IPv4/Port row, then equal-width
+Heartbeat/Fault/Alarm address controls in that order. All three are independently
+editable; the rows reflow when actual content requirements exceed available width.
+The alarm signal table alone collapses. All roles retain read-only observations;
+only Engineer/Administrator can publish changes. New alarm observations record
+the actual address without station identity; stored History/schema are unchanged.
 
 The [bundled JSON template](../src/capsule_vision/configuration/alarm_definitions.json)
 maps bits 0–10 of W18/W118 from the approved equipment signal table dated
-2026-09-05. It is used when `data/alarm_definitions.json` is absent. Engineer
-and Administrator can use **Communication → Alarm file → Create local alarm file
-from template** to publish an exact copy at that path. Creation requires a
-durable Audit Trail intent and exclusive file publication. Existing local files,
-including invalid ones, are preserved across repeat requests and software
-updates. **Open containing folder** opens the equipment directory for external
-editing or repair.
+2026-09-05. It is used when `data/alarm_definitions.json` is absent. The card has
+no Alarm file action or menu; equipment overrides are managed externally. The
+existing Application template-publication command remains Engineer/Administrator
+authorized, with a durable Audit Trail intent and exclusive file publication.
+Existing local files, including invalid ones, are preserved across repeat requests
+and software updates.
 
 A local override supplies a complete `version` and `signals` array
 with 1–16 definitions. Each signal has a unique stable `id`, unique word `bit`
@@ -482,6 +513,33 @@ An invalid or unreadable local file leaves the monitor unavailable at activation
 To load an edited file, save monitoring off and then on, or restart with
 monitoring enabled. Creating or editing the file leaves the active definitions
 in place. Direct file edits carry file provenance without in-app actor attribution.
+
+For manual verification in an **isolated development installation**, use
+[standard-11.json](../tests/fixtures/alarms/standard-11.json) (the unchanged bundled
+11 signals) and [alternate-6.json](../tests/fixtures/alarms/alternate-6.json)
+(six signals, noncontiguous bits, renamed labels, active-low signals and German
+labels with English fallback). Do not replace a customer installation's file.
+
+1. Open the isolated installation's `data/` directory in the file manager.
+   Preserve any existing
+   `alarm_definitions.json` under a separate, unused backup filename outside that
+   override path; do not overwrite a previous backup.
+2. Copy `standard-11.json` into that installation's `data/alarm_definitions.json`.
+   With monitoring disabled, expand the card and refresh its local preview.
+3. For live verification, use only an approved isolated FINS/TCP test peer and its
+   three distinct WR addresses. Enable Status and Save. Check fault-write ACK,
+   heartbeat write and alarm read order, plus the 11 frozen alarm observations.
+4. Replace only the isolated override with `alternate-6.json` while monitoring is
+   active. The displayed/applied definitions must remain the 11-row snapshot.
+   Save monitoring off, then Save on: the new activation must show six rows.
+   With a raw zero word, `guard_open` and `low_air_pressure` are active; with
+   bits 2 and 5 set and all other bits clear, all six signals are inactive.
+5. Save monitoring off before restoring the preserved override. If no override
+   existed originally, retain the test copy outside the override path so the
+   bundled fallback is restored. A restored file applies at the next activation.
+
+These are explicit manual file operations, not an automatic switching facility.
+The focused monitor tests exercise both files against a loopback FINS/TCP peer.
 
 The codecs construct the same immutable protocol-specific endpoint values for
 Diagnostics and reporting. Reporting's address/capacity belong to its separate
@@ -512,11 +570,13 @@ Holding Register addresses are zero-based, independent of FINS DM/WR. Watch
 groups remain session-only and are never implicitly converted by a protocol edit.
 
 Reporting additionally permits `enabled` (default false), `base_address` and
-`mode`. The only values are `per_cycle` and `four_cycle`; omitted `mode` in
-existing documents retains `per_cycle`. Four-cycle mode is saved explicitly and
-requires `protocol: "fins_tcp"` with base 49 or 149, even when disabled. Enabled
-four-cycle Start additionally requires Basler. Counter reads use base−1, bitmap
-writes base+1 and commit writes base. Selecting this mode never enables reporting
+`mode`. The only values are `per_cycle`, `single_cycle` and `four_cycle`; omitted `mode` in
+existing documents retains `per_cycle`. The Qt Merge choices 0, 1 and 4 map
+directly to these values; the other displayed counts are disabled. No numeric
+group-count field is persisted. Single- and four-cycle modes are saved explicitly and
+require `protocol: "fins_tcp"` with base 49 or 149, even when disabled. Enabled
+single-/four-cycle Start additionally requires Basler. Counter reads use base−1, bitmap
+writes base+1 and commit writes base. Selecting either group mode never enables reporting
 or replaces an endpoint/address automatically. Obsolete `w48_observe` and
 `w48_active` values are invalid: no compatibility interpretation, migration or
 file replacement occurs on load. Replacement is an explicit stopped-environment
@@ -584,7 +644,7 @@ and Diagnostics protocols as FINS/UDP.
 No PLC connection or reporting activity starts merely from loading initial values.
 Explicit Save establishes the file; Discard cannot reload a nonexistent file and
 preserves the draft with feedback. Valid files restore their exact saved
-settings, including enabled Web and alarm monitoring, without rewriting them.
+settings, including enabled Web and PLC status communication, without rewriting them.
 Invalid top-level files remain unchanged, with visible recovery
 feedback; reporting and Web stay disabled in memory until reviewed. An explicit
 Save replaces the invalid file with validated settings. If a saved Web address is

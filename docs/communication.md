@@ -197,24 +197,34 @@ does not overlap. Close rejects all new commands while cleanup finishes.
 The guard prevents competing writers; it is not PLC-side locking or
 access control.
 
-## Four-cycle reporting
+<a id="four-cycle-reporting"></a>
 
-Communication → Production reporting offers **Per-cycle reporting** and
-**Four-cycle reporting** as mutually exclusive header segments (Chinese
-“逐次 / 4次合并”, English “Per cycle / 4-cycle”). Full localized meanings remain
-in tooltips and accessible names. The selector sits between the title/summary
-and the lifecycle status with its independent Enable/Disable action. Mode edits
+## PLC group reporting
+
+Communication → Reporting has a compact **Merge** dropdown (Chinese
+“合并”) with numeric values 0–8. Only **0** (per-cycle reporting, no merge), **1** (single-cycle PLC group) and
+**4** (four-cycle merge) are selectable; the other numbers are visibly disabled, with
+unsupported status in their tooltip/accessibility rather than repeated suffixes.
+Full localized meanings remain in tooltips and accessibility.
+Zero does not disable reporting: the independent Enable/Disable action retains
+that meaning. At W49/W149, per-cycle mode still commits its attempted-report
+sequence and does not track W48/W148; single- and four-cycle modes retain the PLC counter
+association below. The header places its icon, title and actual lifecycle state
+on the left, the selector in flexible space, and its independent Enable/Disable
+action on the right. Mode edits
 remain drafts until Save; Discard restores the saved selection. A new normal
 installation selects four_cycle, FINS/TCP and W49, with reporting disabled.
 Engineer/Administrator explicitly saves the next-Start selection. Loading reporting
 settings, opening Communication and Start warm-up issue no reporting requests.
-An independently enabled [alarm monitor](#plc-alarm-monitoring) may already be reading. Disabled reporting
+An independently enabled [status service](#plc-status-service-and-alarm-monitoring) may already be writing heartbeat/FAULT and reading alarms. Disabled reporting
 creates no automatic reporting owner: no counter reads, group attribution or result
 writes occur. Inspection and per-Cycle occurrence counters continue normally;
-four consecutive CycleIds alone never establish physical groups. Independent
+CycleIds alone never establish physical groups. Independent
 manual Diagnostics retain their existing authorization and ownership.
 
-Four-cycle reporting requires Basler and FINS/TCP. The commit base is exactly
+Single-cycle (`single_cycle`, Merge = 1) and four-cycle (`four_cycle`, Merge = 4)
+reporting require Basler and FINS/TCP. They share the existing reporting owner;
+only the required member count differs. Merge = 1 is not the per-cycle mode. The commit base is exactly
 W49 or W149; all addresses derive from that base:
 
 | Commit base | PLC counter | Commit | 30-channel bitmap | 36-channel bitmap |
@@ -227,8 +237,8 @@ are independent: selecting W149 does not read, write or protect W48–W52, and
 selecting W49 does not read, write or protect W148–W152. Per-cycle mode retains
 its FINS UDP/TCP and Modbus protocols and address rules. Selecting a mode never
 automatically enables reporting or replaces an endpoint/address. Unsupported
-four-cycle transport/base combinations are invalid even when disabled;
-Folder/explicit-image Start with enabled four-cycle reporting is rejected before
+PLC-group transport/base combinations are invalid even when disabled;
+Folder/explicit-image Start with enabled PLC-group reporting is rejected before
 session/engine creation. Obsolete w48_observe and w48_active values are rejected,
 not migrated or interpreted. Invalid files remain untouched with recovery feedback.
 
@@ -237,12 +247,13 @@ its product name does **not** establish independent hardware trigger identity:
 
 - Production reaches RUNNING before the first trigger of a new physical group.
 - PLC advances the unsigned 16-bit counter before that trigger and holds it across
-  exactly four triggers and until reporting completes, including its ACK.
+  exactly one or four triggers, according to the selected mode, and until reporting
+  settles, including its ACK or explicit failure.
 - Every trigger reaches every configured camera; no complete electrical trigger
   is silently missed by all cameras.
 - No unobserved counter reset/reuse occurs while the session runs.
 
-Four consecutive observed Basler CycleIds are associated only under that initial
+One observed Basler Cycle, or four consecutive observed Basler Cycles, is associated only under that initial
 phase and the counter/source checks below. ImageNumber continuity does not prove
 physical trigger continuity; a counter read is not exposure-correlated evidence.
 Counter skips and 65535 → 0 wrap between groups are accepted without inventing
@@ -253,15 +264,18 @@ explains these limits and is not the current register contract.
 `FourCycleReportingWorker` is the generation's sole reporting socket owner. The
 first observed cycle queues a read at base−1, without socket work on camera,
 inference, Qt or result-callback threads. This read must finish before the second
-observed cycle is admitted; otherwise phase is lost. Four distinct attributable
-terminal results are required. Their existing `FirstStationReport.reject_words`
+observed cycle is admitted; otherwise phase is lost. For Merge = 1 that next
+Cycle begins another group: admission before the previous group settles loses
+phase, including while its initial read is pending. A later counter is never
+adopted for the earlier Cycle. Exactly one or four distinct attributable
+terminal results are required, according to the frozen Run mode. Their existing `FirstStationReport.reject_words`
 are ORed, preserving verified EMPTY projection. Partial/error cycles contribute
 their conservative words. Missing triggers or unavailable results are never invented.
 
-After all four results and the pre-write counter/source attribution check succeed,
+After all required results and the pre-write counter/source attribution check succeed,
 the worker publishes one immutable inspection completion to Application. Each set
 bit in the authoritative OR bitmap counts as final NG, including conservative
-rejection. Clear bits mean EMPTY only for four verified EMPTY observations;
+rejection. Clear bits mean EMPTY only when every required observation is verified EMPTY;
 otherwise OK/verified EMPTY mixtures mean OK. Each ChannelId counts once. Original
 per-Cycle UNKNOWN, technical ERROR and reasons remain unchanged; final NG does not
 claim a confirmed defect in every rejected position. Incomplete or initially unattributable
@@ -275,7 +289,8 @@ Cycle History retains per-exposure evidence and joins it to group membership by
 Run and Cycle identity. See [Production history](architecture.md#production-history).
 
 Batch Duration uses the worker's monotonic clock and runs from first Cycle
-admission until the last of the four distinct terminal results arrives,
+admission until the last required distinct terminal result arrives (the sole
+result in Merge = 1),
 regardless of callback order. It is published only at eligibility
 and excludes subsequent attribution checks, bitmap/commit writes and ACK time.
 The bounded latest group progress contains actual admitted CycleIds and their
@@ -306,7 +321,7 @@ known-phase Start. There is no polling, guessed replacement counter, fabricated
 all-NG group, PLC stop or W10.7 command. Existing source fault/overload handling
 remains separate.
 
-Pause/Step/Resume are rejected for an enabled four-cycle session; Stop/Close remain
+Pause/Step/Resume are rejected for an enabled PLC-group session; Stop/Close remain
 available regardless of role. Stop settles source/runtime work, drains complete
 admitted groups and records incomplete groups locally. Actual reporting-thread
 exit and safe socket cleanup are required; timeout never releases ownership.
@@ -316,17 +331,28 @@ base+2 (30 channels) or base+3 (36 channels), including unfinished Stop. Close
 rejects new commands and retains the reporting owner until cleanup. FINS target
 matching still covers UDP/TCP WR space; reads and independent targets retain their
 existing rules outside Close. Engineer saves, Operator runs Basler; Guest cannot
-run enabled four-cycle reporting.
+run enabled PLC-group reporting.
 
-The 100 ms early-inspection deadline, four-cycle capacity and serial inference
+The 100 ms early-inspection deadline, existing capacity and serial inference
 owner are unchanged. Reporting retains the existing bounded eight-plus-one cycle
-handoff and four scalar results per group. Bounded diagnostics retain the latest
+handoff and one or four scalar results per group. Merge = 1 uses ordinary
+single-result camera/image presentation with physical-group counters; Merge = 4
+retains its four lamps and identity-matched fourth frame. Bounded diagnostics retain the latest
 16 settled groups plus bounded pending groups: CycleIds, terminal outcomes, timed
 counter reads with their actual address, OR words, eligibility, outcome/reason,
 phase issue and commit timing/uncertainty. No frames, masks or new History records
 are retained. Observations survive Stop, are replaced at the next Start and are
-lost on process Close. Customer UI retains lifecycle/ACK/error/skip feedback;
-there is no Pilot Evidence window or hidden Observe-only runtime mode.
+lost on process Close. Customer UI retains lifecycle and actionable fault feedback;
+routine ACK/success/error/skip counters are not displayed on the Reporting card.
+The global strip displays the last protocol-acknowledged commit with its actual
+frozen-run register label (for example W49, W149 or HR 100), or an unavailable
+marker without an ACK. A later saved/draft target does not relabel an earlier
+commit. This is a retained observation, never a live register read. Register/value
+widths reserve the supported addresses and 16-bit values through 65535, so numeric
+changes do not move neighboring groups. The strip omits routine Web status,
+retains source and alarm indications, and uses existing feedback for failures.
+An ACK proves neither PLC scan consumption nor physical rejection.
+There is no Pilot Evidence window or hidden Observe-only runtime mode.
 
 Authorized equipment acceptance must independently verify counter phase/hold,
 camera order, W49/W149 consumption, stale equality/reset behavior, register
@@ -335,29 +361,91 @@ engineering tools. Local loopback and offline timing evidence cannot establish
 these guarantees on real equipment. A complete group may still be too late;
 conservative timeout projection does not repair a lost timing window.
 
-## PLC alarm monitoring
+<a id="plc-alarm-monitoring"></a>
 
-A saved enabled monitor reads one WR word on its own negotiated FINS/TCP
-connection, W18 for station 1 or W118 for station 2. The read owner waits one
-second between attempts, including after a failure. It negotiates again after
-a failed exchange. One connect/handshake or active read can run to its bounded
-deadline. Close and saved selection changes wake the interval wait immediately.
-The owner retires the old socket and discards late responses before polling the
-replacement. It sends no writes, triggers, resets or acknowledgments.
+## PLC status service and alarm monitoring
 
-Normal launch restores the saved selection under Guest. Logout, navigation and
-Production Start/Stop are independent of it. Faulted monitoring has its own
-unavailable status. The **Alarm file** menu on the monitoring row lets Engineers
-and Administrators create the equipment copy or open its folder. These actions
-are independent of preference Save and monitor activation. Each activation
-captures the [signal definitions and their labels](configuration.md#communication-preferences)
-once for polling, display and History. Commissioning a shared PLC endpoint requires support for
-separately negotiated, concurrently serviced sessions and sufficient PLC service
-capacity to meet the [four-cycle deadlines](#four-cycle-reporting). The monitor
-never uses the reporting socket, request queue or worker. A serial-only PLC
-endpoint cannot provide this concurrent guarantee. Keep monitoring disabled on
-such an endpoint. Field timing and node/connection capacity require equipment
-validation.
+A saved enabled auxiliary service owns one serial FINS/TCP connection, independent
+of Production reporting. Each pass writes the fault word, then, only after its
+validated ACK, writes the heartbeat word, then reads one alarm word on that same
+connection. These are ordered single-word operations, not an atomic pair.
+It waits one second after the pass;
+there is no periodic queue or catch-up backlog. Socket creation, negotiation,
+reconnection and retirement belong exclusively to this worker, outside Qt,
+inference and Production callbacks.
+
+Heartbeat, fault and alarm addresses are independent, distinct WR words, defaulting
+to W46, W47 and W18. The heartbeat increments modulo 65536 for every scheduled
+attempt (first value 1). The fault word is 1 only for a fresh Application FAULT
+observation, otherwise 0. Application state is sampled immediately before the
+fault write; no Application lock spans network I/O. A failed fault write skips
+that pass's heartbeat. A failed/uncertain heartbeat is not replayed. The next
+scheduled pass advances the counter even after negotiation or fault-write
+failure. Close has no final clearing write. Status communication failure does not set
+Application FAULT. Heartbeat communication is not inspection readiness; zero in
+the fault word is not guaranteed machine readiness. Process/network failure can
+prevent publication: the PLC watchdog must detect missing activity. An ACK is
+not evidence of PLC ladder consumption.
+
+The separately editable alarm address defaults to W18 (W0–W511). A validated
+status-write PLC rejection still allows the alarm read on the usable connection.
+A transport/protocol failure retires that client; there is no read or immediate
+reconnect on a broken connection. A later scheduled pass reconnects. Read and
+write success, errors and last successful observations remain separate. Write
+success requires both fault and heartbeat ACKs; a failure identifies its write
+target. The last successful write observation represents that completed sequence,
+not an atomic update. Write and read success mean Online; one means Partial
+failure; neither means Unavailable.
+Waiting has no completed pass, and Off means the saved service is disabled.
+Successful writing alone does not establish fresh alarm values. Read failure
+retains the previous word, active set and time as stale, never as cleared alarms.
+
+Normal launch restores saved enablement under Guest. Logout, navigation and
+Production Start/Stop do not control this service. Each activation freezes the
+existing external JSON definitions (bundled fallback only when absent), labels
+and active-high/active-low interpretation for display and History. Invalid
+definitions leave activation unavailable without PLC I/O until a new selection
+activation; there is no asset repair or continuous reload. New events retain
+the actual alarm address and no station identity; historical provenance is
+unchanged. The first valid read after a connection gap reconciles changes as
+observed active/recovered, rather than inventing transition times or clearing
+alarms during the gap.
+
+The single auxiliary connection never shares the Production reporting socket,
+queue or owner. A shared PLC must support separately negotiated concurrent
+connections and sufficient capacity for [group reporting](#plc-group-reporting).
+Field acceptance must verify watchdog timing and both connections under load;
+loopback checks do not establish those guarantees. Keep the service disabled
+where that PLC capability is unavailable.
+
+Engineer/Administrator Save applies the auxiliary selection after atomic file
+publication. Unsaved edits never redirect the active target. Enabled auxiliary
+ranges must not overlap enabled automatic FINS reporting on the same host/port,
+including W48/W148 for attributed modes. Start also checks any retiring status
+owner before admitting a conflicting reporting session. Active status writes
+reserve the two exact addresses against manual FINS UDP/TCP WR writes to the same
+target. Unrelated words between noncontiguous addresses are not reserved by the
+status service; Production reporting retains its own independent range protection.
+Changing/disabling settings retains the old reservation until its socket retires;
+new selections are reserved before activation. Diagnostics authorization and
+Audit intent/completion remain unchanged. Automatic heartbeat transactions do
+not emit periodic Audit Trail records. Close waits for actual worker exit.
+
+The compact **Status / 状态** card retains the shared service header, actual
+read/write health and a draft Enable/Disable action. Protocol, IPv4 and Port
+appear once. Heartbeat, Fault and Alarm are three independently editable WR
+addresses in one equal-width row below them, with responsive wrapping when
+necessary. These controls remain visible when the signal
+section is collapsed, and reflow using actual available width. Guest/Operator
+can observe but cannot edit. One signal header shows definition count, fresh
+active count, last successful read and disclosure. Expansion survives refreshes
+and language changes. Signal / Bit / Value / State preserve definition order,
+polarity, translated names and full tooltips. Stale values have one table-level
+notice; there is no current active count from stale evidence. Applied target
+text appears only when the draft differs. Errors remain actionable. Disabled
+service previews use the existing bounded background file job, without PLC I/O.
+The global alarm strip remains an alarm-read observation, independent of
+heartbeat-write success.
 
 ## Communication workspace
 
@@ -380,8 +468,16 @@ service operation. Start, Stop and Apply/Restart also check authorization at
 the Web owner. Normal startup can restore saved enablement while anonymous,
 and Close drains the existing service regardless of role.
 
-The page groups **Production reporting**, **Web observer** and **Diagnostics**
-with a compact **PLC alarm monitoring** settings row. Production protocol, endpoint, timeout, base and enabled
+The page groups **Reporting**, **Web** and **Diagnostics**
+with a compact, expandable **Status** card. Service headers use consistent
+project-native icons and place actual state indicators/text after their title
+slots, with actions aligned right. The three title slots share a width measured
+from the current localized captions and actual Qt fonts, not all languages.
+The budget is recalculated on caption/font changes, never on ordinary service
+observations. Stacked cards align their indicators; side-by-side cards keep the
+same local header layout without a shared screen coordinate.
+Configuration controls wrap as whole groups when necessary; the bounded signal table scrolls
+within the existing page. Production protocol, endpoint, timeout, base and enabled
 selection are inline; UDP FINS routing expands separately. FINS/TCP negotiates
 nodes and hides manual routing. Modbus shows an explicitly required HR base and
 advanced Unit ID, with no FINS routing. Protocol changes use port 502 for Modbus
@@ -408,7 +504,7 @@ read/write panel observations are session-local. Manual writes also pass through
 the [Audit Trail](architecture.md#audit-trail). Before sending, the diagnostic
 worker obtains a durable intent for the initiating actor, endpoint, register
 range and requested words, rechecks authorization and checks the current
-reporting reservation. A matching protocol acknowledgment completes the audited
+reporting/status reservation. A matching protocol acknowledgment completes the audited
 write. A PLC rejection records failure. A lost or malformed acknowledgment
 leaves execution uncertain and never triggers a retry. Reads, watches and
 automatic reporting transactions remain outside this trail.
@@ -436,6 +532,17 @@ Service cards reflow when their actual container is shown/resized, including the
 first navigation after maximized startup; no manual resize is needed. Available
 scroll-viewport width, not content stretched by a previous two-column layout,
 determines whether both cards fit. Vertical overflow remains scrollable.
+Reporting, Web and Status headers use a small filled dot with concise
+state text: neutral when off, green when confirmed running/online, amber while
+waiting/stale/unavailable and red for a confirmed service failure. Reserved
+caption widths are measured from the three services' concise states across
+supported languages, keeping state widths and right-side actions stable during
+status, theme and language changes. Each dot follows its shared title slot
+with a consistent gap. Shared action budgets align stacked headers; side-by-side
+cards remain locally right-aligned. Service
+power buttons are neutral and equally sized; their existing activation semantics
+remain distinct. Active PLC alarms do not turn an online monitor into a failed
+service. Retained reporting commits appear in the global strip, not as card counters.
 Web has one header power action: **Turn on** or **Turn off**, alongside actual
 service state, independent of Production and reporting. Power first reads and
 validates the actual settings file, atomically changes only `web.enabled`, then
@@ -451,8 +558,8 @@ drafts are not applied. Saving alone never starts/rebinds Web or changes an acti
 session. Applying reuses the existing Stop/join/Start owner; there is no second
 listener. Power-off persists disabled, so the next process launch stays off.
 
-The effective running URL is a browser action in the Web title row, followed by
-actual service state and the power action. Unavailable URLs are hidden; long URLs
+The effective running URL is a browser action between the Web title/state group
+and the power action. Unavailable URLs are hidden; long URLs
 retain their full value in the tooltip/accessibility description. Service state
 and operation failure remain visible; the status has no runtime tooltip. Saved
 file validation/persistence and address-enumeration recovery retain specific
@@ -466,15 +573,16 @@ one safe restoration of the previous running configuration; the failed saved
 configuration remains saved for review. A failed restoration stays FAILED. Close
 waits asynchronously for actual Web and diagnostic termination; it does not
 abandon blocked work or claim socket release on timeout. Web errors never fault
-Production. Reporting puts its name and compact ACK/success/ERR statistics on the
-left, with actual lifecycle and a power-style Enable/Disable toggle on the right.
+Production. Reporting places actual lifecycle beside its title and keeps its
+power-style Enable/Disable toggle on the right.
 This toggle edits the existing draft only: Save/Discard and next-Start semantics
 apply, and active-session editing remains locked. It never starts/stops a reporting
-worker or adopts Web's immediate runtime power semantics. Lifecycle and
-ACK/success/ERR remain visible; neither label has a runtime diagnostic tooltip.
+worker or adopts Web's immediate runtime power semantics. Routine counters and
+confirmation text are omitted; actionable phase, submission and cleanup failures
+remain visible. The lifecycle label has no runtime diagnostic tooltip.
 Generation, queue, failure and cleanup observations stay with the reporting owner.
-ACK never replaces the lifecycle label.
-There is no separate ACK row, endpoint summary or status footer.
+The retained commit in the global strip never replaces the card's lifecycle label.
+There is no separate ACK row or routine endpoint summary.
 
 The initial editing endpoint is 127.0.0.1:8765 at 500 ms, disabled without a saved
 configuration. Saved enablement is restored on the next application launch.
@@ -482,8 +590,8 @@ The observer remains read-only and unauthenticated;
 use only trusted networks. See
 [configuration](configuration.md#communication-preferences) for validation/recovery.
 
-Automatic reporting presents its lifecycle and ACK/success/ERR summary separately
-from manual connection state; other observations remain with the reporting owner. Communication failures are not fabricated Production NG or
+Automatic reporting lifecycle remains separate from manual connection state;
+other observations remain with the reporting owner. Communication failures are not fabricated Production NG or
 application FAULT. Close stops watches/work and waits asynchronously for actual
 network-owner termination before releasing the UI.
 

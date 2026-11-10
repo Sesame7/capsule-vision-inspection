@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
+    ReportingMode,
     ReportingSettings,
 )
 from capsule_vision.inspection.production import ProductionInspectionResult
@@ -20,7 +21,7 @@ class BatchSelection:
     label: str
     counters: ProductionCounters
     groups: PilotCounters
-    four_cycle: bool | None
+    reporting_mode: ReportingMode | None
     duration_ms: float | None
     uncertain: bool
     detail_expired: bool
@@ -99,12 +100,18 @@ def run_totals(saved: str | None, mode: str) -> PilotCounters | None:
     totals = PilotCounters(**json.loads(saved)) if saved is not None else None
     return (
         totals
-        if totals is not None and (mode == "four_cycle" or totals.batches_completed)
+        if totals is not None
+        and (mode in ("single_cycle", "four_cycle") or totals.batches_completed)
         else None
     )
 
 
 def retained_positions(db: sqlite3.Connection, run: str) -> PilotCounters | None:
+    (mode,) = db.execute(
+        "SELECT reporting_mode FROM runs WHERE uuid=?", (run,)
+    ).fetchone()
+    # Before single_cycle existed, every admitted group fact had four members.
+    size = 1 if mode == "single_cycle" else 4
     counts = {"OK": 0, "NG": 0, "EMPTY": 0, "UNKNOWN": 0}
     groups = 0
     for encoded, members, slots, low, high, first in db.execute(
@@ -114,7 +121,7 @@ def retained_positions(db: sqlite3.Connection, run: str) -> PilotCounters | None
         WHERE g.run=? GROUP BY g.run,g.first_cycle""",
         (run,),
     ):
-        if (members, slots, low, high, first) != (4, 4, 1, 4, 1):
+        if (members, slots, low, high, first) != (size, size, 1, size, 1):
             return None
         try:
             pairs: list[tuple[int, str]] = json.loads(encoded)
@@ -199,7 +206,13 @@ def selected(db: sqlite3.Connection) -> BatchSelection | None:
         row[1],
         ProductionCounters(**json.loads(row[2])),
         PilotCounters(**json.loads(row[3])),
-        row[5] == "four_cycle" if row[5] is not None else None,
+        (
+            ReportingMode(row[5])
+            if row[5] in ("single_cycle", "four_cycle")
+            else ReportingMode.PER_CYCLE
+        )
+        if row[5] is not None
+        else None,
         row[4],
         bool(row[6]),
         bool(row[7]),
@@ -340,6 +353,13 @@ def occurrence(
 def group(
     db: sqlite3.Connection, run: str, fact: CompletedReportingBatch, now: float
 ) -> None:
+    (mode,) = db.execute(
+        "SELECT reporting_mode FROM runs WHERE uuid=?", (run,)
+    ).fetchone()
+    # Before single_cycle existed, every admitted group fact had four members.
+    size = 1 if mode == "single_cycle" else 4
+    if len(fact.reports) != size:
+        raise ValueError("PLC group membership does not match the Run reporting mode")
     first = fact.identity.cycle_id
     if not _first(db, run, "group", first):
         return

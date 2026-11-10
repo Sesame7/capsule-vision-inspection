@@ -31,6 +31,7 @@ from capsule_vision.communication.reporting import (
     FirstStationReportingWorker,
     ReportIdentity,
     ReportingCapacityError,
+    ReportingMode,
     ReportingStateError,
 )
 from capsule_vision.configuration import (
@@ -166,7 +167,8 @@ class SourceRuntimeSession(ProductionRuntimeSession):
     def begin_cycle(self, cycle_id: CycleId) -> ProductionCycle:
         self._store.begin_generation(
             self.generation,
-            four_cycle=isinstance(self.reporting, FourCycleReportingWorker),
+            four_cycle=isinstance(self.reporting, FourCycleReportingWorker)
+            and self.reporting.settings.mode is ReportingMode.FOUR_CYCLE,
         )
         archive = self.archive
         retained = archive.begin(cycle_id) if archive is not None else False
@@ -228,7 +230,10 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             ):
                 raise ValueError("Ambiguous Basler cycle attribution; no report")
             report = FirstStationReport.from_result(self.generation, result)
-            if isinstance(reporter, FourCycleReportingWorker):
+            if (
+                isinstance(reporter, FourCycleReportingWorker)
+                and reporter.settings.mode is ReportingMode.FOUR_CYCLE
+            ):
                 self._store.retain_fourth_result(self.generation, result)
         except BaseException as exc:
             reporter.note_skipped(

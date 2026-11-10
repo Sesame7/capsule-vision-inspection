@@ -18,6 +18,7 @@ from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
     FirstStationReport,
     ReportingGroupProgress,
+    ReportingMode,
     ReportOutcome,
 )
 from capsule_vision.display import LatestDisplayFrameStore, matching_camera
@@ -136,6 +137,7 @@ def test_fourth_display_delayed_publication_missing_camera_and_newer_frames(
     source.value = replace(
         source.value,
         pilot_counting=True,
+        reporting_mode=ReportingMode.FOUR_CYCLE,
         latest_production_result=mixed_result(5),
         active_prepared=config,
         group_progress=ReportingGroupProgress(

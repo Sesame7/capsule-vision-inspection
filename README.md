@@ -27,7 +27,7 @@ accuracy remain separate commissioning responsibilities.
 | Production | Select and prepare saved Recipes; set or continue a Batch with optional product, specification and notes while idle (Operator or above); run inspection and review results |
 | Recipe | Edit and save Recipe definitions, models and inspection rules |
 | Vision | Configure sources, camera layouts and channel ROIs |
-| Communication | Configure PLC diagnostics, reporting, read-only alarm monitoring and the Web observer |
+| Communication | Configure PLC diagnostics, reporting, auxiliary software-status/alarm communication and the Web observer |
 | Records | All roles can browse named Batches, their read-only information, Runs and inspection records. Operators and above can review Alarm History and export customer Batch and filtered defect reports. Engineers and Administrators can review the local Audit Trail. |
 
 ## Quick Start

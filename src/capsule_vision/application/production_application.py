@@ -40,7 +40,7 @@ from capsule_vision.configuration import (
     CameraSources,
     load_camera_sources,
 )
-from capsule_vision.configuration.communication_preferences import AlarmPreferences
+from capsule_vision.configuration.communication_preferences import StatusPreferences
 from capsule_vision.configuration.drafts import CameraSourceDraft
 from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.display import LatestDisplayFrameStore
@@ -81,7 +81,7 @@ class SourceProductionApplication(ProductionApplication):
         identity: LocalIdentity | None = None,
         initial_candidate: PreparedConfiguration | None = None,
         initial_reporting: ReportingSelection | None = None,
-        initial_alarm: AlarmPreferences | None = None,
+        initial_status: StatusPreferences | None = None,
         diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         self.replay_cache = cache
@@ -95,6 +95,12 @@ class SourceProductionApplication(ProductionApplication):
             reporting is not None,
             reporting or ReportingSettings(),
         )
+        if (
+            initial_status is not None
+            and initial_status.enabled
+            and self._reporting_selection.enabled
+        ):
+            initial_status.validate_reporting(self._reporting_selection.settings)
         self._reporting_editable = reporting_editable
         self._reporting_generation = 0
         self._session_reporting: ReportingSettings | None = None
@@ -117,7 +123,7 @@ class SourceProductionApplication(ProductionApplication):
             history=history,
             identity=identity,
             initial_candidate=initial_candidate,
-            initial_alarm=initial_alarm,
+            initial_status=initial_status,
             diagnostics=diagnostics,
         )
 
@@ -159,7 +165,7 @@ class SourceProductionApplication(ProductionApplication):
                     ApplicationState.FAULT,
                 )
                 or self._session_reporting is None
-                or self._session_reporting.mode is ReportingMode.PER_CYCLE
+                or len(batch.reports) != self._session_reporting.mode.group_size
                 or (
                     self._last_pilot_cycle is not None
                     and batch.identity.cycle_id <= self._last_pilot_cycle
@@ -368,10 +374,10 @@ class SourceProductionApplication(ProductionApplication):
     ) -> Future[None]:
         selection = self.reporting_selection()
         if selection.enabled and selection.settings.mode is not ReportingMode.PER_CYCLE:
-            selection.settings.validate_four_cycle()
+            selection.settings.validate_group()
             if not self.basler_available:
                 raise ApplicationStateError(
-                    "Four-cycle reporting requires Basler Production"
+                    "PLC group reporting requires Basler Production"
                 )
         if self.basler_available:
             if single_step:
@@ -414,6 +420,10 @@ class SourceProductionApplication(ProductionApplication):
 
     def _start_reporting_session(self, actor: SessionSnapshot | None) -> Future[None]:
         with self._condition:
+            selected = self.reporting_selection()
+            if selected.enabled and self._alarms is not None:
+                for status in self._alarms.protected_settings():
+                    status.validate_reporting(selected.settings)
             startup = self._admit_start(actor)
             prepared = self._candidate or self._active
             assert prepared is not None
@@ -437,6 +447,11 @@ class SourceProductionApplication(ProductionApplication):
                     with self._condition:
                         if generation == self._generation:
                             self._pilot_counting = pilot
+                            self._counting_mode = (
+                                selection.settings.mode
+                                if pilot
+                                else ReportingMode.PER_CYCLE
+                            )
 
             startup.add_done_callback(activated)
             return startup
@@ -466,7 +481,7 @@ class SourceProductionApplication(ProductionApplication):
         *,
         revision: int | None = None,
         changes: tuple[str, str] | None = None,
-        alarm: AlarmPreferences | None = None,
+        status: StatusPreferences | None = None,
     ) -> None:
         """Publish saved preferences under the same lock that freezes Start.
 
@@ -491,6 +506,16 @@ class SourceProductionApplication(ProductionApplication):
         with scope, self._condition:
             changed = selection != self.reporting_selection()
             with self._admission(Role.ENGINEER, revision):
+                if status is not None and status.enabled:
+                    if selection.enabled:
+                        status.validate_reporting(selection.settings)
+                    with self._reporting_lock:
+                        worker = self._reporting_worker
+                        active = self._state is ApplicationState.STARTING or (
+                            worker is not None and worker.snapshot().thread_alive
+                        )
+                        if active and self._session_reporting is not None:
+                            status.validate_reporting(self._session_reporting)
                 if changed:
                     self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
                     if not self.reporting_editable:
@@ -498,8 +523,8 @@ class SourceProductionApplication(ProductionApplication):
                             "Reporting settings are fixed by this launcher"
                         )
                 persist()
-                if self._alarms is not None and alarm is not None:
-                    self._alarms.apply_saved(alarm)
+                if self._alarms is not None and status is not None:
+                    self._alarms.apply_saved(status)
             if changed:
                 with self._reporting_lock:
                     self._reporting_selection = selection
@@ -517,6 +542,19 @@ class SourceProductionApplication(ProductionApplication):
         if request.kind is not RequestKind.WRITE:
             return
         with self._condition:
+            if self._alarms is not None and request.area is FinsMemoryArea.W:
+                for status in self._alarms.protected_settings():
+                    if (request.endpoint.host, request.endpoint.port) == (
+                        status.endpoint.host,
+                        status.endpoint.port,
+                    ) and any(
+                        request.start <= address < request.start + request.count
+                        for address in (status.heartbeat_address, status.fault_address)
+                    ):
+                        raise ReportingWriteProtectedError(
+                            f"Manual write overlaps active PLC status W{status.heartbeat_address}, "
+                            f"W{status.fault_address}"
+                        )
             with self._reporting_lock:
                 starting = (
                     self._state is ApplicationState.STARTING
@@ -640,7 +678,7 @@ class SourceProductionApplication(ProductionApplication):
             settings = self.reporting_for_generation(self._generation)
             if settings is not None and settings.mode is not ReportingMode.PER_CYCLE:
                 raise ApplicationStateError(
-                    "Four-cycle reporting cannot Pause/Step/Resume; Stop and restart at a new batch's first trigger"
+                    "PLC group reporting cannot Pause/Step/Resume; Stop and restart at a new batch's first trigger"
                 )
             return (
                 self._running_basler_control()

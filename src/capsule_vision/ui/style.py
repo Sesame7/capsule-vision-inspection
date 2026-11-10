@@ -20,6 +20,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QLabel,
     QPushButton,
     QStyle,
     QStyleOptionButton,
@@ -180,6 +181,54 @@ def set_button_caption(button: QPushButton, caption: str, width: int) -> None:
     button.setAccessibleName(caption)
 
 
+def set_service_title(icon: QLabel, title: QLabel, kind: str) -> None:
+    """Refresh service icons without changing the page-owned title slots."""
+    title.ensurePolished()
+    icon.setFixedSize(Style.icon, Style.icon)
+    icon.setPixmap(
+        shell_icon(kind, theme_colors(title).secondary).pixmap(Style.icon, Style.icon)
+    )
+
+
+def set_service_status(
+    indicator: QLabel,
+    label: QLabel,
+    caption: str,
+    color: str,
+) -> None:
+    """One measured caption budget for Reporting, Web and Alarms headers.
+
+    Reserve their concise states across languages, so observations and language
+    changes cannot move the dot or the equally sized action alongside it.
+    """
+    indicator.setFixedSize(8, 8)
+    indicator.setStyleSheet(f"background: {color}; border: none; border-radius: 4px;")
+    label.setText(caption)
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    label.setStyleSheet(f"color: {theme_colors(label).secondary};")
+    metrics = label.fontMetrics()
+    label.setFixedWidth(
+        max(
+            metrics.horizontalAdvance(catalog.text(key, language))
+            for key in (
+                "service_off",
+                "service_next_start",
+                "service_online",
+                "service_waiting",
+                "service_partial",
+                "service_error",
+                "unavailable",
+                "web_running",
+                "web_starting",
+                "STOPPING",
+                "state_RUNNING",
+            )
+            for language in language_identity.LANGUAGES
+        )
+        + Style.small
+    )
+
+
 class _PointerFocus(QObject):
     """Leave focus and selection intact; let the native style draw keyboard cues."""
 
@@ -266,8 +315,6 @@ def stylesheet(theme: Theme = "dark") -> str:
     QFrame#visionModeSwitch QPushButton:checked, QFrame#visionModeSwitch QPushButton:hover, QFrame#visionModeSwitch QPushButton:disabled {{ background: transparent; border: none; }}
     QPushButton, QToolButton, QComboBox {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton[compactAction="true"] {{ padding: 5px 4px; }}
-    QPushButton[reportingSegment="first"] {{ border-top-right-radius: 0; border-bottom-right-radius: 0; }}
-    QPushButton[reportingSegment="last"] {{ border-top-left-radius: 0; border-bottom-left-radius: 0; }}
     QPushButton:hover, QToolButton:hover, QComboBox:hover {{ background: {c.raised}; border-color: {c.secondary}; }}
     QPushButton:pressed, QToolButton:pressed {{ background: {c.selected}; border-color: {c.accent}; }}
     QPushButton#recipeRule {{ text-align: left; }}
@@ -275,7 +322,6 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton:checked {{ color: {c.accent}; background: {c.selected}; border-color: {c.accent}; }}
     QLineEdit:focus {{ border-color: {c.accent}; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
-    QPushButton[reportingSegment]:checked:disabled {{ background: {c.selected}; border-color: {c.secondary}; }}
     QDateEdit#batchDate, QDateEdit#historyDate, QDateEdit#auditDate, QDateEdit#alarmDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QDateEdit#batchDate:disabled, QDateEdit#historyDate:disabled, QDateEdit#auditDate:disabled, QDateEdit#alarmDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
     QCalendarWidget#historyCalendar {{ background: {c.surface}; color: {c.primary}; }}
@@ -315,10 +361,14 @@ def stylesheet(theme: Theme = "dark") -> str:
     QComboBox {{ combobox-popup: 0; qproperty-maxVisibleItems: 24; }}
     QComboBox#language {{ qproperty-maxVisibleItems: {len(language_identity.LANGUAGES)}; }}
     QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
-    QComboBox#reportChoice::drop-down, QComboBox#webAddress::drop-down {{ width: {Style.touch}px; }}
-    QComboBox#reportChoice::down-arrow, QComboBox#webAddress::down-arrow {{ image: none; }}
-    QPushButton#webPower, QPushButton#reportingPower {{ color: {c.primary}; border-color: {c.accent}; background: {c.selected}; }}
-    QPushButton#webPower:disabled, QPushButton#reportingPower:disabled {{ color: {c.secondary}; border-color: {c.border}; background: {c.raised}; }}
+    QComboBox#reportChoice::drop-down, QComboBox#webAddress::drop-down, QComboBox#reportingMerge::drop-down {{ width: {Style.touch}px; }}
+    QComboBox#reportChoice::down-arrow, QComboBox#webAddress::down-arrow, QComboBox#reportingMerge::down-arrow {{ image: none; }}
+    QComboBox#reportingMerge QAbstractItemView::item:disabled {{ color: {c.secondary}; }}
+    QPushButton#webPower, QPushButton#reportingPower, QPushButton#alarmPower,
+    QPushButton#reportingPower:checked, QPushButton#alarmPower:checked {{ color: {c.primary}; border-color: {c.border}; background: {c.raised}; }}
+    QPushButton#webPower:hover, QPushButton#reportingPower:hover, QPushButton#alarmPower:hover {{ border-color: {c.secondary}; }}
+    QPushButton#webPower:pressed, QPushButton#reportingPower:pressed, QPushButton#alarmPower:pressed {{ border-color: {c.accent}; background: {c.selected}; }}
+    QPushButton#webPower:disabled, QPushButton#reportingPower:disabled, QPushButton#alarmPower:disabled {{ color: {c.secondary}; border-color: {c.border}; background: {c.raised}; }}
     QComboBox QAbstractItemView, QMenu {{ background: {c.surface}; color: {c.primary}; border: 1px solid {c.border}; selection-background-color: {c.selected}; }}
     QLineEdit, QSpinBox, QDoubleSpinBox {{ background: {c.surface}; color: {c.primary}; padding: 7px; border: 1px solid {c.border}; border-radius: 6px; selection-background-color: {c.selected}; }}
     QDialog#productionBatchDialog QLineEdit {{ selection-color: {c.primary}; }}
@@ -621,6 +671,8 @@ def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
         return navigation_icon(2, color)
     if kind == "state":
         return production_icon("READY", color)
+    if kind == "alarm":
+        return production_icon("FAULT", color)
     icon = QIcon()
     for dpr in (1.0, 1.25, 1.5, 2.0):
         pixmap = QPixmap(round(24 * dpr), round(24 * dpr))

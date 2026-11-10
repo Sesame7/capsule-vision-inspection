@@ -324,10 +324,7 @@ class StatusBar(QFrame):
         row.setSpacing(8)
         self.state_icon, self.state = self._item(row)
         self.plc_icon, self.plc = self._item(row)
-        self.web_icon, self.web = self._item(row)
-        self.alarm = _StatusLabel()
-        self.alarm.setTextFormat(Qt.TextFormat.PlainText)
-        row.addWidget(self.alarm)
+        self.alarm_icon, self.alarm = self._item(row)
         self.event_icon, self.event_label = self._item(row, flexible=True)
 
     @staticmethod
@@ -358,14 +355,25 @@ class StatusBar(QFrame):
 
     def refresh_icons(self, language: language_identity.Language) -> None:
         colors = theme_colors(self)
+        for label in (self.state, self.plc, self.alarm):
+            label.ensurePolished()
         appearance = (
             colors.background,
             language,
-            tuple(label.font().key() for label in (self.state, self.plc, self.web)),
+            tuple(label.font().key() for label in (self.state, self.plc, self.alarm)),
         )
         if self._appearance == appearance:
             return
         self._appearance = appearance
+        metrics = self.plc.fontMetrics()
+        # Reserve the full supported HR address and 16-bit commit value using
+        # the widest actual digit, independently of the retained observation.
+        self.plc.setFixedWidth(
+            max(metrics.horizontalAdvance("W"), metrics.horizontalAdvance("HR "))
+            + 10 * max(metrics.horizontalAdvance(str(digit)) for digit in range(10))
+            + metrics.horizontalAdvance(" · ")
+            + 2
+        )
         self.alarm.setFixedWidth(
             max(
                 self.alarm.fontMetrics().horizontalAdvance(
@@ -399,22 +407,6 @@ class StatusBar(QFrame):
                     "state_closing",
                 ),
             ),
-            (
-                self.plc,
-                "PLC · ",
-                ("service_off", "service_next_start", "web_running", "technical_error"),
-            ),
-            (
-                self.web,
-                "Web · ",
-                (
-                    "service_off",
-                    "web_starting",
-                    "web_running",
-                    "STOPPING",
-                    "technical_error",
-                ),
-            ),
         ):
             label.setFixedWidth(
                 max(
@@ -423,6 +415,7 @@ class StatusBar(QFrame):
                 )
                 + 2
             )
+        for label in (self.state, self.plc, self.alarm):
             group = label.parentWidget()
             if group is not None and (layout := group.layout()) is not None:
                 layout.invalidate()
@@ -431,5 +424,5 @@ class StatusBar(QFrame):
         if (layout := self.layout()) is not None:
             layout.invalidate()
             layout.activate()
-        for label, kind in ((self.plc_icon, "plc"), (self.web_icon, "globe")):
+        for label, kind in ((self.plc_icon, "plc"), (self.alarm_icon, "alarm")):
             label.setPixmap(shell_icon(kind, colors.secondary).pixmap(20, 20))

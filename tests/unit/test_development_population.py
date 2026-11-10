@@ -218,7 +218,7 @@ def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
                 continue
             assert source.startswith("fins_tcp://")
             assert (category, bit) == (signals[signal].category, signals[signal].bit)
-            assert (station, address) == (1, 18)
+            assert (station, address) == (None, 18)
             if state == "observed_recovered":
                 assert "communication gap" in detail
             elif label is None:

@@ -10,7 +10,7 @@ from typing import Literal
 
 type Stage = Literal["handshake", "initialization", "read", "bitmap", "sequence"]
 type Fault = Literal[
-    "reject", "disconnect", "timeout", "plc", "drop_before", "drop_after"
+    "reject", "disconnect", "timeout", "plc", "drop_before", "drop_after", "sid"
 ]
 
 
@@ -29,8 +29,8 @@ class TcpPeer:
         self._lock = Lock()
         self._packets: list[bytes] = []
         self._memory = {(0x82, 100): 1234, (0xB1, base_address): sequence}
-        self._fault: tuple[Stage, Fault] | None = None
-        self._hold: Stage | None = None
+        self._fault: tuple[Stage, Fault, int | None] | None = None
+        self._hold: tuple[Stage, int | None] | None = None
         self.entered, self.release = Event(), Event()
         self.errors: list[BaseException] = []
         self.connections = 0
@@ -45,9 +45,11 @@ class TcpPeer:
         with self._lock:
             return tuple(self._memory.get((area, start + i), 0) for i in range(count))
 
-    def fail_next(self, stage: Stage, fault: Fault) -> None:
+    def fail_next(
+        self, stage: Stage, fault: Fault, *, start: int | None = None
+    ) -> None:
         with self._lock:
-            self._fault = stage, fault
+            self._fault = stage, fault, start
 
     def set_words(self, start: int, values: tuple[int, ...], area: int = 0xB1) -> None:
         """Local PLC-side state change, including while a client owns the socket."""
@@ -55,11 +57,11 @@ class TcpPeer:
             for offset, value in enumerate(values):
                 self._memory[area, start + offset] = value
 
-    def hold_next(self, stage: Stage) -> None:
+    def hold_next(self, stage: Stage, *, start: int | None = None) -> None:
         self.entered.clear()
         self.release.clear()
         with self._lock:
-            self._hold = stage
+            self._hold = stage, start
 
     def _read(self, connection: socket.socket, count: int) -> bytes | None:
         data = bytearray()
@@ -82,12 +84,22 @@ class TcpPeer:
         assert 8 <= length <= 2020
         return self._read(connection, length)
 
-    def _control(self, stage: Stage) -> Fault | None:
+    def _control(self, stage: Stage, start: int | None = None) -> Fault | None:
         with self._lock:
-            hold = self._hold == stage
+            hold = (
+                self._hold is not None
+                and self._hold[0] == stage
+                and (self._hold[1] is None or self._hold[1] == start)
+            )
             if hold:
                 self._hold = None
-            fault = self._fault[1] if self._fault and self._fault[0] == stage else None
+            fault = (
+                self._fault[1]
+                if self._fault
+                and self._fault[0] == stage
+                and (self._fault[2] is None or self._fault[2] == start)
+                else None
+            )
             if fault:
                 self._fault = None
         if hold:
@@ -137,7 +149,7 @@ class TcpPeer:
             with self._lock:
                 assert len(self._packets) < 512, "test capture must stay bounded"
                 self._packets.append(packet)
-            fault = self._control(stage)
+            fault = self._control(stage, start)
             if fault == "disconnect":
                 return
             if fault in ("timeout", "drop_before"):
@@ -158,6 +170,10 @@ class TcpPeer:
                 self._read(connection, 1)
                 return
             response = b"\xc0\x00\x02" + packet[6:9] + packet[3:6] + packet[9:12]
+            if fault == "sid":
+                response = (
+                    response[:9] + bytes(((packet[9] + 1) & 255,)) + response[10:]
+                )
             response += b"\x21\x01" if fault == "plc" else b"\x00\x00" + data
             connection.sendall(
                 b"FINS" + struct.pack("!III", 8 + len(response), 2, 0) + response

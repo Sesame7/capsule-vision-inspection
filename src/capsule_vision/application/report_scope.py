@@ -123,10 +123,11 @@ class DefectScope:
     cycles: int
     groups: int
     batch_label: str | None
+    covered_cycles: int = 0
 
     @property
     def attributable(self) -> bool:
-        return self.cycles > 0 and self.cycles == 4 * self.groups
+        return self.cycles > 0 and self.cycles == self.covered_cycles
 
 
 def _selected(filters: HistoryQuery) -> tuple[str, list[object]]:
@@ -138,13 +139,15 @@ def defect_scope(db: sqlite3.Connection, filters: HistoryQuery) -> DefectScope:
     """Whole-scope eligibility, never inferred from CycleId arithmetic or categories."""
     selected, args = _selected(filters)
     total = db.execute(f"SELECT count(*) FROM ({selected})", args).fetchone()[0]
-    groups = 0
-    for (encoded,) in db.execute(
-        f"""WITH selected AS ({selected}) SELECT g.final_channels
+    groups = covered = 0
+    for encoded, size in db.execute(
+        f"""WITH selected AS ({selected}) SELECT g.final_channels,
+        CASE r.reporting_mode WHEN 'single_cycle' THEN 1 ELSE 4 END AS size
         FROM main.plc_groups g JOIN main.group_members m USING(run,first_cycle)
+        JOIN main.runs r ON r.uuid=g.run
         LEFT JOIN selected c ON (c.run_id,c.cycle_id)=(m.run,m.cycle)
-        GROUP BY g.run,g.first_cycle HAVING count(*)=4 AND count(c.id)=4
-        AND count(DISTINCT m.slot)=4 AND min(m.slot)=1 AND max(m.slot)=4
+        GROUP BY g.run,g.first_cycle HAVING size>0 AND count(*)=size AND count(c.id)=size
+        AND count(DISTINCT m.slot)=size AND min(m.slot)=1 AND max(m.slot)=size
         AND sum(m.slot=1 AND m.cycle=g.first_cycle)=1""",
         args,
     ):
@@ -157,10 +160,11 @@ def defect_scope(db: sqlite3.Connection, filters: HistoryQuery) -> DefectScope:
             and set(finals.values()) <= {"OK", "NG", "EMPTY", "UNKNOWN"}
         ):
             groups += 1
+            covered += size
     label = db.execute(
         "SELECT label FROM main.batches WHERE uuid=?", (filters.batch_segment,)
     ).fetchone()
-    return DefectScope(total, groups, label[0] if label else None)
+    return DefectScope(total, groups, label[0] if label else None, covered)
 
 
 def capture_report(

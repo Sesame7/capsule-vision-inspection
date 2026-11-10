@@ -196,12 +196,14 @@ class CameraCard(QFrame):
     ) -> None:
         # Generation zero is launcher reference/warm-up data, never production evidence.
         frame = frame if frame is not None and frame.generation > 0 else None
-        was_four_cycle = self._snapshot is not None and self._snapshot.pilot_counting
-        if snapshot.pilot_counting != was_four_cycle:
-            size = 28 if snapshot.pilot_counting else Style.touch
-            padding = 1 if snapshot.pilot_counting else 0
+        was_four_cycle = (
+            self._snapshot is not None and self._snapshot.four_cycle_display
+        )
+        if snapshot.four_cycle_display != was_four_cycle:
+            size = 28 if snapshot.four_cycle_display else Style.touch
+            padding = 1 if snapshot.four_cycle_display else 0
             self._slots.setContentsMargins(0, padding, 0, padding)
-            self._slots.setSpacing(6 if snapshot.pilot_counting else 2)
+            self._slots.setSpacing(6 if snapshot.four_cycle_display else 2)
             for indicator in self.indicators:
                 indicator.setFixedSize(size, size)
             self.indicator_group.updateGeometry()
@@ -244,7 +246,7 @@ class CameraCard(QFrame):
             zip(layout.slots, self.indicators, strict=True)
         ):
             snapshot = self._snapshot
-            if snapshot is not None and snapshot.pilot_counting:
+            if snapshot is not None and snapshot.four_cycle_display:
                 progress = snapshot.group_progress
                 if (
                     progress is not None

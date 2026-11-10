@@ -268,7 +268,7 @@
     const modeChanged = Boolean(latest?.four_cycle) !== Boolean(snapshot.four_cycle);
     latest = snapshot;
     const metrics = element("metrics"), counts = snapshot.metrics;
-    metrics.hidden = !snapshot.four_cycle || !counts;
+    metrics.hidden = !snapshot.group_counting || !counts;
     if (!metrics.hidden) metrics.textContent = `${t("batches")} ${counts.batches} · OK ${counts.ok} · NG ${counts.ng} · EMPTY ${counts.empty} · ${t("duration")} ${counts.duration_ms == null ? "--" : `${Math.round(counts.duration_ms)} ms`}`;
     const order = snapshot.configured_camera_ids;
     for (const [id, card] of cards) {

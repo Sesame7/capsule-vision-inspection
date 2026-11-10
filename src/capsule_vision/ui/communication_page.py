@@ -17,19 +17,16 @@ from PySide6.QtCore import (
     Qt,
     QThread,
     QTimer,
-    QUrl,
     Slot,
 )
 from PySide6.QtGui import (
     QColor,
-    QDesktopServices,
     QFontMetricsF,
     QHideEvent,
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFrame,
@@ -38,7 +35,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -53,6 +49,7 @@ from PySide6.QtWidgets import (
 )
 
 from capsule_vision.application import ProductionApplication
+from capsule_vision.application.alarm_monitor import AlarmSnapshot
 from capsule_vision.application.audit import (
     AuditOperation,
     AuditUnavailable,
@@ -103,10 +100,12 @@ from capsule_vision.communication.reporting import (
     ReportingWriteProtectedError,
 )
 from capsule_vision.configuration import ConfigurationError
-from capsule_vision.configuration.alarm_definitions import load_alarm_definitions
+from capsule_vision.configuration.alarm_definitions import (
+    AlarmDefinitions,
+)
 from capsule_vision.configuration.communication_preferences import (
-    AlarmPreferences,
     CommunicationPreferences,
+    StatusPreferences,
     load_communication_preferences,
     save_communication_preferences,
 )
@@ -114,6 +113,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.web.runtime import WebRuntime, WebState
 
+from .alarm_monitor_panel import AlarmMonitorPanel
 from .future_delivery import FutureDelivery
 from .image_tools import image_icon
 from .permissions import failure_key, permits
@@ -192,7 +192,7 @@ class CommunicationPage(QWidget):
         self._settings_loading = False
         self._settings_missing = True
         self._settings_message, self._settings_detail = "", ""
-        self._alarm_file_message, self._alarm_file_detail = "", ""
+        self._alarm_preview_attempted = False
         self._discard_dialog: QMessageBox | None = None
         self._watch_observations: list[CommunicationResponse | None] = []
         self._watch_fresh: set[int] = set()
@@ -250,46 +250,22 @@ class CommunicationPage(QWidget):
         self._web_close_monitor.timeout.connect(self._check_closed)
         self.service_layout.addWidget(self.web_panel, 1, 0)
         layout.addWidget(self.service_cards)
-        self.alarm_strip = QFrame()
-        self.alarm_strip.setObjectName("commPanel")
-        alarm_row = QHBoxLayout(self.alarm_strip)
-        alarm_row.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
-        self.alarm_enabled = QCheckBox()
-        self.alarm_station = QComboBox()
-        self.alarm_station.addItems(["1 · W18", "2 · W118"])
-        self.alarm_host = QLineEdit("127.0.0.1")
-        self.alarm_host.setMaximumWidth(170)
-        self.alarm_port = self._spin(1, 65535, 9600)
-        for field in (
-            self.alarm_enabled,
-            self.alarm_station,
-            self.alarm_host,
-            self.alarm_port,
-        ):
-            field.setMinimumHeight(Style.touch)
-        alarm_row.addWidget(self.alarm_enabled)
-        alarm_row.addSpacing(Style.space)
-        alarm_row.addWidget(self._caption("alarm_station"))
-        alarm_row.addWidget(self.alarm_station)
-        alarm_row.addSpacing(Style.space)
-        alarm_row.addWidget(QLabel("FINS/TCP"))
-        alarm_row.addWidget(self.alarm_host)
-        alarm_row.addWidget(self._caption("comm_port"))
-        alarm_row.addWidget(self.alarm_port)
-        alarm_row.addStretch()
-        self.alarm_file = QPushButton()
-        self.alarm_file.setMinimumHeight(Style.touch)
-        menu = QMenu(self.alarm_file)
-        self.alarm_create = menu.addAction("")
-        self.alarm_open = menu.addAction("")
-        self.alarm_create.triggered.connect(
-            lambda: self._alarm_file_action(create=True)
+        self.alarm_panel = AlarmMonitorPanel()
+        self.alarm_enabled = self.alarm_panel.enabled
+        self.alarm_host = self.alarm_panel.host
+        self.alarm_port = self.alarm_panel.port
+        self.alarm_address = self.alarm_panel.address
+        self.heartbeat_address = self.alarm_panel.heartbeat_address
+        self.fault_address = self.alarm_panel.fault_address
+        self.alarm_panel.preview_requested.connect(self._preview_alarm_definitions)
+        layout.addWidget(self.alarm_panel)
+        self.alarm_panel.hide()  # Explicit launchers without saved communication settings.
+        self._service_titles = (
+            *((self.reporting_panel.title,) if self.reporting_panel else ()),
+            self.web_panel.title,
+            self.alarm_panel.title,
         )
-        self.alarm_open.triggered.connect(lambda: self._alarm_file_action(create=False))
-        self.alarm_file.setMenu(menu)
-        alarm_row.addWidget(self.alarm_file)
-        layout.addWidget(self.alarm_strip)
-        self.alarm_strip.hide()  # Explicit launchers without saved communication settings.
+        self._service_title_metrics: tuple[tuple[str, str, int], ...] = ()
         diagnostics = self._panel(layout, "comm_diagnostics")
         settings = diagnostics
         self._preferences_path: Path | None = None
@@ -526,6 +502,8 @@ class CommunicationPage(QWidget):
         self.scroll_area.viewport().installEventFilter(self)
         self.watch_tools.installEventFilter(self)
         self.watch_table.viewport().installEventFilter(self)
+        for title in self._service_titles:
+            title.installEventFilter(self)
 
     def _panel(
         self,
@@ -616,7 +594,6 @@ class CommunicationPage(QWidget):
     def refresh_icons(self) -> None:
         colors = theme_colors(self)
         for button, tool in (
-            (self.alarm_file, "folder"),
             (self.watch_editor_button, "plus"),
             (self.watch_add, "apply"),
             (self.watch_remove, "delete"),
@@ -636,6 +613,8 @@ class CommunicationPage(QWidget):
         self._arrange_services()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched in self._service_titles and event.type() is QEvent.Type.FontChange:
+            self._arrange_services()
         if event.type() in (
             QEvent.Type.Resize,
             QEvent.Type.Show,
@@ -726,7 +705,27 @@ class CommunicationPage(QWidget):
                 column, width + spare // 5 + (column < spare % 5)
             )
 
+    def _align_service_titles(self) -> None:
+        # Share a local title slot, not a screen coordinate. Only the current
+        # captions/fonts matter; observations cannot alter the measured budget.
+        for title in self._service_titles:
+            title.ensurePolished()
+        metrics = tuple(
+            (title.text(), title.font().key(), title.logicalDpiX())
+            for title in self._service_titles
+        )
+        if metrics == self._service_title_metrics:
+            return
+        self._service_title_metrics = metrics
+        width = max(
+            title.fontMetrics().horizontalAdvance(title.text()) + 1
+            for title in self._service_titles
+        )
+        for title in self._service_titles:
+            title.setFixedWidth(width)
+
     def _arrange_services(self) -> None:
+        self._align_service_titles()
         panel = self.reporting_panel
         if panel is None:
             return
@@ -801,14 +800,16 @@ class CommunicationPage(QWidget):
             else self._preferences.reporting,
             self.diagnostic_selection(),
             self.web_panel.preferences(),
-            AlarmPreferences(
+            StatusPreferences(
                 self.alarm_enabled.isChecked(),
-                self.alarm_station.currentIndex() + 1,
                 FinsTcpEndpoint(
                     self.alarm_host.text().strip(),
                     self.alarm_port.value(),
-                    self._preferences.alarm.endpoint.timeout,
+                    self._preferences.status.endpoint.timeout,
                 ),
+                self.alarm_address.value(),
+                self.heartbeat_address.value(),
+                self.fault_address.value(),
             ),
         )
 
@@ -851,10 +852,12 @@ class CommunicationPage(QWidget):
             if self.reporting_panel is not None:
                 self.reporting_panel.set_selection(value.reporting)
             self.web_panel.set_preferences(value.web)
-            self.alarm_enabled.setChecked(value.alarm.enabled)
-            self.alarm_station.setCurrentIndex(value.alarm.station - 1)
-            self.alarm_host.setText(value.alarm.endpoint.host)
-            self.alarm_port.setValue(value.alarm.endpoint.port)
+            self.alarm_enabled.setChecked(value.status.enabled)
+            self.alarm_host.setText(value.status.endpoint.host)
+            self.alarm_port.setValue(value.status.endpoint.port)
+            self.alarm_address.setValue(value.status.word_address)
+            self.heartbeat_address.setValue(value.status.heartbeat_address)
+            self.fault_address.setValue(value.status.fault_address)
         finally:
             self._settings_loading = False
         self._refresh()
@@ -867,11 +870,13 @@ class CommunicationPage(QWidget):
         self._preferences_path, self._preferences = path, value
         self._settings_missing = not path.exists()
         self._show_preferences(value)
-        self.alarm_strip.show()
+        self.alarm_panel.show()
         self.alarm_enabled.toggled.connect(self._settings_edited)
-        self.alarm_station.currentIndexChanged.connect(self._settings_edited)
         self.alarm_host.textChanged.connect(self._settings_edited)
         self.alarm_port.valueChanged.connect(self._settings_edited)
+        self.alarm_address.valueChanged.connect(self._settings_edited)
+        self.heartbeat_address.valueChanged.connect(self._settings_edited)
+        self.fault_address.valueChanged.connect(self._settings_edited)
         self.web_panel.saved_available = not (self._settings_missing or error)
         self.web_panel.refresh()
         self._settings_message = "comm_settings_failed" if error else ""
@@ -896,7 +901,6 @@ class CommunicationPage(QWidget):
         self._render_preferences()
 
     def identity_changed(self) -> None:
-        self._alarm_file_message = self._alarm_file_detail = ""
         if self._discard_dialog is not None:
             self._discard_dialog.reject()
         self._refresh()
@@ -909,9 +913,11 @@ class CommunicationPage(QWidget):
         except ValueError:
             self.web_panel.dirty = True
         engineer = permits(self._application, Role.ENGINEER)
-        self.alarm_strip.setEnabled(
-            engineer and not (self._closing or self._disposed or self._file_finished)
+        self.alarm_panel.set_editable(
+            engineer and not (self._closing or self._disposed or self._file_finished),
+            can_manage=engineer,
         )
+        self.alarm_panel.expand.setEnabled(not (self._closing or self._disposed))
         if self.reporting_panel is not None:
             can_edit = engineer and self._file_finished is None
             if self.reporting_panel.can_manage != can_edit:
@@ -935,8 +941,6 @@ class CommunicationPage(QWidget):
             ),
             self.language,
         )
-        if self._alarm_file_message:
-            status += "  ·  " + text(self._alarm_file_message, self.language)
         self.preferences_status.setText(status)
         failed = self._settings_message in (
             "audit_required",
@@ -946,11 +950,7 @@ class CommunicationPage(QWidget):
             "permission_engineer",
             "identity_stale",
         )
-        detail = "\n".join(
-            filter(
-                None, (self._settings_detail if failed else "", self._alarm_file_detail)
-            )
-        )
+        detail = self._settings_detail if failed else ""
         self.preferences_status.setToolTip(detail)
         self.preferences_status.setAccessibleDescription(detail)
         self.preferences_status.setStyleSheet(
@@ -959,12 +959,7 @@ class CommunicationPage(QWidget):
         editable = not (
             self.busy or self._auto_refresh or self._closing or self._disposed
         )
-        self.alarm_file.setEnabled(
-            engineer and editable and self._application is not None
-        )
-        self.alarm_file.setToolTip(
-            text("alarm_file" if engineer else "permission_engineer", self.language)
-        )
+        self.alarm_panel.refresh_preview.setEnabled(editable)
         self.save_settings.setEnabled(
             engineer and editable and (dirty or failed or self._settings_missing)
         )
@@ -981,70 +976,44 @@ class CommunicationPage(QWidget):
         if self._settings_loading:
             return
         self._settings_message = self._settings_detail = ""
-        self._alarm_file_message = self._alarm_file_detail = ""
         self._render_preferences()
 
-    def _alarm_file_action(self, *, create: bool) -> None:
+    def update_alarm_snapshot(self, snapshot: AlarmSnapshot) -> None:
+        if snapshot.selection != self.alarm_panel.snapshot.selection:
+            self._alarm_preview_attempted = False
+            self.alarm_panel.set_preview(None)
+        self.alarm_panel.set_snapshot(snapshot)
+        if (
+            snapshot.state == "off"
+            and self.alarm_panel.expand.isChecked()
+            and not self._alarm_preview_attempted
+        ):
+            self._preview_alarm_definitions()
+
+    def _preview_alarm_definitions(self) -> None:
         app = self._application
         if (
             app is None
+            or app.alarm_snapshot().state != "off"
             or self.busy
             or self._auto_refresh
             or self._closing
             or self._disposed
         ):
             return
-        ticket = app.session_revision
-        try:
-            path = app.alarm_definitions_path(ticket)
-        except RuntimeError as exc:
-            self._alarm_file_message = failure_key(exc, "alarm_file_unavailable")
-            self._alarm_file_detail = str(exc)
-            self._render_preferences()
-            return
+        self._alarm_preview_attempted = True
+        snapshot = app.alarm_snapshot()
 
-        def finished(_value: object, error: BaseException | None) -> None:
-            if self._closing or self._disposed or app.session_revision != ticket:
+        def finished(value: object, error: BaseException | None) -> None:
+            # A file read cannot replace an activation's frozen definitions.
+            if self._closing or self._disposed or app.alarm_snapshot() != snapshot:
                 return
-            try:
-                # Open the directory even for malformed definitions so they can be repaired.
-                if not create and (
-                    error is None or isinstance(error, ConfigurationError)
-                ):
-                    app.authorize_engineering(ticket)
-                    if not QDesktopServices.openUrl(
-                        QUrl.fromLocalFile(str(path.parent))
-                    ):
-                        raise OSError(f"Cannot open {path.parent}")
-            except (RuntimeError, OSError) as exc:
-                error = exc
-            if error is None:
-                key = "alarm_file_created" if create else "alarm_file_opened"
-            elif isinstance(error, FileExistsError):
-                key = "alarm_file_exists"
-            elif isinstance(error, ConfigurationError) and isinstance(
-                error.__cause__, FileNotFoundError
-            ):
-                key = "alarm_file_missing"
-            elif isinstance(error, ConfigurationError) and not isinstance(
-                error.__cause__, OSError
-            ):
-                key = "alarm_file_invalid"
-            else:
-                key = failure_key(error, "alarm_file_unavailable")
-            self._alarm_file_message = key
-            self._alarm_file_detail = str(error) if error else str(path)
-            self._render_preferences()
+            self.alarm_panel.set_preview(
+                value if isinstance(value, AlarmDefinitions) else None,
+                str(error) if error is not None else "",
+            )
 
-        def work() -> None:
-            if create:
-                app.create_alarm_definitions(ticket)
-            else:
-                load_alarm_definitions(
-                    app.alarm_definitions_path(ticket), bundled_fallback=False
-                )
-
-        self._file_work(work, finished)
+        self._file_work(app.preview_alarm_definitions, finished)
 
     def _commit_preferences(
         self,
@@ -1055,7 +1024,11 @@ class CommunicationPage(QWidget):
         if persist is not None:
             if self._authorize is not None:
                 self._authorize(revision)
-            if self._reporting is not None:
+            if isinstance(self._reporting, SourceProductionApplication):
+                self._reporting.persist_reporting_selection(
+                    value.reporting, persist, status=value.status, revision=revision
+                )
+            elif self._reporting is not None:
                 self._reporting.persist_reporting_selection(value.reporting, persist)
             else:
                 persist()
@@ -1119,7 +1092,7 @@ class CommunicationPage(QWidget):
                             persist,
                             revision=revision,
                             changes=changes,
-                            alarm=value.alarm,
+                            status=value.status,
                         )
                     else:
                         with identity.change(
@@ -1408,19 +1381,7 @@ class CommunicationPage(QWidget):
             for selector in (self.area, self.watch_area):
                 selector.setItemText(0, text("comm_holding_registers", language))
         self.web_panel.set_language(language)
-        self.alarm_enabled.setText(text("alarm_monitor", language))
-        self.alarm_file.setText(text("alarm_file", language))
-        self.alarm_file.setAccessibleName(self.alarm_file.text())
-        self.alarm_create.setText(text("alarm_definitions.create", language))
-        self.alarm_open.setText(text("alarm_file_open", language))
-        for field, key in (
-            (self.alarm_enabled, "alarm_monitor"),
-            (self.alarm_host, "comm_host"),
-            (self.alarm_port, "comm_port"),
-            (self.alarm_station, "alarm_station"),
-        ):
-            field.setAccessibleName(text(key, language))
-            field.setToolTip(text(key, language))
+        self.alarm_panel.set_language(language)
         self.refresh_icons()
         set_button_caption(
             self.save_settings,

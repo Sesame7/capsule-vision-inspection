@@ -100,6 +100,7 @@ class HistoryRecord:
     cameras: tuple[HistoryCamera, ...]
     group_first_cycle: int | None = None
     group_slot: int | None = None
+    group_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -973,8 +974,10 @@ class ProductionHistory:
             list[tuple[object, ...]],
             connection.execute(
                 "SELECT id,completed_at,batch_segment,batch_label,run_id,cycle_id,recipe_id,model_id,model_sha,"
-                "status,technical,judgment,detail,m.first_cycle,m.slot FROM cycles "
-                "LEFT JOIN group_members m ON m.run=cycles.run_id AND m.cycle=cycles.cycle_id"
+                "status,technical,judgment,detail,m.first_cycle,m.slot,"
+                "CASE WHEN m.run IS NULL THEN NULL WHEN r.reporting_mode='single_cycle' THEN 1 ELSE 4 END FROM cycles "
+                "LEFT JOIN group_members m ON m.run=cycles.run_id AND m.cycle=cycles.cycle_id "
+                "LEFT JOIN runs r ON r.uuid=m.run"
                 + where
                 + f" ORDER BY completed_at {order},id {order} LIMIT ?",
                 [*args, query.limit + 1],
@@ -1052,6 +1055,7 @@ class ProductionHistory:
             cameras,
             int(str(row[13])) if row[13] is not None else None,
             cast(int | None, row[14]),
+            cast(int | None, row[15]),
         )
 
     def _run(self) -> None:

@@ -43,7 +43,7 @@ from capsule_vision.configuration import (
     resolve_configuration,
 )
 from capsule_vision.configuration.catalog import RecipeCatalog
-from capsule_vision.configuration.communication_preferences import AlarmPreferences
+from capsule_vision.configuration.communication_preferences import StatusPreferences
 from capsule_vision.configuration.drafts import CameraSourceDraft
 from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.display import LatestDisplayFrameStore
@@ -191,7 +191,7 @@ def create_production_application(
     history: ProductionHistory | None = None,
     identity: LocalIdentity | None = None,
     initial_reporting: ReportingSelection | None = None,
-    initial_alarm: AlarmPreferences | None = None,
+    initial_status: StatusPreferences | None = None,
     initial_candidate: PreparedConfiguration | None = None,
     diagnostics: RuntimeDiagnostics | None = None,
 ) -> tuple[SourceProductionApplication, LatestDisplayFrameStore]:
@@ -319,10 +319,10 @@ def create_production_application(
             session_reporting is not None
             and session_reporting.mode is not ReportingMode.PER_CYCLE
         ):
-            session_reporting.validate_four_cycle()
+            session_reporting.validate_group()
             if continuous_source is None:
                 raise ApplicationStateError(
-                    "Four-cycle reporting requires Basler Production"
+                    "PLC group reporting requires Basler Production"
                 )
         report_worker: FirstStationReportingWorker | FourCycleReportingWorker | None
         if session_reporting is None:
@@ -383,7 +383,7 @@ def create_production_application(
         diagnostics=diagnostics,
         identity=identity,
         initial_reporting=initial_reporting,
-        initial_alarm=initial_alarm,
+        initial_status=initial_status,
         initial_candidate=initial_candidate,
         source_draft=source_draft if not paths else None,
         source_cameras=editor.machine_editor.camera_ids,
@@ -401,7 +401,7 @@ def unconfigured_application(
     *,
     identity: LocalIdentity | None = None,
     initial_reporting: ReportingSelection | None = None,
-    initial_alarm: AlarmPreferences | None = None,
+    initial_status: StatusPreferences | None = None,
     diagnostics: RuntimeDiagnostics | None = None,
 ) -> ProductionApplication:
     """Normal stopped shell can edit session preferences without inventing inputs."""
@@ -419,5 +419,5 @@ def unconfigured_application(
         diagnostics=diagnostics,
         identity=identity,
         initial_reporting=initial_reporting,
-        initial_alarm=initial_alarm,
+        initial_status=initial_status,
     )

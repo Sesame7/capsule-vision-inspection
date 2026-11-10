@@ -238,7 +238,7 @@ class LatestDisplayFrameStore:
 def matching_camera(
     frame: DisplayFrame | None, snapshot: ProductionApplicationSnapshot
 ) -> CameraInspectionResult | None:
-    if snapshot.pilot_counting:
+    if snapshot.four_cycle_display:
         return (
             frame.result
             if frame is not None

@@ -667,6 +667,7 @@ test("authoritative invalidation and disconnect do not resurrect a quiet old res
 function fourCycle(h, revision = 1) {
   h.value = h.snapshot(revision);
   h.value.four_cycle = true;
+  h.value.group_counting = true;
   h.value.group_progress = { generation: 1, cycles: [11, 12, 13, 14], eligible: true, invalidated: false };
   h.value.metrics = { batches: 2, ok: 6, ng: 24, empty: 6, duration_ms: 125 };
   for (const row of h.value.cameras) {
@@ -771,5 +772,23 @@ test('new group progress retains the preceding fourth image identity', async () 
   assert.equal(h.image(0), image);
   assert.equal(image.alt, 'CAM6 · #14');
   assert.match(h.channel(0).getAttribute('aria-label'), /#15: ng/);
+  h.stop();
+});
+
+
+test('single-cycle group shows physical counters with ordinary single-result indicators', async () => {
+  const h = fixture();
+  h.value.group_counting = true;
+  h.value.four_cycle = false;
+  h.value.metrics = { batches: 1, ok: 30, ng: 4, empty: 2, duration_ms: 90 };
+  await h.start();
+  assert.equal(h.node('metrics').hidden, false);
+  assert.match(h.node('metrics').textContent, /Batches 1.*NG 4/);
+  assert.equal(h.channel(0).dataset.kind, 'ok');
+  assert.equal(h.channel(0).children.length, 1);
+  assert.notEqual(h.channel(0).children[0].className, 'lamp ok');
+  h.value = h.snapshot(2);
+  await h.tick();
+  assert.equal(h.node('metrics').hidden, true);
   h.stop();
 });
