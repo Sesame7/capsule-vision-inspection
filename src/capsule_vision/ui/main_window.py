@@ -399,12 +399,13 @@ class MainWindow(QMainWindow):
         self.vision_page = QWidget()
         self._vision_layout = QVBoxLayout(self.vision_page)
         self._vision_layout.setContentsMargins(0, 0, 0, 0)
+        recipe_messages, recipe_details = self._recipe_configuration_feedback()
         self.recipe_page = RecipePage(
             bridge,
             self.editing,
             label_reader=label_reader,
-            configuration_messages=configuration_messages,
-            configuration_details=configuration_issue,
+            configuration_messages=recipe_messages,
+            configuration_details=recipe_details,
         )
         self.production_recipes = ProductionRecipes(self.editing)
         identity_row.addWidget(
@@ -420,6 +421,7 @@ class MainWindow(QMainWindow):
         bridge.model_preparation_changed.connect(self._refresh_vision)
         bridge.frames_changed.connect(self._refresh_vision)
         self.communication = CommunicationPage(application=bridge.application)
+        self.communication.preferences_validated.connect(self._communication_validated)
         self.identity_controls.session_changed.connect(self._session_changed)
         self.history = HistoryPage(bridge.application.history, bridge.application)
         self.batches_page = BatchesPage(bridge.application)
@@ -1110,11 +1112,31 @@ class MainWindow(QMainWindow):
     def _recipe_applied(self, prepared: object) -> None:
         if not isinstance(prepared, PreparedConfiguration):
             return
-        # Candidate preparation does not verify acquisition or repair app.json.
+        # Preparation does not verify acquisition, app.json or Communication settings.
         self._retain_configuration_feedback(
-            ("startup_source_unavailable", "startup_language", "startup_preferences")
+            (
+                "startup_source_unavailable",
+                "startup_language",
+                "startup_preferences",
+                "startup_communication",
+            )
         )
         self._render()
+
+    def _recipe_configuration_feedback(self) -> tuple[tuple[str, ...], str]:
+        messages = tuple(
+            key for key in self.configuration_messages if key != "startup_communication"
+        )
+        # Structured startup notices retain relevant setup details without leaking
+        # an unrelated Communication error into Recipe's local Save feedback.
+        details = (
+            self.configuration_issue
+            if messages == self.configuration_messages
+            else "\n".join(
+                detail for key, detail in self._configuration_notices if key in messages
+            )
+        )
+        return messages, details
 
     def _retain_configuration_feedback(self, keys: tuple[str, ...]) -> None:
         self.configuration_messages = tuple(
@@ -1128,9 +1150,22 @@ class MainWindow(QMainWindow):
             )
         elif not self.configuration_messages:
             self.configuration_issue = ""
-        self.recipe_page.configuration_messages = self.configuration_messages
-        self.recipe_page.configuration_details = self.configuration_issue
+        (
+            self.recipe_page.configuration_messages,
+            self.recipe_page.configuration_details,
+        ) = self._recipe_configuration_feedback()
         self.recipe_page.refresh_state()
+
+    @Slot()
+    def _communication_validated(self) -> None:
+        self._retain_configuration_feedback(
+            tuple(
+                key
+                for key in self.configuration_messages
+                if key != "startup_communication"
+            )
+        )
+        self._render()
 
     @Slot(bool, bool)
     def _setup_saved(self, machine: bool, sources: bool) -> None:

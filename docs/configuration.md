@@ -441,6 +441,14 @@ file before the first Save), the complete draft is preserved. Default settings
 can be explicitly saved to establish that initial file. Save/Discard feedback
 and actions remain outside the scrolling content.
 
+Communication startup-validation warnings remain in the global feedback until a
+validated Communication Save or reload succeeds in that window. Failed operations,
+unsaved drafts, runtime connectivity and Recipe Save/preparation do not resolve
+them. Confirmed resolution refreshes the feedback immediately and clears only the
+Communication warning; other startup warnings retain their existing lifecycle.
+Recipe's local status and tooltip exclude Communication warnings while preserving
+Recipe feedback and relevant setup diagnostics.
+
 The versionless object permits optional `reporting`, `diagnostic`, `web` and `status`
 sections; an existing `{}` means legacy UDP defaults, with reporting and Web
 disabled. Unknown or duplicate fields and invalid present types/ranges are rejected. Superseded
@@ -1143,6 +1151,7 @@ color NG with unavailable numeric measurements. Tune has no Occupancy fusion and
 does not reinterpret that result as Production EMPTY or consume historical NG.
 
 Recipe **Save** persists only its definition, including incomplete Model references.
+Invalid Communication settings do not block Recipe Save.
 It does not require saved/complete MachineLayout or source drafts, prepare a
 candidate, change `last_applied_recipe_id`, or alter an already prepared candidate.
 Dirty Recipe navigation/close offers Save, Discard or Cancel with these same semantics.

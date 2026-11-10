@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     Qt,
     QThread,
     QTimer,
+    Signal,
     Slot,
 )
 from PySide6.QtGui import (
@@ -145,6 +146,9 @@ class CommunicationPage(QWidget):
     delivery; an application-close failure can resume admission on the live page.
     The optional reporting boundary only commands/presents the existing owner.
     """
+
+    # Emitted on Qt dispatch only after a successful validated Save or reload.
+    preferences_validated = Signal()
 
     def __init__(
         self,
@@ -1133,6 +1137,7 @@ class CommunicationPage(QWidget):
             self.web_panel.saved_available = True
             self._settings_message, self._settings_detail = "comm_settings_saved", ""
             self._show_preferences(value)
+            self.preferences_validated.emit()
         self._refresh()
         if self.reporting_panel is not None:
             self.reporting_panel.refresh()
@@ -1230,6 +1235,7 @@ class CommunicationPage(QWidget):
             self.web_panel.saved_available = True
             self._settings_missing = False
             self._settings_message, self._settings_detail = "comm_settings_saved", ""
+            self.preferences_validated.emit()
         self._refresh()
 
     def _field(
