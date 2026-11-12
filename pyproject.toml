@@ -35,7 +35,7 @@ capsule-vision-accounts = "capsule_vision.ui.account_maintenance:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-capsule_vision = ["py.typed", "web/static/*", "configuration/alarm_definitions.json"]
+capsule_vision = ["py.typed", "web/static/*", "configuration/alarm_definitions.json", "ui/icons/*.svg"]
 
 [tool.ruff]
 target-version = "py314"

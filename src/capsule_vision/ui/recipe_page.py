@@ -4,7 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread
 from typing import Literal, Protocol, cast
 
 from PySide6.QtCore import (
@@ -22,7 +22,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDesktopServices, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QBoxLayout,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -52,16 +51,17 @@ from capsule_vision.application.identity_models import (
     Role,
     StaleSessionError,
 )
+from capsule_vision.application.process_preview import ProcessObservation
 from capsule_vision.configuration import (
     CheckConfiguration,
     ConfigurationError,
     ConfigurationIOError,
     ModelDefinition,
     RecipeDefinition,
-    load_recipe,
 )
 from capsule_vision.configuration.catalog import RecipeEntry
 from capsule_vision.configuration.drafts import RecipeDraft
+from capsule_vision.configuration.process_parameters import ProcessCatalog
 from capsule_vision.inference import read_model_labels
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
@@ -71,6 +71,7 @@ from .future_delivery import FutureDelivery
 from .image_tools import image_icon
 from .model_controls import ModelControls
 from .permissions import failure_key, permits
+from .process_parameters import ProcessParametersCard
 from .production_bridge import QtProductionBridge
 from .recipe_tuning import PreviewMode, RecipeTuning
 from .style import (
@@ -91,22 +92,14 @@ class ModelLabelReader(Protocol):
     ) -> tuple[str, ...]: ...
 
 
-class _ArchiveCheckBox(QCheckBox):
-    """The full labeled touch target toggles, including its styled padding."""
-
-    def sizeHint(self) -> QSize:
-        hint = super().sizeHint()
-        # Include the native indicator and both styled insets at the actual font.
-        hint.setWidth(
-            max(
-                hint.width(),
-                self.fontMetrics().horizontalAdvance(self.text()) + Style.touch,
-            )
-        )
-        return hint
-
-    def hitButton(self, position: QPoint) -> bool:
-        return self.rect().contains(position)
+class ProcessPreviewReader(Protocol):
+    def __call__(
+        self,
+        catalog: ProcessCatalog,
+        catalog_path: Path | None,
+        cancelled: Event,
+        completed: Callable[[ProcessObservation | None, BaseException | None], None],
+    ) -> None: ...
 
 
 class _RecipeSummary(QScrollArea):
@@ -227,7 +220,9 @@ class RecipePage(QWidget):
         self._labels_thread: Thread | None = None
         self._labels_completion: tuple[object, object] | None = None
         self._labels_error = ""
-        self.label_checks: dict[str, QCheckBox] = {}
+        self.label_checks: dict[str, QPushButton] = {}
+        self._process_reader: ProcessPreviewReader | None = None
+        self._process_stop: Event | None = None
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
             self._model_observed, Qt.ConnectionType.QueuedConnection
@@ -241,7 +236,7 @@ class RecipePage(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(Style.small)
+        root.setSpacing(Style.space)
         self.buttons: dict[str, QPushButton] = {}
         self.labels: dict[str, QLabel] = {}
         self.summary_scroll = _RecipeSummary(self)
@@ -257,7 +252,7 @@ class RecipePage(QWidget):
         summary.setObjectName("recipeSummary")
         sections = QVBoxLayout(summary)
         sections.setContentsMargins(0, 0, 0, 0)
-        sections.setSpacing(Style.small)
+        sections.setSpacing(Style.space)
         sections.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.summary_scroll.setWidget(summary)
         summary.installEventFilter(self.summary_scroll)
@@ -270,7 +265,6 @@ class RecipePage(QWidget):
             self.recipe_section,
             self.model_section,
             self.inspection_section,
-            self.tuning_section,
         ):
             section.setObjectName("recipeSection")
         for section in (
@@ -282,7 +276,7 @@ class RecipePage(QWidget):
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
             )
         recipe = QVBoxLayout(self.recipe_section)
-        recipe.setContentsMargins(10, 8, 10, 8)
+        recipe.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
         recipe.setSpacing(Style.small)
         selection = QHBoxLayout()
         selection.setSpacing(Style.small)
@@ -313,7 +307,7 @@ class RecipePage(QWidget):
             field = QWidget()
             column = QVBoxLayout(field)
             column.setContentsMargins(0, 0, 0, 0)
-            column.setSpacing(2)
+            column.setSpacing(Style.small)
             label, line = QLabel(), QLineEdit()
             line.setMinimumHeight(Style.touch)
             line.setMinimumWidth(180)
@@ -325,11 +319,13 @@ class RecipePage(QWidget):
             self._metadata_row.addWidget(field, 1)
             line.textEdited.connect(self._metadata_changed)
         recipe.addLayout(self._metadata_row)
-        sections.addWidget(self.recipe_section)
         model_layout = QVBoxLayout(self.model_section)
-        model_layout.setContentsMargins(10, 8, 10, 8)
-        model_layout.setSpacing(2)
+        model_layout.setContentsMargins(
+            Style.space, Style.space, Style.space, Style.space
+        )
+        model_layout.setSpacing(Style.small)
         model_row = QHBoxLayout()
+        model_row.setSpacing(Style.small)
         self.model = QComboBox()
         self.model.setMinimumHeight(Style.touch)
         self.model.setMinimumContentsLength(18)
@@ -358,33 +354,38 @@ class RecipePage(QWidget):
         self._label_flow = _LabelFlow(self.label_choices)
         model_layout.addWidget(self.label_choices)
         self.label_choices.hide()
-        sections.addWidget(self.model_section)
         inspection = QVBoxLayout(self.inspection_section)
-        inspection.setContentsMargins(10, 8, 10, 8)
-        inspection.setSpacing(2)
-        inspections = QGridLayout()
-        inspections.setColumnStretch(1, 1)
-        inspections.setHorizontalSpacing(Style.space)
-        inspections.setVerticalSpacing(0)
-        self.capsule_enabled: dict[PreviewMode, QCheckBox] = {}
+        inspection.setContentsMargins(
+            Style.space, Style.space, Style.space, Style.space
+        )
+        inspection.setSpacing(Style.small)
+        inspections = QHBoxLayout()
+        inspections.setSpacing(Style.space)
+        self.capsule_enabled: dict[PreviewMode, QPushButton] = {}
         self.expand_tuning: dict[PreviewMode, QPushButton] = {}
         modes: tuple[PreviewMode, ...] = ("size", "color")
-        for index, mode in enumerate(modes):
-            enabled = QCheckBox()
+        for mode in modes:
+            group = QHBoxLayout()
+            group.setSpacing(Style.small)
+            enabled = QPushButton()
+            enabled.setObjectName("recipeChoice")
+            enabled.setCheckable(True)
+            enabled.setMinimumWidth(2 * Style.touch)
             enabled.setMinimumHeight(Style.touch)
-            enabled.setFixedWidth(Style.touch)
+            enabled.setStyleSheet("font-size: 18px; font-weight: 600;")
             expand = QPushButton(self.inspection_section)
             expand.setCheckable(True)
             expand.setMinimumHeight(Style.touch)
             expand.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             expand.setObjectName("recipeRule")
-            expand.setIcon(shell_icon("chevron"))
+            expand.setIconSize(QSize(Style.icon, Style.icon))
             (
                 self.capsule_enabled[mode],
                 self.expand_tuning[mode],
             ) = enabled, expand
-            inspections.addWidget(enabled, index, 0)
-            inspections.addWidget(expand, index, 1)
+            group.addWidget(enabled)
+            group.addWidget(expand, 1)
+            inspections.addLayout(group, 1)
 
             def toggle(checked: bool, m: PreviewMode = mode) -> None:
                 self._capsule_changed(m, checked)
@@ -398,14 +399,19 @@ class RecipePage(QWidget):
             enabled.toggled.connect(toggle)
             expand.clicked.connect(expand_mode)
         inspection.addLayout(inspections)
-        sections.addWidget(self.inspection_section)
+        self.process_parameters = ProcessParametersCard()
+        self.process_parameters.edited.connect(self._process_edited)
+        self.process_parameters.plc_requested.connect(self._read_process)
+        self.process_parameters.plc_ended.connect(self._cancel_process_read)
         self.archive_section = QFrame(self)
         self.archive_section.setObjectName("recipeSection")
         self.archive_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
         self._archive_layout = QGridLayout(self.archive_section)
-        self._archive_layout.setContentsMargins(10, 8, 10, 8)
+        self._archive_layout.setContentsMargins(
+            Style.space, Style.space, Style.space, Style.space
+        )
         self._archive_layout.setSpacing(Style.small)
         self._archive_stacked: bool | None = None
         self._archive_conditions = QWidget(self.archive_section)
@@ -417,10 +423,11 @@ class RecipePage(QWidget):
         conditions.setSpacing(Style.small)
         self.labels["image_archive"] = QLabel()
         conditions.addWidget(self.labels["image_archive"])
-        self.archive_checks: dict[str, QCheckBox] = {}
+        self.archive_checks: dict[str, QPushButton] = {}
         for name in ("ok", "ng", "error", "empty"):
-            check = _ArchiveCheckBox(name.upper())
-            check.setObjectName("archiveCondition")
+            check = QPushButton(name.upper())
+            check.setObjectName("recipeChoice")
+            check.setCheckable(True)
             check.setMinimumHeight(Style.touch)
             check.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             check.toggled.connect(self._archive_edited)
@@ -448,11 +455,20 @@ class RecipePage(QWidget):
             self.buttons[key] = button
             path_row.addWidget(button)
         self.archive_section.installEventFilter(self)
-        sections.addWidget(self.archive_section)
+        for section in (
+            self.recipe_section,
+            self.archive_section,
+            self.process_parameters,
+            self.model_section,
+        ):
+            sections.addWidget(section)
         self._tuning_layout = QVBoxLayout(self.tuning_section)
-        self._tuning_layout.setContentsMargins(6, 4, 6, 4)
+        self._tuning_layout.setContentsMargins(0, 0, 0, 0)
         self._tuning_layout.setSpacing(0)
-        root.addWidget(self.tuning_section, 1)
+        # One traditional-inspection surface, with the large shared canvas outside
+        # the compact summary scroll. No additional scroll or measurement owner.
+        inspection.addWidget(self.tuning_section, 1)
+        root.addWidget(self.inspection_section, 1)
         self.tuning_section.hide()
         self._empty_space = QWidget()
         root.addWidget(self._empty_space, 1)
@@ -475,6 +491,7 @@ class RecipePage(QWidget):
         self.buttons["save"] = primary
         actions.addWidget(primary)
         root.addLayout(actions)
+        self._tab_order()
 
         self.recipes.activated.connect(self._select)
         self.model.activated.connect(self._model_changed)
@@ -491,6 +508,7 @@ class RecipePage(QWidget):
         self.buttons["recipe_discard"].clicked.connect(self.request_discard)
         primary.clicked.connect(lambda: self.save())
         editing.changed.connect(self.refresh_state)
+        editing.recipe_refresh_changed.connect(self.refresh_state)
         editing.applied.connect(self._configuration_applied)
         bridge.snapshot_changed.connect(self.refresh_state)
         bridge.source_connection_changed.connect(self.refresh_state)
@@ -517,6 +535,69 @@ class RecipePage(QWidget):
     def selected_model(self) -> ModelDefinition | None:
         return self._selected_model()
 
+    def _tab_order(self) -> None:
+        """Follow the visible card order, including late-arriving label buttons."""
+        controls: list[QWidget] = [
+            self.recipes,
+            *(
+                self.buttons[k]
+                for k in ("new_recipe", "duplicate_recipe", "delete_recipe", "reload")
+            ),
+            *self.metadata.values(),
+            *self.archive_checks.values(),
+            self.archive_directory,
+            self.buttons["archive_browse"],
+            self.buttons["archive_open"],
+            self.process_parameters.view_plc,
+            self.process_parameters.expand,
+            *(
+                self.process_parameters.fields[p.id]
+                for group in self.process_parameters.groups
+                for p in self.process_parameters.catalog.parameters
+                if p.group == group
+            ),
+            self.model,
+            *(
+                self.buttons[k]
+                for k in (
+                    "cache_prepare",
+                    "model_import",
+                    "model_rename",
+                    "model_delete",
+                )
+            ),
+            *self.label_checks.values(),
+            self.capsule_enabled["size"],
+            self.expand_tuning["size"],
+            self.capsule_enabled["color"],
+            self.expand_tuning["color"],
+        ]
+        preview = self.preview
+        if preview is not None:
+            controls.extend(
+                (
+                    preview.camera_tabs,
+                    preview.import_button,
+                    preview.runtime_button,
+                    preview.previous_button,
+                    preview.reference,
+                    preview.next_button,
+                    preview.refresh_button,
+                    preview.fit_button,
+                    preview.actual_button,
+                    preview.spins["target_length"],
+                    preview.length_sample,
+                    preview.spins["length_tolerance"],
+                    preview.length_slider,
+                    preview.hue,
+                    preview.sample,
+                    preview.tolerance,
+                )
+            )
+        controls.extend((self.buttons["recipe_discard"], self.buttons["save"]))
+        for previous, following in zip(controls, controls[1:], strict=False):
+            QWidget.setTabOrder(previous, following)
+
     def model_operation_failed(self, error: BaseException) -> None:
         self._report_error(error, "model_action_error")
         self.refresh_state()
@@ -536,6 +617,7 @@ class RecipePage(QWidget):
         return not self.browsing and self.editing.editable() and not self.closing
 
     def identity_changed(self) -> None:
+        self.process_parameters.end_plc_preview()
         if self._dialog is not None:
             self._dialog.reject()
         if self.model_controls.dialog is not None:
@@ -564,9 +646,10 @@ class RecipePage(QWidget):
 
     def set_language(self, language: Language) -> None:
         self.language = language
+        self.process_parameters.set_language(language)
         if self.preview is not None:
             self.preview.set_language(language)
-        self.archive_directory.setPlaceholderText(text("archive_directory", language))
+        self.archive_directory.setPlaceholderText(text("archive_folder", language))
         self.archive_directory.setAccessibleName(text("archive_directory", language))
         for key, check in self.archive_checks.items():
             check.setToolTip(text(f"archive_{key}", language))
@@ -590,21 +673,23 @@ class RecipePage(QWidget):
         for key, label in self.labels.items():
             label.setText(
                 text(
-                    {"display_name": "short_name", "product_code": "short_code"}.get(
-                        key, key
-                    ),
+                    {"product_code": "recipe_product_code"}.get(key, key),
                     language,
                 )
             )
             label.setToolTip(text(key, language))
             label.setAccessibleName(text(key, language))
-        self.labels["image_archive"].setText("PNG")
+        archive = self.labels["image_archive"]
+        archive.setText(text("archive_save_images", language))
+        archive.setToolTip(text("image_archive", language) + " · PNG")
+        archive.setAccessibleDescription(archive.toolTip())
         for key, line in self.metadata.items():
             line.setAccessibleName(text(key, language))
         self._arrange_fields()
         self.show_draft()
 
     def refresh_theme(self) -> None:
+        self.process_parameters.refresh_theme()
         self.model_controls.refresh_theme()
         colors = theme_colors(self)
         self.buttons["recipe_discard"].setIcon(production_icon("reset", colors.primary))
@@ -620,9 +705,9 @@ class RecipePage(QWidget):
             self.buttons[key].setIcon(image_icon(tool, colors.primary))
         for button in self.expand_tuning.values():
             button.setIcon(
-                shell_icon(
-                    "chevron", colors.accent if button.isChecked() else colors.primary
-                )
+                shell_icon("chevron", colors.primary)
+                if button.isChecked()
+                else image_icon("next", colors.primary)
             )
 
     def _arrange_fields(self) -> None:
@@ -745,6 +830,17 @@ class RecipePage(QWidget):
         if not self.browsing:
             self._browse_entry = session.entry
         entry = self._browse_entry if self.browsing else session.entry
+        previous_catalog = self.process_parameters.catalog
+        self.process_parameters.show_values(
+            entry.process_catalog
+            if self.browsing and entry is not None
+            else session.process_catalog,
+            {key: str(value) for key, value in draft.process_parameters}
+            if isinstance(draft, RecipeDefinition)
+            else draft.process_parameters,
+        )
+        if self.process_parameters.catalog != previous_catalog:
+            self._tab_order()
         self.metadata["display_name"].setText(draft.display_name)
         self.metadata["product_code"].setText(draft.product_code or "")
         self.archive_directory.setText(draft.image_archive.root_directory)
@@ -778,6 +874,71 @@ class RecipePage(QWidget):
         if self.preview is not None and not self.browsing:
             self.preview.show_settings()
         self.refresh_state()
+
+    def _process_edited(self) -> None:
+        if self._loading or not self.editable() or self.session is None:
+            return
+        self.session.draft.process_parameters = self.process_parameters.values()
+        self.changed()
+
+    def bind_process_reader(self, reader: ProcessPreviewReader) -> None:
+        self._process_reader = reader
+        self.refresh_state()
+
+    def _read_process(self) -> None:
+        card, session, reader = (
+            self.process_parameters,
+            self.session,
+            self._process_reader,
+        )
+        if reader is None or session is None or self.closing:
+            card.show_plc_values(None)
+            return
+        self._cancel_process_read()
+        stop = self._process_stop = Event()
+        revision = self.bridge.application.session_revision
+        catalog = card.catalog
+
+        def completed(
+            value: ProcessObservation | None, error: BaseException | None
+        ) -> None:
+            if (
+                self._process_stop is not stop
+                or stop.is_set()
+                or not card.plc_previewing
+            ):
+                return
+            if (
+                self.closing
+                or not self.isVisible()
+                or card.catalog != catalog
+                or revision != self.bridge.application.session_revision
+            ):
+                card.end_plc_preview()
+                return
+            if error is not None or value is None:
+                card.show_plc_values(
+                    None,
+                    detail=str(error or "Missing PLC observation"),
+                    error_key=failure_key(error, "process_plc_unavailable")
+                    if error
+                    else "process_plc_unavailable",
+                )
+            else:
+                card.show_plc_values(
+                    dict(value.values),
+                    detail=(
+                        f"FINS/TCP {value.endpoint.host}:{value.endpoint.port} · "
+                        f"{value.completed_at.astimezone():%H:%M:%S}"
+                    ),
+                )
+
+        reader(catalog, session.catalog.process_catalog_path, stop, completed)
+
+    def _cancel_process_read(self) -> None:
+        if self._process_stop is not None:
+            self._process_stop.set()
+            self._process_stop = None
 
     def _metadata_changed(self) -> None:
         if self._loading or not self.editable() or self.session is None:
@@ -833,9 +994,15 @@ class RecipePage(QWidget):
         self.refresh_state()
 
     def refresh_state(self) -> None:
-        self.refresh_theme()
         session, language = self.session, self.language
         allowed = self.editable()
+        self.process_parameters.set_plc_available(
+            self._process_reader is not None
+            and session is not None
+            and not self.closing
+            and permits(self.bridge.application, Role.ENGINEER)
+        )
+        self.process_parameters.set_editable(allowed)
         self.archive_directory.setEnabled(allowed or self.browsing)
         self.archive_directory.setReadOnly(not allowed)
         self.archive_directory.setToolTip(
@@ -848,7 +1015,7 @@ class RecipePage(QWidget):
         for mode in ("size", "color"):
             check = self.capsule_enabled[mode]
             caption = text(mode, language)
-            check.setText("")
+            check.setText(caption)
             check.setAccessibleName(text(mode + "_check", language))
             check.setToolTip(check.accessibleName())
             check.setEnabled(allowed)
@@ -860,11 +1027,14 @@ class RecipePage(QWidget):
                 )
                 check.blockSignals(False)
                 summary = (
-                    f"{text('length', self.language)} {settings.size.target_length} ± {settings.size.length_tolerance} px"
+                    f"L {settings.size.target_length} ± {settings.size.length_tolerance} px"
                     if mode == "size"
                     else f"H {settings.color.target_hue} ± {settings.color.hue_tolerance}"
                 )
-                self.expand_tuning[mode].setText(caption + " · " + summary)
+                self.expand_tuning[mode].setText(summary)
+                self.expand_tuning[mode].setAccessibleDescription(
+                    caption + " · " + summary
+                )
         for mode, button in self.expand_tuning.items():
             button.setEnabled(
                 session is not None
@@ -875,6 +1045,7 @@ class RecipePage(QWidget):
                 and session.machine_editor.persisted
             )
             button.setChecked(self.preview is not None and self.preview.mode == mode)
+        self.refresh_theme()
         self._present_model()
         for line in self.metadata.values():
             line.setEnabled(allowed or self.browsing)
@@ -937,6 +1108,19 @@ class RecipePage(QWidget):
             text(key, language) for key in self.configuration_messages
         )
         feedback = text(self._feedback, language) if self._feedback else ""
+        refresh = self.editing.recipe_refresh
+        refresh_details = ""
+        if (
+            refresh is not None
+            and session is not None
+            and session.entry is not None
+            and refresh[0] == session.entry.recipe.recipe_id
+            and self._feedback == "saved"
+        ):
+            feedback = f"{feedback} · {text(refresh[1], language)}"
+            refresh_details = str(refresh[2]) if refresh[2] else ""
+            if state == "preparing":
+                self.identity.setText("")  # The combined Save feedback already says it.
         self.status.setText(
             (text(self._error_key, language) if self._error else "")
             or (
@@ -945,7 +1129,7 @@ class RecipePage(QWidget):
                 else ""
             )
             or (text("recipe_error", language) if self._catalog_error else "")
-            or (text(self._feedback, language) if self._feedback else "")
+            or feedback
             or (text("recipe_labels_error", language) if self._labels_error else "")
         )
         self.status.setToolTip(
@@ -956,6 +1140,7 @@ class RecipePage(QWidget):
                     self.configuration_details,
                     self._catalog_error,
                     self._labels_error,
+                    refresh_details,
                 )
                 if part
             )
@@ -1258,7 +1443,9 @@ class RecipePage(QWidget):
                 self._labels_error = "Missing complete model label catalog"
             else:
                 for label in labels:
-                    check = QCheckBox(label.replace("&", "&&"), self.label_choices)
+                    check = QPushButton(label.replace("&", "&&"), self.label_choices)
+                    check.setObjectName("recipeChoice")
+                    check.setCheckable(True)
                     check.setAccessibleName(label)
                     check.setMinimumHeight(Style.touch)
                     self._label_flow.addWidget(check)
@@ -1269,6 +1456,7 @@ class RecipePage(QWidget):
 
                     check.toggled.connect(toggled)
                 self.label_choices.show()
+                self._tab_order()
         self.refresh_state()
         self._continue_after_labels()
 
@@ -1348,7 +1536,11 @@ class RecipePage(QWidget):
         self._tuning_layout.addWidget(self.preview)
         self.preview.mode_changed.connect(self.refresh_state)
         self.tuning_section.show()
+        self.inspection_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._empty_space.hide()
+        self._tab_order()
         self.refresh_state()
         self.preview_changed.emit()
 
@@ -1367,8 +1559,12 @@ class RecipePage(QWidget):
             workspace, self.preview = self.preview, None
             self._tuning_layout.removeWidget(workspace)
             self.tuning_section.hide()
+            self.inspection_section.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+            )
             self._empty_space.show()
             workspace.deleteLater()
+            self._tab_order()
         self.preview_changed.emit()
         self.show_draft()
 
@@ -1404,9 +1600,7 @@ class RecipePage(QWidget):
             finished(None, exc)
             return
         if changed:
-            if not self.editing.run_model_io(
-                lambda: session.save(revision), finished, revision=revision
-            ):
+            if not self.editing.save_recipe(finished, revision=revision):
                 finished(None, RuntimeError("Recipe save is unavailable"))
         else:
             finished(None, None)
@@ -1417,12 +1611,14 @@ class RecipePage(QWidget):
         entry = self._entries[index]
         if self.browsing:
             try:
-                recipe = load_recipe(entry.path)
+                assert self.session is not None
+                loaded = self.session.catalog.read(entry.path)
+                recipe = loaded.recipe
                 if recipe.recipe_id != entry.recipe.recipe_id:
                     raise ConfigurationError(
                         "Recipe identity changed; reload the catalog"
                     )
-                self._browse_entry = RecipeEntry(entry.path, recipe)
+                self._browse_entry = loaded
                 self._error = self._feedback = ""
             except ConfigurationError as exc:
                 self._browse_entry = None
@@ -1548,10 +1744,17 @@ class RecipePage(QWidget):
             if not self.editable():
                 return
             try:
+                if (
+                    duplicate
+                    and session.catalog.parameters() != session.process_catalog
+                ):
+                    raise ConfigurationError(
+                        "Process catalog changed; reload before Duplicate"
+                    )
                 identity = session.catalog.new_identity()
                 recipe = (
                     replace(
-                        session.draft.to_recipe(),
+                        session.draft.to_recipe(session.process_catalog),
                         recipe_id=identity,
                         display_name=name.text(),
                     )
@@ -1599,6 +1802,7 @@ class RecipePage(QWidget):
 
     def settle(self, final: Callable[[], None]) -> None:
         """Settle only Recipe-owned metadata, Model dialogs/imports and Preview."""
+        self.process_parameters.end_plc_preview()
         if self.model_controls.close_pending(lambda: self.settle(final)):
             return
         if self.preview is not None:
@@ -1613,6 +1817,7 @@ class RecipePage(QWidget):
             final()
 
     def dispose(self) -> None:
+        self.process_parameters.end_plc_preview()
         if (
             self.labels_loading
             or self.preview is not None

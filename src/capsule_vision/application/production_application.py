@@ -4,6 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from contextlib import nullcontext
 from dataclasses import replace
+from pathlib import Path
 from threading import Lock
 
 from capsule_vision.application.basler_connection import (
@@ -40,14 +41,17 @@ from capsule_vision.configuration import (
     CameraSources,
     load_camera_sources,
 )
-from capsule_vision.configuration.communication_preferences import StatusPreferences
+from capsule_vision.configuration.communication_preferences import (
+    StatusPreferences,
+    load_communication_preferences,
+)
 from capsule_vision.configuration.drafts import CameraSourceDraft
 from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CameraId, CycleId
 
 from .application import ProductionApplication
-from .audit import differences
+from .audit import RevisionEvidence, differences
 from .identity_models import AuthorizationError, Role, SessionSnapshot
 from .model_preparation import ModelPreparationFactory, real_preparation_engine
 from .models import (
@@ -58,6 +62,7 @@ from .models import (
     ProductionApplicationSnapshot,
 )
 from .production_session import SourceRuntimeSession
+from .run_configuration import RunConfiguration, capture_run
 from .session import RuntimeSession
 
 
@@ -81,8 +86,10 @@ class SourceProductionApplication(ProductionApplication):
         identity: LocalIdentity | None = None,
         initial_candidate: PreparedConfiguration | None = None,
         initial_reporting: ReportingSelection | None = None,
+        initial_communication: bytes | None = None,
         initial_status: StatusPreferences | None = None,
         diagnostics: RuntimeDiagnostics | None = None,
+        communication_path: Path | None = None,
     ) -> None:
         self.replay_cache = cache
         self._display_store = store
@@ -102,6 +109,9 @@ class SourceProductionApplication(ProductionApplication):
         ):
             initial_status.validate_reporting(self._reporting_selection.settings)
         self._reporting_editable = reporting_editable
+        self._communication_content = initial_communication
+        self._run_communication: bytes | None = None
+        self._run_selection: ReportingSelection | None = None
         self._reporting_generation = 0
         self._session_reporting: ReportingSettings | None = None
         self._session_reporting_words = 4
@@ -125,6 +135,7 @@ class SourceProductionApplication(ProductionApplication):
             initial_candidate=initial_candidate,
             initial_status=initial_status,
             diagnostics=diagnostics,
+            communication_path=communication_path,
         )
 
     def snapshot(self) -> ProductionApplicationSnapshot:
@@ -144,6 +155,16 @@ class SourceProductionApplication(ProductionApplication):
 
     def _run_reporting(self) -> ReportingSettings | None:
         return self._session_reporting
+
+    def _capture_run_configuration(
+        self, prepared: PreparedConfiguration
+    ) -> RunConfiguration:
+        return capture_run(
+            prepared,
+            self._run_selection,
+            self._run_communication,
+            self.identity.audit if self.identity else None,
+        )
 
     def _bind_run(self, session: RuntimeSession, run_id: str, durable: bool) -> None:
         if isinstance(session, SourceRuntimeSession) and session.archive is not None:
@@ -434,6 +455,8 @@ class SourceProductionApplication(ProductionApplication):
                 generation = self._reporting_generation = self._generation
                 self._last_pilot_cycle = None
                 selection = self._reporting_selection
+                self._run_selection = selection
+                self._run_communication = self._communication_content
                 self._session_reporting = (
                     selection.settings if selection.enabled else None
                 )
@@ -464,6 +487,18 @@ class SourceProductionApplication(ProductionApplication):
         with self._reporting_lock:
             return self._reporting_selection
 
+    def observe_reporting_content(
+        self, selection: ReportingSelection, content: bytes
+    ) -> None:
+        """Retain validated reload evidence only for the already admitted selection.
+
+        This read observation cannot change settings or the current Run's capture.
+        Exact content/selection agreement is verified again on the lifecycle owner.
+        """
+        with self._reporting_lock:
+            if selection == self._reporting_selection:
+                self._communication_content = content
+
     def set_reporting_selection(self, selection: ReportingSelection) -> None:
         with self._condition, self._admission(Role.ENGINEER):
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
@@ -473,6 +508,7 @@ class SourceProductionApplication(ProductionApplication):
                 )
             with self._reporting_lock:
                 self._reporting_selection = selection
+                self._communication_content = None
 
     def persist_reporting_selection(
         self,
@@ -482,6 +518,8 @@ class SourceProductionApplication(ProductionApplication):
         revision: int | None = None,
         changes: tuple[str, str] | None = None,
         status: StatusPreferences | None = None,
+        evidence: RevisionEvidence | None = None,
+        communication_content: bytes | None = None,
     ) -> None:
         """Publish saved preferences under the same lock that freezes Start.
 
@@ -489,6 +527,21 @@ class SourceProductionApplication(ProductionApplication):
         during Production. Failed persistence never changes next-Start admission.
         """
         revision = self.authorize_engineering(revision)
+        content = (
+            communication_content
+            if communication_content is not None
+            else (evidence.content if evidence is not None else None)
+        )
+        if (
+            content is not None
+            and load_communication_preferences(
+                Path("communication.json"), content=content
+            ).reporting
+            != selection
+        ):
+            raise ValueError(
+                "Communication evidence differs from the reporting selection"
+            )
         scope = (
             self.identity.change(
                 "communication.save",
@@ -499,6 +552,7 @@ class SourceProductionApplication(ProductionApplication):
                     if changes is not None
                     else differences(self.reporting_selection(), selection)
                 ),
+                evidence=evidence,
             )
             if self.identity
             else nullcontext()
@@ -506,8 +560,9 @@ class SourceProductionApplication(ProductionApplication):
         with scope, self._condition:
             changed = selection != self.reporting_selection()
             with self._admission(Role.ENGINEER, revision):
-                if status is not None and status.enabled:
-                    if selection.enabled:
+                if status is not None:
+                    status.validate_reporting(selection.settings, running_only=True)
+                    if status.enabled and selection.enabled:
                         status.validate_reporting(selection.settings)
                     with self._reporting_lock:
                         worker = self._reporting_worker
@@ -515,7 +570,11 @@ class SourceProductionApplication(ProductionApplication):
                             worker is not None and worker.snapshot().thread_alive
                         )
                         if active and self._session_reporting is not None:
-                            status.validate_reporting(self._session_reporting)
+                            status.validate_reporting(
+                                self._session_reporting, running_only=True
+                            )
+                            if status.enabled:
+                                status.validate_reporting(self._session_reporting)
                 if changed:
                     self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
                     if not self.reporting_editable:
@@ -525,9 +584,10 @@ class SourceProductionApplication(ProductionApplication):
                 persist()
                 if self._alarms is not None and status is not None:
                     self._alarms.apply_saved(status)
-            if changed:
-                with self._reporting_lock:
+            with self._reporting_lock:
+                if changed:
                     self._reporting_selection = selection
+                self._communication_content = content
 
     def reporting_for_generation(self, generation: int) -> ReportingSettings | None:
         with self._reporting_lock:

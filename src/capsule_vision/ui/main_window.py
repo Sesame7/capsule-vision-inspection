@@ -421,6 +421,7 @@ class MainWindow(QMainWindow):
         bridge.model_preparation_changed.connect(self._refresh_vision)
         bridge.frames_changed.connect(self._refresh_vision)
         self.communication = CommunicationPage(application=bridge.application)
+        self.recipe_page.bind_process_reader(self.communication.read_process_parameters)
         self.communication.preferences_validated.connect(self._communication_validated)
         self.identity_controls.session_changed.connect(self._session_changed)
         self.history = HistoryPage(bridge.application.history, bridge.application)
@@ -980,6 +981,8 @@ class MainWindow(QMainWindow):
             self._closing,
             draft_locked,
             self.snapshot.candidate_requires_preparation,
+            self.snapshot.process_required,
+            self.snapshot.process_applying,
             tuple(self.buttons[key].font().key() for key in actions),
         )
         if identity == self._operation_presentation:
@@ -994,6 +997,9 @@ class MainWindow(QMainWindow):
                     enabled
                     and source_ready
                     and not (draft_locked or self.snapshot.batch_pending)
+                    and not (
+                        self.snapshot.process_required or self.snapshot.process_applying
+                    )
                 )
             permitted = (
                 operator
@@ -1035,6 +1041,8 @@ class MainWindow(QMainWindow):
                 if key == "operation"
                 and self.snapshot.state is ApplicationState.READY
                 and self.snapshot.candidate_requires_preparation
+                else text("process_apply_required", self.language)
+                if action == "start" and self.snapshot.process_required
                 else text("pause_unsupported", self.language)
                 if key == "pause" and not self.bridge.controls_enabled
                 else text("software_stop", self.language)
@@ -1539,6 +1547,17 @@ class MainWindow(QMainWindow):
         if production_feedback and not (warning or fault or self._closing):
             message = text(production_feedback[0], language)
         elif (
+            (snapshot.process_required or snapshot.process_applying)
+            and self.pages.currentIndex() == 0
+            and not (warning or fault or self._closing)
+        ):
+            message = text(
+                "process_applying"
+                if snapshot.process_applying
+                else "process_apply_required",
+                language,
+            )
+        elif (
             snapshot.candidate_requires_preparation
             and self.pages.currentIndex() == 0
             and not (warning or fault or self._closing)
@@ -1820,6 +1839,7 @@ class MainWindow(QMainWindow):
                 "startup": "startup_error",
                 "shutdown": "shutdown_error",
                 "runtime": "runtime_error",
+                "process_application": "process_apply_failed",
             }.get(issue.stage, "operation_error")
             return f"{text(key, language)} · {issue.exception_type}"
         if event_key == "fault_note":
@@ -2109,6 +2129,7 @@ class MainWindow(QMainWindow):
             self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.recipe_page.process_parameters.end_plc_preview()
         if self.bridge.closed and self.communication.closed:
             application = QApplication.instance()
             if application is not None:

@@ -10,12 +10,14 @@ from PySide6.QtGui import QFontMetricsF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QGroupBox,
     QLineEdit,
     QMessageBox,
+    QPushButton,
     QScrollArea,
 )
 from tests.support.qt import assert_full_caption, until
@@ -140,6 +142,73 @@ def test_archive_first_show_uses_final_section_geometry(
     assert not session.dirty and not runtimes
 
 
+def test_recipe_choice_buttons_keyboard_persistence_and_separate_disclosure(
+    configured_screen: Screen, tmp_path: Path
+) -> None:
+    window, session, runtimes = configured_screen
+    page = window.recipe_page
+    controls = (
+        *page.label_checks.values(),
+        *page.archive_checks.values(),
+        *page.capsule_enabled.values(),
+    )
+    assert all(isinstance(b, QPushButton) and b.isCheckable() for b in controls)
+    assert all(b.height() >= Style.touch and b.accessibleName() for b in controls)
+    label, button = next(iter(page.label_checks.items()))
+    included = button.isChecked()
+    button.setFocus()
+    QTest.keyClick(button, Qt.Key.Key_Space)
+    assert button.isChecked() is not included
+    assert (label in session.draft.defaults.vimo.disabled_labels) is included
+    expected_labels = session.draft.defaults.vimo.disabled_labels
+    edit(page.archive_directory, str(tmp_path / "archive"))
+    for button in page.archive_checks.values():
+        if not button.isChecked():
+            button.setFocus()
+            QTest.keyClick(button, Qt.Key.Key_Space)
+    assert all(b.isChecked() for b in page.archive_checks.values())
+    for button in page.capsule_enabled.values():
+        if button.isChecked():
+            button.click()
+        button.setFocus()
+        QTest.keyClick(button, Qt.Key.Key_Space)
+    assert session.draft.capsule.size.enabled and session.draft.capsule.color.enabled
+    assert page.preview is None
+    before = window.bridge.application.snapshot()
+    page.expand_tuning["size"].setFocus()
+    QTest.keyClick(page.expand_tuning["size"], Qt.Key.Key_Space)
+    preview = page.preview
+    assert preview is not None
+    until(lambda: not preview.busy)
+    frozen, camera = preview.frame, preview.camera_tabs.currentIndex()
+    page.expand_tuning["color"].setFocus()
+    QTest.keyClick(page.expand_tuning["color"], Qt.Key.Key_Space)
+    assert page.preview is preview and preview.frame is frozen
+    assert preview.camera_tabs.currentIndex() == camera
+    assert session.draft.capsule.size.enabled and session.draft.capsule.color.enabled
+    page.expand_tuning["color"].click()
+    until(lambda: page.preview is None)
+    page.save()
+    until(lambda: not page.busy)
+    assert session.entry is not None and not session.dirty
+    saved = load_recipe(session.entry.path)
+    assert saved.defaults.vimo.disabled_labels == expected_labels
+    assert saved.capsule.size.enabled and saved.capsule.color.enabled
+    assert saved.image_archive == ImageArchiveSettings(
+        str(tmp_path / "archive"), True, True, True, True
+    )
+    refreshed = window.bridge.application.snapshot()
+    assert refreshed.candidate_prepared is not None
+    assert refreshed.candidate_prepared.configuration.capsule == saved.capsule
+    assert (
+        refreshed.candidate_prepared.configuration.image_archive == saved.image_archive
+    )
+    assert refreshed.active == before.active and not runtimes
+    assert not refreshed.candidate_requires_preparation
+    page.show_draft()
+    assert all(b.isChecked() for b in page.archive_checks.values())
+
+
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("theme", ["dark", "light"])
 def test_archive_responsive_groups_label_hit_targets_and_locks(
@@ -197,7 +266,16 @@ def test_archive_responsive_groups_label_hit_targets_and_locks(
     for current_language in ("en", "zh", language):
         window.set_language(current_language)
         QApplication.processEvents()
-        assert stacked()
+        # The localized Save images heading is no longer a fixed-width PNG tag.
+        page.archive_section.setMaximumWidth(
+            conditions.sizeHint().width()
+            + path.minimumSizeHint().width()
+            + layout.contentsMargins().left()
+            + layout.contentsMargins().right()
+            + layout.spacing()
+            - Style.touch
+        )
+        until(stacked)
         assert_inside(page.archive_directory, page.archive_section)
         assert_inside(page.buttons["archive_open"], page.archive_section)
     page.archive_section.setMaximumWidth(16777215)
@@ -401,8 +479,26 @@ def test_compact_recipe_layout(
     assert set(page.metadata) == {"display_name", "product_code"}
     assert page.findChildren(QComboBox) == [page.recipes, page.model]
     assert page.findChildren(QScrollArea) == [page.summary_scroll]
+    assert not page.findChildren(QCheckBox)
+    for before, after in (
+        (page.metadata["product_code"], page.archive_checks["ok"]),
+        (page.buttons["archive_open"], page.process_parameters.expand),
+        (page.process_parameters.expand, page.model),
+        (tuple(page.label_checks.values())[-1], page.capsule_enabled["size"]),
+        (page.capsule_enabled["size"], page.expand_tuning["size"]),
+        (page.expand_tuning["size"], page.capsule_enabled["color"]),
+    ):
+        before.setFocus()
+        QTest.keyClick(before, Qt.Key.Key_Tab)
+        assert after.hasFocus()
     assert not page.findChildren(QGroupBox)
-    assert len(page.findChildren(QLineEdit)) == 3
+    assert set(page.findChildren(QLineEdit)) == {
+        *page.metadata.values(),
+        page.archive_directory,
+        *page.process_parameters.fields.values(),
+    }
+    assert len(page.process_parameters.fields) == 17
+    assert not page.process_parameters.details.isVisible()
     assert set(page.buttons) == {
         "model_import",
         "model_rename",
@@ -443,15 +539,77 @@ def test_compact_recipe_layout(
     assert_inside(page.label_choices, page)
     color = session.draft.capsule.color
     assert (
-        page.expand_tuning["color"]
-        .text()
-        .endswith(f" · H {color.target_hue} ± {color.hue_tolerance}")
+        page.expand_tuning["color"].text()
+        == f"H {color.target_hue} ± {color.hue_tolerance}"
     )
+    size_settings = session.draft.capsule.size
+    assert page.expand_tuning["size"].text() == (
+        f"L {size_settings.target_length} ± {size_settings.length_tolerance} px"
+    )
+    assert page.labels["image_archive"].text() == text("archive_save_images", language)
+    assert "PNG" in page.labels["image_archive"].toolTip()
+    assert "PNG" in page.labels["image_archive"].accessibleDescription()
+    assert page.archive_directory.placeholderText() == text("archive_folder", language)
+    positions = [
+        button.mapTo(page, QPoint()).y()
+        for button in (*page.capsule_enabled.values(), *page.expand_tuning.values())
+    ]
+    assert len(set(positions)) == 1
+    widths = [
+        page.capsule_enabled[mode].width()
+        + Style.small
+        + page.expand_tuning[mode].width()
+        for mode in ("size", "color")
+    ]
+    assert abs(widths[0] - widths[1]) <= 1
     assert window.vision_workspace is None
 
-    sections = (page.recipe_section, page.model_section, page.inspection_section)
+    sections = (
+        page.recipe_section,
+        page.archive_section,
+        page.process_parameters,
+        page.model_section,
+        page.inspection_section,
+    )
     for above, below in zip(sections, sections[1:], strict=False):
-        assert above.geometry().bottom() < below.y()
+        assert (
+            below.mapTo(page, QPoint()).y()
+            - above.mapTo(page, QPoint(0, above.height())).y()
+            == Style.space
+        )
+    for section in sections:
+        layout = section.layout()
+        assert layout is not None
+        margins = layout.contentsMargins()
+        assert (
+            margins.left()
+            == margins.top()
+            == margins.right()
+            == margins.bottom()
+            == Style.space
+        )
+    assert (
+        len(
+            {
+                control.mapTo(page.model_section, control.rect().center()).y()
+                for control in (
+                    page.model,
+                    page.cache_status,
+                    *(
+                        page.buttons[key]
+                        for key in (
+                            "cache_prepare",
+                            "model_import",
+                            "model_rename",
+                            "model_delete",
+                        )
+                    ),
+                )
+                if control.isVisible()
+            }
+        )
+        == 1
+    )
     for control in (
         *sections,
         page.recipes,
@@ -468,6 +626,10 @@ def test_compact_recipe_layout(
     page.expand_tuning["size"].click()
     preview = page.preview
     assert preview is not None and page.tuning_section.isVisible()
+    assert page.tuning_section.parentWidget() is page.inspection_section
+    assert not page.summary_scroll.isAncestorOf(preview)
+    assert_inside(preview, page.inspection_section)
+    assert not preview.findChildren(QScrollArea)
     assert (
         page.expand_tuning["size"].isChecked()
         and not page.expand_tuning["color"].isChecked()
@@ -534,8 +696,8 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         assert_full_caption(save, text("save", language))
         assert save.accessibleName() == save.toolTip() == text("save", language)
         for key, compact in (
-            ("display_name", "short_name"),
-            ("product_code", "short_code"),
+            ("display_name", "display_name"),
+            ("product_code", "recipe_product_code"),
         ):
             assert page.labels[key].text() == text(compact, language)
             assert (
@@ -544,26 +706,38 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
                 == text(key, language)
             )
         for mode in ("size", "color"):
-            assert (
-                page.expand_tuning[mode].text().startswith(text(mode, language) + " · ")
+            assert page.capsule_enabled[mode].text() == text(mode, language)
+            assert page.expand_tuning[mode].accessibleDescription() == (
+                text(mode, language) + " · " + page.expand_tuning[mode].text()
             )
             assert page.expand_tuning[mode].toolTip() == text("tune_" + mode, language)
         assert not preview.controls.toolTip()
         assert text("preview_scope_tip", language) in preview.canvas.toolTip()
         assert tuple(spin.geometry() for spin in preview.spins.values()) == fields
         for key, label in preview.labels.items():
-            assert label.text() in ("L (px)", "± L (px)")
+            assert label.text() in ("L", "±")
             assert label.fontMetrics().horizontalAdvance(label.text()) <= label.width()
             assert text(key, language) in label.toolTip() == label.accessibleName()
         assert_inside(preview.controls, preview)
     page.open_preview("color")
     QApplication.processEvents()
     sample_size = preview.sample.size()
+    hue_size = preview.hue.size()
     tolerance_size = preview.tolerance_label.size()
     for language in LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert preview.sample.size() == sample_size
+        assert preview.hue.size() == hue_size
+        assert text("target_color", language) in preview.hue.toolTip()
+        assert preview.hue.accessibleName() == preview.hue.lineEdit().accessibleName()
+        assert preview.hue_label.geometry().right() < preview.hue.geometry().left()
+        assert preview.hue.geometry().right() < preview.swatch.geometry().left()
+        assert preview.swatch.geometry().right() < preview.sample.geometry().left()
+        assert (
+            preview.sample.geometry().right()
+            < preview.tolerance_label.geometry().left()
+        )
         assert preview.sample.text() == "" and not preview.sample.icon().isNull()
         assert preview.sample.width() == preview.sample.height() == Style.touch
         assert preview.tolerance_label.size() == tolerance_size
@@ -927,7 +1101,12 @@ def test_inline_labels_wrap_and_cards_follow_content(
     heights: list[int] = []
     for width in (1920, 1080):
         window.resize(width, 1200)
-        until(lambda: page.label_choices.width() == page.model_section.width() - 22)
+        until(
+            lambda: (
+                page.label_choices.width()
+                == page.model_section.contentsRect().width() - 2 * Style.space
+            )
+        )
         QApplication.processEvents()
         assert len({check.y() for check in page.label_checks.values()}) > 1
         for check in page.label_checks.values():
@@ -936,7 +1115,7 @@ def test_inline_labels_wrap_and_cards_follow_content(
         for card in (page.recipe_section, page.model_section, page.inspection_section):
             assert card.minimumHeight() == 0 and card.maximumHeight() > card.height()
         assert page.summary_scroll.horizontalScrollBar().maximum() == 0
-        assert page.summary_scroll.verticalScrollBar().maximum() == 0
+        until(lambda: page.summary_scroll.verticalScrollBar().maximum() == 0)
     assert heights[1] > heights[0]
     before = session.draft.to_recipe()
     labels[0] = tuple(f"Defect label {i:03d}" for i in range(120))
@@ -1015,11 +1194,11 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     assert load_recipe(session.entry.path).display_name == "Updated"
     assert app.snapshot().active is None
     assert "next successful Start" in text("roi_applied", "en")
-    assert page.status.text() == text("saved", page.language)
-    window.production_recipes.select(
-        window.production_recipes.recipes.findData(original.recipe_id)
+    assert page.status.text() == " · ".join(
+        text(key, page.language) for key in ("saved", "READY")
     )
-    until(lambda: not window.editing.busy)
+    candidate = app.snapshot().candidate_prepared
+    assert candidate is not None and candidate.configuration.display_name == "Updated"
     model_identity = page.model.toolTip()
     window.bridge.start()
     until(lambda: len(runtimes) == 1)
@@ -1186,7 +1365,7 @@ def test_rule_rows_expand_and_collapse_without_toggling_checks(
     preview = page.preview
     assert preview is not None
     until(lambda: not preview.busy)
-    assert page.expand_tuning["size"].width() > page.width() // 2
+    assert 2 * Style.touch < page.expand_tuning["size"].width() < page.width() // 2
     assert not hasattr(preview, "back")
     assert session.draft.capsule.size.enabled and session.draft.capsule.color.enabled
     page.expand_tuning["color"].click()
@@ -1393,14 +1572,20 @@ def test_prepare_failure_preserves_saved_edits_but_not_promoted(
     edit(page.metadata["display_name"], "Saved before preparation")
     page.save()
     until(lambda: not page.busy)
-    assert page.status.text() == text("saved", page.language)
+    assert page.status.text() == " · ".join(
+        text(key, page.language) for key in ("saved", "recipe_prepare_error")
+    )
     window.production_recipes.select(
         window.production_recipes.recipes.findData("product-a")
     )
     until(lambda: not window.editing.busy)
     assert window.production_recipes.feedback is not None
     assert "SHA-256" in window.production_recipes.feedback[1]
-    assert window.bridge.application.snapshot() == before and not runtimes
+    assert (
+        window.bridge.application.snapshot()
+        == replace(before, candidate_requires_preparation=True)
+        and not runtimes
+    )
     assert (
         not session.dirty
         and load_recipe(session.entry.path).display_name == "Saved before preparation"
@@ -1460,10 +1645,18 @@ def test_unknown_model_preserved_on_unrelated_edit(configured_screen: Screen) ->
     assert session.draft.model_id == "unknown-model"
     page.save()
     until(lambda: not page.busy)
-    assert page.status.text() == text("saved", page.language) and not session.dirty
+    assert (
+        page.status.text()
+        == " · ".join(
+            text(key, page.language) for key in ("saved", "recipe_prepare_error")
+        )
+        and not session.dirty
+    )
     assert load_recipe(session.entry.path).model_id == "unknown-model"
     assert load_recipe(session.entry.path).display_name == "名称"
-    assert window.bridge.application.snapshot() == before
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_requires_preparation=True
+    )
 
 
 @pytest.mark.parametrize("decision", ["save", "discard", "cancel"])
@@ -1515,8 +1708,12 @@ def test_single_model_and_unrelated_edit_preserve_model_semantics(
     until(lambda: not page.busy)
     assert load_recipe(session.entry.path) == replace(baseline, product_code="new-code")
     if not explicit:
-        assert page.status.text() == text("saved", page.language)
-        assert window.bridge.application.snapshot() == before
+        assert page.status.text() == " · ".join(
+            text(key, page.language) for key in ("saved", "recipe_prepare_error")
+        )
+        assert window.bridge.application.snapshot() == replace(
+            before, candidate_requires_preparation=True
+        )
 
 
 def test_save_failure_keeps_draft_file_and_application(
@@ -1541,7 +1738,7 @@ def test_save_failure_keeps_draft_file_and_application(
     assert window.bridge.application.snapshot() == before
 
 
-def test_dirty_save_switch_does_not_require_preparation(
+def test_dirty_save_switch_survives_automatic_preparation_failure(
     configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window, session, _ = configured_screen
@@ -1550,13 +1747,13 @@ def test_dirty_save_switch_does_not_require_preparation(
     page = window.recipe_page
     before = window.bridge.application.snapshot()
 
-    def fail(recipe: RecipeDefinition) -> PreparedConfiguration:
+    def fail(_session: object, _recipe_id: str) -> PreparedConfiguration:
         raise ConfigurationIOError("model temporarily unavailable")
 
     def save(callback: Callable[[DirtyDecision], None]) -> None:
         callback("save")
 
-    monkeypatch.setattr(session, "prepare", fail)
+    monkeypatch.setattr(type(session), "prepare_saved", fail)
     monkeypatch.setattr(page, "confirm_dirty", save)
     edit(page.metadata["display_name"], "Persisted")
     target = next(
@@ -1569,4 +1766,6 @@ def test_dirty_save_switch_does_not_require_preparation(
     assert session.entry is not None and session.entry.path != original.path
     assert load_recipe(original.path).display_name == "Persisted"
     assert page.status.text() != text("recipe_prepare_error", page.language)
-    assert window.bridge.application.snapshot() == before
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_requires_preparation=True
+    )

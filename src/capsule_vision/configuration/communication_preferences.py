@@ -1,6 +1,7 @@
 """Operator communication preferences, separate from live owners/observations."""
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from ipaddress import IPv4Address
@@ -22,7 +23,7 @@ from capsule_vision.communication.reporting import (
     ReportingSettings,
 )
 
-from ._io import atomic_write, read_json
+from ._io import ConfigurationPublication, decode_json, read_json
 from .errors import ConfigurationError, ConfigurationIOError
 
 
@@ -61,6 +62,7 @@ class StatusPreferences:
     word_address: int = 18
     heartbeat_address: int = 46
     fault_address: int = 47
+    running_address: int = 16
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
@@ -74,8 +76,13 @@ class StatusPreferences:
             validate_word_range(address, 1, 1, FinsMemoryArea.W)
         if len(set(addresses)) != 3:
             raise ValueError("PLC status addresses must be distinct")
+        validate_word_range(self.running_address, 1, 1, FinsMemoryArea.W)
+        if self.running_address in (self.heartbeat_address, self.fault_address):
+            raise ValueError("PLC running address overlaps automatic status writes")
 
-    def validate_reporting(self, settings: ReportingSettings) -> None:
+    def validate_reporting(
+        self, settings: ReportingSettings, *, running_only: bool = False
+    ) -> None:
         """Reserve the configured FINS reporting window, including group counter."""
         endpoint = settings.endpoint
         if isinstance(endpoint, ModbusSettings) or (endpoint.host, endpoint.port) != (
@@ -85,14 +92,16 @@ class StatusPreferences:
             return
         base = settings.require_base_address()
         start = base if settings.mode is ReportingMode.PER_CYCLE else base - 1
-        if any(
-            start <= address < base + 4
-            for address in (
+        addresses = (
+            (self.running_address,)
+            if running_only
+            else (
                 self.word_address,
                 self.heartbeat_address,
                 self.fault_address,
             )
-        ):
+        )
+        if any(start <= address < base + 4 for address in addresses):
             raise ValueError("PLC status ranges overlap automatic reporting")
 
 
@@ -112,6 +121,8 @@ class CommunicationPreferences:
     def __post_init__(self) -> None:
         if self.reporting.enabled and self.status.enabled:
             self.status.validate_reporting(self.reporting.settings)
+        # Running is an independent read target, including with Status disabled.
+        self.status.validate_reporting(self.reporting.settings, running_only=True)
 
 
 # Existing documents, including {}, must keep their original UDP interpretation.
@@ -219,6 +230,7 @@ def _status(value: object) -> StatusPreferences:
             "word_address",
             "heartbeat_address",
             "fault_address",
+            "running_address",
             "protocol",
             "host",
             "port",
@@ -235,7 +247,13 @@ def _status(value: object) -> StatusPreferences:
                 k: v
                 for k, v in status.items()
                 if k
-                not in ("enabled", "word_address", "heartbeat_address", "fault_address")
+                not in (
+                    "enabled",
+                    "word_address",
+                    "heartbeat_address",
+                    "fault_address",
+                    "running_address",
+                )
             },
         }
     )
@@ -247,17 +265,27 @@ def _status(value: object) -> StatusPreferences:
         _integer(status.get("word_address", 18), "status.word_address"),
         _integer(status.get("heartbeat_address", 46), "status.heartbeat_address"),
         _integer(status["fault_address"], "status.fault_address"),
+        _integer(status.get("running_address", 16), "status.running_address"),
     )
 
 
 def load_communication_preferences(
-    path: Path, *, status_error: Callable[[str], None] | None = None
+    path: Path,
+    *,
+    status_error: Callable[[str], None] | None = None,
+    content: bytes | None = None,
 ) -> CommunicationPreferences:
     """Missing/invalid files are reported; the startup owner chooses recovery."""
     try:
-        raw = read_json(path, duplicate_message="Duplicate field: {key}")
+        raw = (
+            read_json(path, duplicate_message="Duplicate field: {key}")
+            if content is None
+            else decode_json(content.decode("utf-8"), "Duplicate field: {key}")
+        )
         obj = _object(
-            raw, {"reporting", "diagnostic", "web", "status"}, "communication"
+            raw,
+            {"reporting", "diagnostic", "web", "status"},
+            "communication",
         )
         reporting = _object(
             obj.get("reporting", {}),
@@ -286,6 +314,7 @@ def load_communication_preferences(
             status = _status(obj["status"]) if "status" in obj else StatusPreferences()
             if selected_reporting.enabled and status.enabled:
                 status.validate_reporting(selected_reporting.settings)
+            status.validate_reporting(selected_reporting.settings, running_only=True)
         except (ValueError, TypeError) as exc:
             if status_error is None:
                 raise
@@ -348,6 +377,12 @@ def _address_json(address: FinsAddress, default: FinsAddress) -> dict[str, int]:
 
 def save_communication_preferences(path: Path, value: CommunicationPreferences) -> None:
     """Atomic replacement of definitions only; no sockets, ACKs or runtime state."""
+    communication_publication(path, value).publish()
+
+
+def communication_publication(
+    path: Path, value: CommunicationPreferences
+) -> ConfigurationPublication:
     defaults = _PERSISTED_DEFAULTS
     payload: dict[str, object] = {}
     if value.reporting != defaults.reporting:
@@ -377,13 +412,18 @@ def save_communication_preferences(path: Path, value: CommunicationPreferences) 
             "word_address": value.status.word_address,
             "heartbeat_address": value.status.heartbeat_address,
             "fault_address": value.status.fault_address,
+            "running_address": value.status.running_address,
             "enabled": value.status.enabled,
         }
         payload["status"] = status
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-    except OSError as exc:
-        raise ConfigurationIOError(
-            f"Cannot save communication settings {path}: {exc}"
-        ) from exc
+    content = (
+        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        .replace("\n", os.linesep)
+        .encode("utf-8")
+    )
+    return ConfigurationPublication(
+        path,
+        content,
+        create_parent=True,
+        error_context="Cannot save communication settings",
+    )

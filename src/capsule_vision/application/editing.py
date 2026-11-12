@@ -9,6 +9,7 @@ from capsule_vision.configuration import (
     CameraSources,
     ConfigurationError,
     ConfigurationIOError,
+    ConfigurationPublication,
     MachineLayoutDefinition,
     ModelRegistry,
     RecipeDefinition,
@@ -16,7 +17,6 @@ from capsule_vision.configuration import (
     load_camera_sources,
     load_machine_layout,
     load_model_definition,
-    load_recipe,
     resolve_configuration,
 )
 from capsule_vision.configuration.catalog import RecipeCatalog, RecipeEntry
@@ -27,12 +27,22 @@ from capsule_vision.configuration.drafts import (
 )
 from capsule_vision.configuration.managed_models import ManagedModels
 from capsule_vision.configuration.preferences import load_preferences
+from capsule_vision.configuration.process_parameters import BUILTIN_PROCESS_CATALOG
 
-from .audit import AuditOperation, AuditUnavailable, differences, error_outcome
+from .audit import (
+    AuditOperation,
+    AuditUnavailable,
+    RevisionConfirmationError,
+    RevisionEvidence,
+    differences,
+    error_outcome,
+)
 from .basler_connection import ConnectionState, SourceConnectionSnapshot
 from .identity import LocalIdentity, admit_engineering
 from .identity_models import IdentityError, Role
 from .models import PreparedConfiguration, prepare_configuration
+from .recipe_dependencies import RecipeDependencies
+from .run_configuration import capture_prepared
 from .vision_dependencies import VisionDependencies, read_sources
 
 
@@ -48,6 +58,7 @@ class VisionSaveResult:
     sources_saved: bool
     errors: tuple[str, ...]
     permission_error: IdentityError | None = None
+    unconfirmed: frozenset[str] = frozenset()
 
 
 class RecipeEditorSession:
@@ -86,6 +97,7 @@ class RecipeEditorSession:
         self.catalog, self.registry = catalog, registry
         self.base_directory = base_directory
         self.entry: RecipeEntry | None = None
+        self.process_catalog = BUILTIN_PROCESS_CATALOG
         self.draft = RecipeDraft("", "")
 
     @property
@@ -109,25 +121,30 @@ class RecipeEditorSession:
     def load(self, entry: RecipeEntry) -> None:
         if self.dirty:
             raise ConfigurationError("Resolve unsaved changes before selection")
-        self.entry = RecipeEntry(entry.path, load_recipe(entry.path))
+        self.entry = self.catalog.read(entry.path)
+        self.process_catalog = self.entry.process_catalog
         self.draft = RecipeDraft.from_recipe(self.entry.recipe)
 
     def new(self) -> None:
         if self.dirty:
             raise ConfigurationError("Resolve unsaved changes before New")
+        self.process_catalog = self.catalog.parameters()
         self.entry = None
         self.draft = RecipeDraft("", "")
 
     def discard(self) -> None:
         if self.entry is not None:
-            recipe = load_recipe(self.entry.path)
+            loaded = self.catalog.read(self.entry.path)
+            recipe = loaded.recipe
             if recipe.recipe_id != self.entry.recipe.recipe_id:
                 raise ConfigurationError(
                     "Recipe identity changed externally; reload explicitly"
                 )
-            self.entry = RecipeEntry(self.entry.path, recipe)
+            self.entry = loaded
+            self.process_catalog = loaded.process_catalog
             self.draft = RecipeDraft.from_recipe(recipe)
         else:
+            self.process_catalog = self.catalog.parameters()
             self.draft = RecipeDraft("", "")
 
     def delete(
@@ -158,11 +175,13 @@ class RecipeEditorSession:
     ) -> ResolvedInspectionConfiguration:
         return resolve_configuration(
             self.machine,
-            recipe or self.draft.to_recipe(),
+            recipe or self.draft.to_recipe(self.process_catalog),
             self.registry,
+            process_catalog=self.process_catalog,
         )
 
-    def save(self, revision: int | None = None) -> None:
+    def save(self, revision: int | None = None) -> RecipeEntry | None:
+        """Persist independently; return evidence only for a changed definition."""
         admission = (
             self.identity.admission(Role.ENGINEER, revision)
             if self.identity
@@ -171,7 +190,11 @@ class RecipeEditorSession:
         with admission as actor:
             revision = actor.revision if actor else None
             try:
-                recipe = self.draft.to_recipe()
+                if self.catalog.parameters() != self.process_catalog:
+                    raise ConfigurationError(
+                        "Process catalog changed; reload before Save"
+                    )
+                recipe = self.draft.to_recipe(self.process_catalog)
             except ValueError as exc:
                 if actor and self.identity:
                     self.identity.audit.record(
@@ -183,14 +206,20 @@ class RecipeEditorSession:
         original = self.entry
 
         def publish(value: RecipeDefinition) -> RecipeEntry:
-            with self._change(
+            return self._save_file(
                 "recipe.save",
+                "recipe",
                 value.recipe_id,
                 revision,
                 original.recipe if original else None,
                 value,
-            ):
-                return self.catalog.save(value, original=original)
+                lambda write: self.catalog.save(
+                    value,
+                    original=original,
+                    process_catalog=self.process_catalog,
+                    publish=write,
+                ),
+            )
 
         entry = (
             self.catalog.save_generated(recipe, publish=publish)
@@ -199,6 +228,52 @@ class RecipeEditorSession:
         )
         self.entry = entry
         self.draft = RecipeDraft.from_recipe(entry.recipe)
+        return entry if original is None or original.recipe != entry.recipe else None
+
+    def _save_file[T](
+        self,
+        action: str,
+        artifact: str,
+        resource: str,
+        revision: int | None,
+        old: object,
+        new: object,
+        save: Callable[[Callable[[ConfigurationPublication], None]], T],
+    ) -> T:
+        """Prepare/validate through the codec, then audit the very bytes it publishes."""
+        identity = self.identity
+        if identity is None:
+            return save(lambda publication: publication.publish())
+        before, after = differences(old, new)
+        with identity.admission(
+            Role.ENGINEER, revision, action=action, target=resource
+        ) as actor:
+            pass
+        admitted = False
+
+        def publish(publication: ConfigurationPublication) -> None:
+            nonlocal admitted
+            admitted = True
+            evidence = (
+                RevisionEvidence(artifact, resource, publication.content)
+                if old != new
+                else None
+            )
+            with identity.change(
+                action, resource, actor.revision, before, after, evidence=evidence
+            ):
+                publication.publish()
+
+        try:
+            return save(publish)
+        except BaseException as exc:
+            if not admitted:
+                identity.audit.record(
+                    AuditOperation.by(actor, action, resource, before, after),
+                    error_outcome(exc),
+                    type(exc).__name__,
+                )
+            raise
 
     def _change(
         self, action: str, target: str, revision: int | None, old: object, new: object
@@ -305,24 +380,34 @@ class RecipeEditorSession:
                     )
         errors: list[str] = []
         permission_error = None
+        unconfirmed: set[str] = set()
         machine_saved = sources_saved = False
         if self.camera_sources is not None:
             try:
                 draft = self.camera_sources
-                with self._change(
-                    "vision.sources",
-                    draft.path.name,
-                    revision,
-                    draft.saved if draft.persisted else None,
-                    draft.definition,
-                ):
+
+                def sources_save(
+                    write: Callable[[ConfigurationPublication], None],
+                ) -> None:
                     if connection is not None and connection.locked and draft.dirty:
                         raise ConfigurationError(
                             "Disconnect before changing camera sources"
                         )
-                    draft.save()
+                    draft.save(publish=write)
+
+                self._save_file(
+                    "vision.sources",
+                    "sources",
+                    "camera_sources.json",
+                    revision,
+                    draft.saved if draft.persisted else None,
+                    draft.definition,
+                    sources_save,
+                )
                 sources_saved = True
             except (IdentityError, AuditUnavailable, ValueError, OSError) as exc:
+                if isinstance(exc, RevisionConfirmationError):
+                    unconfirmed.add("CameraSources")
                 if isinstance(exc, IdentityError):
                     permission_error = exc
                 errors.append(f"CameraSources: {type(exc).__name__}: {exc}")
@@ -334,21 +419,28 @@ class RecipeEditorSession:
             try:
                 admit_engineering(self.identity, revision)
                 machine = self.machine_editor
-                with self._change(
+                self._save_file(
                     "vision.layout",
-                    machine.path.name if machine.path else "MachineLayout",
+                    "machine",
+                    "machine.tsv",
                     revision,
                     machine.saved_definition,
                     machine.definition,
-                ):
-                    machine.save()
+                    lambda write: machine.save(publish=write),
+                )
                 machine_saved = True
             except (IdentityError, AuditUnavailable, ValueError, OSError) as exc:
+                if isinstance(exc, RevisionConfirmationError):
+                    unconfirmed.add("MachineLayout")
                 if isinstance(exc, IdentityError):
                     permission_error = exc
                 errors.append(f"MachineLayout: {type(exc).__name__}: {exc}")
         return VisionSaveResult(
-            machine_saved, sources_saved, tuple(errors), permission_error
+            machine_saved,
+            sources_saved,
+            tuple(errors),
+            permission_error,
+            frozenset(unconfirmed),
         )
 
     def production_preparation(self) -> RecipeEditorSession:
@@ -386,6 +478,7 @@ class RecipeEditorSession:
             raise ConfigurationError(
                 "Saved Recipe is unavailable or ambiguous; refresh"
             )
+        self.process_catalog = entry.process_catalog
         if self.machine_path is not None:
             self.machine_editor.load_saved(load_machine_layout(self.machine_path))
         self.reload_models()
@@ -394,10 +487,21 @@ class RecipeEditorSession:
             raise ConfigurationError(
                 "Saved Recipe changed during preparation; select again"
             )
-        return prepared
+        return capture_prepared(
+            replace(
+                prepared,
+                recipe_dependencies=RecipeDependencies(
+                    entry, self.catalog.process_catalog_path
+                ),
+            )
+        )
 
     def prepare(self, recipe: RecipeDefinition) -> PreparedConfiguration:
         """Background preparation only; immutable inputs, no draft/application access."""
+        if self.catalog.parameters() != self.process_catalog:
+            raise ConfigurationError(
+                "Process catalog changed; reload before preparation"
+            )
         configuration = self.resolve(recipe)
         if self.require_saved_sources:
             metadata = Path(configuration.model.model_path).parent / "model.json"

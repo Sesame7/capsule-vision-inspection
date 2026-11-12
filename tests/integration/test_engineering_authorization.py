@@ -36,11 +36,13 @@ from capsule_vision.communication.operations import (
     RegisterWatchGroup,
     RequestKind,
 )
-from capsule_vision.configuration import load_recipe, save_recipe
+from capsule_vision.configuration import (
+    ConfigurationPublication,
+    load_recipe,
+    save_recipe,
+)
 from capsule_vision.configuration.communication_preferences import (
-    CommunicationPreferences,
     WebPreferences,
-    save_communication_preferences,
 )
 from capsule_vision.inference import SegmentationModuleInfo, read_model_labels
 from capsule_vision.localization.catalog import text
@@ -379,12 +381,14 @@ def test_web_power_rechecks_actor_between_save_and_service_admission(
     app, owner = engineering.application, engineering.application.identity
     assert owner is not None
 
-    def save_then_logout(path: Path, value: CommunicationPreferences) -> None:
-        save_communication_preferences(path, value)
+    publish = ConfigurationPublication.publish
+
+    def save_then_logout(value: ConfigurationPublication) -> None:
+        publish(value)
         owner.logout()
 
     monkeypatch.setattr(
-        "capsule_vision.ui.communication_page.save_communication_preferences",
+        "capsule_vision.configuration.ConfigurationPublication.publish",
         save_then_logout,
     )
 

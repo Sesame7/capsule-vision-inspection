@@ -20,7 +20,7 @@ from capsule_vision.inspection.production.capsule import (
     SizeSettings,
 )
 
-from ._io import atomic_write, read_json
+from ._io import ConfigurationPublication, decode_json, read_json
 from .errors import ConfigurationError, ConfigurationIOError
 from .models import (
     CheckConfiguration,
@@ -34,6 +34,7 @@ from .models import (
     persistent_id,
     text,
 )
+from .process_parameters import BUILTIN_PROCESS_CATALOG, ProcessCatalog
 from .sources import CameraFolder, CameraSources
 
 
@@ -155,10 +156,12 @@ def _image_archive(value: object) -> ImageArchiveSettings:
     )
 
 
-def _recipe(value: object, path: Path) -> RecipeDefinition:
+def _recipe(
+    value: object, path: Path, process_catalog: ProcessCatalog
+) -> RecipeDefinition:
     data = _object(
         value,
-        "display_name defaults product_code model_id capsule image_archive",
+        "display_name defaults product_code model_id capsule image_archive process_parameters",
         "display_name",
     )
     return RecipeDefinition(
@@ -169,12 +172,26 @@ def _recipe(value: object, path: Path) -> RecipeDefinition:
         _optional(data.get("model_id"), _str),
         capsule=_capsule(data.get("capsule", {})),
         image_archive=_image_archive(data.get("image_archive", {})),
+        process_parameters=_process_parameters(
+            data.get("process_parameters", {}), process_catalog
+        ),
     )
 
 
-def _load[T](path: Path, parse: Callable[[object], T]) -> T:
+def _process_parameters(value: object, catalog: ProcessCatalog):
+    data = _object(value, " ".join(p.id for p in catalog.parameters))
+    return catalog.validate(
+        tuple((key, integer(raw, key, -(2**31))) for key, raw in data.items())
+    )
+
+
+def _load[T](
+    path: Path, parse: Callable[[object], T], content: bytes | None = None
+) -> T:
     try:
-        value = read_json(path)
+        value = (
+            read_json(path) if content is None else decode_json(content.decode("utf-8"))
+        )
         return parse(value)
     except OSError as exc:
         raise ConfigurationIOError(f"Read {path}: {exc}") from exc
@@ -182,8 +199,13 @@ def _load[T](path: Path, parse: Callable[[object], T]) -> T:
         raise ConfigurationError(f"Configuration {path}: {exc}") from exc
 
 
-def load_recipe(path: Path) -> RecipeDefinition:
-    return _load(path, lambda value: _recipe(value, path))
+def load_recipe(
+    path: Path,
+    *,
+    process_catalog: ProcessCatalog = BUILTIN_PROCESS_CATALOG,
+    content: bytes | None = None,
+) -> RecipeDefinition:
+    return _load(path, lambda value: _recipe(value, path, process_catalog), content)
 
 
 def load_recipe_model_reference(path: Path) -> str | None:
@@ -226,10 +248,16 @@ def _model_id(path: Path) -> str:
 _MACHINE_HEADER = "channel\tx\ty\twidth\theight"
 
 
-def load_machine_layout(path: Path) -> MachineLayoutDefinition:
+def load_machine_layout(
+    path: Path, *, content: bytes | None = None
+) -> MachineLayoutDefinition:
     """Read explicit ROI rows; channel identity alone determines camera and slot."""
     try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        lines = (
+            path.read_text(encoding="utf-8-sig")
+            if content is None
+            else content.decode("utf-8-sig")
+        ).splitlines()
         if not lines or lines[0] != _MACHINE_HEADER:
             raise ConfigurationError(
                 "Expected TSV header: channel, x, y, width, height"
@@ -304,9 +332,9 @@ def _nondefault(
     return {key: item for key, item in value.items() if item != defaults[key]}
 
 
-def _save(
+def _publication(
     path: Path, value: dict[str, object] | str, *, exclusive: bool = False
-) -> None:
+) -> ConfigurationPublication:
     try:
         content = (
             value
@@ -316,9 +344,13 @@ def _save(
             )
             + "\n"
         )
-        atomic_write(path, content, exclusive=exclusive, newline="\n")
+        return ConfigurationPublication(path, content.encode("utf-8"), exclusive)
     except (OSError, ValueError, TypeError) as exc:
         raise ConfigurationIOError(f"Save {path}: {exc}") from exc
+
+
+def _save(path: Path, value: dict[str, object] | str) -> None:
+    _publication(path, value).publish()
 
 
 def save_model_definition(path: Path, model: ModelDefinition) -> None:
@@ -340,6 +372,12 @@ def save_model_definition(path: Path, model: ModelDefinition) -> None:
 
 
 def save_machine_layout(path: Path, machine: MachineLayoutDefinition) -> None:
+    machine_publication(path, machine).publish()
+
+
+def machine_publication(
+    path: Path, machine: MachineLayoutDefinition
+) -> ConfigurationPublication:
     rows = [_MACHINE_HEADER]
     for camera in machine.layout.cameras:
         for slot in camera.slots:
@@ -347,17 +385,36 @@ def save_machine_layout(path: Path, machine: MachineLayoutDefinition) -> None:
             rows.append(
                 f"{slot.channel_id}\t{rect.x}\t{rect.y}\t{rect.width}\t{rect.height}"
             )
-    _save(path, "\n".join(rows) + "\n")
+    return _publication(path, "\n".join(rows) + "\n")
 
 
 def save_recipe(
-    path: Path, recipe: RecipeDefinition, *, exclusive: bool = False
+    path: Path,
+    recipe: RecipeDefinition,
+    *,
+    exclusive: bool = False,
+    process_catalog: ProcessCatalog = BUILTIN_PROCESS_CATALOG,
 ) -> None:
+    recipe_publication(
+        path, recipe, exclusive=exclusive, process_catalog=process_catalog
+    ).publish()
+
+
+def recipe_publication(
+    path: Path,
+    recipe: RecipeDefinition,
+    *,
+    exclusive: bool = False,
+    process_catalog: ProcessCatalog = BUILTIN_PROCESS_CATALOG,
+) -> ConfigurationPublication:
     if _recipe_id(path) != recipe.recipe_id:
         raise ConfigurationError("Recipe identity must match its filename")
     data: dict[str, object] = {
         "display_name": recipe.display_name,
     }
+    process = process_catalog.validate(recipe.process_parameters)
+    if process:
+        data["process_parameters"] = dict(process)
     defaults = _checks_data(recipe.defaults)
     if defaults:
         data["defaults"] = defaults
@@ -380,7 +437,7 @@ def save_recipe(
     ):
         if value is not None:
             data[key] = value
-    _save(path, data, exclusive=exclusive)
+    return _publication(path, data, exclusive=exclusive)
 
 
 def _sources(value: object) -> CameraSources:
@@ -409,11 +466,15 @@ def _sources(value: object) -> CameraSources:
     )
 
 
-def load_camera_sources(path: Path) -> CameraSources:
-    return _load(path, _sources)
+def load_camera_sources(path: Path, *, content: bytes | None = None) -> CameraSources:
+    return _load(path, _sources, content)
 
 
 def save_camera_sources(path: Path, sources: CameraSources) -> None:
+    sources_publication(path, sources).publish()
+
+
+def sources_publication(path: Path, sources: CameraSources) -> ConfigurationPublication:
     data: dict[str, object] = {
         c.camera_id: {
             **({"folder": c.folder} if c.folder else {}),
@@ -427,4 +488,4 @@ def save_camera_sources(path: Path, sources: CameraSources) -> None:
         data["loop"] = sources.loop
     if sources.target_fps != 8.0:
         data["target_fps"] = sources.target_fps
-    _save(path, data)
+    return _publication(path, data)

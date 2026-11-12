@@ -193,7 +193,10 @@ def test_save_and_selection_keep_editor_candidate_and_preferences_independent(
         until(lambda: not window.editing.busy)
         assert not session.dirty
         assert load_recipe(session.entry.path).display_name == "Saved latest"
-        assert startup.application.snapshot() == initial
+        refreshed = startup.application.snapshot()
+        assert refreshed.candidate_prepared is not None
+        assert refreshed.candidate_prepared.configuration.display_name == "Saved latest"
+        assert refreshed.active is None and not refreshed.candidate_requires_preparation
         assert load_preferences(data.preferences).last_applied_recipe_id == "local"
         session.draft.display_name = "Keep unsaved"
         draft = session.draft.to_recipe()

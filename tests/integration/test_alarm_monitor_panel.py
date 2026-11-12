@@ -23,6 +23,7 @@ from capsule_vision.application import ApplicationState
 from capsule_vision.application.alarm_monitor import AlarmMonitor, AlarmSnapshot
 from capsule_vision.application.identity_models import Role
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
+from capsule_vision.configuration import ConfigurationPublication
 from capsule_vision.configuration.alarm_definitions import (
     AlarmDefinitions,
     load_alarm_definitions,
@@ -202,7 +203,12 @@ def test_independent_address_row_is_aligned_and_equal_width(
     panel.set_language(language)
     panel.resize(width, panel.sizeHint().height())
     panel.show()
-    addresses = (panel.heartbeat_address, panel.fault_address, panel.address)
+    addresses = (
+        panel.heartbeat_address,
+        panel.fault_address,
+        panel.address,
+        panel.running_address,
+    )
     try:
         for expanded in (True, False, True):
             panel.expand.setChecked(expanded)
@@ -213,7 +219,7 @@ def test_independent_address_row_is_aligned_and_equal_width(
             widths = [widget.width() for widget in addresses]
             assert len({point.y() for point in points}) == 1
             assert max(widths) - min(widths) <= 1
-            assert all(points[i].x() + widths[i] < points[i + 1].x() for i in (0, 1))
+            assert all(points[i].x() + widths[i] < points[i + 1].x() for i in (0, 1, 2))
             assert (
                 panel.host.mapTo(panel, panel.host.rect().bottomRight()).y()
                 < points[0].y()
@@ -235,6 +241,19 @@ def test_independent_address_row_is_aligned_and_equal_width(
         panel.heartbeat_address.setValue(511)
         panel.fault_address.setValue(211)
         assert panel.address.value() == 18 and panel.heartbeat_address.value() == 511
+        assert panel.running_address.text() == "W16.1"
+        panel.running_address.setValue(511)
+        assert panel.running_address.text() == "W511.1"
+        panel.controls.setFixedWidth(300)
+        QApplication.processEvents()
+        assert (
+            panel.running_address.mapTo(
+                panel, panel.running_address.rect().topLeft()
+            ).y()
+            > panel.heartbeat_address.mapTo(
+                panel, panel.heartbeat_address.rect().bottomRight()
+            ).y()
+        )
     finally:
         panel.close()
 
@@ -686,12 +705,12 @@ def test_failed_address_save_preserves_applied_selection_and_discard(
             original = data.communication.read_bytes()
             page.alarm_address.setValue(205)
 
-            def denied(_path: Path, _value: CommunicationPreferences) -> None:
+            def denied(_publication: ConfigurationPublication) -> None:
                 raise PermissionError("isolated save failure")
 
             with monkeypatch.context() as fail:
                 fail.setattr(
-                    "capsule_vision.ui.communication_page.save_communication_preferences",
+                    "capsule_vision.configuration.ConfigurationPublication.publish",
                     denied,
                 )
                 page.persist_settings()

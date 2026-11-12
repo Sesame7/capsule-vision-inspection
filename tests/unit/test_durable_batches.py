@@ -171,7 +171,7 @@ def test_group_membership_dedup_and_expiry_are_independent_of_summaries(
             assert db.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)
 
 
-@pytest.mark.parametrize("version", [0, 1])
+@pytest.mark.parametrize("version", [0, 1, 2, 3])
 def test_existing_unsupported_database_is_preserved(
     tmp_path: Path, version: int
 ) -> None:
@@ -190,7 +190,7 @@ def test_existing_unsupported_database_is_preserved(
     assert path.read_bytes() == original
 
 
-def test_v2_preserves_named_runs_and_rejects_only_unbatched_recording(
+def test_obsolete_populated_store_is_preserved_without_migration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "history.sqlite3"
@@ -217,17 +217,10 @@ def test_v2_preserves_named_runs_and_rejects_only_unbatched_recording(
         schema = db.execute("SELECT sql FROM sqlite_master ORDER BY name").fetchall()
     history = ProductionHistory(path)
     try:
-        assert history.initial_selection.result(WAIT) is not None
-        history.select_batch(None).result(WAIT)
-        with pytest.raises(
-            ValueError, match="History v2 cannot record an unbatched Run"
-        ):
+        with pytest.raises(RuntimeError, match="Unsupported History"):
+            history.initial_selection.result(WAIT)
+        with pytest.raises(RuntimeError, match="Unsupported History"):
             history.start_run(None, "unbatched", RECIPE, None).result(WAIT)
-        assert "History v2" in history.snapshot().error
-        restored = history.select_batch("Existing").result(WAIT)
-        assert restored and restored.uuid == batch.uuid
-        history.start_run(batch.uuid, "later", RECIPE, None).result(WAIT)
-        history.finish_run("later", "stopped", False).result(WAIT)
     finally:
         finish(history)
     with closing(sqlite3.connect(path)) as db:
@@ -240,7 +233,6 @@ def test_v2_preserves_named_runs_and_rejects_only_unbatched_recording(
             "SELECT uuid,batch,outcome FROM runs ORDER BY rowid"
         ).fetchall() == [
             ("old", batch.uuid, "stopped"),
-            ("later", batch.uuid, "stopped"),
         ]
 
 

@@ -28,6 +28,7 @@ from . import (
     batch_review,
     defect_records,
     records_query,
+    run_configuration,
 )
 from .alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
 from .alarm_report import AlarmReportRequest
@@ -183,6 +184,7 @@ class ProductionHistory:
         retention_batch: int = 256,
         on_failure: Callable[[str], None] | None = None,
         alarm_access: Callable[[int | None], int] | None = None,
+        configuration_access: Callable[[int | None], int] | None = None,
         diagnostics: RuntimeDiagnostics | None = None,
     ) -> None:
         if max_pending < 1 or retention_batch < 1:
@@ -191,6 +193,7 @@ class ProductionHistory:
         self._diagnostics = diagnostics
         self._on_failure = on_failure
         self._alarm_access = alarm_access
+        self._configuration_access = configuration_access
         self.clock = clock
         self.retention_batch = retention_batch
         self._capacity = max_pending
@@ -554,11 +557,14 @@ class ProductionHistory:
         recipe: ConfigurationIdentity,
         reporting: ReportingSettings | None,
         account: StartAccount | None = None,
+        *,
+        configuration: run_configuration.RunConfiguration | None = None,
     ) -> Future[None]:
         observed = self.clock()
 
         def write(db: sqlite3.Connection) -> None:
             batch_records.start_run(db, batch, run, observed, recipe, reporting)
+            run_configuration.store(db, run, configuration)
             db.execute("INSERT INTO run_coverage VALUES (?,0,0,0)", (run,))
             if account is not None:
                 db.execute(
@@ -567,6 +573,23 @@ class ProductionHistory:
                 )
 
         return self._command(write)
+
+    def run_configuration(
+        self, run: str, revision: int | None = None
+    ) -> Future[run_configuration.RunConfiguration | None]:
+        """One Run, on the existing owner; normal composition requires Engineer."""
+        authorize = self._configuration_access
+        ticket = authorize(revision) if authorize is not None else None
+
+        def read(db: sqlite3.Connection) -> run_configuration.RunConfiguration | None:
+            if authorize is not None:
+                authorize(ticket)
+            value = run_configuration.read(db, run)
+            if authorize is not None:
+                authorize(ticket)
+            return value
+
+        return self._command(read, read_only=True)
 
     def finish_run(self, run: str, outcome: str, uncertain: bool) -> Future[None]:
         observed = self.clock()
@@ -711,7 +734,7 @@ class ProductionHistory:
         register_result_filter(connection)
         try:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 2, 3) or (
+            if version not in (0, 4) or (
                 version == 0
                 and connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
@@ -739,8 +762,15 @@ class ProductionHistory:
                 CREATE INDEX IF NOT EXISTS history_batch ON cycles(batch_segment, completed_at DESC, id DESC);
             """
                     + batch_records.SCHEMA
-                    + "PRAGMA user_version=3; COMMIT;"
+                    + run_configuration.SCHEMA
+                    + "PRAGMA user_version=4; COMMIT;"
                 )
+            connection.execute(
+                "SELECT run,effective,complete,revision_lookup FROM run_configurations LIMIT 0"
+            )
+            connection.execute(
+                "SELECT run,artifact,resource,sha256,content,origin,revision_id FROM run_configuration_resources LIMIT 0"
+            )
             with connection:
                 batch_records.recover(connection, self.clock())
                 batch_records.initialize_run_positions(connection)

@@ -10,33 +10,20 @@ import pytest
 from tests.support.application import WAIT, production
 from tests.unit.test_history import context, finish
 
-from capsule_vision.application import archive_links, batch_records
+from capsule_vision.application import archive_links
 from capsule_vision.application.archive_links import PublishedImage
 from capsule_vision.application.history import ProductionHistory
 
 
-@pytest.mark.parametrize("version", [2, 3])
-def test_exact_links_both_orders_legacy_rows_and_restart(
-    tmp_path: Path, version: int, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_exact_links_both_orders_unlinked_rows_and_restart(tmp_path: Path) -> None:
     path = tmp_path / "history.sqlite3"
     old, first, second = context(), context(), context()
-    with monkeypatch.context() as patch:
-        if version == 2:
-            patch.setattr(
-                batch_records,
-                "SCHEMA",
-                batch_records.SCHEMA.replace(
-                    "batch TEXT REFERENCES batches",
-                    "batch TEXT NOT NULL REFERENCES batches",
-                ),
-            )
-        legacy = ProductionHistory(path)
-        try:
-            assert legacy.offer(old, production(1))
-            (original,) = legacy.query().result(WAIT).records
-        finally:
-            finish(legacy)
+    initial = ProductionHistory(path)
+    try:
+        assert initial.offer(old, production(1))
+        (original,) = initial.query().result(WAIT).records
+    finally:
+        finish(initial)
     with closing(sqlite3.connect(path)) as db, db:
         assert (
             db.execute(
@@ -44,8 +31,6 @@ def test_exact_links_both_orders_legacy_rows_and_restart(
             ).fetchone()
             is None
         )
-        if version == 2:
-            db.execute("PRAGMA user_version=2")
 
     committed = Event()
 
@@ -112,7 +97,7 @@ def test_exact_links_both_orders_legacy_rows_and_restart(
     finally:
         finish(reopened)
     with closing(sqlite3.connect(path)) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (version,)
+        assert db.execute("PRAGMA user_version").fetchone() == (4,)
 
 
 def test_image_overflow_and_sql_failure_do_not_displace_cycle_or_finish(

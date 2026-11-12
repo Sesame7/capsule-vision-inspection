@@ -265,8 +265,6 @@ def start_run(
     recipe: ConfigurationIdentity,
     reporting: ReportingSettings | None,
 ) -> None:
-    if batch is None and db.execute("PRAGMA user_version").fetchone()[0] == 2:
-        raise ValueError("History v2 cannot record an unbatched Run")
     inserted = db.execute(
         "INSERT INTO runs(uuid,batch,started,outcome,recipe,reporting_mode,reporting_base,endpoint) "
         "SELECT ?,?,?,'open',?,?,?,? WHERE ? IS "

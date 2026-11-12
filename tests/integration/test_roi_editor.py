@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import numpy as np
 import pytest
@@ -13,7 +13,7 @@ from tests.support.recipe_ui import select_production_recipe
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.application.editing import RecipeEditorSession
-from capsule_vision.configuration import load_machine_layout
+from capsule_vision.configuration import ConfigurationPublication, load_machine_layout
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection import CameraId, CycleId, Frame, FrameId
 from capsule_vision.localization.catalog import text
@@ -375,7 +375,9 @@ def test_machine_save_failure_does_not_prepare(
     saved = session.machine_editor.saved
     candidate = window.bridge.application.snapshot().candidate
 
-    def fail() -> None:
+    def fail(
+        *, publish: Callable[[ConfigurationPublication], None] | None = None
+    ) -> None:
         raise ValueError("machine file is read-only")
 
     monkeypatch.setattr(session.machine_editor, "save", fail)

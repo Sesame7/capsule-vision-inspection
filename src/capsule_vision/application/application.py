@@ -9,14 +9,21 @@ from threading import Condition, Event, Thread, current_thread
 from uuid import uuid4
 
 from capsule_vision.communication.reporting import ReportingMode, ReportingSettings
-from capsule_vision.configuration import CameraSources, MachineLayoutDefinition
+from capsule_vision.configuration import (
+    CameraSources,
+    MachineLayoutDefinition,
+    RecipeDefinition,
+)
 from capsule_vision.configuration.alarm_definitions import (
     TEMPLATE,
     AlarmDefinitions,
     create_local_alarm_definitions,
     load_alarm_definitions,
 )
-from capsule_vision.configuration.communication_preferences import StatusPreferences
+from capsule_vision.configuration.communication_preferences import (
+    StatusPreferences,
+    load_communication_preferences,
+)
 from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inspection import CycleId, CycleStatus, Frame
 from capsule_vision.inspection.production import ProductionInspectionResult
@@ -53,7 +60,10 @@ from .models import (
     ProductionApplicationSnapshot,
     ProductionCounters,
 )
+from .process_application import apply_process, process_target
+from .recipe_dependencies import RecipePreparationRequired
 from .report_scope import DefectScope, HistoryQuery, ReportRequest
+from .run_configuration import RunConfiguration, capture_run
 from .session import ProductionCycle, RuntimeSession, lifecycle_error
 from .vision_dependencies import VisionPreparationRequired
 
@@ -77,6 +87,16 @@ class RecipeSelection:
     revision: int | None
     generation: int
     operation: AuditOperation | None = None
+    recipe_id: str = ""
+    automatic: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ProcessApplication:
+    candidate: PreparedConfiguration
+    revision: int | None
+    cancelled: Event
+    future: Future[None]
 
 
 class ProductionApplication:
@@ -97,6 +117,7 @@ class ProductionApplication:
         initial_candidate: PreparedConfiguration | None = None,
         initial_status: StatusPreferences | None = None,
         diagnostics: RuntimeDiagnostics | None = None,
+        communication_path: Path | None = None,
     ) -> None:
         if type(max_pending_cycles) is not int or max_pending_cycles < 1:
             raise ValueError("max_pending_cycles must be positive")
@@ -108,6 +129,12 @@ class ProductionApplication:
         self._export_cancel = Event()
         self._identity = identity
         self._selection: RecipeSelection | None = None
+        self._communication_path = communication_path
+        self._process_job: _ProcessApplication | None = None
+        self._process_pending: _ProcessApplication | None = None
+        self._process_active: _ProcessApplication | None = None
+        self._process_required = False
+        self._process_settings: StatusPreferences | None = None
         self._batch_segment = uuid4().hex
         self._run_id: str | None = None
         self._start_operation: AuditOperation | None = None
@@ -158,6 +185,10 @@ class ProductionApplication:
         )
         if initial_candidate is not None:
             self._install_candidate(initial_candidate)
+            # Guest restoration is observation only; an authorized re-selection
+            # admits writes. Explicit identity-free compositions remain trusted.
+            if identity is None:
+                self._queue_process(None)
         if history is not None:
             history.initial_selection.add_done_callback(self._restored)
         self._thread.start()
@@ -255,27 +286,66 @@ class ProductionApplication:
             ) as actor,
         ):
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
+            self.cancel_process_application()
             self._selection = RecipeSelection(
                 actor.revision if actor else None,
                 self._generation,
                 AuditOperation.by(actor, "production.recipe", recipe_id)
                 if actor
                 else None,
+                recipe_id,
+            )
+            return self._selection
+
+    def observe_saved_recipe(
+        self, recipe: RecipeDefinition, revision: int | None
+    ) -> RecipeSelection | None:
+        """Observe a committed changed Save while its stopped file slot is owned.
+
+        Invalidate before releasing that slot, even if authorization was lost.
+        Reading and installation still require the saving session's admission.
+        This is internal refresh evidence, not an operator selection audit event.
+        """
+        with self._condition:
+            candidate = self._candidate
+            if (
+                candidate is None
+                or candidate.configuration.recipe_id != recipe.recipe_id
+            ):
+                return None
+            self._candidate_requires_preparation = True
+            self.cancel_process_application()
+            self._selection = None
+            if self._closing or self._state is not ApplicationState.READY:
+                return None
+            self._selection = RecipeSelection(
+                revision, self._generation, recipe_id=recipe.recipe_id, automatic=True
             )
             return self._selection
 
     def install_recipe_selection(
         self, request: RecipeSelection, candidate: PreparedConfiguration
-    ) -> None:
+    ) -> Future[None]:
         with self._condition:
             try:
-                with self._admission(Role.OPERATOR, request.revision):
+                with self._admission(
+                    Role.ENGINEER if request.automatic else Role.OPERATOR,
+                    request.revision,
+                ):
                     if (
                         self._selection is not request
                         or self._generation != request.generation
                     ):
                         raise StaleSessionError("Production selection was superseded")
+                    if (
+                        request.recipe_id
+                        and candidate.configuration.recipe_id != request.recipe_id
+                    ):
+                        raise ApplicationStateError(
+                            "Prepared Recipe identity does not match request"
+                        )
                     self._install_candidate(candidate)
+                    process = self._queue_process(request.revision)
             except Exception as exc:
                 self.recipe_selection_failed(request, exc)
                 raise
@@ -286,6 +356,7 @@ class ProductionApplication:
                     ),
                     "success",
                 )
+            return process
 
     def recipe_selection_failed(
         self, request: RecipeSelection, error: BaseException
@@ -342,9 +413,12 @@ class ProductionApplication:
                 detail_expired=self._detail_expired
                 or bool(self.history and self.history.expired_for(self._batch_segment)),
                 batch_pending=self._batch_pending or self._restoring,
+                process_required=self._process_required,
+                process_applying=self._process_active is not None
+                or self._process_pending is not None,
             )
 
-    def configure(self, candidate: PreparedConfiguration) -> None:
+    def configure(self, candidate: PreparedConfiguration) -> Future[None]:
         recipe = candidate.configuration.recipe_id
         with (
             self._condition,
@@ -353,10 +427,12 @@ class ProductionApplication:
             ) as actor,
         ):
             self._install_candidate(candidate)
+            process = self._queue_process(actor.revision if actor else None)
             if actor and self.identity:
                 self.identity.audit.record(
                     AuditOperation.by(actor, "production.recipe", recipe), "success"
                 )
+            return process
 
     def _install_candidate(self, candidate: PreparedConfiguration) -> None:
         """Cheap installation of an already resolved/artifact-checked candidate."""
@@ -365,11 +441,21 @@ class ProductionApplication:
             if (
                 self._candidate_requires_preparation
                 and self._issue is not None
-                and self._issue.exception_type == VisionPreparationRequired.__name__
+                and self._issue.exception_type
+                in (
+                    VisionPreparationRequired.__name__,
+                    RecipePreparationRequired.__name__,
+                )
             ):
                 self._issue = None
             self._selection = None
+            self.cancel_process_application()
+            self._process_job = None
             self._candidate = candidate
+            self._process_required = bool(candidate.configuration.process_parameters)
+            self._process_settings = None
+            if self._issue is not None and self._issue.stage == "process_application":
+                self._issue = None
             if self.diagnostics:
                 self.diagnostics.record(
                     "recipe.preparation",
@@ -379,6 +465,101 @@ class ProductionApplication:
                 )
             self._candidate_requires_preparation = False
             self._state = ApplicationState.READY
+
+    def cancel_process_application(self) -> None:
+        """End unadmitted work; already admitted IO still belongs to the lifecycle owner."""
+        with self._condition:
+            if self._process_job is not None:
+                self._process_job.cancelled.set()
+            if self._process_pending is not None:
+                self._process_pending.future.set_exception(
+                    CancelledError("PLC process application superseded or closing")
+                )
+                self._process_pending = None
+            self._condition.notify_all()
+
+    def _queue_process(self, revision: int | None) -> Future[None]:
+        with self._condition:
+            future: Future[None] = _promise(Future())
+            if not self._process_required:
+                future.set_result(None)
+                return future
+            assert self._candidate is not None
+            self._process_job = _ProcessApplication(
+                self._candidate, revision, Event(), future
+            )
+            self._process_pending = self._process_job
+            self._condition.notify_all()
+            return future
+
+    def _apply_process(self, job: _ProcessApplication) -> None:
+        def guard() -> None:
+            with self._condition:
+                if (
+                    job.cancelled.is_set()
+                    or self._closing
+                    or self._process_job is not job
+                    or self._candidate is not job.candidate
+                    or self._candidate_requires_preparation
+                    or self._state is not ApplicationState.READY
+                ):
+                    raise CancelledError(
+                        "PLC process application superseded or closing"
+                    )
+                with self._admission(Role.OPERATOR, job.revision, action=""):
+                    pass
+
+        error: BaseException | None = None
+        try:
+            guard()
+            if job.candidate.recipe_dependencies is not None:
+                job.candidate.recipe_dependencies.validate_current()
+            if job.candidate.vision_dependencies is not None:
+                job.candidate.vision_dependencies.validate_current()
+            if self._communication_path is None:
+                raise ApplicationStateError(
+                    "Saved Status endpoint unavailable for process application"
+                )
+            settings = load_communication_preferences(self._communication_path).status
+            apply_process(
+                job.candidate,
+                settings,
+                guard,
+                identity=self.identity,
+                revision=job.revision,
+            )
+            # A concurrent file edit cannot earn eligibility for an older definition.
+            if job.candidate.recipe_dependencies is not None:
+                job.candidate.recipe_dependencies.validate_current()
+            if job.candidate.vision_dependencies is not None:
+                job.candidate.vision_dependencies.validate_current()
+            if process_target(
+                load_communication_preferences(self._communication_path).status
+            ) != process_target(settings):
+                raise ApplicationStateError(
+                    "Saved Status target changed; reselect the saved Recipe"
+                )
+            with self._condition:
+                guard()
+                with self._admission(Role.OPERATOR, job.revision, action=""):
+                    self._process_required = False
+                    self._process_settings = settings
+        except BaseException as exc:
+            error = exc
+        with self._condition:
+            self._process_active = None
+            if error is not None and self._process_job is job and not self._closing:
+                self._issue = ApplicationIssue(
+                    "process_application",
+                    "process_apply_failed",
+                    type(error).__name__,
+                    str(error),
+                )
+            self._condition.notify_all()
+        if error is None:
+            job.future.set_result(None)
+        else:
+            job.future.set_exception(error)
 
     def observe_saved_vision(
         self,
@@ -402,6 +583,7 @@ class ProductionApplication:
                 )
             ):
                 self._candidate_requires_preparation = True
+                self.cancel_process_application()
 
     def _install_batch(self, selection: BatchSelection | None) -> None:
         self._batch = selection.label if selection else None
@@ -786,7 +968,15 @@ class ProductionApplication:
                 )
             if self._candidate_requires_preparation:
                 raise ApplicationStateError(
-                    "Vision requires re-preparation; reselect the saved Recipe"
+                    "Saved configuration requires re-preparation; reselect the saved Recipe"
+                )
+            if (
+                self._process_required
+                or self._process_active is not None
+                or self._process_pending is not None
+            ):
+                raise ApplicationStateError(
+                    "PLC process values require successful application and readback; reselect the saved Recipe"
                 )
             if self._preparation is not None:
                 raise ApplicationStateError("Model preparation still owns resources")
@@ -830,7 +1020,11 @@ class ProductionApplication:
 
     @contextmanager
     def recipe_preparation(self, request: RecipeSelection) -> Generator[None]:
-        with self._model_files(Role.OPERATOR, request.revision, selection=request):
+        with self._model_files(
+            Role.ENGINEER if request.automatic else Role.OPERATOR,
+            request.revision,
+            selection=request,
+        ):
             yield
 
     @contextmanager
@@ -974,6 +1168,7 @@ class ProductionApplication:
                 ApplicationState.READY,
                 ApplicationState.UNCONFIGURED,
             ):
+                self.cancel_process_application()
                 future.set_result(None)
                 return future
             if self.identity:
@@ -1008,6 +1203,7 @@ class ProductionApplication:
                 return self._closed
             self._closed = _promise(Future())
             self._closing = True
+            self.cancel_process_application()
             if self.diagnostics:
                 self.diagnostics.record(
                     "application.close",
@@ -1259,6 +1455,13 @@ class ProductionApplication:
     def _run_reporting(self) -> ReportingSettings | None:
         return None
 
+    def _capture_run_configuration(
+        self, prepared: PreparedConfiguration
+    ) -> RunConfiguration:
+        return capture_run(
+            prepared, None, None, self.identity.audit if self.identity else None
+        )
+
     def _bind_run(self, session: RuntimeSession, run_id: str, durable: bool) -> None:
         """Bind session-owned evidence before opening Cycle admission."""
 
@@ -1286,6 +1489,7 @@ class ProductionApplication:
                             or self._stop_requested
                             or self._closing
                             or self._prepare_requested
+                            or self._process_pending is not None
                         )
                     )
                 )
@@ -1297,6 +1501,13 @@ class ProductionApplication:
                 start_operation = self._start_operation if starting else None
                 preparation = self._preparation if self._prepare_requested else None
                 self._prepare_requested = False
+                process = self._process_pending if preparation is None else None
+                if process is not None:
+                    self._process_pending = None
+                self._process_active = process
+            if process is not None:
+                self._apply_process(process)
+                continue
             if preparation is not None:
                 self._prepare_model(preparation)
                 continue
@@ -1304,8 +1515,29 @@ class ProductionApplication:
             if starting:
                 try:
                     assert prepared is not None
+                    if prepared.recipe_dependencies is not None:
+                        prepared.recipe_dependencies.validate_current()
                     if prepared.vision_dependencies is not None:
                         prepared.vision_dependencies.validate_current()
+                    if prepared.configuration.process_parameters:
+                        try:
+                            if (
+                                self._communication_path is None
+                                or self._process_settings is None
+                                or process_target(
+                                    load_communication_preferences(
+                                        self._communication_path
+                                    ).status
+                                )
+                                != process_target(self._process_settings)
+                            ):
+                                raise ApplicationStateError(
+                                    "Saved Status target changed; reselect the saved Recipe"
+                                )
+                        except Exception:
+                            with self._condition:
+                                self._process_required = True
+                            raise
                     with self._condition:
                         self._condition.wait_for(lambda: not self._restoring)
                         batch = self._batch_segment if self._batch is not None else None
@@ -1338,6 +1570,7 @@ class ProductionApplication:
                     if self.history is not None and (
                         record_unbatched or batch is not None
                     ):
+                        manifest = self._capture_run_configuration(prepared)
                         recording = self.history.start_run(
                             batch,
                             run_id,
@@ -1348,6 +1581,7 @@ class ProductionApplication:
                             )
                             if start_operation
                             else None,
+                            configuration=manifest,
                         )
                         try:
                             recording.result()
@@ -1400,7 +1634,9 @@ class ProductionApplication:
                             stop_requested=self._stop_requested,
                         )
                     with self._condition:
-                        if isinstance(exc, VisionPreparationRequired):
+                        if isinstance(
+                            exc, (VisionPreparationRequired, RecipePreparationRequired)
+                        ):
                             self._candidate_requires_preparation = True
                         self._issue = ApplicationIssue(
                             "startup", "startup_failed", type(exc).__name__, str(exc)

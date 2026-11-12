@@ -84,8 +84,35 @@ class ProductionRecipes(QWidget):
         self.recipes.activated.connect(self.select)
         self.refresh_button.clicked.connect(self.reload)
         editing.changed.connect(self.refresh_state)
+        editing.recipe_refresh_changed.connect(self._recipe_refreshed)
         editing.bridge.snapshot_changed.connect(self.refresh_state)
         editing.bridge.model_preparation_changed.connect(self.refresh_state)
+
+    def _recipe_refreshed(self) -> None:
+        refresh = self.editing.recipe_refresh
+        if refresh is None:
+            return
+        identity, state, error = refresh
+        snapshot = self.editing.bridge.application.snapshot()
+        candidate = snapshot.candidate_prepared
+        # A newer explicit selection owns its own feedback and identity.
+        if candidate is None or candidate.configuration.recipe_id != identity:
+            if self._requested is not None and self._requested[0] == identity:
+                self._requested = None
+                self.feedback = None
+                self.feedback_changed.emit()
+            return
+        name = candidate.configuration.display_name
+        self._requested = (identity, name) if state == "preparing" else None
+        self.feedback = (
+            self._catalog_feedback
+            if state == "READY"
+            else (state, f"{name} [{identity}]\n{error}" if error else "")
+        )
+        self.editing.bridge.refresh()
+        self.present(snapshot)
+        self.refresh_state()
+        self.feedback_changed.emit()
 
     def sizeHint(self) -> QSize:
         return QSize(self.maximumWidth(), Style.touch)
@@ -106,7 +133,15 @@ class ProductionRecipes(QWidget):
                 )
         self._catalog_feedback = self.feedback
         self._catalog_revision += 1
-        self.present(self.editing.bridge.application.snapshot())
+        snapshot = self.editing.bridge.application.snapshot()
+        refresh = self.editing.recipe_refresh
+        if (
+            refresh is not None
+            and refresh[2] is not None
+            and snapshot.candidate_requires_preparation
+        ):
+            self._recipe_refreshed()
+        self.present(snapshot)
         self.refresh_state()
         self.feedback_changed.emit()
 
@@ -194,6 +229,26 @@ class ProductionRecipes(QWidget):
             stale = text("recipe_reprepare", self.language)
             inline = f"{inline} · {stale}" if inline else stale
             details += f"\n{text('recipe_reprepare_hint', self.language)}"
+        if snapshot.process_required or snapshot.process_applying:
+            process = text(
+                "process_applying"
+                if snapshot.process_applying
+                else "process_apply_required",
+                self.language,
+            )
+            short = text(
+                "process_applying_short"
+                if snapshot.process_applying
+                else "process_unverified_short",
+                self.language,
+            )
+            inline = f"{inline} · {short}" if inline else short
+            details += f"\n{process}"
+            if (
+                snapshot.last_issue is not None
+                and snapshot.last_issue.stage == "process_application"
+            ):
+                details += f"\n{snapshot.last_issue.message}"
         if self.feedback is not None and self.feedback[0] in (
             "recipe_prepare_error",
             "permission_operator",
@@ -202,11 +257,17 @@ class ProductionRecipes(QWidget):
             details += f"\n{text(self.feedback[0], self.language)}\n{self.feedback[1]}"
         if self._requested is not None:
             requested_id, requested_name = self._requested
-            inline = (
-                f"{text('recipe_preparing_short', self.language)}: {requested_name}"
+            key = "process_applying" if snapshot.process_applying else "preparing"
+            short_key = (
+                "process_applying_short"
+                if snapshot.process_applying
+                else "recipe_preparing_short"
             )
-            details += f"\n{text('preparing', self.language)}: {requested_name} [{requested_id}]"
-            self.feedback = ("preparing", details)
+            inline = f"{text(short_key, self.language)}: {requested_name}"
+            details += (
+                f"\n{text(key, self.language)}: {requested_name} [{requested_id}]"
+            )
+            self.feedback = (key, details)
         if not permits(self.editing.bridge.application, Role.OPERATOR):
             details += "\n" + text("permission_operator", self.language)
         self.recipes.setToolTip(details)

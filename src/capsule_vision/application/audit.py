@@ -6,6 +6,7 @@ from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
+from hashlib import sha256
 from itertools import zip_longest
 from pathlib import Path
 from queue import Queue
@@ -26,6 +27,16 @@ from .identity_models import (
 
 class AuditUnavailable(RuntimeError):
     """The critical operation has no confirmed durable intent."""
+
+
+class RevisionConfirmationError(AuditUnavailable):
+    """Publication completed, but its durable confirmation is unresolved."""
+
+    def __init__(self, operation: AuditOperation) -> None:
+        self.operation = operation
+        super().__init__(
+            "Configuration published; audit revision confirmation incomplete. Reload to review; do not repeat the write automatically."
+        )
 
 
 def _utc() -> str:
@@ -128,6 +139,45 @@ class AuditRecord:
     outcome: str
     completed_utc: str
     detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionEvidence:
+    artifact: str
+    resource: str
+    content: bytes
+
+    def __post_init__(self) -> None:
+        if (
+            self.artifact not in {"recipe", "machine", "sources", "communication"}
+            or not self.resource
+            or not self.content
+            or type(self.content) is not bytes
+        ):
+            raise ValueError("Invalid configuration revision identity/content")
+        fixed = {
+            "machine": "machine.tsv",
+            "sources": "camera_sources.json",
+            "communication": "communication.json",
+        }
+        if self.artifact in fixed and self.resource != fixed[self.artifact]:
+            raise ValueError("Invalid configuration artifact identity")
+
+    @property
+    def sha256(self) -> str:
+        return sha256(self.content).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationRevision:
+    record: AuditRecord
+    artifact: str
+    resource: str
+    sha256: str
+
+    @property
+    def confirmed(self) -> bool:
+        return self.record.outcome == "success"
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,13 +342,25 @@ class AuditTrail:
                         CREATE INDEX audit_action ON operations(action);
                         CREATE TABLE completions(id TEXT PRIMARY KEY REFERENCES operations(id),
                             utc TEXT NOT NULL, outcome TEXT NOT NULL, detail TEXT NOT NULL);
-                        PRAGMA user_version=1;
+                        CREATE TABLE configuration_revisions(
+                            id TEXT PRIMARY KEY REFERENCES operations(id),
+                            artifact TEXT NOT NULL, resource TEXT NOT NULL,
+                            sha256 TEXT NOT NULL, content BLOB NOT NULL);
+                        CREATE INDEX revision_resource ON configuration_revisions(artifact,resource);
+                        CREATE TRIGGER revision_immutable_update BEFORE UPDATE ON configuration_revisions
+                            BEGIN SELECT RAISE(ABORT,'Immutable configuration revision'); END;
+                        CREATE TRIGGER revision_immutable_delete BEFORE DELETE ON configuration_revisions
+                            BEGIN SELECT RAISE(ABORT,'Immutable configuration revision'); END;
+                        PRAGMA user_version=2;
                         COMMIT;
                     """)
-                elif version != 1:
+                elif version != 2:
                     raise AuditUnavailable("Unsupported audit database")
                 db.execute(
                     "SELECT o.id,o.utc,actor_id,username,action,target,old_value,new_value,c.utc,outcome,detail FROM operations o LEFT JOIN completions c USING(id) LIMIT 0"
+                )
+                db.execute(
+                    "SELECT id,artifact,resource,sha256,content FROM configuration_revisions LIMIT 0"
                 )
             except Exception as exc:
                 if db is not None:
@@ -357,8 +419,43 @@ class AuditTrail:
             ).fetchone() != (outcome, detail):
                 raise ValueError("Conflicting audit completion")
 
-    def intent(self, op: AuditOperation) -> Future[None]:
-        return self._submit(lambda db: self._intent(db, op))
+    def intent(
+        self, op: AuditOperation, evidence: RevisionEvidence | None = None
+    ) -> Future[None]:
+        def begin(db: sqlite3.Connection) -> None:
+            existing = db.execute(
+                "SELECT 1 FROM operations WHERE id=?", (op.id,)
+            ).fetchone()
+            if (
+                evidence is not None
+                and existing
+                and not db.execute(
+                    "SELECT 1 FROM configuration_revisions WHERE id=?", (op.id,)
+                ).fetchone()
+            ):
+                raise ValueError("Revision evidence must accompany the original intent")
+            self._intent(db, op)
+            if evidence is not None:
+                values = (
+                    op.id,
+                    evidence.artifact,
+                    evidence.resource,
+                    evidence.sha256,
+                    evidence.content,
+                )
+                if not db.execute(
+                    "INSERT INTO configuration_revisions VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+                    values,
+                ).rowcount:
+                    if (
+                        db.execute(
+                            "SELECT * FROM configuration_revisions WHERE id=?", (op.id,)
+                        ).fetchone()
+                        != values
+                    ):
+                        raise ValueError("Conflicting configuration revision identity")
+
+        return self._submit(begin)
 
     def complete(
         self, op: AuditOperation, outcome: str, detail: str = ""
@@ -449,6 +546,86 @@ class AuditTrail:
             )
             self._authorize_review(revision)
             return records
+
+        return self._submit(read, write=False)
+
+    def match_run_revisions(
+        self, evidence: tuple[RevisionEvidence, ...]
+    ) -> Future[tuple[str | None, ...]]:
+        """Trusted lifecycle lookup, not an interactive Audit review or a Save.
+
+        Only identities of exact, confirmed publications leave this owner. One
+        bounded request covers the four resources; no account/actor data is read.
+        """
+        if len(evidence) > 4 or len({e.artifact for e in evidence}) != len(evidence):
+            raise ValueError("Expected at most one of each Run configuration resource")
+
+        def read(db: sqlite3.Connection) -> tuple[str | None, ...]:
+            matches: list[str | None] = []
+            for item in evidence:
+                row = db.execute(
+                    "SELECT r.id FROM configuration_revisions r JOIN completions c USING(id) "
+                    "JOIN operations o USING(id) WHERE r.artifact=? AND r.resource=? "
+                    "AND r.sha256=? AND r.content=? AND c.outcome='success' "
+                    "ORDER BY o.rowid DESC LIMIT 1",
+                    (item.artifact, item.resource, item.sha256, item.content),
+                ).fetchone()
+                matches.append(row[0] if row else None)
+            return tuple(matches)
+
+        return self._submit(read, write=False)
+
+    def revisions(
+        self,
+        artifact: str,
+        resource: str,
+        *,
+        before: int | None = None,
+        revision: int | None = None,
+    ) -> Future[tuple[ConfigurationRevision, ...]]:
+        """Bounded engineering review, including explicitly unconfirmed attempts."""
+        revision = self._authorize_review(revision)
+
+        def read(db: sqlite3.Connection) -> tuple[ConfigurationRevision, ...]:
+            self._authorize_review(revision)
+            rows = db.execute(
+                "SELECT o.rowid,o.actor_id,o.username,o.action,o.target,o.old_value,o.new_value,o.id,o.utc,"
+                "coalesce(c.outcome,'unresolved'),coalesce(c.utc,''),coalesce(c.detail,''),r.artifact,r.resource,r.sha256 "
+                "FROM configuration_revisions r JOIN operations o USING(id) LEFT JOIN completions c USING(id) "
+                "WHERE r.artifact=? AND r.resource=? AND (? IS NULL OR o.rowid<?) ORDER BY o.rowid DESC LIMIT 51",
+                (artifact, resource, before, before),
+            )
+            result = tuple(
+                ConfigurationRevision(
+                    AuditRecord(row[0], AuditOperation(*row[1:9]), *row[9:12]),
+                    *row[12:],
+                )
+                for row in rows
+            )
+            self._authorize_review(revision)
+            return result
+
+        return self._submit(read, write=False)
+
+    def revision_content(
+        self, operation_id: str, revision: int | None = None
+    ) -> Future[bytes]:
+        """Retrieve exact bytes, verifying their hash before authorized delivery."""
+        revision = self._authorize_review(revision)
+
+        def read(db: sqlite3.Connection) -> bytes:
+            self._authorize_review(revision)
+            row = db.execute(
+                "SELECT content,sha256 FROM configuration_revisions WHERE id=?",
+                (operation_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Configuration revision not found")
+            content = bytes(row[0])
+            if sha256(content).hexdigest() != row[1]:
+                raise ValueError("Configuration revision hash mismatch")
+            self._authorize_review(revision)
+            return content
 
         return self._submit(read, write=False)
 

@@ -54,6 +54,7 @@ from capsule_vision.application.alarm_monitor import AlarmSnapshot
 from capsule_vision.application.audit import (
     AuditOperation,
     AuditUnavailable,
+    RevisionEvidence,
     differences,
 )
 from capsule_vision.application.identity_models import (
@@ -62,6 +63,10 @@ from capsule_vision.application.identity_models import (
     StaleSessionError,
 )
 from capsule_vision.application.manual_plc import execute_manual, manual_target
+from capsule_vision.application.process_preview import (
+    ProcessObservation,
+    read_process_preview,
+)
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
@@ -107,9 +112,11 @@ from capsule_vision.configuration.alarm_definitions import (
 from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
     StatusPreferences,
+    communication_publication,
     load_communication_preferences,
     save_communication_preferences,
 )
+from capsule_vision.configuration.process_parameters import ProcessCatalog
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.web.runtime import WebRuntime, WebState
@@ -175,6 +182,7 @@ class CommunicationPage(QWidget):
         self._reporting = reporting
         self.reporting_panel: ReportingPanel | None = None
         self._thread: Thread | None = None
+        self._process_read_stop: Event | None = None
         self._completion: tuple[object, object] | None = None
         self._file_finished: Callable[[object, BaseException | None], None] | None = (
             None
@@ -261,6 +269,7 @@ class CommunicationPage(QWidget):
         self.alarm_address = self.alarm_panel.address
         self.heartbeat_address = self.alarm_panel.heartbeat_address
         self.fault_address = self.alarm_panel.fault_address
+        self.running_address = self.alarm_panel.running_address
         self.alarm_panel.preview_requested.connect(self._preview_alarm_definitions)
         layout.addWidget(self.alarm_panel)
         self.alarm_panel.hide()  # Explicit launchers without saved communication settings.
@@ -814,6 +823,7 @@ class CommunicationPage(QWidget):
                 self.alarm_address.value(),
                 self.heartbeat_address.value(),
                 self.fault_address.value(),
+                self.running_address.value(),
             ),
         )
 
@@ -862,6 +872,7 @@ class CommunicationPage(QWidget):
             self.alarm_address.setValue(value.status.word_address)
             self.heartbeat_address.setValue(value.status.heartbeat_address)
             self.fault_address.setValue(value.status.fault_address)
+            self.running_address.setValue(value.status.running_address)
         finally:
             self._settings_loading = False
         self._refresh()
@@ -881,6 +892,7 @@ class CommunicationPage(QWidget):
         self.alarm_address.valueChanged.connect(self._settings_edited)
         self.heartbeat_address.valueChanged.connect(self._settings_edited)
         self.fault_address.valueChanged.connect(self._settings_edited)
+        self.running_address.valueChanged.connect(self._settings_edited)
         self.web_panel.saved_available = not (self._settings_missing or error)
         self.web_panel.refresh()
         self._settings_message = "comm_settings_failed" if error else ""
@@ -1072,6 +1084,7 @@ class CommunicationPage(QWidget):
                         old = load_communication_preferences(path)
                     except ConfigurationError as exc:
                         # Explicit Save also repairs invalid or missing settings.
+                        changed = True
                         before = (
                             "Missing file"
                             if isinstance(exc.__cause__, FileNotFoundError)
@@ -1083,9 +1096,16 @@ class CommunicationPage(QWidget):
                         )
                     else:
                         changes = differences(old, value)
+                        changed = old != value
 
-                    def persist() -> None:
-                        save_communication_preferences(path, value)
+                    publication = communication_publication(path, value)
+                    evidence = (
+                        RevisionEvidence(
+                            "communication", "communication.json", publication.content
+                        )
+                        if changed
+                        else None
+                    )
 
                     if (
                         isinstance(owner, SourceProductionApplication)
@@ -1093,20 +1113,26 @@ class CommunicationPage(QWidget):
                     ):
                         owner.persist_reporting_selection(
                             value.reporting,
-                            persist,
+                            publication.publish,
                             revision=revision,
                             changes=changes,
                             status=value.status,
+                            evidence=evidence,
+                            communication_content=publication.content,
                         )
                     else:
                         with identity.change(
-                            "communication.save", path.name, revision, *changes
+                            "communication.save",
+                            path.name,
+                            revision,
+                            *changes,
+                            evidence=evidence,
                         ):
                             if owner is None:
-                                persist()
+                                publication.publish()
                             else:
                                 owner.persist_reporting_selection(
-                                    value.reporting, persist
+                                    value.reporting, publication.publish
                                 )
 
                 self._file_work(
@@ -1142,10 +1168,56 @@ class CommunicationPage(QWidget):
         if self.reporting_panel is not None:
             self.reporting_panel.refresh()
 
+    def read_process_parameters(
+        self,
+        catalog: ProcessCatalog,
+        catalog_path: Path | None,
+        cancelled: Event,
+        completed: Callable[[ProcessObservation | None, BaseException | None], None],
+    ) -> None:
+        """Share the bounded diagnostic slot, never the live Status connection."""
+        try:
+            if self._disposed or self._closing or self.busy or self._auto_refresh:
+                raise RuntimeError("Communication operation pending or closing")
+            path = self._preferences_path
+            if path is None:
+                raise ConfigurationError("Saved Communication settings are unavailable")
+            revision = self._authorize(None) if self._authorize else None
+            identity = self._application.identity if self._application else None
+            execute = self._execute
+            guard = self._reporting.validate_manual_request if self._reporting else None
+
+            def work() -> ProcessObservation:
+                return read_process_preview(
+                    path,
+                    catalog,
+                    catalog_path,
+                    cancelled,
+                    identity=identity,
+                    revision=revision,
+                    execute=execute,
+                    guard=guard,
+                )
+
+            def finished(value: object, error: BaseException | None) -> None:
+                self._process_read_stop = None
+                completed(
+                    value if isinstance(value, ProcessObservation) else None, error
+                )
+
+            self._process_read_stop = cancelled
+            self._file_work(work, finished, name="ProcessParameterRead")
+        except (ConfigurationError, ValueError, RuntimeError) as exc:
+            if self._process_read_stop is cancelled:
+                self._process_read_stop = None
+            completed(None, exc)
+
     def _file_work(
         self,
         work: Callable[[], object],
         finished: Callable[[object, BaseException | None], None],
+        *,
+        name: str = "CommunicationSettings",
     ) -> None:
         """Share the diagnostic page's one admitted job and actual Close/join ownership."""
         if self.busy or self._closing:
@@ -1164,7 +1236,7 @@ class CommunicationPage(QWidget):
                 future.set_result(value)
 
         self._delivery.watch(str(self._sequence), future)
-        self._thread = Thread(target=run, name="CommunicationSettings", daemon=False)
+        self._thread = Thread(target=run, name=name, daemon=False)
         try:
             self._thread.start()
         except RuntimeError:
@@ -1223,8 +1295,13 @@ class CommunicationPage(QWidget):
                 and revision != self._application.session_revision
             ):
                 raise StaleSessionError("Session changed during confirmation")
-            value = load_communication_preferences(self._preferences_path)
+            content = self._preferences_path.read_bytes()
+            value = load_communication_preferences(
+                self._preferences_path, content=content
+            )
             self._commit_preferences(value, None, revision)
+            if isinstance(self._reporting, SourceProductionApplication):
+                self._reporting.observe_reporting_content(value.reporting, content)
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self._settings_message, self._settings_detail = (
                 failure_key(exc, "comm_reload_failed"),
@@ -1316,6 +1393,7 @@ class CommunicationPage(QWidget):
                         else load_communication_preferences(path)
                     )
                     value = replace(saved, web=replace(saved.web, enabled=target))
+                    publication = communication_publication(path, value)
                     if identity is not None:
                         with identity.change(
                             "communication.web_power",
@@ -1323,10 +1401,17 @@ class CommunicationPage(QWidget):
                             revision,
                             str(saved.web.enabled),
                             str(target),
+                            evidence=RevisionEvidence(
+                                "communication",
+                                "communication.json",
+                                publication.content,
+                            )
+                            if saved != value or not path.exists()
+                            else None,
                         ):
-                            save_communication_preferences(path, value)
+                            publication.publish()
                     else:
-                        save_communication_preferences(path, value)
+                        publication.publish()
                     return value
 
                 def power_saved(value: object, error: BaseException | None) -> None:
@@ -2181,6 +2266,8 @@ class CommunicationPage(QWidget):
             return
         if self._closing:
             return
+        if self._process_read_stop is not None:
+            self._process_read_stop.set()
         self.stop_monitoring()
         if self._discard_dialog is not None:
             self._discard_dialog.reject()

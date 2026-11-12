@@ -22,6 +22,7 @@ from capsule_vision.application.audit import (
     AuditOperation,
     AuditQuery,
     AuditUnavailable,
+    RevisionEvidence,
 )
 from capsule_vision.application.batch_review import (
     BatchInformation,
@@ -382,7 +383,10 @@ def test_batch_metadata_has_authorization_audited_commit_and_stale_intent_fencin
         assert history.batch_detail(batch).result(WAIT).info == info
         identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
 
-        def deny_intent(_op: AuditOperation) -> Future[None]:
+        def deny_intent(
+            _op: AuditOperation, evidence: RevisionEvidence | None = None
+        ) -> Future[None]:
+            assert evidence is None
             failed = Future[None]()
             failed.set_exception(AuditUnavailable("Audit unavailable"))
             return failed

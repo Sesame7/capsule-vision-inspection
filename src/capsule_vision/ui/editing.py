@@ -7,6 +7,8 @@ from threading import Thread
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 
 from capsule_vision.application import ApplicationState, PreparedConfiguration
+from capsule_vision.application.application import RecipeSelection
+from capsule_vision.application.audit import RevisionConfirmationError
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import ConfigurationError
@@ -18,6 +20,7 @@ from .production_bridge import QtProductionBridge
 class EditingCoordinator(QObject):
     changed = Signal()
     applied = Signal(object)
+    recipe_refresh_changed = Signal()
 
     def __init__(
         self,
@@ -36,12 +39,14 @@ class EditingCoordinator(QObject):
                 raise ValueError("Recipe editor belongs to another identity owner")
             session.identity = bridge.application.identity
         self.closing = False
+        self.recipe_refresh: tuple[str, str, str | None] | None = None
         self._thread: Thread | None = None
         self._completion: tuple[object, object] | None = None
         self._completed: Callable[[object, BaseException | None], None] | None = None
         self._cleanup = False
         self._request = 0
         self._after_idle: Callable[[], None] | None = None
+        self._process_completion: Callable[[BaseException | None], None] | None = None
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
             self._delivered, Qt.ConnectionType.QueuedConnection
@@ -55,7 +60,7 @@ class EditingCoordinator(QObject):
 
     @property
     def busy(self) -> bool:
-        return self._thread is not None
+        return self._thread is not None or self._process_completion is not None
 
     def editable(self) -> bool:
         return (
@@ -115,6 +120,56 @@ class EditingCoordinator(QObject):
 
         return self.run_io(owned, completed)
 
+    def save_recipe(
+        self,
+        completed: Callable[[object, BaseException | None], None],
+        *,
+        revision: int | None,
+    ) -> bool:
+        session = self.session
+        if session is None:
+            return False
+
+        def save() -> RecipeSelection | None:
+            saved_revision = self.bridge.application.authorize_engineering(revision)
+            try:
+                saved = session.save(saved_revision)
+            except RevisionConfirmationError:
+                # The file is published even though Save cannot claim confirmation.
+                self.bridge.application.observe_saved_recipe(
+                    session.draft.to_recipe(session.process_catalog), saved_revision
+                )
+                raise
+            return (
+                self.bridge.application.observe_saved_recipe(
+                    saved.recipe, saved_revision
+                )
+                if saved is not None
+                else None
+            )
+
+        def saved(value: object, error: BaseException | None) -> None:
+            # Save has its own committed outcome, even if preparation cannot run.
+            if isinstance(error, RevisionConfirmationError):
+                self.bridge.refresh()
+            completed(None, error)
+            if error is not None or not isinstance(value, RecipeSelection):
+                return
+            self.recipe_refresh = (value.recipe_id, "preparing", None)
+            self.recipe_refresh_changed.emit()
+
+            def refreshed(failure: BaseException | None) -> None:
+                self.recipe_refresh = (
+                    value.recipe_id,
+                    "recipe_prepare_error" if failure else "READY",
+                    str(failure) if failure is not None else None,
+                )
+                self.recipe_refresh_changed.emit()
+
+            self._prepare_saved(value, value.recipe_id, refreshed)
+
+        return self.run_model_io(save, saved, revision=revision)
+
     def select_saved(
         self, recipe_id: str, completed: Callable[[BaseException | None], None]
     ) -> None:
@@ -126,6 +181,21 @@ class EditingCoordinator(QObject):
             request = self.bridge.application.begin_recipe_selection(recipe_id)
         except RuntimeError as exc:
             completed(exc)
+            return
+        self.recipe_refresh = None
+        self.recipe_refresh_changed.emit()
+        self._prepare_saved(request, recipe_id, completed)
+
+    def _prepare_saved(
+        self,
+        request: RecipeSelection,
+        recipe_id: str,
+        completed: Callable[[BaseException | None], None],
+    ) -> None:
+        if not self.editable() or self.session is None:
+            error = ConfigurationError("Production preparation is unavailable")
+            self.bridge.application.recipe_selection_failed(request, error)
+            completed(error)
             return
         preparation = self.session.production_preparation()
 
@@ -143,13 +213,19 @@ class EditingCoordinator(QObject):
                     raise ConfigurationError("Production selection is closing")
                 if not isinstance(value, PreparedConfiguration):
                     raise ConfigurationError("Missing prepared configuration")
-                self.bridge.application.install_recipe_selection(request, value)
+                process = self.bridge.application.install_recipe_selection(
+                    request, value
+                )
                 self.applied.emit(value)
                 self.bridge.refresh()
             except Exception as exc:
                 completed(exc)
             else:
-                completed(None)
+                if process.done():
+                    completed(process.exception())
+                else:
+                    self._process_completion = completed
+                    self._delivery.watch("process", process)
 
         def prepare() -> PreparedConfiguration:
             with self.bridge.application.recipe_preparation(request):
@@ -160,6 +236,15 @@ class EditingCoordinator(QObject):
 
     @Slot(str, object, object)
     def _delivered(self, token: str, value: object, error: object) -> None:
+        if token == "process" and self._process_completion is not None:
+            completed, self._process_completion = self._process_completion, None
+            completed(error if isinstance(error, BaseException) else None)
+            self.bridge.refresh()
+            self.changed.emit()
+            if self._after_idle is not None:
+                after, self._after_idle = self._after_idle, None
+                after()
+            return
         if self.busy and token == str(self._request):
             self._completion = value, error
             self._finish()
@@ -193,6 +278,7 @@ class EditingCoordinator(QObject):
     def drain(self, after: Callable[[], None]) -> None:
         """Reject late activation; wait for the actual setup thread and cleanup chain."""
         self.closing = True
+        self.bridge.application.cancel_process_application()
         if self.busy:
             self._after_idle = after
         else:

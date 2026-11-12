@@ -192,7 +192,7 @@ def test_save_failure_keeps_draft_and_baseline(
         raise ConfigurationIOError("save denied")
 
     monkeypatch.setattr(
-        "capsule_vision.configuration.drafts.save_machine_layout", denied
+        "capsule_vision.configuration.ConfigurationPublication.publish", denied
     )
     with pytest.raises(ConfigurationIOError):
         d.save()

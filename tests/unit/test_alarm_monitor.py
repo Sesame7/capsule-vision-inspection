@@ -669,7 +669,7 @@ def test_legacy_alarm_history_reads_without_writing_and_freezes_new_translations
         history.request_stop()
         assert history.join(3)
     with closing(sqlite3.connect(path)) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (3,)
+        assert db.execute("PRAGMA user_version").fetchone() == (4,)
 
 
 def test_damaged_alarm_table_cannot_block_named_batch_restoration(

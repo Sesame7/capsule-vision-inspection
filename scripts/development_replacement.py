@@ -81,7 +81,7 @@ def known_development(data: ApplicationData) -> dict[str, object]:
     """Fail closed on customer/unknown records, rather than using a --force option."""
     result: dict[str, object] = {}
     ids: list[int] = []
-    for path, version in ((data.history, 3), (data.audit, 1)):
+    for path, version in ((data.history, 4), (data.audit, 2)):
         with closing(sqlite3.connect(path, timeout=0)) as db:
             if db.execute("PRAGMA user_version").fetchone() != (version,) or db.execute(
                 "PRAGMA integrity_check"
@@ -89,6 +89,12 @@ def known_development(data: ApplicationData) -> dict[str, object]:
                 raise ValueError("Unsupported or damaged development database")
             ids.append(db.execute("PRAGMA application_id").fetchone()[0])
             if path == data.history:
+                if db.execute(
+                    "SELECT 1 FROM run_configuration_resources LIMIT 1"
+                ).fetchone():
+                    raise ValueError(
+                        "Run configuration evidence present; refusing development replacement"
+                    )
                 labels = [
                     r[0] for r in db.execute("SELECT label FROM batches ORDER BY label")
                 ]
@@ -142,6 +148,12 @@ def known_development(data: ApplicationData) -> dict[str, object]:
                             "Additional/unknown production records found; refusing replacement"
                         )
             else:
+                if db.execute(
+                    "SELECT 1 FROM configuration_revisions LIMIT 1"
+                ).fetchone():
+                    raise ValueError(
+                        "Configuration revisions present; refusing development replacement"
+                    )
                 result["audit_events"] = db.execute(
                     "SELECT count(*) FROM operations"
                 ).fetchone()[0]
@@ -216,7 +228,20 @@ def copy_schema(db: sqlite3.Connection, source: str, target: str) -> None:
     objects = db.execute(
         f"SELECT type,name,sql FROM {source}.sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY type='table' DESC"
     ).fetchall()
-    if any(kind not in ("table", "index") for kind, _, _ in objects):
+    if any(
+        kind not in ("table", "index")
+        and not (
+            kind == "trigger"
+            and name
+            in (
+                "revision_immutable_update",
+                "revision_immutable_delete",
+                "run_configuration_immutable",
+                "run_resource_immutable",
+            )
+        )
+        for kind, name, _ in objects
+    ):
         raise ValueError("Unexpected staged schema object")
     old = db.execute(
         f"SELECT name FROM {target}.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -225,9 +250,9 @@ def copy_schema(db: sqlite3.Connection, source: str, target: str) -> None:
         db.execute(f"DROP TABLE {target}.{quoted(name)}")
     for kind, name, sql in objects:
         # SQLite schema-qualified CREATE belongs before the object's name. Our
-        # maintained History/Audit DDL uses a plain CREATE TABLE/INDEX prefix.
+        # maintained History/Audit DDL uses a plain TABLE/INDEX/TRIGGER prefix.
         qualified, count = re.subn(
-            r"^(CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+(?:IF NOT EXISTS\s+)?)([^\s(]+)",
+            r"^(CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER)\s+(?:IF NOT EXISTS\s+)?)([^\s(]+)",
             lambda m, name=name: m[1] + target + "." + quoted(name),
             sql,
             count=1,

@@ -8,12 +8,18 @@ from datetime import datetime
 from pathlib import Path
 from secrets import token_bytes
 
+from ._io import ConfigurationPublication
 from .errors import ConfigurationError, ConfigurationIOError
 from .models import ModelDefinition, ModelRegistry, RecipeDefinition, persistent_id
 from .persistence import (
     load_model_definition,
     load_recipe,
-    save_recipe,
+    recipe_publication,
+)
+from .process_parameters import (
+    BUILTIN_PROCESS_CATALOG,
+    ProcessCatalog,
+    load_process_catalog,
 )
 
 
@@ -21,6 +27,7 @@ from .persistence import (
 class RecipeEntry:
     path: Path
     recipe: RecipeDefinition
+    process_catalog: ProcessCatalog = BUILTIN_PROCESS_CATALOG
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +53,29 @@ class RecipeCatalog:
     this is not cross-process conflict resolution. IDs are validated components.
     """
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(
+        self, directory: Path, *, process_catalog_path: Path | None = None
+    ) -> None:
         self.directory = directory
+        self.process_catalog_path = process_catalog_path
+
+    def parameters(self) -> ProcessCatalog:
+        return load_process_catalog(self.process_catalog_path)
+
+    def read(self, path: Path) -> RecipeEntry:
+        parameters = self.parameters()
+        return RecipeEntry(
+            path, load_recipe(path, process_catalog=parameters), parameters
+        )
 
     def discover(self) -> CatalogSnapshot:
+        try:
+            parameters = self.parameters()
+        except ConfigurationError as exc:
+            return CatalogSnapshot(
+                (),
+                (CatalogIssue(self.process_catalog_path or self.directory, str(exc)),),
+            )
         try:
             paths = sorted(
                 (p for p in self.directory.iterdir() if p.suffix.lower() == ".json"),
@@ -72,11 +98,11 @@ class RecipeCatalog:
                 continue
             path = group[0]
             try:
-                recipe = load_recipe(path)
+                recipe = load_recipe(path, process_catalog=parameters)
             except ConfigurationError as exc:
                 issues.append(CatalogIssue(path, str(exc)))
             else:
-                entries.append(RecipeEntry(path, recipe))
+                entries.append(RecipeEntry(path, recipe, parameters))
         entries.sort(
             key=lambda e: (e.recipe.display_name.casefold(), e.recipe.recipe_id)
         )
@@ -116,8 +142,17 @@ class RecipeCatalog:
         raise ConfigurationError("Could not allocate an unused Recipe identity")
 
     def save(
-        self, recipe: RecipeDefinition, *, original: RecipeEntry | None
+        self,
+        recipe: RecipeDefinition,
+        *,
+        original: RecipeEntry | None,
+        process_catalog: ProcessCatalog | None = None,
+        publish: Callable[[ConfigurationPublication], None] | None = None,
     ) -> RecipeEntry:
+        parameters = self.parameters()
+        if process_catalog is not None and process_catalog != parameters:
+            raise ConfigurationError("Process catalog changed; reload before Save")
+        parameters.validate(recipe.process_parameters)
         identity = persistent_id(recipe.recipe_id, "recipe_id")
         path = self.directory / f"{identity}.json"
         if original is None:
@@ -155,14 +190,22 @@ class RecipeCatalog:
         except OSError as exc:
             raise ConfigurationIOError(f"Recipe directory: {exc}") from exc
         try:
-            save_recipe(path, recipe, exclusive=original is None)
+            if self.parameters() != parameters:
+                raise ConfigurationError("Process catalog changed during Save; reload")
+            publication = recipe_publication(
+                path, recipe, exclusive=original is None, process_catalog=parameters
+            )
+            if publish is None:
+                publication.publish()
+            else:
+                publish(publication)
         except ConfigurationIOError as exc:
             if original is None and isinstance(exc.__cause__, FileExistsError):
                 raise RecipeIdentityCollision(
                     "Recipe target appeared during creation"
                 ) from exc
             raise
-        return RecipeEntry(path, recipe)
+        return RecipeEntry(path, recipe, parameters)
 
     def save_generated(
         self,

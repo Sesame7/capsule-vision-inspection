@@ -2154,6 +2154,15 @@ class VisionPage(QWidget):
                 result.sources_saved,
             )
             self._save_failed = bool(errors)
+            if result.unconfirmed:
+                self.editing.bridge.application.observe_saved_vision(
+                    self.draft.definition
+                    if "MachineLayout" in result.unconfirmed
+                    else None,
+                    self.sources.definition if self.sources is not None else None,
+                    machine_known="MachineLayout" in result.unconfirmed,
+                    sources_known="CameraSources" in result.unconfirmed,
+                )
             if errors:
                 saved = ", ".join(
                     name
@@ -2170,7 +2179,9 @@ class VisionPage(QWidget):
                     ),
                     failure_key(
                         result.permission_error,
-                        "source_partial_save"
+                        "configuration_confirmation_incomplete"
+                        if result.unconfirmed
+                        else "source_partial_save"
                         if machine_saved and not source_saved
                         else "vision_error",
                     ),

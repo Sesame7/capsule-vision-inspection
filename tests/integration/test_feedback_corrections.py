@@ -1,6 +1,7 @@
 """Feedback regressions using isolated files and controlled engines."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from capsule_vision.configuration import (
     CameraFolder,
     CameraSources,
     ConfigurationIOError,
+    ConfigurationPublication,
     RecipeDefinition,
     save_camera_sources,
     save_recipe,
@@ -397,7 +399,9 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
     assert not window.event_label.text() and not window.event_label.toolTip()
     details = f"Write {sources.path}: [WinError 5] Access is denied"
 
-    def fail() -> None:
+    def fail(
+        *, publish: Callable[[ConfigurationPublication], None] | None = None
+    ) -> None:
         raise ConfigurationIOError(details)
 
     with monkeypatch.context() as patch:

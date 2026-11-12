@@ -11,12 +11,15 @@ from .models import (
     RecipeDefinition,
     ResolvedInspectionConfiguration,
 )
+from .process_parameters import BUILTIN_PROCESS_CATALOG, ProcessCatalog
 
 
 def resolve_configuration(
     base_layout: MachineLayoutDefinition,
     recipe: RecipeDefinition,
     model_registry: ModelRegistry,
+    *,
+    process_catalog: ProcessCatalog = BUILTIN_PROCESS_CATALOG,
 ) -> ResolvedInspectionConfiguration:
     """Validate all references, then resolve once; never load or activate a model.
 
@@ -37,6 +40,7 @@ def resolve_configuration(
         base_layout.layout,
         capsule=recipe.capsule,
         image_archive=recipe.image_archive,
+        process_parameters=process_catalog.validate(recipe.process_parameters),
     )
 
 

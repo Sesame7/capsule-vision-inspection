@@ -26,6 +26,7 @@ from capsule_vision.application.audit import (
     AuditOperation,
     AuditQuery,
     AuditUnavailable,
+    RevisionEvidence,
 )
 from capsule_vision.application.identity_models import (
     AuthorizationError,
@@ -275,7 +276,10 @@ def test_creating_alarm_file_requires_durable_intent_and_current_session(
         gate: Future[None] = Future()
         entered = Event()
 
-        def pending(_op: AuditOperation) -> Future[None]:
+        def pending(
+            _op: AuditOperation, evidence: RevisionEvidence | None = None
+        ) -> Future[None]:
+            assert evidence is None
             entered.set()
             return gate
 
@@ -293,7 +297,10 @@ def test_creating_alarm_file_requires_durable_intent_and_current_session(
             assert not path.exists()
         identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
 
-        def no_audit(_op: AuditOperation) -> Future[None]:
+        def no_audit(
+            _op: AuditOperation, evidence: RevisionEvidence | None = None
+        ) -> Future[None]:
+            assert evidence is None
             unavailable: Future[None] = Future()
             unavailable.set_exception(AuditUnavailable("isolated audit failure"))
             return unavailable

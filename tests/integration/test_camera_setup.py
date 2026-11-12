@@ -1,5 +1,6 @@
 """Unified Settings and real-local Folder lifecycle, with fake inference."""
 
+from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
@@ -38,6 +39,7 @@ from capsule_vision.application.production_application import (
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
+    ConfigurationPublication,
     RecipeDefinition,
     load_camera_sources,
     load_machine_layout,
@@ -472,7 +474,9 @@ def test_save_reload_partial_failure_and_running_guards(
     candidate = window.bridge.application.snapshot().candidate
     original = source.save
 
-    def fail() -> None:
+    def fail(
+        *, publish: Callable[[ConfigurationPublication], None] | None = None
+    ) -> None:
         raise ConfigurationIOError("test source write failure")
 
     monkeypatch.setattr(source, "save", fail)
@@ -1170,7 +1174,9 @@ def test_vision_discard_preserves_partial_persistence_and_respects_locks(
     workspace.apply_geometry()
     snapshot = window.bridge.application.snapshot()
 
-    def fail() -> None:
+    def fail(
+        *, publish: Callable[[ConfigurationPublication], None] | None = None
+    ) -> None:
         raise ConfigurationIOError("source save rejected after machine persisted")
 
     with monkeypatch.context() as patch:

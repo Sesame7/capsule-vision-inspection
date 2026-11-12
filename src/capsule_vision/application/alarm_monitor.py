@@ -69,6 +69,18 @@ class AlarmMonitor:
         with self._condition:
             if self._closed or value == self._selection:
                 return
+            if (
+                value.enabled == self._selection.enabled
+                and value.endpoint == self._selection.endpoint
+                and value.word_address == self._selection.word_address
+                and value.heartbeat_address == self._selection.heartbeat_address
+                and value.fault_address == self._selection.fault_address
+            ):
+                # Running is not polled by this owner. Preserve the live socket,
+                # alarm baseline and health when only its future read target changes.
+                self._selection = value
+                self._snapshot = replace(self._snapshot, selection=value)
+                return
             self._cancel.set()
             self._cancel = Event()
             self._selection = value

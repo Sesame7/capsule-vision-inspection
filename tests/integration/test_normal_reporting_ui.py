@@ -244,9 +244,10 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
     monkeypatch.setattr(
         "capsule_vision.communication.endpoints.FinsUdpClient", ObservedClient
     )
+    engine = Engine()
     with (
         server() as peer,
-        normal_window(tmp_path, Engine()) as (startup, window, panel),
+        normal_window(tmp_path, engine) as (startup, window, panel),
     ):
         seed(peer, 88)
         panel.protocol.setCurrentIndex(0)  # This fixture uses the UDP loopback peer.
@@ -320,6 +321,7 @@ def test_normal_start_settings_propagation_ack_and_manual_write_protection(
         until(lambda: not window.communication.busy)
         page.area.setCurrentIndex(1)  # W, independent from automatic settings.
         page.write_values.setText("7")
+        until(engine.entered.is_set)  # Freeze replay before comparing manual IO.
         counters = startup.application.snapshot().counters
         for start, values in ((49, "7"), (52, "7"), (48, "7 8")):
             page.address.setValue(start)

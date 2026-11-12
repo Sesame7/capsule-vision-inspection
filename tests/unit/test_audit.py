@@ -225,6 +225,8 @@ def test_manual_command_records_original_actor_after_logout_and_fences_queued_re
         assert entered.wait(WAIT)
         queued = identity.audit_page(AuditQuery())
         queued_accounts = identity.audit.accounts()
+        queued_revisions = identity.audit.revisions("recipe", "fixture")
+        queued_content = identity.audit.revision_content("not-readable-after-logout")
         identity.logout()
         release.set()
         holding.result(WAIT)
@@ -232,6 +234,10 @@ def test_manual_command_records_original_actor_after_logout_and_fences_queued_re
             queued.result(WAIT)
         with pytest.raises(StaleSessionError):
             queued_accounts.result(WAIT)
+        with pytest.raises(StaleSessionError):
+            queued_revisions.result(WAIT)
+        with pytest.raises(StaleSessionError):
+            queued_content.result(WAIT)
     finally:
         release.set()
         close(startup.application)

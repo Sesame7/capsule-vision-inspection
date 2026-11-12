@@ -21,6 +21,7 @@ fallback, automatic repair of saved geometry or fake inference is used for recov
 | `data/models/<model_id>/model.vimosln` | Managed Model artifact, verified by SHA-256 |
 | `data/models/<model_id>/vimo_trt_cache/` | SDK-owned generated TensorRT artifacts |
 | `data/recipes/<recipe_id>.json` | Recipe with an optional direct `model_id` |
+| `data/process_parameters.json` | optional device-level DINT process catalog overrides/extensions; no PLC operations |
 | `data/machine.tsv` | 30/36 explicit ROI rows keyed by ChannelId; fixed camera/slot mapping |
 | `data/camera_sources.json` | Folder/Basler source mapping, Loop and replay FPS |
 
@@ -40,7 +41,7 @@ old output caches are neither migrated nor removed automatically.
 Obsolete managed `cache/<sha256>/` staging trees are not used or automatically
 migrated/deleted.
 
-The five JSON definition families are versionless; `schema_version` and obsolete aliases
+The JSON definition families are versionless; `schema_version` and obsolete aliases
 are unknown fields, not migration inputs. Nothing automatically rewrites existing
 files. Parsers reject unknown/duplicate fields, invalid present values, duplicate
 IDs and malformed hashes. Incomplete definitions may be saved where documented;
@@ -222,6 +223,28 @@ the target's stable account ID. An unavailable intent or completion is reported
 to the maintenance operator. Emergency recovery stays available. Direct filesystem
 and SQLite access are protected by the operating system.
 
+The Audit database uses schema version 2 for new storage. Changed Recipe JSON,
+MachineLayout, CameraSources and complete Communication saves retain the exact
+published bytes and SHA-256 under stable artifact identities. The existing Audit
+owner atomically commits operation intent and pending revision evidence before
+publication. Only a successful completion confirms that revision. An unchanged
+save creates no duplicate revision; external edits are not silently recorded as a
+logged-in user's Save. Earlier Recipe revisions survive later edits and deletion.
+Engineering review APIs can retrieve pending/failed/confirmed evidence and verify
+its content hash; ordinary status and customer exports do not expose full content.
+
+Unavailable precommit evidence rejects publication. If the file is published but
+Audit confirmation fails, Save reports **configuration published; audit confirmation
+incomplete**, preserving the file and unresolved evidence. Reload is a read of the
+actual file, not confirmation of the earlier operation. No rollback, repeat write,
+revision restore or Production activation is implied. Independent Vision saves
+can have different outcomes. Saved Recipe candidate refresh remains separate from
+publication and is initiated only after a confirmed successful changed Save.
+Old Audit schemas are not migrated or replaced automatically. Preserve operational
+databases; an obsolete disposable database requires a separate, verified maintenance
+decision before reset. Configuration file formats and the account schema are
+unchanged; Run evidence uses the current [History schema](#history-storage).
+
 For offline setup or Administrator recovery, stop the application and select its
 installation root. The native Windows launcher defaults to the working directory
 and Chinese. Specify a different root or a supported UI language as needed:
@@ -326,14 +349,23 @@ Cancelling the import can remove its staging directory after logout.
 
 Normal startup creates the history owner independently of configuration readiness.
 Both Folder and Basler terminal Production results are eligible. The database
-uses internal schema version 3 for new installations and may have SQLite
-`-wal`/`-shm` sidecars. Version 3 allows a null Batch reference on a Run.
-Existing version 2 databases continue to support named Batches and Runs in
-place. Their schema requires a Batch on every Run, so unbatched Basler inspection
-displays a recording warning. There is no automatic migration. Preserve
+uses internal schema version 4 and may have SQLite `-wal`/`-shm` sidecars. Runs
+allow a null Batch reference and retain immutable configuration evidence.
+Older development History schemas are unsupported; there is no migration or
+configuration backfill. Preserve
 these files with other local assets; do not copy an active database without its
 SQLite consistency requirements. An unsupported schema, corrupt database or
 unwritable path is reported as unavailable, never silently reset or replaced.
+
+Each durable Run stores its prepared Recipe/MachineLayout/CameraSources evidence,
+Model ID/SHA-256 and frozen reporting selection with the Run transaction. Available
+saved bytes retain their exact content hashes; launcher-owned effective values are
+distinguished from saved files. Matching CONFIG-REV publication references require
+the same resource and exact bytes plus successful confirmation. Missing or unavailable
+references remain explicit, and later Saves cannot update the Run. Configured Recipe
+process overrides are not evidence of PLC application. See the
+[Run capture and query contract](architecture.md#production-history) for admission,
+read access, incomplete evidence and retention.
 
 New records capture the active resolved Recipe's display name alongside its stable
 ID in the compact detail payload. Renaming a Recipe does not relabel past cycles.
@@ -348,17 +380,17 @@ totals. Startup restores the selection by UUID. Labels are unique per IPC after
 trimming, with case-sensitive matching. Explicit End clears selection while
 preserving the Batch for later continuation. The owner holds the database
 exclusively until Close. Use the History page while running and close the
-application before offline SQLite access. Version 1 has no automatic migration.
+application before offline SQLite access.
 
 Cycle and physical-group detail expire incrementally after 30 days by their host
 observations. Batch/Run identities, end events, summaries and completeness flags
-persist independently of this window. An optional table in supported v2/v3
+persist independently of this window. An optional table in current
 History databases associates newly published archive paths with their exact
 Run, Cycle and camera. Existing detail payloads are unchanged. Paths expire
 with detail; the [archived PNGs](architecture.md#image-archiving) have separate ownership.
 The History owner adds companion tables for durable Run position summaries,
 Run start accounts, named Batch
-information and observed inspection spans on supported v2/v3 stores. Existing
+information and observed inspection spans on current stores. Existing
 Run rows and Batch identities keep their original values. Old Runs without
 account evidence show a dash. New completion observations extend the stored
 Batch span independently of detail retention. Product name and specification
@@ -366,11 +398,11 @@ each accept up to 96 printable characters, and notes accept up to 384.
 Run summaries use the existing eligible-group transaction and survive detail
 expiry. Legacy recovery requires complete retained evidence reconciled to the
 named Batch's durable totals; missing coverage stays unavailable. This addition
-does not change the v2/v3 version or Run Batch-nullability rules. See the
+does not reinterpret Cycle counts as physical positions. See the
 [accounting contract](architecture.md#production-history) for completeness and
 unbatched behavior.
 The same owner initializes scalar classification companion tables on supported
-v2/v3 History before retention. Per-Cycle and per-group rows expire with their
+current History before retention. Per-Cycle and per-group rows expire with their
 parent detail. Batch and Run category counts and coverage persist independently;
 Run category counts use the eligible group's transaction and final NG channels.
 Traditional customer categories collapse to Length/Color before position counting;
@@ -458,15 +490,27 @@ startup reports them without rewriting the file. Explicit Save writes this forma
 The flat `status` section replaces the obsolete `alarm` section. It accepts
 `enabled` (false), `protocol` (`fins_tcp` only), numeric IPv4 `host`
 (127.0.0.1), `port` (9600), `timeout` (1.0 seconds, at most one second),
-`word_address` (alarm read, default 18), `heartbeat_address` (default 46) and
-`fault_address` (default 47 for an absent status section). A present `status`
+`word_address` (alarm read, default 18), `heartbeat_address` (default 46),
+`fault_address` (default 47 for an absent status section), and
+`running_address` (read target, default 16). A present `status`
 section must explicitly contain `fault_address`, even when disabled; other
-missing fields use their defaults. All three addresses are independent integers
+missing fields use their defaults. All four addresses are independent integers
 0–511. No address is derived from another. Booleans, null,
-invalid types/ranges, duplicate addresses and unknown fields are
-rejected. When both status and automatic FINS reporting are enabled on the same
-host/port, their configured ranges must be disjoint (including the group counter
+invalid types/ranges and unknown fields are rejected. Heartbeat, fault and alarm
+must be distinct. Running must not share either status output word; it may share
+the read-only alarm word. When both status and automatic FINS reporting are enabled
+on the same host/port, their configured ranges must be disjoint (including the group counter
 and the maximum reporting window). Disabled services perform no I/O.
+
+Running uses fixed bit **1** of its configured word: 0 is stopped, 1 is running.
+It is a read-only target definition, not a status-service output or a live
+measurement. Its word must also avoid the configured FINS reporting window on
+the same host/port, including W48/W148 for attributed modes, regardless of either
+service's enablement. The existing worker does not read Running. Adding or saving
+this field initiates no reads or writes; changing it alone preserves the active
+Status connection and alarm observations. Configuration remains editable when
+Status is disabled. A future returned bit would not itself prove a PLC interlock,
+mechanical state or Recipe parameter application.
 
 Old `alarm` sections, `station` fields, aliases and `status` sections without
 `fault_address` are rejected; there is no automatic migration or repair. Developers must update
@@ -477,20 +521,24 @@ An obsolete top-level section invalidates the document. An explicit authorized
 Save can publish the reviewed new definition.
 
 Save serializes nondefault status selections with explicit `fins_tcp`,
-`enabled`, `word_address`, `heartbeat_address` and `fault_address`. No runtime heartbeat value,
-FAULT state or observations are persisted. The existing Engineer/Administrator
+`enabled`, `word_address`, `heartbeat_address`, `fault_address` and `running_address`.
+The exact published bytes, including Running, participate in existing configuration
+revision evidence. No runtime heartbeat value, FAULT state or observations are
+persisted. The existing Engineer/Administrator
 Save/Discard authorization and atomic publication remain authoritative. Save
 applies status communication independently of Production Start; reporting keeps
 its next-Start boundary. Runtime reservations also protect retiring status
 writes and frozen active reporting ranges. See the [status service contract](communication.md#plc-status-service-and-alarm-monitoring).
 
 ```json
-{"status": {"enabled": true, "protocol": "fins_tcp", "host": "192.168.251.1", "word_address": 18, "heartbeat_address": 46, "fault_address": 47}}
+{"status": {"enabled": true, "protocol": "fins_tcp", "host": "192.168.251.1", "word_address": 18, "heartbeat_address": 46, "fault_address": 47, "running_address": 16}}
 ```
 
 The Status card provides one common Protocol/IPv4/Port row, then equal-width
-Heartbeat/Fault/Alarm address controls in that order. All three are independently
-editable; the rows reflow when actual content requirements exceed available width.
+Heartbeat/Fault/Alarm/Running address controls in that order. All four are independently
+editable; Running shows `W16.1` by default and edits only the word, retaining `.1`.
+The connection and address rows reflow independently when actual content requirements
+exceed available width.
 The alarm signal table alone collapses. All roles retain read-only observations;
 only Engineer/Administrator can publish changes. New alarm observations record
 the actual address without station identity; stored History/schema are unchanged.
@@ -783,14 +831,15 @@ languages use the existing optional English fallback. Existing translations rema
 
 The `<recipe_id>.json` filename stem is its sole persisted identity; `recipe_id`
 is not a JSON field. Only `display_name` is required. Optional fields are `model_id`,
-`product_code`, `defaults`, `capsule` and
+`product_code`, `defaults`, `capsule`, `process_parameters` and
 `image_archive`. A nonempty `model_id` selects that exact Model; there is no global
 Model, inheritance or first-Model fallback. Save validates the Recipe's structure
 and persistence identity, so a missing or unresolved Model reference can remain
 saved. Production preparation rejects it without replacing the current candidate
 or active session. Referenced artifacts must still pass path/SHA/module validation.
-Recipe Save persists only the definition. Production selection separately prepares
-it; preparation failure keeps the saved definition available for completion.
+Persistence and preparation have independent outcomes; preparation failure keeps
+the saved definition available for completion. The selected-Recipe refresh and
+activation rules are defined under [editing and persistence](#editing-and-persistence).
 `camera_overrides` and `channel_overrides` are unknown fields and are rejected,
 including empty arrays. They are never ignored or migrated.
 Renaming changes only `display_name`, never the ID/path. Save writes the unchanged
@@ -852,6 +901,138 @@ Legacy `target_width`, `target_height`, `width_tolerance` and `height_tolerance`
 are rejected with explicit guidance, including on disabled Size definitions.
 An engineer must explicitly replace these fields with calibrated Length settings;
 old W/H targets are never reinterpreted. Loading does not rewrite or delete files.
+
+### Process parameters
+
+Recipe `process_parameters` is an optional flat object of stable parameter IDs to
+integer overrides, for example `{"running_speed":120,"reject_compensation":0}`.
+Omitted IDs mean no override; an omitted or empty object means none. Explicit zero
+is retained. Unknown IDs, booleans, fractions, nulls and values outside the resolved
+device catalog's range are rejected. Save stores no address, group, unit, enable
+flag or activation mode. These are raw values, with no scaling or unit conversion.
+Loading and editing retain immutable configuration values. Preparing the selected
+saved Recipe admits the separate [process application](communication.md#process-parameter-application)
+for Operator or higher; a changed selected Save triggers the same preparation.
+Guest startup restores the candidate without writes. Omission never restores a PLC default.
+
+All catalog parameters are signed 32-bit DINT definitions occupying two consecutive
+DM words. Addresses below are the first word; the on-demand preview decodes the
+low word first, with each individual FINS word in network byte order. Confirm
+this device word order with a known-value field test before hardware acceptance.
+The built-in catalog has these 17 parameters, in original electrical-address order:
+
+| ID | Group | Starting DM address | Range |
+| --- | --- | --- | --- |
+| `running_speed` | Speed | D102 | 0..150 |
+| `rotation_speed` | Speed | D108 | 0..600 |
+| `photo_phase` | Photo | D114 | 0..36000 |
+| `reject_phase` | Reject | D122 | 0..36000 |
+| `reject_compensation` | Reject | D124 | 0..1000 |
+| `lift_valve_open_phase` | Lift valve | D130 | 0..36000 |
+| `lift_valve_close_phase` | Lift valve | D132 | 0..36000 |
+| `lift_valve_open_compensation` | Lift valve | D134 | 0..1000 |
+| `lift_valve_close_compensation` | Lift valve | D136 | 0..1000 |
+| `drop_valve_open_phase` | Drop valve | D138 | 0..36000 |
+| `drop_valve_close_phase` | Drop valve | D140 | 0..36000 |
+| `drop_valve_open_compensation` | Drop valve | D142 | 0..1000 |
+| `drop_valve_close_compensation` | Drop valve | D144 | 0..1000 |
+| `extend_valve_open_phase` | Extend valve | D146 | 0..36000 |
+| `extend_valve_close_phase` | Extend valve | D148 | 0..36000 |
+| `extend_valve_open_compensation` | Extend valve | D150 | 0..1000 |
+| `extend_valve_close_compensation` | Extend valve | D152 | 0..1000 |
+
+Normal startup resolves the optional `data/process_parameters.json`. Only an absent
+file selects the built-ins; an invalid/unreadable file produces a Recipe catalog
+diagnostic, without fallback repair or rewriting Recipes. Explicit configuration
+APIs default to the built-in catalog and accept a resolved catalog when needed.
+The optional catalog has only `overrides`, `parameters` and `groups`:
+
+```json
+{
+  "overrides": [
+    {"id":"running_speed","labels":{"en":"Line speed","zh":"线速度"},"maximum":150}
+  ],
+  "groups": {"feeder":{"en":"Feeder","zh":"供料"}},
+  "parameters": [
+    {"id":"feeder_speed","group":"feeder","labels":{"en":"Feeder speed","zh":"供料速度"},"address":180,"minimum":0,"maximum":100}
+  ]
+}
+```
+
+An override targets one built-in ID and may replace `labels`, `address`, `minimum`
+or `maximum`; ID and group cannot change. Label entries merge with built-in English
+and Chinese. Each parameter has one explicit starting `address`; there is no station
+selector or derived second address set.
+Each extension requires all six fields shown above. Its group is one of `speed`,
+`photo`, `reject`, `lift_valve`, `drop_valve`, `extend_valve`, or a new ID declared in
+`groups`. New group/parameter labels require nonempty English and may include any
+supported language code; missing languages fall back to English. Built-in UI text
+uses Chinese/English with the existing optional English fallback. The feeder is
+an example extension, not an eighteenth default parameter.
+
+IDs use 1–64 lowercase ASCII letters/digits/underscores, starting with a letter.
+Each starting address is an integer 0..65534. The occupied two-word ranges
+must not overlap anywhere in the catalog. Ranges must fit DINT and have
+minimum <= maximum. Duplicate IDs/JSON keys, unknown override targets/fields,
+malformed translations and catalogs larger than 64 KiB are rejected. Built-in slots
+retain their original address order after overrides; extensions sort by their
+configured address, then ID. No ordering, visibility or widget-layout
+fields are supported. Definitions do not authorize machine operations.
+
+The editor retains the catalog snapshot used to load its draft. A changed catalog
+requires explicit reload before Save, Duplicate or preparation; invalid saved
+values remain errors and are never dropped, clamped or repaired. Production
+preparation also verifies that its saved definition/catalog did not change during
+preparation. Existing prepared metadata remains unchanged. Catalog files are
+external device configuration, not editable or watched by this card.
+
+The collapsible Process Parameters card sits after Image Archive and before
+Model information. Its compact header shows **Process** / **工艺参数**, a count
+such as **3 set** / **3 项**, View PLC and a separate disclosure in both states.
+The count describes saved/draft definitions, not PLC application status. Full
+meanings remain in tooltips and accessible names. Expansion uses a directional
+indicator without a selected header fill; keyboard focus remains visible.
+
+Built-in mechanisms display in Lift, Drop, Extend, Speed, Reject, Photo order.
+Concise built-in captions retain full valve/field meanings in tooltips and
+accessibility; device-supplied labels remain unchanged.
+Fields within each mechanism retain catalog order; additional
+mechanisms follow their catalog order. This presentation does not reorder the
+device catalog. Mechanism groups use two field columns and reflow with actual
+available width/font metrics: ordinarily two group columns at 1080 logical width
+and three at 1920. One text field per parameter accepts an integer, including
+permitted negatives; blank or a
+standalone `-` omits that override, with a subtle dash placeholder. Save rejects
+malformed/out-of-range input without clearing it. Tooltips/accessibility expose
+the full group/name, range and DM word pair. Engineer/Administrator retain
+ordinary Save/Discard/New/Duplicate permissions; other roles can read/copy values.
+
+With the card expanded, an Engineer/Administrator may hold **View PLC** (mouse or
+Space) for a fresh background observation. The same value slots temporarily show
+read-only PLC readings, distinguished by the held View PLC action and value-slot
+styling. Loading/unavailable feedback remains visible; successful readings do not
+add a redundant read-only header caption. Full observation meaning and target
+details remain in tooltips/accessibility. Original editor text, omitted overrides,
+dirty state and Save/Discard
+remain independent. Release, focus loss, navigation, collapse, session change or
+Close restores the Recipe view immediately; late results cannot reopen it. Failed
+reads never substitute a previous observation. There is no polling or readback
+into the Recipe, and a successful read does not mean a Recipe was applied.
+
+View PLC and automatic application use the saved Status FINS/TCP endpoint even
+when Status is disabled, never an unsaved draft or the Diagnostics endpoint.
+No additional endpoint editor is presented in Recipe. The strict configuration
+rejects obsolete `process_station` and catalog `addresses` fields; no compatibility
+mapping or migration is performed. Historical alarm station evidence and explicit
+reporting base addresses are unrelated and remain unchanged.
+An absent/unreadable/invalid preferences file or changed process catalog rejects
+preview/application without blocking Recipe editing or successful Save. Existing
+FINS DM transport limits (0..32767, complete pairs) are validated before requests;
+a catalog address outside that supported range cannot be read or applied.
+See [preview ownership and limits](communication.md#process-parameter-preview) and
+[application admission and verification](communication.md#process-parameter-application).
+
+### Image archive settings
 
 `image_archive` optionally contains `root_directory` (string, omitted default `""`)
 and independent booleans `save_ok`, `save_ng`, `save_error`, `save_empty` (all
@@ -928,17 +1109,29 @@ Configuration owns the Recipe/Model catalogs and Recipe, MachineLayout and sourc
 drafts. Application coordinates Recipe editing and preparation; Qt presents these
 owners without becoming the authority for saved or active configuration.
 
-Recipe stacks Recipe management, Model information, Inspection Rules and one
-shared Image Tuning workspace. New/Duplicate, explicit selection, metadata and
+Recipe stacks Recipe management, Image Archive,
+[Process Parameters](#process-parameters), Model information and traditional
+Size/Color inspection rules with one shared Image Tuning workspace in the bottom
+card. Cards share Communication's surface, border, corner radius,
+12-logical-pixel insets and inter-card spacing, with 44-logical-pixel minimum
+action rows. Model identity and its existing actions align on one row.
+Identity fields are captioned Recipe name and Product code. The archive row uses
+Save images and a short Folder placeholder; PNG remains explicit in its tooltip
+and accessible description.
+New/Duplicate, explicit selection, metadata and
 model selection retain their drafts. Reload remains a catalog-refresh action,
 including external new/repaired files; it is distinct from Discard. Model selection is explicit even with one registered Model; an unset or unknown
 reference remains visibly unavailable until selected. The compact Model selector shows its display name and
 configured SHA-256 prefix; its tooltip exposes the full ID/hash, not a runtime
-verification claim. The second row shows compact default defect-label checkboxes,
+verification claim. The second row shows compact checkable defect-label buttons,
 wrapping at the available width. There is no filter popup, technical-details or
 policy-summary panel. The summary cards use their content's natural height;
 one enclosing scroll area updates on wrapping/content/language changes and scrolls
-only when needed, leaving Save accessible.
+only when needed. The bottom inspection card and shared image viewport stay outside
+that compact scroll area, use the remaining height and keep Save/Discard accessible.
+Tab order follows the displayed sections, including asynchronously loaded labels
+and fields rebuilt by an explicit catalog reload. Archive OK/NG/ERROR/EMPTY
+buttons remain independent multi-selections in the compact archive row.
 Opening Recipe reads the selected segmentation module's complete
 `ModuleInfo.features` catalog through the inference adapter, off Qt dispatch. One
 bounded metadata job and one current catalog are owned by the page; stale results
@@ -947,8 +1140,8 @@ Start; Close observes actual job termination before detaching delivery. It
 hash-checks a memory snapshot before SDK metadata loading; no inference module,
 pipeline or cache is created. Missing/invalid metadata reports an error without
 offering an inferred catalog. Guest and Operator see the saved label selections
-for the current Recipe. Engineer and Administrator can edit the checkboxes in the
-draft and persist them with Recipe Save. Checked labels participate, and unchecked
+for the current Recipe. Engineer and Administrator can toggle the label buttons
+in the draft and persist them with Recipe Save. Checked labels participate, and unchecked
 labels update only draft `defaults.vimo.disabled_labels`. Checking all catalog
 labels leaves no filter when no other exclusions exist. Previously saved out-of-catalog exclusions
 remain preserved with a tooltip, not offered as catalog choices. Metadata failure
@@ -977,17 +1170,44 @@ permanent cache validity, activate a Recipe or replace Production warm-up. The
 operation never saves/discards drafts, changes sources, produces counters/results
 or reports to PLC. SDK artifacts remain opaque; no delete/rebuild policy is added.
 
-Occupancy stays always on. The Size/Color rule rows alone open/switch/collapse
-tuning; their separate enablement checkboxes never expand it. Both checks may be
-enabled, with only one tuning panel visible and no second Collapse action.
+Occupancy stays always on. Size and Color share one horizontal row, each using
+approximately half its width for a checkable title, draft summary and disclosure.
+The summary/disclosure opens, switches
+or collapses tuning without enabling the check; the title button changes only
+enablement. Both checks may be enabled, with only one tuning panel visible and
+no second Collapse action or nested tuning card.
 Switching panels reuses
 the same frozen image and cached measurement ownership. Camera selection, Fit,
-Refresh, numeric parameters and image color sampling remain draft-only, with no
+Refresh, numeric parameters and image sampling remain draft-only, with no
 production admission, counters, source commands or activation. The former separate
 Tune page and duplicate enablement controls are removed. Size and Color summaries
-use actual draft limits, including `H <target> ± <tolerance>` for circular Hue.
-The compact Size tuning fields use L, pixel units and ± notation; full localized
-parameter names remain in tooltips and accessibility labels.
+use actual draft limits: `L <target> ± <tolerance> px` and
+`H <target> ± <tolerance>` for circular Hue. Size places its numeric target,
+Sample Length action, numeric tolerance and convenience slider on one row.
+Full localized parameter names remain in tooltips and accessibility labels.
+Numeric editing preserves the configuration's positive integer target and
+nonnegative integer tolerance without imposing a new maximum. The slider expands
+to represent existing tolerances; values beyond its native integer range remain
+editable numerically without being clamped into the draft.
+
+Color starts its tuning row with the compact numeric H control, followed by the
+target swatch, image sampling action, tolerance caption and slider.
+It edits draft `color.target_hue` as an integer from 0 to 179, with one-unit
+circular stepping (179 to 0 and 0 to 179) and precise typed entry. Manual edits and
+successful image sampling synchronize the same control, target swatch, summary
+and cached-evidence preview. They leave tolerance, enablement and Size settings
+unchanged and never Save or activate the Recipe. Programmatic refresh, language
+changes and mode switches do not create draft edits or repeat measurement.
+
+Sample Length uses the median of finite positive major-axis lengths from valid
+measured views of the current frozen reference, rounded to the nearest integer
+(ties to even), with a minimum target of one pixel. Failed rows and invalid or
+missing views contribute no sample; a valid view does not require its companion
+view to be usable. Sampling changes only draft `target_length`, leaving tolerance,
+enablement and the saved/active Recipe unchanged. No eligible evidence leaves the
+target unchanged with concise feedback. Sampling and threshold edits reuse cached
+measurements rather than measuring the image again. These manual edits do not
+alter the production requirement to judge both views.
 
 On first selection, Folder tuning reads the camera's first decodable image in the
 normal deterministic Folder order. Previous/Next and the image selector browse
@@ -1015,7 +1235,9 @@ the combined channel result or production acceptance. Image overlays keep compac
 selected Size or Color check judgments/body outlines and a selection highlight, without twelve repeated
 Length captions. Complete major-axis lines and endpoints use original image
 coordinates and remain visible across the logical divider; selection retains the
-owning view identity. Threshold edits rejudge cached evidence; mode switches retain the
+owning view identity. The control row reserves enough height for both modes'
+current localized measurement explanations, keeping the shared viewport in place
+when switching Size/Color. Threshold edits rejudge cached evidence; mode switches retain the
 selection. New images/camera changes clear it; stale asynchronous evidence is
 never displayed as the selected view's measurements.
 Disabled checks, unavailable/pending evidence, execution ERROR and content NG are
@@ -1150,11 +1372,23 @@ frame are still image evidence: enabled Size/Color can report missing-body/unusa
 color NG with unavailable numeric measurements. Tune has no Occupancy fusion and
 does not reinterpret that result as Production EMPTY or consume historical NG.
 
-Recipe **Save** persists only its definition, including incomplete Model references.
-Invalid Communication settings do not block Recipe Save.
-It does not require saved/complete MachineLayout or source drafts, prepare a
-candidate, change `last_applied_recipe_id`, or alter an already prepared candidate.
-Dirty Recipe navigation/close offers Save, Discard or Cancel with these same semantics.
+Recipe **Save** persists its definition, including incomplete Model references.
+Invalid Communication settings or incomplete MachineLayout/source definitions do
+not block that persistence. A materially changed Save of the current Production
+candidate's ID automatically prepares the latest saved definition and dependencies
+on the existing bounded worker. Unchanged Saves, unrelated Recipes and unsaved
+drafts never trigger preparation or change Production selection. Save success and
+preparation success are separate outcomes, shown as saved/preparing, saved/ready or
+saved/preparation-failed using the existing feedback surfaces. Dirty navigation/close
+still offers Save, Discard or Cancel; failed preparation cannot undo a successful Save.
+
+The previous candidate becomes ineligible for Start as soon as the changed selected
+definition is committed, before releasing the stopped editing slot. Preparation
+failure preserves its identity/evidence and leaves Start unavailable. Only successful
+preparation replaces it; only successful Start changes the active session. Automatic
+refresh uses the saving session revision and existing generation/selection fencing,
+and cannot install after supersession, authorization loss or Close. It preserves
+the Recipe Save audit event without inventing an operator Recipe-selection event.
 
 Production's compact saved-Recipe selector prepares the explicitly selected ID
 using its current saved Recipe, MachineLayout, Model and source definitions, off Qt
@@ -1187,18 +1421,19 @@ prepares/installs a candidate, changes its Recipe identity or `last_applied_reci
 or activates a session. Model binaries and source images remain unchanged.
 Runtime lifecycle and source-connection locks continue to govern editing.
 
-A prepared candidate retains its saved MachineLayout and CameraSources definitions
-and their paths. Successfully saved or reloaded definitions are compared by parsed
-value, so unchanged saves do not invalidate it. A changed dependency requires
-explicit re-preparation while retaining the candidate, active identity and saved
+A prepared candidate retains its saved Recipe (including its process catalog),
+MachineLayout and CameraSources definitions and their paths. Successfully saved
+or reloaded Vision definitions are compared by parsed value, so unchanged saves
+do not invalidate it. A changed Vision dependency requires explicit re-preparation
+while retaining the candidate, active identity and saved
 Recipe preference. Partial saves observe only the definitions actually persisted.
 Production disables Start when this state is known and shows re-selection guidance.
 Reselecting the same saved Recipe prepares current dependencies; failed preparation
 retains the old candidate and does not clear its re-preparation requirement.
 
-Every Start also parses and compares those files on the Application lifecycle worker
-before automatic camera connection, session construction or engine creation.
-External changes, missing or unreadable
+Every Start also parses and compares the saved Recipe and Vision files on the
+Application lifecycle worker before automatic camera connection, session
+construction or engine creation. External changes, missing or unreadable
 dependencies reject Start without activating the candidate. Re-preparation clears
 this requirement only on successful installation. Start uses the captured sources
 with the captured layout; it never combines newly read sources with an older layout.

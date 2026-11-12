@@ -45,6 +45,8 @@ from .models import (
     PreparedConfiguration,
     prepare_configuration,
 )
+from .recipe_dependencies import RecipeDependencies
+from .run_configuration import capture_prepared
 from .session import real_engine
 from .vision_dependencies import VisionDependencies
 
@@ -94,6 +96,10 @@ class ApplicationData:
     @property
     def recipes(self) -> Path:
         return self.root / "recipes"
+
+    @property
+    def process_catalog(self) -> Path:
+        return self.root / "process_parameters.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +209,9 @@ def _load_startup(
             elif kind == "sources":
                 sources = load_camera_sources(path)
             else:
-                catalog = RecipeCatalog(path).discover()
+                catalog = RecipeCatalog(
+                    path, process_catalog_path=data.process_catalog
+                ).discover()
                 entries = catalog.entries
                 issues.extend(
                     StartupIssue(
@@ -245,7 +253,7 @@ def _load_startup(
             )
 
         editor = RecipeEditorSession(
-            RecipeCatalog(data.recipes),
+            RecipeCatalog(data.recipes, process_catalog_path=data.process_catalog),
             machine,
             registry,
             data.models,
@@ -309,6 +317,7 @@ def _load_startup(
                     editor.machine,
                     entry.recipe,
                     editor.registry,
+                    process_catalog=entry.process_catalog,
                 ),
                 base_directory=data.models,
             )
@@ -318,12 +327,18 @@ def _load_startup(
                     prepared.configuration.model
                 ),
                 managed_model=True,
+                recipe_dependencies=RecipeDependencies(
+                    entry, editor.catalog.process_catalog_path
+                ),
                 vision_dependencies=VisionDependencies(
                     data.machine, editor.machine, data.sources, sources
                 ),
             )
             assert prepared.vision_dependencies is not None
             prepared.vision_dependencies.validate_current()
+            assert prepared.recipe_dependencies is not None
+            prepared.recipe_dependencies.validate_current()
+            prepared = capture_prepared(prepared)
         except ModelArtifactError as exc:
             issues.append(StartupIssue("startup_artifact", str(exc)))
         except ConfigurationError as exc:
@@ -342,20 +357,28 @@ def _load_startup(
 
     communication = CommunicationPreferences()
     communication_error = ""
+    communication_content = None
     try:
         status_errors: list[str] = []
+        communication_content = data.communication.read_bytes()
         communication = load_communication_preferences(
-            data.communication, status_error=status_errors.append
+            data.communication,
+            status_error=status_errors.append,
+            content=communication_content,
         )
         if status_errors:
+            communication_content = None
             communication_error = status_errors[0]
             issues.append(
                 StartupIssue(
                     "startup_communication", communication_error, blocking=False
                 )
             )
-    except ConfigurationError as exc:
-        if not isinstance(exc.__cause__, FileNotFoundError):
+    except (ConfigurationError, OSError) as exc:
+        communication_content = None
+        if not isinstance(exc, FileNotFoundError) and not isinstance(
+            exc.__cause__, FileNotFoundError
+        ):
             # Preserve the bad file; safe in-memory recovery is visible and only
             # an explicit settings Save can replace it. Never open a wider bind.
             communication_error = str(exc)
@@ -376,18 +399,25 @@ def _load_startup(
         with identity.admission(Role.OPERATOR, revision) as actor:
             return actor.revision
 
+    def configuration_access(revision: int | None) -> int:
+        with identity.admission(Role.ENGINEER, revision) as actor:
+            return actor.revision
+
     history = ProductionHistory(
         data.history,
         on_failure=history_error,
         alarm_access=alarm_access,
+        configuration_access=configuration_access,
         diagnostics=diagnostics,
     )
     if editor is None or editor.camera_sources is None:
         application = unconfigured_application(
             history,
+            communication_path=data.communication,
             diagnostics=diagnostics,
             identity=identity,
             initial_reporting=communication.reporting,
+            initial_communication=communication_content,
             initial_status=communication.status,
         )
         # Shell identity slots only, never a layout/ROI/source/runtime fallback.
@@ -400,6 +430,7 @@ def _load_startup(
     else:
         application, frames = create_production_application(
             editor,
+            communication_path=data.communication,
             diagnostics=diagnostics,
             engine_factory=engine_factory,
             observe_source=observe_source,
@@ -409,6 +440,7 @@ def _load_startup(
             replay_controls=True,
             initial_candidate=prepared,
             initial_reporting=communication.reporting,
+            initial_communication=communication_content,
             initial_status=communication.status,
         )
     if diagnostics:

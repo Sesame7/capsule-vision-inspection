@@ -57,27 +57,36 @@ rounding/bounds live in Configuration, while gestures and image transforms remai
 in Qt presentation. `application/editing.py` coordinates Recipe selection, Save,
 Delete, resolution and preparation without importing UI. Qt dispatches explicit
 actions and queued completions; candidate installation and Start remain separate.
-Recipe Save only persists the editor definition. Production selects a saved Recipe
-independently, resolving current saved dependencies on the existing bounded IO
-worker. It never reads or replaces the editor draft. The saved definition, stopped
-candidate and active session are distinct; only successful Start promotes a candidate.
+Recipe Save commits the editor definition independently of preparation. A materially
+changed Save matching the Production candidate ID marks that candidate ineligible
+for Start before releasing the stopped file-management slot, then refreshes the
+same saved ID on the existing bounded preparation worker. Unchanged and unrelated
+Saves do not prepare. Save success survives preparation failure; the old candidate
+remains diagnostic evidence until a successful preparation replaces it. Production
+selection and automatic refresh resolve saved dependencies, never another editor
+draft. The saved definition, stopped candidate and active session remain distinct;
+only successful Start promotes a candidate. Internal refresh retains the saving
+session revision and generation/selection fencing but emits no `production.recipe`
+selection audit event; the committed `recipe.save` event remains authoritative.
 
-Prepared candidates retain immutable saved Vision definitions and their paths.
+Prepared candidates retain immutable saved Recipe and Vision definitions and paths.
 Vision has one Save action with independent MachineLayout/CameraSources outcomes;
 it never enters Production preparation or emits a candidate-installation event.
 Successful Save/reload observations mark a differing candidate as requiring
 re-preparation without replacing its Recipe identity or an active session. Identical
-parsed definitions leave a current candidate valid. Production alone selects and
-prepares saved Recipes, including explicit re-selection of the same ID.
-The existing Application lifecycle worker verifies persisted Vision dependencies
-again before invoking the session factory. Changed or unreadable definitions reject
-Start before engine/session side effects and retain the previous candidate/active
-values. Session creation consumes the candidate's captured sources and layout.
+parsed definitions leave a current candidate valid. Production selects saved Recipes,
+including explicit re-selection of the same ID after a failed refresh.
+The existing Application lifecycle worker verifies persisted Recipe and Vision
+dependencies again before invoking the session factory. Changed or unreadable
+definitions reject Start before engine/session side effects and retain the previous
+candidate/active values. Session creation consumes the candidate's captured sources
+and layout.
 Snapshot presence is authoritative: missing captured CameraSources reject Start
 without a fallback disk read. Fixed-image launchers capture their own source mapping;
 its absent file path denotes launcher ownership, not missing captured values.
 No filesystem validation is added to Qt dispatch or the Application command lock;
-no watcher, automatic preparation or cross-file transaction is introduced.
+no watcher or cross-file transaction is introduced. Automatic preparation is limited
+to a changed, successfully saved Recipe matching the existing candidate ID.
 Fixed-image engineering/demo launchers retain their explicit source ownership.
 
 Production composition is Qt-independent: `application/startup.py` owns entry-relative
@@ -260,6 +269,43 @@ execution append separate terminal evidence. Repeating the same fact for the sam
 operation is idempotent. A crash between the intent and completion leaves the
 operation unresolved. An audit finalization error leaves the business result intact.
 
+Audit schema version 2 additionally retains complete configuration revision evidence
+for Recipe JSON (stable Recipe ID), MachineLayout (`machine.tsv`), CameraSources
+(`camera_sources.json`) and the entire `communication.json`. The Configuration codec
+prepares one immutable byte sequence for both publication and revision storage;
+the Audit owner commits its SHA-256, artifact identity and complete content together
+with the initiating operation intent in one SQLite transaction. Revision records
+reference that operation's actor and UTC evidence and prohibit content updates or
+deletion. A changed definition produces a pending revision; unchanged saves still
+follow the existing command admission but create no duplicate revision. External
+edits and read/reload observations are not attributed as user publications.
+
+The business worker waits for durable intent/content before the existing atomic
+single-file publication. For a tracked revision it also waits for the completion
+transaction, outside Application and identity locks. A successful completion
+confirms the revision; failed/stale attempts are not confirmed, and missing
+completion remains unresolved. If confirmation fails after publication, the file
+and durable pending evidence remain intact and Save explicitly reports incomplete
+audit confirmation. There is no automatic rollback, retry or inferred recovery.
+An affected prepared candidate remains ineligible until it is prepared from the
+published definitions. Confirmed Recipe Saves retain automatic same-ID preparation;
+Vision files retain independent outcomes; Communication retains its existing
+publication/next-Start admission boundary. A confirmed revision is publication
+evidence, not evidence of Production activation or Run usage.
+
+`AuditTrail.revisions` provides bounded, revision-fenced Engineer review by artifact
+identity; `revision_content` retrieves the exact bytes and verifies their hash before
+delivery. Routine status and customer reports do not include these snapshots.
+Recipe deletion does not remove its earlier revisions. Revision evidence has no
+automatic expiry or restore action. Run capture can reference an exact confirmed
+publication through the existing Audit owner; it does not create a Save event.
+Incompatible Audit schemas
+are rejected visibly without migration or replacement; existing databases must be
+preserved for an explicitly authorized maintenance decision.
+The development-record replacement tool rejects stores containing configuration
+revisions or captured Run resources, preserving that evidence independently of
+synthetic record provenance.
+
 Authentication, logout, actual Start/Stop, Batch changes, unbatched statistics
 clearing, saved Recipe selection and important security or persistence failures
 submit observations without waiting.
@@ -318,6 +364,12 @@ active set remains available and is marked stale. The first valid reading after
 a gap reconciles differences as observed active or observed recovered. All
 timestamps are host observations. Pulses entirely between reads can be missed.
 A new activation starts a fresh observation baseline.
+
+The saved Running address is a separate read-only target definition (default
+W16.1, fixed bit 1); this worker neither samples it nor writes it. A Running-only
+Save preserves the connection and observations. Its strict address constraints
+and editable disabled-service behavior are defined in
+[Communication preferences](configuration.md#communication-preferences).
 
 The immutable monitor snapshot also carries its applied selection, frozen
 definitions, last successful raw word and observation time. The Communication
@@ -646,6 +698,48 @@ cleanup is safe. Stop/Start or a Recipe change retains the selected Batch's tota
 products; enabled PLC group reporting's separate conditional channel-position totals are
 described above.
 
+Recipe process overrides remain immutable definition metadata in Configuration
+and Run evidence. Configuration resolves one explicit DM starting address per
+parameter and validates flat ID/value overrides. A stopped candidate with overrides
+requires separate PLC application and register readback before Start is eligible.
+The existing Application lifecycle thread serializes this work: at most one active
+attempt and one latest pending candidate. It owns its private bounded FINS/TCP
+connection; Qt dispatch, the Status service and the reporting owner do not execute
+or lend a client to this operation. Start warm-up does not apply parameters.
+
+An Operator-or-higher saved Recipe selection/configuration, or Engineer's successful
+changed selected Save and automatic preparation, admits application at the captured
+session revision. Guest restoration does not write and leaves overridden candidates
+ineligible until authorized re-selection. Empty overrides require neither a target
+nor PLC I/O. Save success is independent of later preparation/application failure.
+The candidate stays available as diagnostic evidence on failure; there is no
+fallback, retry or rollback. Supersession, saved dependency invalidation, cancellation
+and Close fence subsequent operations and eligibility. Already admitted I/O finishes
+under its deadline and the lifecycle owner closes it before shutdown completes.
+The initiating identity is rechecked before each operation and final eligibility.
+External saved Recipe/catalog/Vision changes retain the ordinary pre-Start freshness
+checks. A changed/unreadable saved Status target also blocks a later Start until
+re-selection, without writing during Start.
+
+Audit records the prepared Recipe identity and captured Recipe hash for an application
+attempt; each parameter has linked address/value intent and verified/failed/uncertain
+completion. No automatic `production.recipe` selection event is fabricated.
+Configured Run overrides are not rewritten as proof of PLC application.
+See [process definitions](configuration.md#process-parameters) and
+[application wire semantics](communication.md#process-parameter-application).
+
+The separate hold-to-view PLC observation captures the saved Status endpoint and
+configured DM addresses, revalidates the editor's catalog, and admits each
+bounded DM read with the initiating Engineer session revision. The Application
+read function is Qt-independent. Communication's existing single diagnostic/file
+job owns temporary clients, queued completion and actual thread termination;
+the live Status connection is never borrowed. Qt keeps observations separate
+from the original editor widgets and cancels presentation on release, navigation,
+focus loss, session change or Close. Cancellation stops unadmitted reads and
+fences late results; already admitted I/O settles under its deadline before the
+owner joins. Recipe editing/Save retain their independent worker and never wait
+for this observation. View PLC never writes or feeds readings back into the draft.
+
 Stop prevents inspection admission, finalizes incomplete collection and explicitly rejects
 unclaimed inspection work. A claimed native call finishes naturally. Owners are
 retained until source/runtime/worker/report threads actually exit and SDK cleanup
@@ -704,6 +798,40 @@ Stop records termination after session cleanup, including for zero-Cycle Runs,
 and preserves the Batch selection. Exclusive owner startup marks any abandoned
 open Run interrupted and uncertain, with the recovery time as its termination
 observation. Warm-up and preview contribute no production evidence.
+
+History schema 4 records an immutable configuration manifest in the same transaction
+as each durable Run and its Start Account, before RUNNING is published. Preparation
+captures Recipe, MachineLayout and CameraSources bytes and parses those same bytes
+against its frozen definitions. Start's existing parsed-value freshness checks are
+unchanged. The lifecycle owner captures the effective resolved inspection values,
+source mapping/base, configured process overrides/catalog and frozen reporting
+selection (including disabled reporting). It does not read editor drafts or reload
+files after warm-up. Model identity retains the verified Model ID/SHA-256, without
+copying its binary. Process overrides describe configuration, not PLC-applied values.
+
+Resources retain stable identities, content hashes, their saved-byte or effective-value
+origin and optional revision IDs. Saved Communication bytes are retained when the
+selection is restored, published or validated on reload, then frozen at Start
+admission. They supply publication context only; the separate frozen reporting
+selection specifies what this Run uses, not the file's independent Web/status settings.
+One bounded read on the Audit owner matches artifact, resource, SHA-256 and exact
+content against successful confirmations only. A newer unmatched, pending or failed
+revision is never substituted. Missing matches are explicit null references; an
+unavailable Audit owner is separately recorded. These historical references do not
+imply an atomic transaction across Audit and History, a user selection event or PLC
+acceptance. Later edits, deletions and confirmations never relabel a recorded Run.
+
+`ProductionHistory.run_configuration` retrieves one captured manifest on the existing
+History owner and verifies resource content hashes. Normal composition requires
+Engineer admission with session fencing before, during and after the queued read;
+trusted identity-free compositions retain their existing ownership. Missing launcher
+inputs or directly submitted engineering Runs are explicitly incomplete, never
+reconstructed from current files. Unactivated Run cleanup removes its manifest in
+the same transaction. Manifest retention follows the Run, independently of 30-day
+Cycle/group expiry. Failure to commit rolls back the whole Run transaction; named
+Batch admission still fails, while unbatched inspection may continue with its existing
+visible non-durable/uncertain observation. Older History schemas are rejected without
+migration, reset or configuration backfill.
 
 One background owner handles every access to the live History database, along
 with projection, compression and retention. The normal inbox admits up to 128
@@ -1216,6 +1344,13 @@ Pointer activation preserves focus and checked or selected state without
 leaving a keyboard focus outline. Keyboard navigation uses Qt's visible focus
 cue, independently of selection.
 
+Native numeric inputs share compact, vertically paired chevrons on the right,
+with themed hover, pressed, disabled and focus states. Their existing ranges,
+precision, steps, validation and permission behavior remain field-owned; only
+Color target Hue wraps. Optional process-parameter text, Vision FPS/ROI fields
+with deferred validation, register lists and other non-spin inputs retain their
+existing editing and commit behavior.
+
 The supported workstation profiles are portrait 1080×1920 at 100% Windows
 scaling and landscape 3840×2160 at 200% (about 1920×1080 Qt logical pixels).
 The native frame and taskbar reduce the maximized client area. The supported
@@ -1361,9 +1496,15 @@ indicators are independent of image availability and never become image overlays
 The reporting owner publishes one bounded latest progress observation; Application
 includes it in its snapshot alongside cumulative accounting and group duration.
 Vision uses temporary browsed/imported/captured images or eligible frozen Runtime
-pixels; no separate persisted reference library exists. Recipe preview retains its
-internal frozen-image contract. Capture uses the same SDK owner, accepts one pending
-request with a monotonic deadline and first requires an empty complete SDK boundary.
+pixels; no separate persisted reference library exists. Recipe presents one shared
+Size/Color tuning workspace within its bottom inspection card, outside the compact
+summary scroll area. Side-by-side Size/Color controls have independent enablement
+and expansion; mode switches retain frozen-image ownership, cached measurements
+and viewport geometry. Explicit length/color sampling edits only Recipe draft
+targets from that cached evidence, as described in
+[configuration](configuration.md#editing-and-persistence). Capture uses the same
+SDK owner, accepts one pending request with a monotonic deadline and first requires
+an empty complete SDK boundary.
 It never sends software/PLC triggers or opens another camera. Camera/source changes,
 Disconnect, Start and Close cancel pending capture; a Qt request token rejects stale
 delivery. A frame already buffered at request processing is not substituted for a

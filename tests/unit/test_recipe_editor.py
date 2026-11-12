@@ -188,7 +188,9 @@ def test_invalid_and_io_failure_keep_draft(
     def fail(*_args: object, **_kwargs: object) -> None:
         raise ConfigurationIOError("simulated disk error")
 
-    monkeypatch.setattr("capsule_vision.configuration.catalog.save_recipe", fail)
+    monkeypatch.setattr(
+        "capsule_vision.configuration.ConfigurationPublication.publish", fail
+    )
     with pytest.raises(ConfigurationIOError):
         session.save()
     assert session.dirty and session.entry.path.read_bytes() == before

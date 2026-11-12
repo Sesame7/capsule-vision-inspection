@@ -21,6 +21,8 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 
+from .audit import RevisionEvidence
+from .recipe_dependencies import RecipeDependencies
 from .vision_dependencies import VisionDependencies
 
 
@@ -52,6 +54,8 @@ class PreparedConfiguration:
     model_path: Path
     managed_model: bool = False
     vision_dependencies: VisionDependencies | None = None
+    recipe_dependencies: RecipeDependencies | None = None
+    saved_content: tuple[RevisionEvidence, ...] = ()
 
 
 def prepare_configuration(
@@ -219,6 +223,8 @@ class ProductionApplicationSnapshot:
     detail_expired: bool = False
     batch_pending: bool = False
     unbatched_run_uncertain: bool = False
+    process_required: bool = False
+    process_applying: bool = False
 
     @property
     def four_cycle_display(self) -> bool:

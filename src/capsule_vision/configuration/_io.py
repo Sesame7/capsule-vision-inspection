@@ -3,7 +3,31 @@
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
+
+from .errors import ConfigurationIOError
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationPublication:
+    """The codec's exact bytes, ready for the existing single-file publication."""
+
+    path: Path
+    content: bytes
+    exclusive: bool = False
+    create_parent: bool = False
+    error_context: str = "Save"
+
+    def publish(self) -> None:
+        try:
+            if self.create_parent:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(self.path, self.content, exclusive=self.exclusive)
+        except (OSError, ValueError, TypeError) as exc:
+            raise ConfigurationIOError(
+                f"{self.error_context} {self.path}: {exc}"
+            ) from exc
 
 
 def read_json(
@@ -28,7 +52,7 @@ def decode_json(
 
 def atomic_write(
     path: Path,
-    content: str,
+    content: str | bytes,
     *,
     exclusive: bool = False,
     newline: str | None = None,
@@ -36,10 +60,12 @@ def atomic_write(
     """Publish closed, flushed data; the caller owns parent and error policies."""
     temporary: Path | None = None
     try:
+        if isinstance(content, str):
+            content = content.replace(
+                "\n", os.linesep if newline is None else newline or "\n"
+            ).encode("utf-8")
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline=newline,
+            mode="wb",
             dir=path.parent,
             prefix=f".{path.name}.",
             suffix=".tmp",

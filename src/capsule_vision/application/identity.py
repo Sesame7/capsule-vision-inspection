@@ -15,7 +15,16 @@ from capsule_vision.diagnostics import RuntimeDiagnostics
 
 from ._account_store import AccountStore
 from ._security_lock import SecurityLease
-from .audit import AuditOperation, AuditQuery, AuditRecord, AuditTrail, error_outcome
+from .audit import (
+    AuditOperation,
+    AuditQuery,
+    AuditRecord,
+    AuditTrail,
+    AuditUnavailable,
+    RevisionConfirmationError,
+    RevisionEvidence,
+    error_outcome,
+)
 from .identity_models import (
     Account,
     AccountConflictError,
@@ -125,11 +134,12 @@ class LocalIdentity:
         *,
         role: Role = Role.ENGINEER,
         uncertain: Callable[[BaseException], bool] = lambda _: False,
+        evidence: RevisionEvidence | None = None,
     ) -> Generator[None]:
         """Worker-only. Never wait for audit IO while holding the identity lock."""
         with self.admission(role, revision, action=action, target=target) as actor:
             op = AuditOperation.by(actor, action, target, before, after)
-        self.audit.intent(op).result()
+        self.audit.intent(op, evidence).result()
         try:
             with self.admission(role, actor.revision, action=""):
                 pass
@@ -142,7 +152,12 @@ class LocalIdentity:
             )
             raise
         else:
-            self.audit.complete(op, "success")
+            completion = self.audit.complete(op, "success")
+            if evidence is not None:
+                try:
+                    completion.result()
+                except AuditUnavailable as exc:
+                    raise RevisionConfirmationError(op) from exc
 
     @contextmanager
     def admission(

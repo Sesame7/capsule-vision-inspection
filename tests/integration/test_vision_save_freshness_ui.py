@@ -1,6 +1,6 @@
 """Qt Vision persists independently; Production alone installs saved candidates."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Never
@@ -19,6 +19,7 @@ from capsule_vision.application.startup import ApplicationData
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
+    ConfigurationPublication,
     load_camera_sources,
     load_machine_layout,
     save_camera_sources,
@@ -161,7 +162,7 @@ def test_partial_save_invalidates_only_successfully_changed_dependencies(
     edit_geometry(workspace)
     workspace.sources.set_loop(not workspace.sources.saved.loop)
 
-    def fail() -> None:
+    def fail(**_kwargs: object) -> None:
         raise ConfigurationIOError("isolated partial Save failure")
 
     monkeypatch.setattr(
@@ -279,8 +280,10 @@ def test_vision_save_revalidates_each_independent_publication(
     else:
         save = workspace.sources.save
 
-        def save_and_logout() -> None:
-            save()
+        def save_and_logout(
+            *, publish: Callable[[ConfigurationPublication], None] | None = None
+        ) -> None:
+            save(publish=publish)
             owner.logout()
 
         monkeypatch.setattr(workspace.sources, "save", save_and_logout)

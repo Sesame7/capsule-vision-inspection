@@ -42,7 +42,7 @@ from capsule_vision.configuration import (
     load_recipe,
     resolve_configuration,
 )
-from capsule_vision.configuration.catalog import RecipeCatalog
+from capsule_vision.configuration.catalog import RecipeCatalog, RecipeEntry
 from capsule_vision.configuration.communication_preferences import StatusPreferences
 from capsule_vision.configuration.drafts import CameraSourceDraft
 from capsule_vision.diagnostics import RuntimeDiagnostics
@@ -60,6 +60,8 @@ from .models import (
 )
 from .production_application import SourceProductionApplication
 from .production_session import SourceRuntimeSession
+from .recipe_dependencies import RecipeDependencies
+from .run_configuration import capture_prepared
 from .vision_dependencies import VisionDependencies
 
 
@@ -93,6 +95,7 @@ def compose(
     reporting: ReportingSettings | None = None,
     replay_controls: bool = False,
     reporting_editable: bool = False,
+    communication_path: Path | None = None,
 ) -> EngineeringComposition:
     """Parse/hash/decode explicit inputs; no fallback images or invented ROIs.
 
@@ -146,7 +149,14 @@ def compose(
         fixed_sources if paths else sources if sources_present else None,
     )
     dependencies.validate_current()
-    prepared = replace(prepared, vision_dependencies=dependencies)
+    recipe_dependencies = RecipeDependencies(RecipeEntry(recipe_file.resolve(), recipe))
+    recipe_dependencies.validate_current()
+    prepared = replace(
+        prepared,
+        vision_dependencies=dependencies,
+        recipe_dependencies=recipe_dependencies,
+    )
+    prepared = capture_prepared(prepared)
     editor = RecipeEditorSession(
         RecipeCatalog(recipe_file.resolve().parent),
         machine,
@@ -167,6 +177,7 @@ def compose(
         reporting=reporting,
         replay_controls=replay_controls,
         reporting_editable=reporting_editable,
+        communication_path=communication_path,
     )
     try:
         app.configure(prepared)
@@ -191,9 +202,11 @@ def create_production_application(
     history: ProductionHistory | None = None,
     identity: LocalIdentity | None = None,
     initial_reporting: ReportingSelection | None = None,
+    initial_communication: bytes | None = None,
     initial_status: StatusPreferences | None = None,
     initial_candidate: PreparedConfiguration | None = None,
     diagnostics: RuntimeDiagnostics | None = None,
+    communication_path: Path | None = None,
 ) -> tuple[SourceProductionApplication, LatestDisplayFrameStore]:
     """Shared serial composition; no session/source/engine is created until Start."""
     if paths and len(paths) != len(editor.machine.layout.cameras):
@@ -383,8 +396,10 @@ def create_production_application(
         diagnostics=diagnostics,
         identity=identity,
         initial_reporting=initial_reporting,
+        initial_communication=initial_communication,
         initial_status=initial_status,
         initial_candidate=initial_candidate,
+        communication_path=communication_path,
         source_draft=source_draft if not paths else None,
         source_cameras=editor.machine_editor.camera_ids,
         source_camera_ids=lambda: (
@@ -401,8 +416,10 @@ def unconfigured_application(
     *,
     identity: LocalIdentity | None = None,
     initial_reporting: ReportingSelection | None = None,
+    initial_communication: bytes | None = None,
     initial_status: StatusPreferences | None = None,
     diagnostics: RuntimeDiagnostics | None = None,
+    communication_path: Path | None = None,
 ) -> ProductionApplication:
     """Normal stopped shell can edit session preferences without inventing inputs."""
 
@@ -419,5 +436,7 @@ def unconfigured_application(
         diagnostics=diagnostics,
         identity=identity,
         initial_reporting=initial_reporting,
+        initial_communication=initial_communication,
         initial_status=initial_status,
+        communication_path=communication_path,
     )

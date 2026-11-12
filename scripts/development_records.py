@@ -126,18 +126,25 @@ def active_configuration(
     data: ApplicationData,
 ) -> tuple[ResolvedInspectionConfiguration, ConfigurationIdentity]:
     recipe_id = read_preferences(data.preferences).preferences.last_applied_recipe_id
-    recipe = next(
+    entry = next(
         (
-            e.recipe
-            for e in RecipeCatalog(data.recipes).discover().entries
+            e
+            for e in RecipeCatalog(
+                data.recipes, process_catalog_path=data.process_catalog
+            )
+            .discover()
+            .entries
             if e.recipe.recipe_id == recipe_id
         ),
         None,
     )
-    if recipe is None:
+    if entry is None:
         raise ValueError(f"A valid saved current Recipe is required: {recipe_id!r}")
     config = resolve_configuration(
-        load_machine_layout(data.machine), recipe, discover_models(data.models).registry
+        load_machine_layout(data.machine),
+        entry.recipe,
+        discover_models(data.models).registry,
+        process_catalog=entry.process_catalog,
     )
     if len(config.layout.cameras) not in (5, 6) or not (
         config.capsule.enabled or config.checks.vimo.enabled
@@ -545,7 +552,7 @@ def initialize_empty(path: Path, template: Path, *, audit: bool) -> None:
         version = target.execute("PRAGMA user_version").fetchone()[0]
         occupied = target.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
         target.commit()
-        if version == (1 if audit else 3):
+        if version == (2 if audit else 4):
             return
         if version or occupied:
             raise ValueError(

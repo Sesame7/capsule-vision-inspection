@@ -433,7 +433,7 @@ not emit periodic Audit Trail records. Close waits for actual worker exit.
 
 The compact **Status / 状态** card retains the shared service header, actual
 read/write health and a draft Enable/Disable action. Protocol, IPv4 and Port
-appear once. Heartbeat, Fault and Alarm are three independently editable WR
+appear once. Heartbeat, Fault, Alarm and Running are four independently editable WR
 addresses in one equal-width row below them, with responsive wrapping when
 necessary. These controls remain visible when the signal
 section is collapsed, and reflow using actual available width. Guest/Operator
@@ -447,7 +447,79 @@ service previews use the existing bounded background file job, without PLC I/O.
 The global alarm strip remains an alarm-read observation, independent of
 heartbeat-write success.
 
+The independently configured Running target defaults to **W16.1**, fixed bit 1
+(0 stopped, 1 running). Only its word is editable. It is not an automatic output
+or part of the monitor's polling sequence; configuration alone never opens a
+connection or reads the bit. A Running-only Save retains the current connection,
+health and alarm baseline. It stays configurable with Status off, and is excluded
+from applied-monitor target feedback and manual-write reservations. Its word cannot
+alias heartbeat/fault outputs or the configured FINS reporting window on the same
+host/port, even with services disabled. Save also checks frozen active reporting
+ranges. Sharing the read-only alarm word is permitted. See the
+[strict configuration contract](configuration.md#communication-preferences).
+
 ## Communication workspace
+
+### Process parameter preview
+
+Recipe's hold-to-view action uses the saved Status FINS/TCP endpoint and each
+parameter's explicit DM address; it does not enable Status or change its live
+target. Address and missing-value behavior are specified under
+[Process parameters](configuration.md#process-parameters). Each hold reloads the
+strict saved preferences and confirms the editor's catalog before transport.
+Engineer/Administrator admission and the initiating session revision are checked
+before each grouped read. A busy diagnostic/file job or active register watch
+rejects the preview instead of queueing it. Recipe edits and saves remain independent.
+
+Mapped DINTs use consecutive DM words, low word first, decoded as signed 32-bit
+values without clamping to Recipe override ranges. Sorted mappings are combined
+into windows of at most 999 words, including gaps, without splitting a DINT;
+all ranges are validated before I/O. Each request uses the existing temporary
+FINS/TCP diagnostic client and its deadlines/cleanup. The live Status and reporting
+owners remain independent. Separate windows are acquired sequentially, not as an
+atomic PLC-wide snapshot. Any grouped-read failure invalidates the whole
+observation. All extension parameters have explicit addresses. There are no writes,
+automatic polls, retries or stale-value fallback. Release/cancellation prevents
+subsequent requests and display, while already admitted I/O finishes and closes
+its client before the worker terminates. Close retains this actual join ownership.
+
+A returned value is register evidence, not mechanical state or Recipe application.
+Field acceptance requires a known-value DINT word-order check and sufficient PLC
+connection capacity for the temporary diagnostic client alongside active services.
+Synthetic loopback tests do not establish those hardware properties.
+
+### Process parameter application
+
+Preparing a selected saved Recipe with explicit overrides automatically admits one
+application for Operator or higher, independently of continuous Status enablement.
+Guest restoration does not write. No overrides means no connection or Running read.
+The Application lifecycle worker uses strict saved Status settings and a private
+FINS/TCP connection, with the existing per-exchange deadlines and no retries.
+It validates the entire address/value plan before connecting, reads the configured
+Running word once (default W16), and proceeds only when fixed bit 1 is zero.
+Other bits have no Running meaning. A failed/unavailable read blocks all writes.
+
+Each explicit value is written sequentially as two consecutive DM words, low word
+first, signed 32-bit two's complement. Each pair is then read back and compared
+before the next write. Omitted values, including absent overrides alongside explicit
+zero, leave PLC registers unchanged. There are no WR writes or new handshake signals.
+Each write requires recorded audit intent before admission. Per-parameter records
+retain exact attempted addresses/values and readback outcomes, linked to the overall
+prepared-Recipe attempt. Failed or uncertain readback blocks Start; evidence preserves
+verified pairs and pairs that may have been written. There is no automatic rollback
+or whole-set atomicity claim. A permission/session change, supersession or Close
+prevents subsequent admissions and obsolete candidate success. Audit confirmation
+failure also prevents reporting the application as ready.
+
+The Running read is a one-time software check, not a hardware interlock. PLC logic
+may change after the read; matching register readback is not proof of ladder
+consumption or physical equipment state. Field acceptance must confirm DINT word
+order using known values, Running timing, and independent connection capacity.
+Simulated tests do not establish these hardware properties. Start warm-up and
+ordinary draft editing/View PLC never perform process writes. See
+[Application ownership](architecture.md#application-and-shutdown) for lifecycle rules.
+
+### Workspace controls
 
 Engineer or Administrator can issue manual PLC reads and writes, read register
 watches, save CommunicationPreferences and control the Web observer. Saving

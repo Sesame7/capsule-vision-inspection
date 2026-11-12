@@ -1,5 +1,6 @@
 """Pure recipe/model/layout configuration; activation belongs to the application."""
 
+from ._io import ConfigurationPublication
 from .errors import ConfigurationError, ConfigurationIOError, ModelArtifactError
 from .models import (
     CheckConfiguration,
@@ -28,6 +29,7 @@ from .resolve import (
 from .sources import CameraFolder, CameraSources
 
 __all__ = [
+    "ConfigurationPublication",
     "CameraFolder",
     "CameraSources",
     "load_camera_sources",

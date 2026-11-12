@@ -165,11 +165,13 @@ def test_status_draft_permissions_save_discard_and_fault_observation(
             window.navigate(2)
             assert panel.heartbeat_address.isEnabled() == (role >= Role.ENGINEER)
             assert panel.fault_address.isEnabled() == (role >= Role.ENGINEER)
+            assert panel.running_address.isEnabled() == (role >= Role.ENGINEER)
             assert peer.connections == 0
             panel.heartbeat_address.setValue(146)
             assert panel.fault_address.value() == 47
             panel.fault_address.setValue(211)
             panel.address.setValue(118)
+            panel.running_address.setValue(216)
             panel.enabled.setChecked(True)
             assert panel.fault_address.text() == "W211" and peer.connections == 0
             if role < Role.ENGINEER:
@@ -193,7 +195,8 @@ def test_status_draft_permissions_save_discard_and_fault_observation(
                 applied.heartbeat_address,
                 applied.fault_address,
                 applied.word_address,
-            ) == (146, 211, 118)
+                applied.running_address,
+            ) == (146, 211, 118, 216)
             assert (
                 peer.words(211) == (0,)
                 and app.snapshot().state is not ApplicationState.FAULT
@@ -213,12 +216,14 @@ def test_status_draft_permissions_save_discard_and_fault_observation(
             assert app.alarm_snapshot().selection == applied
             panel.heartbeat_address.setValue(246)
             panel.fault_address.setValue(311)
+            panel.running_address.setValue(316)
             assert app.alarm_snapshot().selection == applied
             page.reload_settings()
             until(lambda: not page.busy)
             assert (
                 panel.heartbeat_address.value() == 146
                 and panel.fault_address.text() == "W211"
+                and panel.running_address.text() == "W216.1"
             )
             # No periodic audit stream: only the normal Save command is audited.
             rows = identity.audit_page(AuditQuery()).result(WAIT)
@@ -248,6 +253,16 @@ def test_start_rejects_conflict_until_old_status_owner_retires(tmp_path: Path) -
             assert peer.entered.wait(WAIT)
             # Trusted composition changing next-Start reporting cannot bypass an
             # old status writer that is still retiring after a saved disable.
+            published: list[bool] = []
+            with pytest.raises(ValueError, match="overlap"):
+                app.persist_reporting_selection(
+                    report,
+                    lambda: published.append(True),
+                    status=replace(
+                        status, enabled=False, heartbeat_address=46, running_address=49
+                    ),
+                )
+            assert not published and app.alarm_snapshot().selection == status
             app.persist_reporting_selection(
                 report, lambda: None, status=replace(status, enabled=False)
             )

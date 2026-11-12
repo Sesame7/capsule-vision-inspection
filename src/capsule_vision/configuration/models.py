@@ -9,6 +9,7 @@ from capsule_vision.inspection.production import CheckPolicy, InspectionLayout
 from capsule_vision.inspection.production.capsule import CapsuleSettings
 
 from .errors import ConfigurationError
+from .process_parameters import ProcessValues, process_values
 
 
 def text(value: object, name: str) -> str:
@@ -144,10 +145,14 @@ class RecipeDefinition:
     model_id: str | None = None
     capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
     image_archive: ImageArchiveSettings = field(default_factory=ImageArchiveSettings)
+    process_parameters: ProcessValues = ()
 
     def __post_init__(self) -> None:
         persistent_id(self.recipe_id, "recipe_id")
         text(self.display_name, "display_name")
+        object.__setattr__(
+            self, "process_parameters", process_values(self.process_parameters)
+        )
         for name, value in (
             ("product_code", self.product_code),
             ("model_id", self.model_id),
@@ -230,3 +235,4 @@ class ResolvedInspectionConfiguration:
     layout: InspectionLayout
     capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
     image_archive: ImageArchiveSettings = field(default_factory=ImageArchiveSettings)
+    process_parameters: ProcessValues = ()

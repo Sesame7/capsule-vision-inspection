@@ -301,6 +301,15 @@ def test_saved_disable_keeps_old_write_reservation_until_retirement(
                 {"fault_address": 47.0},
                 {"fault_address": None},
                 {"fault_address": "W47"},
+                {"running_address": -1},
+                {"running_address": 512},
+                {"running_address": True},
+                {"running_address": 16.0},
+                {"running_address": None},
+                {"running_address": "W16.1"},
+                {"running_address": 46},
+                {"running_address": 47},
+                {"running_bit": 1},
             )
         ),
     ],
@@ -320,13 +329,15 @@ def test_defaults_explicit_roundtrip_and_register_bounds(tmp_path: Path) -> None
     path = tmp_path / "communication.json"
     path.write_text("{}", encoding="utf-8")
     assert load_communication_preferences(path).status == StatusPreferences()
+    assert load_communication_preferences(path).status.running_address == 16
     path.write_text('{"status":{"fault_address":47}}', encoding="utf-8")
     assert load_communication_preferences(path).status == StatusPreferences()
-    for word, heartbeat, fault in (
-        (0, 511, 510),
-        (511, 0, 47),
-        (18, 46, 47),
-        (118, 146, 211),
+    for word, heartbeat, fault, running in (
+        (0, 511, 510, 16),
+        (511, 1, 47, 0),
+        (18, 46, 47, 511),
+        (118, 146, 211, 216),
+        (18, 46, 47, 18),  # Two read targets may share a word.
     ):
         value = CommunicationPreferences(
             status=StatusPreferences(
@@ -334,6 +345,7 @@ def test_defaults_explicit_roundtrip_and_register_bounds(tmp_path: Path) -> None
                 word_address=word,
                 heartbeat_address=heartbeat,
                 fault_address=fault,
+                running_address=running,
             )
         )
         save_communication_preferences(path, value)
@@ -343,6 +355,7 @@ def test_defaults_explicit_roundtrip_and_register_bounds(tmp_path: Path) -> None
             encoded["protocol"] == "fins_tcp"
             and encoded["heartbeat_address"] == heartbeat
             and encoded["fault_address"] == fault
+            and encoded["running_address"] == running
         )
         assert encoded["word_address"] == word and "alarm" not in json.loads(
             path.read_text(encoding="utf-8")
@@ -399,3 +412,137 @@ def test_configured_status_reporting_ranges_cannot_conflict(
         reporting=ReportingSelection(True, ReportingSettings(ModbusSettings(), base)),
         status=StatusPreferences(True, heartbeat_address=base),
     )
+
+
+@pytest.mark.parametrize("mode", list(ReportingMode))
+@pytest.mark.parametrize("base", [49, 149])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_running_target_cannot_alias_configured_automatic_reporting(
+    tmp_path: Path, mode: ReportingMode, base: int, enabled: bool
+) -> None:
+    report = ReportingSelection(
+        enabled, ReportingSettings(FinsTcpEndpoint(), base, mode=mode)
+    )
+    start = base - 1 if mode.group_size else base
+    for address in range(start, base + 4):
+        # Status Off does not make a conflicting future read target safe.
+        with pytest.raises(ValueError, match="overlap"):
+            CommunicationPreferences(
+                reporting=report, status=StatusPreferences(running_address=address)
+            )
+    for address in (start - 1, base + 4):
+        CommunicationPreferences(
+            reporting=report,
+            status=StatusPreferences(
+                heartbeat_address=400, fault_address=401, running_address=address
+            ),
+        )
+    CommunicationPreferences(
+        reporting=report,
+        status=StatusPreferences(
+            False, FinsTcpEndpoint(port=9601), running_address=base
+        ),
+    )
+    if mode is ReportingMode.PER_CYCLE:
+        with pytest.raises(ValueError, match="overlap"):
+            CommunicationPreferences(
+                reporting=replace(
+                    report,
+                    settings=replace(report.settings, endpoint=FinsUdpEndpoint()),
+                ),
+                status=StatusPreferences(running_address=base),
+            )
+    CommunicationPreferences(
+        reporting=ReportingSelection(
+            enabled, ReportingSettings(ModbusSettings(), base)
+        ),
+        status=StatusPreferences(running_address=base),
+    )
+    path = tmp_path / "communication.json"
+    content = json.dumps(
+        {
+            "reporting": {
+                "protocol": "fins_tcp",
+                "base_address": base,
+                "mode": mode.value,
+                "enabled": enabled,
+            },
+            "status": {"fault_address": 47, "running_address": base},
+        }
+    ).encode()
+    path.write_bytes(content)
+    with pytest.raises(ConfigurationError, match="overlap"):
+        load_communication_preferences(path)
+    issues: list[str] = []
+    recovered = load_communication_preferences(path, status_error=issues.append)
+    assert recovered.reporting == report and not recovered.status.enabled
+    assert recovered.status.running_address == 16 and len(issues) == 1
+    assert path.read_bytes() == content
+
+
+def test_running_only_save_preserves_connection_health_and_alarm_baseline(
+    tmp_path: Path,
+) -> None:
+    events: list[AlarmEvent] = []
+    monitor = AlarmMonitor(
+        tmp_path / "alarms.json",
+        events.extend,
+        lambda: (42.0, None, None),
+        state=lambda: ApplicationState.READY,
+        interval=60,
+    )
+    with TcpPeer() as peer:
+        selected = replace(selection(peer), enabled=False)
+        try:
+            monitor.apply_saved(selected)
+            monitor.apply_saved(replace(selected, running_address=216))
+            assert monitor.snapshot().state == "off" and peer.connections == 0
+            peer.set_words(18, (1,))
+            monitor.apply_saved(replace(selected, enabled=True))
+            wait(lambda: monitor.snapshot().state == "online")
+            before = monitor.snapshot()
+            recorded = tuple(events)
+            monitor.apply_saved(replace(before.selection, running_address=316))
+            assert monitor.snapshot() == replace(
+                before, selection=replace(before.selection, running_address=316)
+            )
+            assert not Event().wait(0.05)
+            assert peer.connections == 1 and len(peer.packets) == 3
+            assert [int.from_bytes(p[13:15]) for p in peer.packets] == [47, 46, 18]
+            assert tuple(events) == recorded
+        finally:
+            monitor.request_stop()
+            assert monitor.join(2)
+
+
+def test_running_and_output_address_swap_applies_without_intermediate_collision(
+    tmp_path: Path,
+) -> None:
+    monitor = AlarmMonitor(
+        tmp_path / "alarms.json",
+        lambda _: None,
+        lambda: (1.0, None, None),
+        state=lambda: ApplicationState.READY,
+        interval=60,
+    )
+    with TcpPeer() as peer:
+        try:
+            selected = selection(peer)
+            monitor.apply_saved(selected)
+            wait(lambda: monitor.snapshot().state == "online")
+            swapped = replace(selected, heartbeat_address=16, running_address=46)
+            monitor.apply_saved(swapped)
+            wait(lambda: monitor.snapshot().state == "online")
+            assert monitor.snapshot().selection == swapped
+            assert peer.connections == 2
+            assert [int.from_bytes(p[13:15]) for p in peer.packets] == [
+                47,
+                46,
+                18,
+                47,
+                16,
+                18,
+            ]
+        finally:
+            monitor.request_stop()
+            assert monitor.join(2)

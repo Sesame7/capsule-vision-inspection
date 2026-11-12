@@ -18,13 +18,17 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
     QComboBox,
+    QDoubleSpinBox,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QSpinBox,
     QStyle,
     QStyleOptionHeader,
+    QStyleOptionSpinBox,
     QWidget,
 )
+from tests.support.application import WAIT
 from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
 from tests.support.startup import authenticated_startup, provision_account, saved_data
 
@@ -298,6 +302,19 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     )
     assert runtime.snapshot().configuration == saved.web
     assert load_communication_preferences(startup.data.communication) == saved
+    identity = startup.application.identity
+    assert identity is not None
+    revisions = identity.audit.revisions("communication", "communication.json").result(
+        WAIT
+    )
+    assert (
+        revisions[0].confirmed
+        and revisions[0].record.operation.action == "communication.web_power"
+    )
+    assert (
+        identity.audit.revision_content(revisions[0].record.operation.id).result(WAIT)
+        == startup.data.communication.read_bytes()
+    )
     assert panel.port.value() == draft_port and page.port.value() == 19602
     assert page.reporting_panel.enabled.isChecked() and page.dirty
     assert page.reporting_panel.controller.reporting_selection() is original_reporting
@@ -623,6 +640,62 @@ def settings_window(
     finally:
         close_window(window)
         delivery.detach()
+
+
+@pytest.mark.parametrize("theme", ("dark", "light"))
+@pytest.mark.parametrize("language", ("zh", "en"))
+@pytest.mark.parametrize("size", ((1080, 1920), (1920, 1080)))
+def test_numeric_values_and_prefixes_fit_shared_stepper_geometry(
+    settings_window: tuple[Startup, MainWindow],
+    theme: Theme,
+    language: Language,
+    size: tuple[int, int],
+) -> None:
+    startup, window = settings_window
+    window.resize(*size)
+    window.set_language(language)
+    window.set_theme(theme)
+    page = window.communication
+    panel = page.reporting_panel
+    assert panel is not None
+    before = startup.application.snapshot()
+    panel.advanced_button.click()
+    panel.merge_count.setCurrentIndex(0)
+    page.advanced_button.click()
+    page.watch_editor_button.click()
+    page.manual_button.click()
+    for protocol in ("fins_tcp", "modbus_tcp"):
+        panel.protocol.setCurrentIndex(1 if protocol == "fins_tcp" else 2)
+        page.protocol.setCurrentIndex(1 if protocol == "fins_tcp" else 2)
+        spins = page.findChildren(QSpinBox) + page.findChildren(QDoubleSpinBox)
+        for spin in spins:
+            if isinstance(spin, QSpinBox):
+                spin.setValue(spin.maximum())
+            else:
+                spin.setValue(spin.maximum())
+        QApplication.processEvents()
+        assert page.body.width() <= page.scroll_area.viewport().width()
+        for spin in spins:
+            if not spin.isVisible():
+                continue
+            option = QStyleOptionSpinBox()
+            spin.initStyleOption(option)
+            up = spin.style().subControlRect(
+                QStyle.ComplexControl.CC_SpinBox,
+                option,
+                QStyle.SubControl.SC_SpinBoxUp,
+                spin,
+            )
+            assert up.width() == 21 and up.right() == spin.rect().right()
+            assert spin.height() >= Style.touch
+            line = spin.lineEdit()
+            assert (
+                line.fontMetrics().horizontalAdvance(line.text()) + 4 <= line.width()
+            ), (spin.accessibleName(), line.text(), line.size())
+        assert page.web_panel.port.isVisible()
+        assert page.alarm_panel.port.isVisible()
+    assert startup.application.snapshot() == before
+    assert not startup.data.communication.exists()
 
 
 @pytest.mark.parametrize("theme", ("dark", "light"))

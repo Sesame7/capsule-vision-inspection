@@ -29,7 +29,12 @@ from development_showcase import (
 from tests.support.startup import saved_data
 
 from capsule_vision.application._security_lock import SecurityLease
-from capsule_vision.application.audit import AuditQuery, AuditTrail
+from capsule_vision.application.audit import (
+    AuditOperation,
+    AuditQuery,
+    AuditTrail,
+    RevisionEvidence,
+)
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity_models import SecurityBusyError
 from capsule_vision.application.startup import ApplicationData
@@ -310,6 +315,30 @@ def test_install_requires_exact_preview_and_preserves_credentials(
     for name, old in zip(("history.sqlite3", "audit.sqlite3"), before, strict=True):
         with closing(sqlite3.connect(backup / name)) as db:
             assert tuple(db.iterdump()) == old
+    with closing(sqlite3.connect(target.audit)) as db:
+        assert db.execute("PRAGMA user_version").fetchone() == (2,)
+        assert set(
+            db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
+        ) == {("revision_immutable_update",), ("revision_immutable_delete",)}
+
+
+def test_development_replacement_cannot_remove_configuration_revisions(
+    staged: Path, tmp_path: Path
+) -> None:
+    target, directory = install_fixture(tmp_path, staged)
+    audit = AuditTrail(target.audit, lambda _: 1)
+    operation = AuditOperation("engineer", "Engineer", "recipe.save", "recipe")
+    try:
+        audit.intent(
+            operation, RevisionEvidence("recipe", "recipe", b"retained definition")
+        ).result()
+        audit.complete(operation, "success").result()
+    finally:
+        audit.close()
+    before = target.audit.read_bytes()
+    with pytest.raises(ValueError, match="Configuration revisions present"):
+        replacement.preview(target, directory)
+    assert target.audit.read_bytes() == before
 
 
 @pytest.mark.parametrize("change", ["target", "stage", "root", "customer", "redirect"])

@@ -3,7 +3,9 @@
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
+from math import isfinite
 from pathlib import Path
+from statistics import median
 from threading import Thread
 from time import monotonic
 from typing import Literal
@@ -16,8 +18,11 @@ from PySide6.QtGui import (
     QPainter,
     QPaintEvent,
     QPen,
+    QResizeEvent,
+    QValidator,
 )
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QComboBox,
     QFileDialog,
     QHBoxLayout,
@@ -69,6 +74,66 @@ from .style import Style, camera_icon, theme_colors
 
 type PreviewMode = Literal["size", "color"]
 type ReferenceKind = Literal["folder", "runtime", "import"]
+
+
+class _LengthSpinBox(QAbstractSpinBox):
+    """Native numeric editing without imposing a Qt int32 limit on Recipe lengths."""
+
+    valueChanged = Signal()
+
+    def __init__(self, minimum: int) -> None:
+        super().__init__()
+        self.setObjectName("recipeLength")
+        self._minimum = self._value = minimum
+        self.lineEdit().setText(str(minimum))
+        self.lineEdit().textEdited.connect(self._edited)
+        self.editingFinished.connect(lambda: self.lineEdit().setText(str(self._value)))
+
+    def value(self) -> int:
+        return self._value
+
+    def setValue(self, value: int) -> None:
+        if value < self._minimum:
+            raise ValueError("Length value below its configured minimum")
+        changed = value != self._value
+        self._value = value
+        if self.lineEdit().text() != str(value):
+            self.lineEdit().setText(str(value))
+        if changed:
+            self.valueChanged.emit()
+
+    def validate(self, input: str, pos: int) -> tuple[QValidator.State, str, int]:
+        state = QValidator.State.Invalid
+        if not input:
+            state = QValidator.State.Intermediate
+        elif input.isascii() and input.isdecimal():
+            try:
+                state = (
+                    QValidator.State.Acceptable
+                    if int(input) >= self._minimum
+                    else QValidator.State.Intermediate
+                )
+            except ValueError:
+                pass
+        return state, input, pos
+
+    def fixup(self, input: str) -> str:
+        return str(self._value)
+
+    def _edited(self, value: str) -> None:
+        if self.validate(value, 0)[0] == QValidator.State.Acceptable:
+            self.setValue(int(value))
+
+    def stepBy(self, steps: int) -> None:
+        self.setValue(max(self._minimum, self._value + steps))
+
+    def stepEnabled(self) -> QAbstractSpinBox.StepEnabledFlag:
+        if self.isReadOnly():
+            return QAbstractSpinBox.StepEnabledFlag.StepNone
+        flags = QAbstractSpinBox.StepEnabledFlag.StepUpEnabled
+        if self._value > self._minimum:
+            flags |= QAbstractSpinBox.StepEnabledFlag.StepDownEnabled
+        return flags
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,8 +340,9 @@ class RecipeTuning(QWidget):
         self._close: Callable[[], None] | None = None
         self._loading = False
         self._selection_frame: DisplayFrame | None = None
+        self._detail_metrics: tuple[tuple[str, str], int, str] | None = None
         root = QVBoxLayout(self)
-        root.setContentsMargins(Style.space, Style.small, Style.space, Style.small)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(Style.small)
         camera_controls = QWidget()
         header = QHBoxLayout(camera_controls)
@@ -345,38 +411,63 @@ class RecipeTuning(QWidget):
         for row in (size_row, color_row):
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(Style.space)
-        self.spins: dict[str, QSpinBox] = {}
+        self.spins: dict[str, _LengthSpinBox] = {}
         self.labels: dict[str, QLabel] = {}
         for key in (
             "target_length",
             "length_tolerance",
         ):
-            column = QVBoxLayout()
-            column.setSpacing(Style.small)
-            label, spin = QLabel(), QSpinBox()
-            spin.setRange(1 if key.startswith("target") else 0, 1000000)
+            label, spin = QLabel(), _LengthSpinBox(1 if key == "target_length" else 0)
             spin.setMinimumHeight(Style.touch)
             spin.setFixedWidth(
-                spin.fontMetrics().horizontalAdvance(str(spin.maximum()))
+                spin.fontMetrics().horizontalAdvance("1000000")
                 + 2 * Style.space
                 + Style.icon
             )
             spin.valueChanged.connect(self.update_settings)
             self.spins[key], self.labels[key] = spin, label
-            column.addWidget(label)
-            column.addWidget(spin)
-            size_row.addLayout(column)
+        self.length_sample = QPushButton()
+        self.length_sample.setFixedSize(Style.touch, Style.touch)
+        self.length_sample.setIconSize(QSize(Style.icon, Style.icon))
+        self.length_slider = QSlider(Qt.Orientation.Horizontal)
+        self.length_slider.setRange(0, 100)
+        self.length_slider.setMinimumHeight(Style.touch)
+        self.length_slider.setMinimumWidth(5 * Style.touch)
+        for control in (
+            self.labels["target_length"],
+            self.spins["target_length"],
+            self.length_sample,
+            self.labels["length_tolerance"],
+            self.spins["length_tolerance"],
+            QLabel("px"),
+            self.length_slider,
+        ):
+            size_row.addWidget(control)
         size_row.addStretch()
         self.swatch = QLabel()
         self.swatch.setFixedSize(Style.touch, Style.touch)
         self.sample = QPushButton()
         self.sample.setFixedSize(Style.touch, Style.touch)
         self.sample.setIconSize(QSize(Style.icon, Style.icon))
+        self.hue_label, self.hue = QLabel("H"), QSpinBox()
+        self.hue.setObjectName("recipeHue")
+        self.hue.setRange(0, 179)
+        self.hue.setSingleStep(1)
+        self.hue.setWrapping(True)
+        self.hue.setMinimumHeight(Style.touch)
+        self.hue.setFixedWidth(
+            self.hue.fontMetrics().horizontalAdvance("179")
+            + 2 * Style.space
+            + Style.icon
+        )
+        self.hue_label.setBuddy(self.hue)
         self.tolerance = QSlider(Qt.Orientation.Horizontal)
         self.tolerance.setRange(0, 90)
         self.tolerance.setMinimumHeight(Style.touch)
         self.tolerance.setMinimumWidth(5 * Style.touch)
         self.tolerance_label = QLabel()
+        color_row.addWidget(self.hue_label)
+        color_row.addWidget(self.hue)
         color_row.addWidget(self.swatch)
         color_row.addWidget(self.sample)
         color_row.addWidget(self.tolerance_label)
@@ -414,7 +505,11 @@ class RecipeTuning(QWidget):
         self.reference.activated.connect(self.choose_image)
         self.camera_tabs.currentChanged.connect(self.select_camera)
         self.tolerance.valueChanged.connect(self.update_settings)
+        self.hue.valueChanged.connect(self.update_settings)
         self.sample.clicked.connect(self.sample_color)
+        self.length_sample.clicked.connect(self.sample_length)
+        self.length_slider.valueChanged.connect(self._length_slid)
+        self.length_slider.sliderReleased.connect(self.show_settings)
         self.canvas.view_selected.connect(self.select_view)
         self._timer = QTimer(self)
         self._timer.setInterval(15)
@@ -447,8 +542,10 @@ class RecipeTuning(QWidget):
             (self.refresh_button, "refresh"),
             (self.fit_button, "fit"),
             (self.sample, "sample"),
+            (self.length_sample, "sample"),
         ):
             button.setIcon(image_icon(tool, color))
+        self._present_selection()
 
     def set_language(self, language: Language) -> None:
         self.language = self.canvas.language = language
@@ -479,14 +576,21 @@ class RecipeTuning(QWidget):
             caption = text(key, language)
             if key.endswith("tolerance"):
                 caption += " (px)"
-            self.labels[key].setText("L (px)" if key == "target_length" else "± L (px)")
-            self.labels[key].setFixedWidth(self.spins[key].width())
+            self.labels[key].setText("L" if key == "target_length" else "±")
             self.labels[key].setToolTip(caption)
             self.labels[key].setAccessibleName(caption)
             self.spins[key].setAccessibleName(caption)
+            self.spins[key].lineEdit().setAccessibleName(caption)
             self.spins[key].setToolTip(caption)
         self.sample.setToolTip(text("color_sample_tip", self.language))
         self.sample.setAccessibleName(self.sample.toolTip())
+        hue_caption = text("target_color", language) + " · H (0–179)"
+        for control in (self.hue_label, self.hue, self.hue.lineEdit()):
+            control.setToolTip(hue_caption)
+            control.setAccessibleName(hue_caption)
+        self.length_sample.setToolTip(text("length_sample", language))
+        self.length_sample.setAccessibleName(self.length_sample.toolTip())
+        self.length_slider.setAccessibleName(text("length_tolerance", language))
         self.canvas.setToolTip(
             text("preview_select", language)
             + "\n"
@@ -504,6 +608,35 @@ class RecipeTuning(QWidget):
                 "length_tolerance": settings.size.length_tolerance,
             }[key]
             spin.setValue(value)
+            spin.setToolTip(text(key, self.language) + f" · {value} px")
+            spin.setAccessibleDescription(f"{value} px")
+        tolerance = settings.size.length_tolerance
+        # Keep a drag's range stable; numeric edits/release restore a useful
+        # range. Values beyond Qt's integer range remain precisely editable.
+        self.length_slider.setMaximum(
+            min(
+                max(
+                    100,
+                    tolerance,
+                    self.length_slider.maximum()
+                    if self.length_slider.isSliderDown()
+                    else 0,
+                ),
+                2**31 - 1,
+            )
+        )
+        self.length_slider.setValue(min(tolerance, self.length_slider.maximum()))
+        self.length_slider.setToolTip(
+            text("length_tolerance", self.language)
+            + f" · {tolerance} px"
+            + (
+                " · " + text("length_numeric_entry", self.language)
+                if tolerance > self.length_slider.maximum()
+                else ""
+            )
+        )
+        self.hue.setValue(settings.color.target_hue)
+        self.hue.setAccessibleDescription(f"H {settings.color.target_hue}")
         self.tolerance.setValue(settings.color.hue_tolerance)
         self.swatch.setStyleSheet(
             f"background: {QColor.fromHsv(settings.color.target_hue * 2, 220, 220).name()}; border: 1px solid #8090a0;"
@@ -527,6 +660,15 @@ class RecipeTuning(QWidget):
     def refresh_state(self) -> None:
         allowed = self.allowed() and self._close is None
         self.controls.setEnabled(allowed)
+        self.length_slider.setEnabled(
+            allowed and self.session.draft.capsule.size.length_tolerance <= 2**31 - 1
+        )
+        self.length_sample.setEnabled(
+            allowed
+            and not self.busy
+            and self.frame is not None
+            and self.session.draft.capsule.size.enabled
+        )
         self.sample.setEnabled(
             allowed
             and not self.busy
@@ -554,17 +696,40 @@ class RecipeTuning(QWidget):
         self.canvas.update()
 
     def _present_selection(self) -> None:
+        # Reserve the actual text budget of both modes, so their different
+        # reason/measurement lines do not move the shared image on mode switches.
+        captions = self._selection_text("size"), self._selection_text("color")
+        detail = self.selection_detail
+        detail.ensurePolished()
+        width = max(
+            detail.minimumWidth(),
+            self.width() - self.controls.sizeHint().width() - Style.space,
+        )
+        metrics = captions, width, detail.font().key()
+        if metrics != self._detail_metrics:
+            heights = [Style.touch]
+            for caption in captions:
+                detail.setText(caption)
+                heights.append(detail.heightForWidth(width))
+            detail.setMinimumHeight(max(heights))
+            self._detail_metrics = metrics
+        detail.setText(captions[0 if self.mode == "size" else 1])
+        detail.setToolTip("")
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._present_selection()
+
+    def _selection_text(self, mode: PreviewMode) -> str:
         selected = self.canvas.selection
         settings = self.session.draft.capsule
-        enabled = (
-            settings.size.enabled if self.mode == "size" else settings.color.enabled
-        )
+        enabled = settings.size.enabled if mode == "size" else settings.color.enabled
         if (
             selected is None
             or self._selection_frame is not self.frame
             or self.frame is None
         ):
-            self.selection_detail.setText(
+            return (
                 text("preview_pending", self.language)
                 if self.busy
                 else text("preview_no_reference", self.language)
@@ -575,8 +740,6 @@ class RecipeTuning(QWidget):
                 if not self.measurements
                 else ""
             )
-            self.selection_detail.setToolTip("")
-            return
         index, view_index = selected
         slot = self.camera.slots[index]
         name = "upper" if view_index == 0 else "lower"
@@ -587,7 +750,7 @@ class RecipeTuning(QWidget):
         measured = row.measured if row else None
         view = measured.views[view_index] if measured else None
         available = measured is not None and (
-            measured.size_measured if self.mode == "size" else measured.color_measured
+            measured.size_measured if mode == "size" else measured.color_measured
         )
         status, explanation = text("unavailable", self.language), ""
         if not enabled:
@@ -595,24 +758,35 @@ class RecipeTuning(QWidget):
         elif row is not None and row.error:
             status = "ERROR"
         elif available and measured is not None:
-            result = self.results[index] if index < len(self.results) else None
-            if result is not None:
-                reasons = [r.code for r in result.reasons if f".{name}." in r.code]
-                status = "NG" if reasons else "OK"
-                explanation = " · ".join(
-                    dict.fromkeys(
-                        text(
-                            CAPSULE_REASON_KEYS.get(
-                                code.rsplit(".", 1)[-1], "preview_unavailable"
-                            ),
-                            self.language,
-                        )
-                        for code in reasons
+            result = judge_capsule(
+                measured,
+                replace(
+                    settings,
+                    size=replace(
+                        settings.size, enabled=mode == "size" and settings.size.enabled
+                    ),
+                    color=replace(
+                        settings.color,
+                        enabled=mode == "color" and settings.color.enabled,
+                    ),
+                ),
+            )
+            reasons = [r.code for r in result.reasons if f".{name}." in r.code]
+            status = "NG" if reasons else "OK"
+            explanation = " · ".join(
+                dict.fromkeys(
+                    text(
+                        CAPSULE_REASON_KEYS.get(
+                            code.rsplit(".", 1)[-1], "preview_unavailable"
+                        ),
+                        self.language,
                     )
+                    for code in reasons
                 )
-        check_name = text(self.mode, self.language)
+            )
+        check_name = text(mode, self.language)
         header = f"{self.camera.camera_id} · CH{slot.channel_id:02d} · {caption} · {check_name} {status}"
-        if self.mode == "size":
+        if mode == "size":
             body = view.body if view is not None and enabled and available else None
             actual = f"{body.length:.2f}" if body is not None else "—"
             s = settings.size
@@ -625,10 +799,7 @@ class RecipeTuning(QWidget):
             )
             actual = f"{hue:.2f}" if hue is not None else "—"
             values = f"Hue {actual} · {text('target', self.language)} {settings.color.target_hue} ± {settings.color.hue_tolerance}"
-        self.selection_detail.setText(
-            f"{header}\n{values}" + (f"\n{explanation}" if explanation else "")
-        )
-        self.selection_detail.setToolTip("")
+        return f"{header}\n{values}" + (f"\n{explanation}" if explanation else "")
 
     def update_settings(self) -> None:
         if self._loading or not self.allowed() or self._close is not None:
@@ -648,10 +819,52 @@ class RecipeTuning(QWidget):
                 settings,
                 color=replace(
                     settings.color,
+                    target_hue=self.hue.value(),
                     hue_tolerance=self.tolerance.value(),
                 ),
             )
         self.session.draft.capsule = settings
+        self.changed()
+        self.show_settings()
+
+    def _length_slid(self, value: int) -> None:
+        if (
+            self._loading
+            or self.mode != "size"
+            or not self.allowed()
+            or self.closing
+            or not self.length_slider.isEnabled()
+        ):
+            return
+        self.spins["length_tolerance"].setValue(value)
+
+    def sample_length(self) -> None:
+        settings = self.session.draft.capsule
+        if (
+            not self.allowed()
+            or self.busy
+            or self.closing
+            or self.frame is None
+            or not settings.size.enabled
+        ):
+            return
+        lengths = [
+            view.body.length
+            for row in self.measurements
+            if not row.error and row.measured and row.measured.size_measured
+            for view in row.measured.views
+            if view.invalid_reason is None
+            and view.body is not None
+            and isfinite(view.body.length)
+            and view.body.length > 0
+        ]
+        if not lengths:
+            self.show_message(text("length_sample_missing", self.language))
+            return
+        self.session.draft.capsule = replace(
+            settings,
+            size=replace(settings.size, target_length=max(1, round(median(lengths)))),
+        )
         self.changed()
         self.show_settings()
 

@@ -1,5 +1,6 @@
 """Single-owner configuration working copies; persistence is separate from activation."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
@@ -14,6 +15,7 @@ from capsule_vision.inspection.production import (
 )
 from capsule_vision.inspection.production.capsule import CapsuleSettings
 
+from ._io import ConfigurationPublication
 from .errors import ConfigurationError, ConfigurationIOError
 from .models import (
     CheckConfiguration,
@@ -24,9 +26,10 @@ from .models import (
 from .persistence import (
     load_camera_sources,
     load_machine_layout,
-    save_camera_sources,
-    save_machine_layout,
+    machine_publication,
+    sources_publication,
 )
+from .process_parameters import BUILTIN_PROCESS_CATALOG, ProcessCatalog
 from .roi_geometry import fits, pixel
 from .sources import CameraSources
 
@@ -69,6 +72,7 @@ class RecipeDraft:
 
     capsule: CapsuleSettings = field(default_factory=CapsuleSettings)
     image_archive: ImageArchiveDraft = field(default_factory=ImageArchiveDraft)
+    process_parameters: dict[str, str] = field(default_factory=dict[str, str])
 
     @classmethod
     def from_recipe(cls, recipe: RecipeDefinition) -> RecipeDraft:
@@ -80,9 +84,12 @@ class RecipeDraft:
             recipe.defaults,
             recipe.capsule,
             ImageArchiveDraft.from_settings(recipe.image_archive),
+            {key: str(value) for key, value in recipe.process_parameters},
         )
 
-    def to_recipe(self) -> RecipeDefinition:
+    def to_recipe(
+        self, process_catalog: ProcessCatalog = BUILTIN_PROCESS_CATALOG
+    ) -> RecipeDefinition:
         return RecipeDefinition(
             self.recipe_id,
             self.display_name,
@@ -91,6 +98,7 @@ class RecipeDraft:
             self.model_id,
             capsule=self.capsule,
             image_archive=self.image_archive.to_settings(),
+            process_parameters=process_catalog.parse_draft(self.process_parameters),
         )
 
 
@@ -262,7 +270,9 @@ class MachineLayoutDraft:
             )
         self.replace_rects(camera, tuple(rects))
 
-    def save(self) -> None:
+    def save(
+        self, *, publish: Callable[[ConfigurationPublication], None] | None = None
+    ) -> None:
         if self.path is None:
             raise ValueError("No machine layout persistence path configured")
         if self._file_present:
@@ -286,7 +296,11 @@ class MachineLayoutDraft:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise ConfigurationIOError(f"Machine directory: {exc}") from exc
-        save_machine_layout(self.path, definition)
+        publication = machine_publication(self.path, definition)
+        if publish is None:
+            publication.publish()
+        else:
+            publish(publication)
         self.saved = definition
         self._file_present = True
 
@@ -336,7 +350,9 @@ class CameraSourceDraft:
             + (row,),
         )
 
-    def save(self) -> None:
+    def save(
+        self, *, publish: Callable[[ConfigurationPublication], None] | None = None
+    ) -> None:
         if self._file_present:
             if not self.persisted or load_camera_sources(self.path) != self.saved:
                 raise ConfigurationError(
@@ -348,7 +364,11 @@ class CameraSourceDraft:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise ConfigurationIOError(f"Sources directory: {exc}") from exc
-        save_camera_sources(self.path, self.definition)
+        publication = sources_publication(self.path, self.definition)
+        if publish is None:
+            publication.publish()
+        else:
+            publish(publication)
         self.saved = self.definition
         self.persisted = self._file_present = True
 

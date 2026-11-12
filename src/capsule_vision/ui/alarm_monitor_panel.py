@@ -50,7 +50,7 @@ class AlarmMonitorPanel(QFrame):
         self.preview: AlarmDefinitions | None = None
         self.preview_issue = ""
         self.can_manage = True
-        self._columns = 0
+        self._columns = (0, 0)
         self.setObjectName("commPanel")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         root = QVBoxLayout(self)
@@ -103,6 +103,11 @@ class AlarmMonitorPanel(QFrame):
         self.fault_address.setRange(0, FinsMemoryArea.W.word_count - 1)
         self.fault_address.setValue(47)
         self.fault_address.setPrefix("W")
+        self.running_address = QSpinBox()
+        self.running_address.setRange(0, FinsMemoryArea.W.word_count - 1)
+        self.running_address.setValue(16)
+        self.running_address.setPrefix("W")
+        self.running_address.setSuffix(".1")
         self._captions: list[tuple[str, QLabel]] = []
         self.controls = QWidget()
         settings = QVBoxLayout(self.controls)
@@ -122,6 +127,7 @@ class AlarmMonitorPanel(QFrame):
             ("status_heartbeat", self.heartbeat_address),
             ("status_fault", self.fault_address),
             ("status_alarm_address", self.address),
+            ("status_running", self.running_address),
         ):
             group = QWidget()
             column = QVBoxLayout(group)
@@ -209,27 +215,30 @@ class AlarmMonitorPanel(QFrame):
         return super().eventFilter(watched, event)
 
     def _arrange_settings(self) -> None:
-        required = (
-            max(
-                sum(group.minimumSizeHint().width() for group in self._groups[:3]),
-                3 * max(group.minimumSizeHint().width() for group in self._groups[3:]),
-            )
+        connection_width = (
+            sum(group.minimumSizeHint().width() for group in self._groups[:3])
             + 2 * Style.space
         )
-        columns = 3 if self.controls.width() >= required else 2
+        address_width = max(
+            group.minimumSizeHint().width() for group in self._groups[3:]
+        )
+        columns = (
+            3 if self.controls.width() >= connection_width else 2,
+            4 if self.controls.width() >= 4 * address_width + 3 * Style.space else 2,
+        )
         if columns == self._columns:
             return
         self._columns = columns
-        for grid, groups in (
-            (self.settings_layout, self._groups[:3]),
-            (self.address_layout, self._groups[3:]),
+        for grid, groups, count in (
+            (self.settings_layout, self._groups[:3], columns[0]),
+            (self.address_layout, self._groups[3:], columns[1]),
         ):
             for group in groups:
                 grid.removeWidget(group)
-            for column in range(3):
+            for column in range(4):
                 grid.setColumnStretch(column, 0)
             for index, group in enumerate(groups):
-                row, column = divmod(index, columns)
+                row, column = divmod(index, count)
                 grid.addWidget(group, row, column)
                 grid.setColumnStretch(
                     column, 2 if grid is self.settings_layout and column == 1 else 1
@@ -326,6 +335,7 @@ class AlarmMonitorPanel(QFrame):
             (self.address, "alarm_word_tip"),
             (self.heartbeat_address, "status_heartbeat_tip"),
             (self.fault_address, "status_fault_tip"),
+            (self.running_address, "status_running_tip"),
             (self.expand, "alarm_details"),
             (self.refresh_preview, "alarm_preview_refresh"),
             (self.table, "alarm_details"),

@@ -10,12 +10,13 @@ import cv2
 import numpy as np
 import pytest
 from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLabel
 from tests.support.capsule_images import SETTINGS, bodies
 from tests.support.cycles import image_result
 from tests.support.qt import until
-from tests.support.recipe_ui import Screen, assert_inside
+from tests.support.recipe_ui import Screen, assert_inside, edit
 from tests.support.recipe_ui import configured_screen as configured_screen
 
 from capsule_vision.application import ConfiguredProductionPipeline
@@ -607,8 +608,356 @@ def test_cached_judgment_and_isolation_and_save(
     assert session.entry and load_recipe(session.entry.path).capsule == expected
     candidate = window.bridge.application.snapshot().candidate_prepared
     assert candidate is not None
-    assert candidate == before.candidate_prepared
+    assert candidate.configuration.capsule == expected
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_prepared=candidate
+    )
     assert not runtimes and window.bridge.application.snapshot().active is before.active
+
+
+@pytest.mark.parametrize("language", ("zh", "en"))
+def test_manual_hue_wrap_sampling_and_save_discard_reuse_evidence(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, language: Language
+) -> None:
+    import capsule_vision.ui.recipe_tuning as module
+
+    window, session, runtimes = configured_screen
+    preview = setup(configured_screen)
+    preview.set_mode("color")
+    window.set_language(language)
+    page = window.recipe_page
+    page.save()
+    until(lambda: not page.busy)
+    assert session.entry is not None and not session.dirty
+    original = session.draft.capsule
+    persisted = session.entry.path.read_bytes()
+    before = window.bridge.application.snapshot()
+    frame, evidence, camera = preview.frame, preview.measurements, preview.camera
+    preview.select_view(0, 0)
+    changes: list[bool] = []
+    changed = preview.changed
+
+    def observed_change() -> None:
+        changes.append(True)
+        changed()
+
+    def forbidden(*args: object) -> None:
+        pytest.fail("Hue edits and sampling must reuse cached measurements")
+
+    preview.changed = observed_change
+    monkeypatch.setattr(module, "measure_reference", forbidden)
+    assert (preview.hue.minimum(), preview.hue.maximum(), preview.hue.singleStep()) == (
+        0,
+        179,
+        1,
+    )
+    assert text("target_color", language) in preview.hue.toolTip()
+    assert preview.hue.accessibleName() == preview.hue.lineEdit().accessibleName()
+
+    for theme in ("dark", "light"):
+        window.set_theme(theme)
+        for mode in ("size", "color"):
+            preview.set_mode(mode)
+            preview.show_settings()
+    assert not changes and not session.dirty
+    preview.hue.setFocus(Qt.FocusReason.TabFocusReason)
+    QTest.keyClick(preview.hue, Qt.Key.Key_Tab)
+    assert preview.sample.hasFocus()
+    QTest.keyClick(preview.sample, Qt.Key.Key_Tab)
+    assert preview.tolerance.hasFocus()
+    field = preview.hue.lineEdit()
+    field.setFocus()
+    field.selectAll()
+    QTest.keyClicks(field, "70")
+    QTest.keyClick(field, Qt.Key.Key_Return)
+    assert session.draft.capsule == replace(
+        original, color=replace(original.color, target_hue=70)
+    )
+    assert session.dirty and session.entry.path.read_bytes() == persisted
+    assert QColor.fromHsv(140, 220, 220).name() in preview.swatch.styleSheet()
+    assert preview.swatch.toolTip().endswith("H 70")
+    assert "70 ±" in preview.selection_detail.text()
+    assert (
+        page.expand_tuning["color"].text() == f"H 70 ± {original.color.hue_tolerance}"
+    )
+    assert all(
+        r and r.assessment.judgment is ProductJudgment.NG for r in preview.results
+    )
+    assert preview.canvas.results == preview.results
+
+    for start, key, expected in (
+        (179, Qt.Key.Key_Up, 0),
+        (0, Qt.Key.Key_Down, 179),
+        (73, Qt.Key.Key_Up, 74),
+        (73, Qt.Key.Key_Down, 72),
+    ):
+        field.selectAll()
+        QTest.keyClicks(field, str(start))
+        assert preview.hue.value() == start
+        count = len(changes)
+        QTest.keyClick(preview.hue, key)
+        assert preview.hue.value() == session.draft.capsule.color.target_hue == expected
+        assert len(changes) == count + 1
+        assert session.draft.capsule == replace(
+            original, color=replace(original.color, target_hue=expected)
+        )
+        assert (
+            QColor.fromHsv(expected * 2, 220, 220).name() in preview.swatch.styleSheet()
+        )
+
+    page.save()
+    until(lambda: not page.busy)
+    assert (
+        not session.dirty
+        and load_recipe(session.entry.path).capsule.color.target_hue == 72
+    )
+    preview.sample.click()
+    assert preview.hue.value() == session.draft.capsule.color.target_hue == 30
+    assert preview.swatch.toolTip().endswith("H 30")
+    assert all(
+        r and r.assessment.judgment is ProductJudgment.OK for r in preview.results
+    )
+    assert session.draft.capsule == original and session.dirty
+    count = len(changes)
+    session.discard()
+    page.show_draft()
+    assert not session.dirty and preview.hue.value() == 72
+    assert len(changes) == count
+    for mode in ("size", "color", "size", "color"):
+        preview.set_mode(mode)
+        preview.show_settings()
+    assert len(changes) == count and not session.dirty
+    assert preview.frame is frame and preview.measurements is evidence
+    assert preview.camera == camera and preview.canvas.selection == (0, 0)
+    assert not preview.busy and not runtimes
+    candidate = window.bridge.application.snapshot().candidate_prepared
+    assert candidate is not None
+    assert candidate.configuration.capsule == session.entry.recipe.capsule
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_prepared=candidate
+    )
+
+
+def test_manual_hue_permissions_disabled_color_and_close(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import capsule_vision.ui.recipe_tuning as module
+
+    window, session, _ = configured_screen
+    preview = setup(configured_screen)
+    preview.set_mode("color")
+    original = session.draft.capsule
+    preview.allowed = lambda: False
+    preview.refresh_state()
+    assert not preview.hue.isEnabled()
+    preview.hue.setValue(67)
+    assert session.draft.capsule == original
+    preview.show_settings()
+    assert preview.hue.value() == original.color.target_hue
+    preview.allowed = window.recipe_page.editable
+    window.recipe_page.capsule_enabled["color"].click()
+    until(lambda: not preview.busy)
+    disabled = session.draft.capsule
+    assert not disabled.color.enabled and preview.hue.isEnabled()
+    assert not preview.sample.isEnabled()
+
+    def forbidden(*args: object) -> None:
+        pytest.fail("Editing a disabled Color target must not measure or enable it")
+
+    monkeypatch.setattr(module, "measure_reference", forbidden)
+    preview.hue.setValue(41)
+    assert session.draft.capsule == replace(
+        disabled, color=replace(disabled.color, target_hue=41)
+    )
+    assert (
+        not preview.results[0]
+        or preview.results[0].assessment.judgment is not ProductJudgment.NG
+    )
+    closing = session.draft.capsule
+    preview.request_close(lambda: None)
+    assert preview.closing and not preview.hue.isEnabled()
+    preview.hue.setValue(179)
+    assert session.draft.capsule == closing
+
+
+@pytest.mark.parametrize("partial", (False, True))
+def test_length_sample_uses_cached_valid_axes_and_changes_only_target(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, partial: bool
+) -> None:
+    import capsule_vision.ui.recipe_tuning as module
+
+    window, session, runtimes = configured_screen
+    preview = setup(configured_screen)
+    session.draft.capsule = replace(
+        SETTINGS, size=replace(SETTINGS.size, target_length=292, length_tolerance=10)
+    )
+    preview.show_settings()
+    if partial:
+        row = preview.measurements[0]
+        assert row.measured is not None
+        upper, lower = row.measured.views
+        assert upper.body is not None and lower.body is not None
+        first = replace(
+            row.measured,
+            views=(
+                replace(upper, body=replace(upper.body, length=291.25)),
+                replace(lower, body=replace(lower.body, length=292.75)),
+            ),
+        )
+        second = replace(
+            row.measured,
+            views=(
+                replace(upper, body=None, invalid_reason="missing_body"),
+                replace(lower, body=replace(lower.body, length=310.0)),
+            ),
+        )
+        preview.measurements = (
+            replace(row, measured=first),
+            replace(preview.measurements[1], measured=second),
+            *(
+                replace(r, measured=None, error="unavailable")
+                for r in preview.measurements[2:]
+            ),
+        )
+    frame, evidence = preview.frame, preview.measurements
+    original = session.draft.capsule
+    before = window.bridge.application.snapshot()
+
+    def forbidden(*args: object) -> None:
+        pytest.fail("Sampling/threshold changes must reuse the frozen measurements")
+
+    monkeypatch.setattr(module, "measure_reference", forbidden)
+    preview.length_sample.click()
+    expected = 293 if partial else 29  # Major-axis scalars, not 80×120 ROIs.
+    assert session.draft.capsule == replace(
+        original, size=replace(original.size, target_length=expected)
+    )
+    assert preview.frame is frame and preview.measurements is evidence
+    assert not preview.busy and session.dirty
+    window.recipe_page.save()
+    until(lambda: not window.recipe_page.busy)
+    assert session.entry is not None and not session.dirty
+    assert load_recipe(session.entry.path).capsule == session.draft.capsule
+    preview.spins["target_length"].setValue(expected + 5)
+    session.discard()
+    window.recipe_page.show_draft()
+    assert preview.spins["target_length"].value() == expected and not session.dirty
+    candidate = window.bridge.application.snapshot().candidate_prepared
+    assert (
+        candidate is not None
+        and candidate.configuration.capsule == session.entry.recipe.capsule
+    )
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_prepared=candidate
+    )
+    assert not runtimes
+
+
+def test_length_sample_unavailable_disabled_and_denied_preserve_target(
+    configured_screen: Screen,
+) -> None:
+    window, session, _ = configured_screen
+    preview = setup(configured_screen)
+    before = session.draft.capsule
+    preview.allowed = lambda: False
+    preview.refresh_state()
+    assert (
+        not preview.length_sample.isEnabled() and not preview.length_slider.isEnabled()
+    )
+    preview.sample_length()
+    assert session.draft.capsule == before
+    preview.allowed = window.recipe_page.editable
+    window.bridge.frames.publish(
+        Frame(
+            FrameId(CycleId(2), CameraId("CAM1"), 2),
+            2,
+            np.zeros((120, 480, 3), dtype=np.uint8),
+        ),
+        generation=0,
+    )
+    preview.refresh_reference()
+    until(lambda: not preview.busy)
+    dirty = session.dirty
+    preview.length_sample.click()
+    assert session.draft.capsule == before and session.dirty == dirty
+    assert preview.message.text() == text("length_sample_missing", preview.language)
+    window.recipe_page.capsule_enabled["size"].click()
+    until(lambda: not preview.busy)
+    disabled = session.draft.capsule
+    preview.sample_length()
+    assert not preview.length_sample.isEnabled() and session.draft.capsule == disabled
+
+
+@pytest.mark.parametrize("tolerance", (0, 1_500_001, 2**40))
+def test_length_numeric_and_slider_preserve_unbounded_saved_values(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, tolerance: int
+) -> None:
+    import capsule_vision.ui.recipe_tuning as module
+
+    window, session, _ = configured_screen
+    preview = setup(configured_screen)
+    original = replace(
+        SETTINGS,
+        size=replace(SETTINGS.size, target_length=2**40, length_tolerance=tolerance),
+    )
+    session.draft.capsule = original
+    window.recipe_page.save()
+    until(lambda: not window.recipe_page.busy)
+    assert not session.dirty
+
+    def forbidden(*args: object) -> None:
+        pytest.fail("Numeric/slider changes must not remeasure")
+
+    monkeypatch.setattr(module, "measure_reference", forbidden)
+    for mode in ("size", "color", "size"):
+        preview.set_mode(mode)
+        assert session.draft.capsule == original and not session.dirty
+    assert preview.spins["target_length"].value() == 2**40
+    assert preview.spins["length_tolerance"].value() == tolerance
+    target = preview.spins["target_length"].lineEdit()
+    target.setFocus()
+    target.selectAll()
+    QTest.keyClicks(target, str(2**40 + 17))
+    assert session.draft.capsule.size.target_length == 2**40 + 17
+    assert session.draft.capsule.size.length_tolerance == tolerance
+    QTest.keyClick(preview.spins["target_length"], Qt.Key.Key_Up)
+    assert session.draft.capsule.size.target_length == 2**40 + 18
+    if tolerance <= 2**31 - 1:
+        assert preview.length_slider.value() == tolerance
+        assert preview.length_slider.isEnabled()
+        preview.length_slider.setValue(12)
+        assert preview.spins["length_tolerance"].value() == 12
+        assert session.draft.capsule.size.length_tolerance == 12
+    else:
+        assert not preview.length_slider.isEnabled()
+        preview.length_slider.setValue(12)
+        assert session.draft.capsule.size.length_tolerance == tolerance
+    # Dragging does not rescale beneath the pointer; release/numeric entry can
+    # recover a useful range after an exceptionally large saved tolerance.
+    edit(preview.spins["length_tolerance"].lineEdit(), "1000")
+    preview.length_slider.setSliderDown(True)
+    preview.length_slider.setValue(250)
+    assert preview.length_slider.maximum() == 1000
+    assert session.draft.capsule.size.length_tolerance == 250
+    preview.length_slider.setSliderDown(False)
+    assert preview.length_slider.maximum() == 250
+    edit(preview.spins["length_tolerance"].lineEdit(), "37")
+    assert preview.length_slider.isEnabled() and preview.length_slider.value() == 37
+    assert preview.length_slider.maximum() == 100
+    target.setFocus()
+    target.selectAll()
+    QTest.keyClick(target, Qt.Key.Key_Backspace)
+    QTest.keyClicks(target, "-x")
+    assert target.text() == ""  # Invalid text never becomes a draft value.
+    QTest.keyClick(target, Qt.Key.Key_Tab)
+    assert target.text() == str(2**40 + 18)
+    assert session.draft.capsule.size == replace(
+        original.size, target_length=2**40 + 18, length_tolerance=37
+    )
+    assert session.draft.capsule.color == original.color
+    session.discard()
+    window.recipe_page.show_draft()
+    assert session.draft.capsule == original and not session.dirty
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -631,7 +980,9 @@ def test_camera_refresh_and_layout(
             index
         ) == preview.camera_tabs.tabToolTip(index)
         assert preview.camera_tabs.rect().contains(preview.camera_tabs.tabRect(index))
-    assert preview.canvas.width() > 500 and preview.canvas.height() > 240
+    # The new collapsed card may consume the former spare height; preserve the
+    # canvas's existing 240-pixel usable minimum and scroll the summary if needed.
+    assert preview.canvas.width() > 500 and preview.canvas.height() >= 240
     assert preview.frame is not None and len(preview.results) == 6
     for widget in (
         preview.camera_tabs,
@@ -706,6 +1057,10 @@ def test_stale_job_and_observable_close(
     monkeypatch.setattr(module, "measure_reference", blocked)
     preview.refresh_reference()
     until(entered.is_set)
+    draft = configured_screen[1].draft.capsule
+    assert not preview.length_sample.isEnabled()
+    preview.sample_length()
+    assert configured_screen[1].draft.capsule == draft
     preview.camera_tabs.setCurrentIndex(1)
     assert not preview.measurements
     release.set()
@@ -727,6 +1082,8 @@ def test_stale_job_and_observable_close(
 
     preview.request_close(finished)
     assert not closed and preview.busy
+    preview.sample_length()
+    assert configured_screen[1].draft.capsule == draft
     release.set()
     until(lambda: bool(closed))
     assert not any(t.name == "CapsulePreview" for t in threads())
@@ -750,6 +1107,10 @@ def test_preview_read_only_during_runtime_and_navigation_releases(
         and not preview.controls.isEnabled()
     )
     preview.sample_color()
+    preview.sample_length()
+    preview.set_mode("color")
+    assert not preview.hue.isEnabled()
+    preview.hue.setValue((before.color.target_hue + 1) % 180)
     assert session.draft.capsule == before
     window.navigate(4)
     until(lambda: window.recipe_page.preview is None)
@@ -1274,11 +1635,19 @@ def test_disabled_selected_mode_keeps_other_checks_ng(
     collapse(preview, configured_screen)
 
 
+@pytest.mark.parametrize("size", ((1080, 1920), (1920, 1080)))
+@pytest.mark.parametrize("language", ("zh", "en"))
 def test_integrated_controls_precede_canvas_and_enablement_is_separate(
-    configured_screen: Screen,
+    configured_screen: Screen, size: tuple[int, int], language: Language
 ) -> None:
     window, session, _ = configured_screen
     preview = setup(configured_screen)
+    window.resize(*size)
+    window.set_language(language)
+    session.draft.capsule = replace(
+        session.draft.capsule, color=replace(session.draft.capsule.color, target_hue=60)
+    )
+    preview.show_settings()
     page = window.recipe_page
     assert not preview.findChildren(QCheckBox)
     assert preview.controls.y() + preview.controls.height() <= preview.canvas.y()
@@ -1289,6 +1658,16 @@ def test_integrated_controls_precede_canvas_and_enablement_is_separate(
         page.preview is preview and preview.frame is frozen and preview.mode == "color"
     )
     assert session.draft.capsule == before
+    for theme in ("dark", "light"):
+        window.set_theme(theme)
+        preview.select_view(0, 0)  # Size OK has two lines; Color NG adds a reason.
+        QApplication.processEvents()
+        viewport = preview.canvas.geometry()
+        for mode in ("size", "color", "size", "color"):
+            preview.set_mode(mode)
+            QApplication.processEvents()
+            assert preview.canvas.geometry() == viewport
+            assert preview.frame is frozen and page.preview is preview
     page.capsule_enabled["color"].click()
     until(lambda: not preview.busy)
     assert (

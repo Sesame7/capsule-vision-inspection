@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from functools import cache
 from math import ceil
+from pathlib import Path
 from typing import Literal
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, Qt
@@ -293,6 +294,7 @@ def apply_theme(widget: QWidget, theme: Theme) -> None:
 
 def stylesheet(theme: Theme = "dark") -> str:
     c = LIGHT if theme == "light" else DARK
+    icons = (Path(__file__).parent / "icons").as_posix()
     # Repolishing can replace a child's inherited family with the platform default.
     # Keep the shell font stack when measuring and painting navigation in either theme.
     nav_fonts = ", ".join(f'"{name}"' for name in Style.font_families)
@@ -320,8 +322,15 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton#recipeRule {{ text-align: left; }}
     QWidget#page_production QPushButton#start, QPushButton#productionAction {{ padding: 6px 8px; }}
     QPushButton:checked {{ color: {c.accent}; background: {c.selected}; border-color: {c.accent}; }}
+    QPushButton#recipeRule, QPushButton#recipeRule:checked,
+    QPushButton#recipeDisclosure, QPushButton#recipeDisclosure:checked {{ color: {c.primary}; background: transparent; border-color: transparent; }}
+    QPushButton#recipeRule:hover, QPushButton#recipeDisclosure:hover {{ background: {c.raised}; border-color: {c.secondary}; }}
+    QPushButton#recipeRule:pressed, QPushButton#recipeDisclosure:pressed {{ background: {c.selected}; border-color: {c.accent}; }}
+    QPushButton#recipeRule:disabled {{ color: {c.secondary}; }}
     QLineEdit:focus {{ border-color: {c.accent}; }}
+    QLabel#processReading {{ background: {c.raised}; color: {c.primary}; border: 1px solid {c.accent}; border-radius: 7px; padding: 5px 10px; }}
     QPushButton:disabled, QComboBox:disabled {{ color: {c.secondary}; background: {c.surface}; border-color: {c.border}; }}
+    QPushButton#recipeChoice:checked:disabled {{ color: {c.secondary}; background: {c.selected}; border-color: {c.accent}; }}
     QDateEdit#batchDate, QDateEdit#historyDate, QDateEdit#auditDate, QDateEdit#alarmDate {{ color: {c.primary}; background: {c.raised}; border: 1px solid {c.border}; border-radius: 7px; padding: 5px 10px; }}
     QDateEdit#batchDate:disabled, QDateEdit#historyDate:disabled, QDateEdit#auditDate:disabled, QDateEdit#alarmDate:disabled {{ color: {c.secondary}; background: {c.surface}; }}
     QCalendarWidget#historyCalendar {{ background: {c.surface}; color: {c.primary}; }}
@@ -370,9 +379,21 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton#webPower:pressed, QPushButton#reportingPower:pressed, QPushButton#alarmPower:pressed {{ border-color: {c.accent}; background: {c.selected}; }}
     QPushButton#webPower:disabled, QPushButton#reportingPower:disabled, QPushButton#alarmPower:disabled {{ color: {c.secondary}; border-color: {c.border}; background: {c.raised}; }}
     QComboBox QAbstractItemView, QMenu {{ background: {c.surface}; color: {c.primary}; border: 1px solid {c.border}; selection-background-color: {c.selected}; }}
-    QLineEdit, QSpinBox, QDoubleSpinBox {{ background: {c.surface}; color: {c.primary}; padding: 7px; border: 1px solid {c.border}; border-radius: 6px; selection-background-color: {c.selected}; }}
+    QLineEdit, QSpinBox, QDoubleSpinBox, QAbstractSpinBox#recipeLength {{ background: {c.surface}; color: {c.primary}; padding: 7px; border: 1px solid {c.border}; border-radius: 6px; selection-background-color: {c.selected}; }}
     QDialog#productionBatchDialog QLineEdit {{ selection-color: {c.primary}; }}
-    QLineEdit:disabled, QSpinBox:disabled {{ color: {c.secondary}; background: {c.raised}; }}
+    QSpinBox, QDoubleSpinBox, QAbstractSpinBox#recipeLength,
+    QSpinBox QLineEdit, QDoubleSpinBox QLineEdit, QAbstractSpinBox#recipeLength QLineEdit {{ selection-color: {c.primary}; }}
+    QSpinBox:focus, QDoubleSpinBox:focus, QAbstractSpinBox#recipeLength:focus {{ border-color: {c.accent}; }}
+    QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QAbstractSpinBox#recipeLength:disabled {{ color: {c.secondary}; background: {c.raised}; }}
+    QSpinBox::up-button, QDoubleSpinBox::up-button, QAbstractSpinBox#recipeLength::up-button {{ subcontrol-origin: border; subcontrol-position: top right; width: 20px; border: none; border-left: 1px solid {c.border}; border-top-right-radius: 6px; background: {c.raised}; }}
+    QSpinBox::down-button, QDoubleSpinBox::down-button, QAbstractSpinBox#recipeLength::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right; width: 20px; border: none; border-left: 1px solid {c.border}; border-top: 1px solid {c.border}; border-bottom-right-radius: 6px; background: {c.raised}; }}
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover, QAbstractSpinBox#recipeLength::up-button:hover, QAbstractSpinBox#recipeLength::down-button:hover {{ background: {c.selected}; }}
+    QSpinBox::up-button:pressed, QSpinBox::down-button:pressed, QDoubleSpinBox::up-button:pressed, QDoubleSpinBox::down-button:pressed, QAbstractSpinBox#recipeLength::up-button:pressed, QAbstractSpinBox#recipeLength::down-button:pressed {{ background: {c.border}; }}
+    QSpinBox::up-button:disabled, QSpinBox::down-button:disabled, QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::down-button:disabled, QAbstractSpinBox#recipeLength::up-button:disabled, QAbstractSpinBox#recipeLength::down-button:disabled {{ background: {c.raised}; }}
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QAbstractSpinBox#recipeLength::up-arrow {{ image: url("{icons}/{theme}-up.svg"); width: 14px; height: 14px; }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QAbstractSpinBox#recipeLength::down-arrow {{ image: url("{icons}/{theme}-down.svg"); width: 14px; height: 14px; }}
+    QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off, QAbstractSpinBox#recipeLength::up-arrow:disabled, QAbstractSpinBox#recipeLength::up-arrow:off {{ image: url("{icons}/{theme}-up-disabled.svg"); }}
+    QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:off, QAbstractSpinBox#recipeLength::down-arrow:disabled, QAbstractSpinBox#recipeLength::down-arrow:off {{ image: url("{icons}/{theme}-down-disabled.svg"); }}
     QScrollArea, QWidget#commBody, QWidget#sourceMappings, QWidget#recipeSummary {{ background: {c.background}; border: none; }}
     QTableWidget, QTreeWidget#batchRecords, QPlainTextEdit {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; gridline-color: {c.border}; }}
     QTableWidget#accounts, QListWidget#reportBatches {{ background: {c.surface}; alternate-background-color: {c.raised}; border: 1px solid {c.border}; }}
@@ -390,10 +411,6 @@ def stylesheet(theme: Theme = "dark") -> str:
     QTableWidget#historyCycles::corner, QTableWidget#historyChannels::corner {{ background: {c.surface}; border: none; }}
     QCheckBox {{ background: transparent; spacing: 8px; }}
     QCheckBox::indicator {{ width: 20px; height: 20px; }}
-    QCheckBox#archiveCondition {{ color: {c.primary}; background: {c.surface}; border: 1px solid {c.border}; border-radius: 6px; padding: 4px 8px; spacing: 6px; }}
-    QCheckBox#archiveCondition:hover:enabled {{ border-color: {c.secondary}; }}
-    QCheckBox#archiveCondition:checked:enabled {{ background: {c.selected}; border-color: {c.accent}; }}
-    QCheckBox#archiveCondition:disabled {{ color: {c.secondary}; background: {c.raised}; border-color: {c.border}; }}
     QTabBar::tab {{ padding: 12px 10px; min-height: 20px; color: {c.primary}; background: {c.surface}; border: none; }}
     QTabBar::tab:selected {{ color: {c.accent}; background: {c.selected}; }}
     QTabBar#recordTypes::tab {{ width: 132px; min-height: 30px; padding: 6px 8px; margin-right: 4px; border: 1px solid {c.border}; border-radius: 7px; }}
