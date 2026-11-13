@@ -9,7 +9,7 @@ from typing import Never
 import pytest
 from tests.support.application import WAIT, ControlledEngine, FakeSession, close
 from tests.support.source_inputs import folders, input_files, write_image
-from tests.support.startup import saved_data
+from tests.support.startup import authenticated_startup, saved_data
 
 from capsule_vision.application import (
     ApplicationError,
@@ -309,7 +309,7 @@ def test_session_factory_uses_captured_sources_if_files_change_after_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data = saved_data(tmp_path)
-    startup = load_startup(data)
+    startup = authenticated_startup(data)
     assert (
         startup.prepared is not None
         and startup.prepared.vision_dependencies is not None

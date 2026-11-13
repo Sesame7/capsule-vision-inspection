@@ -52,7 +52,7 @@ from capsule_vision.inspection import CameraId, CycleId
 
 from .application import ProductionApplication
 from .audit import RevisionEvidence, differences
-from .identity_models import AuthorizationError, Role, SessionSnapshot
+from .identity_models import Role, SessionSnapshot
 from .model_preparation import ModelPreparationFactory, real_preparation_engine
 from .models import (
     ApplicationError,
@@ -116,7 +116,6 @@ class SourceProductionApplication(ProductionApplication):
         self._session_reporting: ReportingSettings | None = None
         self._session_reporting_words = 4
         self._last_pilot_cycle: CycleId | None = None
-        self._guest_demo_generation: int | None = None
         self._replay_lock = Lock()
         self.replay_controls = replay_controls
         self._source_draft = source_draft
@@ -245,10 +244,14 @@ class SourceProductionApplication(ProductionApplication):
             self._archive_owner = owner
 
     def capture_image(
-        self, camera: CameraId, *, timeout: float = 10.0
+        self,
+        camera: CameraId,
+        *,
+        timeout: float | None = 10.0,
+        revision: int | None = None,
     ) -> Future[CameraSnapshot]:
         with self._condition:
-            with self._admission(Role.OPERATOR):
+            with self._admission(Role.OPERATOR, revision):
                 self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
             if self._closing:
                 raise ApplicationStateError("Application is closing")
@@ -353,38 +356,14 @@ class SourceProductionApplication(ProductionApplication):
         with self._condition:
             return self._start_replay(single_step=False)
 
-    @property
-    def guest_replay_available(self) -> bool:
-        """Guest source/reporting eligibility; Start also requires normal readiness."""
-        with self._condition:
-            deps = self._candidate.vision_dependencies if self._candidate else None
-            return (
-                deps is not None
-                and deps.sources_path is not None
-                and deps.sources is not None
-                and deps.sources.mode == "folder"
-                and self._source_draft is not None
-                and not self.reporting_selection().enabled
-            )
-
-    def is_guest_demo(self, generation: int) -> bool:
-        with self._condition:
-            return self._guest_demo_generation == generation
-
     def _start_replay(self, *, single_step: bool) -> Future[None]:
-        with self._admission(Role.GUEST) as actor:
-            demo = actor is not None and actor.role is Role.GUEST
+        with self._admission(Role.OPERATOR, action="production.start") as actor:
             try:
                 self._require(ApplicationState.READY)
-                if demo and not self.guest_replay_available:
-                    raise AuthorizationError(
-                        "Guest requires prepared Folder Replay with automatic reporting disabled"
-                    )
                 startup = self._admit_replay(single_step=single_step, actor=actor)
             except Exception as exc:
                 self._rejected_start(actor, exc)
                 raise
-            self._guest_demo_generation = self._generation if demo else None
         # Cancelling an idle capture runs user callbacks synchronously. The
         # generation is already admitted and the identity lock must be free.
         self.connection.cancel_capture()
@@ -729,36 +708,31 @@ class SourceProductionApplication(ProductionApplication):
 
     def _running_control(self) -> BaslerAdmissionControl | FolderReplayControl:
         self._require(ApplicationState.RUNNING)
-        minimum = (
-            Role.GUEST
-            if self._guest_demo_generation == self._generation
-            else Role.OPERATOR
-        )
-        with self._admission(minimum):
-            settings = self.reporting_for_generation(self._generation)
-            if settings is not None and settings.mode is not ReportingMode.PER_CYCLE:
-                raise ApplicationStateError(
-                    "PLC group reporting cannot Pause/Step/Resume; Stop and restart at a new batch's first trigger"
-                )
-            return (
-                self._running_basler_control()
-                if self.basler_available
-                else self._running_folder_control()
+        settings = self.reporting_for_generation(self._generation)
+        if settings is not None and settings.mode is not ReportingMode.PER_CYCLE:
+            raise ApplicationStateError(
+                "PLC group reporting cannot Pause/Step/Resume; Stop and restart at a new batch's first trigger"
             )
+        return (
+            self._running_basler_control()
+            if self.basler_available
+            else self._running_folder_control()
+        )
 
     def pause_source(self) -> Future[None]:
-        with self._condition:
+        with self._condition, self._admission(Role.OPERATOR):
             return self._running_control().pause()
 
     def resume_source(self) -> Future[None]:
-        with self._condition:
+        with self._condition, self._admission(Role.OPERATOR):
             return self._running_control().resume()
 
     def step_source(self) -> Future[None]:
         with self._condition:
             if self._state is ApplicationState.READY:
                 return self._start_replay(single_step=True)
-            return self._running_control().step()
+            with self._admission(Role.OPERATOR):
+                return self._running_control().step()
 
     @property
     def _folder_controls_available(self) -> bool:

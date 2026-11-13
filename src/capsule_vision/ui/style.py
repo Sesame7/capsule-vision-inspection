@@ -483,6 +483,8 @@ def navigation_icon(index: int, color: str = Style.secondary) -> QIcon:
                 painter.drawLine(QPointF(x, 3), QPointF(x, 19))
                 painter.drawEllipse(QPointF(x, 7 if (i + index) % 2 else 14), 2, 2)
         elif index == 2:
+            # The connector's strokes run from y=1 to y=16, not the full canvas.
+            painter.translate(0, (Style.icon - 1 - 16) / 2)
             painter.drawRoundedRect(QRectF(2, 3, 6, 7), 1, 1)
             painter.drawRoundedRect(QRectF(14, 4, 6, 7), 1, 1)
             for a, b in (

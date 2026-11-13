@@ -26,7 +26,9 @@ from capsule_vision.application.identity_models import (
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
+from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.application.startup import load_startup
+from capsule_vision.communication.reporting import ReportingMode
 from capsule_vision.configuration import load_camera_sources, save_camera_sources
 
 
@@ -75,6 +77,8 @@ def test_production_role_boundaries(
 
         if role is Role.GUEST:
             for command in (
+                app.start,
+                app.step_source,
                 app.begin_recipe_selection,
                 lambda: app.configure(candidate),
                 lambda: app.start_batch("changed"),
@@ -87,24 +91,26 @@ def test_production_role_boundaries(
                 with pytest.raises(AuthorizationError):
                     command()
             assert app.snapshot() == before and app.source_snapshot() == connection
-        else:
-            until(lambda: not app.snapshot().batch_pending)
-            app.clear_statistics(revision=owner.snapshot().revision)
-            revision = owner.snapshot().revision
-            account = owner.snapshot().account
-            assert account is not None
-            owner.login(account.username, TEST_PASSWORD).result(WAIT)
-            with pytest.raises(StaleSessionError):
-                app.clear_statistics(revision=revision)
-            first = app.begin_recipe_selection()
-            second = app.begin_recipe_selection()
-            with pytest.raises(StaleSessionError):
-                app.install_recipe_selection(first, candidate)
-            app.install_recipe_selection(second, candidate)
-            app.start_batch("Batch").result(5)
-            assert app.snapshot().batch_id == "Batch"
-            with pytest.raises(ApplicationStateError):  # READY, no fault to reset
-                app.reset_fault()
+            assert app.control_snapshot() is None and app.reporting_snapshot() is None
+            return
+
+        until(lambda: not app.snapshot().batch_pending)
+        app.clear_statistics(revision=owner.snapshot().revision)
+        revision = owner.snapshot().revision
+        account = owner.snapshot().account
+        assert account is not None
+        owner.login(account.username, TEST_PASSWORD).result(WAIT)
+        with pytest.raises(StaleSessionError):
+            app.clear_statistics(revision=revision)
+        first = app.begin_recipe_selection()
+        second = app.begin_recipe_selection()
+        with pytest.raises(StaleSessionError):
+            app.install_recipe_selection(first, candidate)
+        app.install_recipe_selection(second, candidate)
+        app.start_batch("Batch").result(5)
+        assert app.snapshot().batch_id == "Batch"
+        with pytest.raises(ApplicationStateError):  # READY, no fault to reset
+            app.reset_fault()
         app.start().result(WAIT)
         app.pause_source().result(WAIT)
         app.step_source().result(WAIT)
@@ -120,23 +126,15 @@ def test_production_role_boundaries(
                 and not app.snapshot().runtime_owned
             )
         )
-        if role is Role.GUEST:
-            fault = app.snapshot()
-            with pytest.raises(AuthorizationError):
-                app.reset_fault()
-            assert app.snapshot() == fault
-        else:
-            app.reset_fault()
-            assert app.snapshot().state is ApplicationState.READY
+        app.reset_fault()
+        assert app.snapshot().state is ApplicationState.READY
     finally:
         close(startup)
 
 
-@pytest.mark.parametrize(
-    "obstacle", ["reporting", "legacy", "missing", "fixed", "stale"]
-)
-def test_guest_ready_step_and_start_require_a_current_safe_replay(
-    tmp_path: Path, obstacle: str
+@pytest.mark.parametrize("reporting_enabled", [False, True])
+def test_guest_cannot_start_or_step_prepared_folder_replay(
+    tmp_path: Path, reporting_enabled: bool
 ) -> None:
     data = saved_data(tmp_path)
     startup = authenticated_startup(
@@ -144,35 +142,29 @@ def test_guest_ready_step_and_start_require_a_current_safe_replay(
     )
     app, candidate = startup.application, startup.prepared
     assert isinstance(app, SourceProductionApplication) and candidate is not None
-    deps = candidate.vision_dependencies
-    assert deps is not None and app.identity is not None
+    assert app.identity is not None
     try:
-        if obstacle == "reporting":
-            app.set_reporting_selection(
-                replace(app.reporting_selection(), enabled=True)
+        selection = app.reporting_selection()
+        app.set_reporting_selection(
+            replace(
+                selection,
+                enabled=reporting_enabled,
+                settings=replace(selection.settings, mode=ReportingMode.PER_CYCLE),
             )
-        elif obstacle == "stale":
-            app.observe_saved_vision(None, None)
-        else:
-            capture = {
-                "legacy": None,
-                "missing": replace(deps, sources=None),
-                "fixed": replace(deps, sources_path=None),
-            }[obstacle]
-            app.configure(replace(candidate, vision_dependencies=capture))
+        )
         app.identity.logout()
         before = app.snapshot()
+        assert before.state is ApplicationState.READY and not app.basler_available
         for command in (app.start, app.step_source):
-            with pytest.raises(
-                ApplicationStateError if obstacle == "stale" else AuthorizationError
-            ):
+            with pytest.raises(AuthorizationError):
                 command()
-            assert app.snapshot() == before and app.control_snapshot() is None
+            assert app.snapshot() == before
+            assert app.control_snapshot() is None and app.reporting_snapshot() is None
     finally:
         close(startup)
 
 
-def test_running_controls_follow_generation_across_identity_changes(
+def test_admitted_replay_and_step_survive_logout_without_new_guest_admission(
     tmp_path: Path,
 ) -> None:
     data = saved_data(tmp_path)
@@ -188,32 +180,43 @@ def test_running_controls_follow_generation_across_identity_changes(
     assert owner is not None
     try:
         worker = provision_account(owner, "Worker", Role.OPERATOR, TEST_PASSWORD)
+        owner.login(worker.username, TEST_PASSWORD).result(WAIT)
         starting = app.start()
         assert engine.entered.wait(WAIT)
         owner.logout()
         engine.release.set()
         starting.result(WAIT)
+        running = app.snapshot()
+        assert running.state is ApplicationState.RUNNING and running.run_id is not None
         for command in (app.pause_source, app.resume_source, app.step_source):
             with pytest.raises(AuthorizationError):
                 command()
-        owner.login("Worker", TEST_PASSWORD).result(WAIT)
+        owner.login(worker.username, TEST_PASSWORD).result(WAIT)
         app.pause_source().result(WAIT)
-        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
-        owner.set_enabled(worker.account_id, False).result(WAIT)
+        paused = app.control_snapshot()
+        assert paused is not None and paused.state is SourceControlState.PAUSED
+        engine.hold_call = len(engine.calls) + 1
+        engine.entered.clear()
+        engine.release.clear()
+        step = app.step_source()
+        assert engine.entered.wait(WAIT) and not step.done()
         owner.logout()
-        with pytest.raises(AuthorizationError):
-            app.resume_source()
-        assert app.snapshot().state is ApplicationState.RUNNING
+        engine.release.set()
+        step.result(WAIT)
+        assert app.control_snapshot() == paused
+        for command in (app.pause_source, app.resume_source, app.step_source):
+            with pytest.raises(AuthorizationError):
+                command()
+        current = app.snapshot()
+        assert (
+            current.state is ApplicationState.RUNNING
+            and current.run_id == running.run_id
+        )
+        assert current.generation == running.generation == 1
         app.stop().result(WAIT)
-
-        app.step_source().result(WAIT)  # Guest admitted a new generation
-        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
-        app.resume_source().result(WAIT)
-        owner.logout()
-        app.pause_source().result(WAIT)
-        app.step_source().result(WAIT)
-        app.resume_source().result(WAIT)
-        assert app.snapshot().generation == 2
+        assert app.snapshot().state is ApplicationState.READY
+        with pytest.raises(AuthorizationError):
+            app.step_source()
     finally:
         engine.release.set()
         close(startup)
@@ -229,8 +232,10 @@ def test_unavailable_accounts_restore_as_guest(tmp_path: Path, corrupt: bool) ->
         app = startup.application
         assert app.identity is not None and app.identity.snapshot().role is Role.GUEST
         assert app.snapshot().candidate_prepared is startup.prepared is not None
-        with pytest.raises(AuthorizationError):
-            app.begin_recipe_selection()
+        assert isinstance(app, SourceProductionApplication)
+        for command in (app.start, app.step_source, app.begin_recipe_selection):
+            with pytest.raises(AuthorizationError):
+                command()
         assert startup.editor is not None
         with pytest.raises(AuthorizationError):
             startup.editor.save()
@@ -239,7 +244,7 @@ def test_unavailable_accounts_restore_as_guest(tmp_path: Path, corrupt: bool) ->
         close(startup)
 
 
-def test_guest_start_observes_an_already_admitted_reporting_save(
+def test_logout_revokes_start_admission_after_reporting_save(
     tmp_path: Path,
 ) -> None:
     data = saved_data(tmp_path)

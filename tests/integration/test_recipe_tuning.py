@@ -376,7 +376,11 @@ def test_blank_preview_uses_only_authoritative_connected_dimensions(
             pytest.fail("Preview must not disconnect")
 
         def capture_image(
-            self, camera: CameraId, *, timeout: float = 10.0
+            self,
+            camera: CameraId,
+            *,
+            timeout: float | None = 10.0,
+            revision: int | None = None,
         ) -> Future[CameraSnapshot]:
             pytest.fail("Preview must not acquire")
 

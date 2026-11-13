@@ -20,7 +20,7 @@ from tests.support.application import (
     production,
 )
 from tests.support.business import channel as business_channel
-from tests.support.business import mixed_result
+from tests.support.business import history_review, mixed_result
 
 from capsule_vision.application import (
     ApplicationState,
@@ -29,10 +29,13 @@ from capsule_vision.application import (
 )
 from capsule_vision.application.history import (
     HistoryContext,
+    HistoryFinding,
+    HistoryImageEvidence,
     HistoryQuery,
     HistorySubmission,
     ProductionHistory,
 )
+from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection import CycleId, CycleStatus
 from capsule_vision.inspection.production import (
     FindingSource,
@@ -150,6 +153,71 @@ def test_persisted_evidence_is_exact_compact_and_survives_restart(
         )  # Current owner commits, not lifetime count.
     finally:
         finish(reopened)
+
+
+def test_effective_findings_are_historical_camera_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "history.sqlite3"
+    reviewed, legacy = context(), context()
+    result, _ = history_review(tmp_path)
+    owner = ProductionHistory(path)
+    try:
+        assert owner.offer(reviewed, result)
+        assert owner.offer(reviewed, mixed_result(2))
+        assert owner.offer(legacy, mixed_result())
+        page = owner.query(HistoryQuery(result=frozenset({"NG"}))).result(WAIT)
+        assert len(page.records) == 3
+        records = {(r.context.run_id, r.cycle_id): r for r in page.records}
+        stored = records[(reviewed.run_id, 1)]
+        shared = HistoryFinding("Scratch", BoundingRect(75, 17, 90, 12), (8, 9))
+        dent = HistoryFinding("Dent", BoundingRect(103, 22, 9, 12), (8,))
+        assert stored.cameras[1].image_evidence == HistoryImageEvidence(
+            (504, 120),
+            (
+                shared,
+                dent,
+                HistoryFinding("Dent", BoundingRect(109, 80, 6, 9), (8,)),
+                dent,
+            ),
+        )
+        assert stored.cameras[1].unassigned_labels == ("Background",)
+        assert all(
+            camera.image_evidence is None
+            for camera in stored.cameras
+            if camera.camera != "CAM2"
+        )
+        assert all(
+            c.image_evidence is None
+            for key, row in records.items()
+            if key != (reviewed.run_id, 1)
+            for c in row.cameras
+        )
+        empty = stored.channels[6]
+        assert (empty.channel, empty.business, empty.reasons) == (7, "EMPTY", ())
+        missing = stored.channels[12]
+        assert (missing.channel, missing.business, missing.technical) == (
+            13,
+            "NG",
+            "ERROR",
+        )
+        assert "basler.missing_camera" in missing.reasons
+        assert "capsule.size.upper.length" in stored.channels[7].reasons
+        assert "capsule.color.lower.tolerance" in stored.channels[7].reasons
+    finally:
+        finish(owner)
+    reopened = ProductionHistory(path)
+    try:
+        assert reopened.query().result(WAIT).records == page.records
+    finally:
+        finish(reopened)
+    with closing(sqlite3.connect(path)) as db:
+        assert db.execute("PRAGMA user_version").fetchone() == (4,)
+        detail = db.execute(
+            "SELECT detail FROM cycles WHERE run_id=? AND cycle_id='1'",
+            (legacy.run_id,),
+        ).fetchone()[0]
+        assert all(
+            len(camera) == 5 for camera in json.loads(zlib.decompress(detail))[1]
+        )
 
 
 def test_application_batch_run_and_exactly_once_identities(tmp_path: Path) -> None:

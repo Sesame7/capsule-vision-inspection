@@ -1201,6 +1201,8 @@ class ProductionApplication:
         with self._condition:
             if self._closed is not None:
                 return self._closed
+            if self.identity is not None:
+                self.identity.cancel_startup_login()
             self._closed = _promise(Future())
             self._closing = True
             self.cancel_process_application()

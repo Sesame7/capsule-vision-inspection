@@ -450,7 +450,7 @@ def _load_startup(
             "startup.loaded",
             recipe_id=prepared.configuration.recipe_id if prepared else None,
         )
-    return Startup(
+    startup = Startup(
         data,
         preferences,
         application,
@@ -464,6 +464,8 @@ def _load_startup(
         communication_error,
         identity.storage_snapshot().issue,
     )
+    identity.begin_startup_login()
+    return startup
 
 
 def create_web_runtime(startup: Startup, *, restore_saved: bool = False) -> WebRuntime:

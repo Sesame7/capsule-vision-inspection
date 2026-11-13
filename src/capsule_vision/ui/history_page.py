@@ -2,7 +2,7 @@
 
 from collections import Counter
 from dataclasses import replace
-from pathlib import Path
+from math import ceil
 
 from PySide6.QtCore import (
     QEvent,
@@ -15,13 +15,12 @@ from PySide6.QtCore import (
     QSize,
     Qt,
     QTimer,
-    QUrl,
     Slot,
 )
 from PySide6.QtGui import (
     QColor,
-    QDesktopServices,
     QFontMetrics,
+    QImageReader,
     QPainter,
     QPainterPath,
     QRegion,
@@ -67,6 +66,7 @@ from .history_event_table import (
     readable_value,
     record_time,
 )
+from .history_image import HistoryImageDialog
 from .history_result_filter import HistoryResultFilter
 from .image_tools import image_icon
 from .permissions import permits
@@ -99,6 +99,7 @@ def _inspection_reason(code: str, language: Language) -> str:
         "cycle_shutdown": "cycle_shutdown",
         "basler.shutdown_unfinished": "cycle_shutdown",
         "basler.missing_camera": "records_missing_frame",
+        "missing_frame": "records_missing_frame",
         "basler.inspection_deadline": "records_deadline",
     }
     if code in keys:
@@ -119,7 +120,7 @@ def _inspection_reason(code: str, language: Language) -> str:
         and parts[-2] in ("upper", "lower")
         and parts[-1] in CAPSULE_REASON_KEYS
     ):
-        return f"{text('preview_' + parts[-2], language)} · {text(CAPSULE_REASON_KEYS[parts[-1]], language)}"
+        return text(CAPSULE_REASON_KEYS[parts[-1]], language)
     # Preserve free-form explanations from older records. Opaque codes stay in History.
     if (
         code.isascii()
@@ -296,6 +297,7 @@ class HistoryPage(QWidget):
         self.export_requires_batch = False
         self.scope = RecordsScope()
         self.report_dialog: ReportDialog | None = None
+        self.image_dialog: HistoryImageDialog | None = None
         self.language: Language = "zh"
         self.busy = False
         self._revision = 0
@@ -388,6 +390,9 @@ class HistoryPage(QWidget):
         self.channel_detail.setObjectName("channelEvidence")
         self.channel_detail.setTabChangesFocus(True)
         self.channel_detail.setReadOnly(True)
+        self.channel_detail.document().documentLayout().documentSizeChanged.connect(
+            self._size_detail, Qt.ConnectionType.QueuedConnection
+        )
         detail = QHBoxLayout()
         detail.addWidget(self.channel_detail, 1)
         self.image_button = QPushButton()
@@ -577,23 +582,20 @@ class HistoryPage(QWidget):
         )
         self._size_detail()
 
+    @Slot()
     def _size_detail(self) -> None:
-        value = self.channel_detail.toPlainText()
-        self.channel_detail.setVisible(bool(value))
-        if not value:
+        detail = self.channel_detail
+        detail.setVisible(bool(detail.toPlainText()))
+        if detail.isHidden():
             return
-        metrics = self.channel_detail.fontMetrics()
-        margin = int(self.channel_detail.document().documentMargin())
-        padding = 2 * self.channel_detail.frameWidth() + 2 * margin + Style.small
-        height = metrics.boundingRect(
-            QRect(
-                0, 0, max(1, self.channel_detail.viewport().width() - 2 * margin), 10000
-            ),
-            Qt.TextFlag.TextWrapAnywhere,
-            value,
-        ).height()
-        self.channel_detail.setFixedHeight(
-            max(metrics.lineSpacing(), min(height, 4 * metrics.lineSpacing())) + padding
+        document = detail.document()
+        max_height = 4 * detail.fontMetrics().lineSpacing() + ceil(
+            2 * document.documentMargin()
+        )
+        detail.setFixedHeight(
+            min(ceil(document.size().height()), max_height)
+            + 2 * detail.frameWidth()
+            + Style.small
         )
 
     def set_language(self, language: Language) -> None:
@@ -945,23 +947,40 @@ class HistoryPage(QWidget):
         )
         reasons: list[str] = []
         if isinstance(selected, (HistoryChannel, HistoryCamera)):
+            labels: tuple[str, ...] = ()
+            if isinstance(selected, HistoryChannel):
+                source = self._selected_camera()
+                evidence = source[1].image_evidence if source else None
+                if evidence is not None:
+                    labels = tuple(
+                        finding.label
+                        for finding in evidence.findings
+                        if selected.channel in finding.channels
+                    )
+            reasons.extend(labels)
             reasons.extend(
-                _inspection_reason(code, self.language) for code in selected.reasons
+                _inspection_reason(code, self.language)
+                for code in selected.reasons
+                if code != "defect_region" or not labels
             )
             if isinstance(selected, HistoryCamera) and selected.unassigned_labels:
-                labels = ", ".join(selected.unassigned_labels)
+                unassigned = ", ".join(selected.unassigned_labels)
                 reasons.append(
-                    text("records_unassigned", self.language).format(labels=labels)
+                    text("records_unassigned", self.language).format(labels=unassigned)
                 )
+        separator = "\n"
+        if isinstance(selected, HistoryChannel):
+            separator = "、" if self.language == "zh" else ", "
         self.channel_detail.setPlainText(
-            "\n".join(dict.fromkeys(v for v in reasons if v))
+            separator.join(dict.fromkeys(filter(None, reasons)))
         )
         self._image_selection_changed()
         self._size_detail()
 
     @Slot()
     def _image_selection_changed(self) -> None:
-        path = self._selected_image()
+        source = self._selected_camera()
+        path = source[1].image_path if source is not None and not self.busy else None
         self.image_button.setEnabled(path is not None)
         description = (
             str(path) if path is not None else text("history_no_image", self.language)
@@ -969,39 +988,84 @@ class HistoryPage(QWidget):
         self.image_button.setToolTip(description)
         self.image_button.setAccessibleDescription(description)
 
-    def _selected_image(self) -> Path | None:
+    def _selected_camera(self) -> tuple[HistoryRecord, HistoryCamera] | None:
         cycle, camera = self.cycles.currentRow(), self.channels.currentRow()
         if (
-            self.busy
-            or not self.cycles.selectedItems()
+            not self.cycles.selectedItems()
             or not self.channels.selectedItems()
             or not 0 <= cycle < len(self._data.records)
         ):
             return None
-        cameras = self._data.records[cycle].cameras
-        return cameras[camera].image_path if 0 <= camera < len(cameras) else None
+        record = self._data.records[cycle]
+        if 0 <= camera < len(record.cameras):
+            return record, record.cameras[camera]
+        return None
 
     @Slot()
     def _open_image(self) -> None:
-        path = self._selected_image()
+        source = self._selected_camera()
+        if source is None or self.busy or self.image_dialog is not None:
+            return
+        record, camera = source
+        path = camera.image_path
         if path is None:
             return
         self._channel_selected()  # Clear any earlier open error; retain the channel evidence.
-        try:
-            if (
-                not path.is_absolute()
-                or path.suffix.lower() != ".png"
-                or not path.is_file()
-            ):
-                issue = "history_image_missing"
-            elif QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
-                return
-            else:
-                issue = "history_image_open_failed"
-        except OSError:
+        if not path.is_absolute() or path.suffix.lower() != ".png":
+            self._image_error("history_image_missing")
+            return
+        reader = QImageReader(str(path), b"png")
+        reader.setAutoDetectImageFormat(False)
+        reader.setAutoTransform(False)
+        image = reader.read()
+        if image.isNull():
             issue = "history_image_open_failed"
-        self.channel_detail.append(text(issue, self.language))
+            try:
+                path.stat()
+            except FileNotFoundError:
+                issue = "history_image_missing"
+            except OSError:
+                pass
+            self._image_error(issue)
+            return
+        evidence = camera.image_evidence
+        if (
+            evidence is not None
+            and evidence.size is not None
+            and evidence.size != (image.width(), image.height())
+        ):
+            self._image_error("history_image_size_mismatch")
+            return
+        language = self.language
+        title = (
+            f"{text('history_archived_image', language)} · {camera.camera} · "
+            f"{text('history_cycle', language)} {record.cycle_id}"
+        )
+        time_caption, _ = record_time(record.context.completed_at, milliseconds=True)
+        item = self.channels.currentItem()
+        channel: object = item.data(Qt.ItemDataRole.UserRole) if item else None
+        parts = [time_caption]
+        if isinstance(channel, HistoryChannel):
+            parts.append(f"CH{channel.channel:02d}")
+        parts.extend(self.channel_detail.toPlainText().splitlines())
+        self.image_dialog = HistoryImageDialog(
+            self,
+            image,
+            evidence.findings
+            if evidence is not None and evidence.size is not None
+            else (),
+            title,
+            " · ".join(parts),
+        )
+        self.image_dialog.finished.connect(self._image_closed)
+        self.image_dialog.open()
+
+    def _image_error(self, key: str) -> None:
+        self.channel_detail.append(text(key, self.language))
         self._size_detail()
+
+    def _image_closed(self) -> None:
+        self.image_dialog = None
 
     @Slot()
     def _observe(self) -> None:
@@ -1048,6 +1112,8 @@ class HistoryPage(QWidget):
         self.warning.setStyleSheet(f"color: {theme_colors(self).warning};")
 
     def dispose(self) -> None:
+        if self.image_dialog is not None:
+            self.image_dialog.reject()
         if self.report_dialog is not None:
             self.report_dialog.reject()
         self.timer.stop()

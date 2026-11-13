@@ -11,11 +11,14 @@ from .identity_models import Role
 
 ACTION_CAPTIONS = {
     "session.login": "identity_login",
+    "session.auto_login": "identity_auto_login",
     "session.logout": "identity_logout",
     "account.create": "identity_create",
     "account.role": "identity_change_role",
     "account.change_password": "identity_change",
     "account.reset_password": "identity_reset",
+    "account.set_auto_login": "identity_set_auto_login",
+    "account.disable_auto_login": "identity_disable_auto_login",
     "production.start": "replay_start",
     "production.stop": "production_stop",
     "production.recipe": "recipe",
@@ -58,6 +61,11 @@ def target_caption(record: AuditRecord, language: Language) -> str:
             language,
         )
     if action.startswith(("session.", "account.")):
+        if (
+            action in ("account.set_auto_login", "account.disable_auto_login")
+            and record.outcome == "success"
+        ):
+            return readable_value(record.detail) or text("records_user", language)
         # Only the recorded actor/target match establishes a self operation.
         if (
             op.actor_id

@@ -62,6 +62,9 @@ IDENTITY_UI_KEYS = {
     "identity_disabled",
     "identity_guest",
     "identity_login",
+    "identity_auto_login",
+    "identity_set_auto_login",
+    "identity_disable_auto_login",
     "identity_logout",
     "identity_switch",
     "identity_change",
@@ -97,6 +100,11 @@ IDENTITY_UI_KEYS = {
 }
 
 OPTIONAL_UI_KEYS = {
+    "short_auto_login",
+    "short_set_auto_login",
+    "short_clear_auto_login",
+    "vision_preview_start",
+    "vision_preview_stop",
     "length_sample",
     "length_sample_missing",
     "length_numeric_entry",
@@ -376,9 +384,11 @@ OPTIONAL_UI_KEYS = {
     "audit_unresolved",
     "audit_uncertain",
     "history_open_image",
+    "history_archived_image",
     "history_no_image",
     "history_image_missing",
     "history_image_open_failed",
+    "history_image_size_mismatch",
     "history_image_link_warning",
     "report_export",
     "report_search",
@@ -1669,7 +1679,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 875
+assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 885
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

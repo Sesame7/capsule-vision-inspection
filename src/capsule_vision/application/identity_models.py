@@ -82,6 +82,20 @@ class Account:
     last_login_utc: datetime | None = None
     must_change_password: bool = False
 
+    @property
+    def auto_login_eligible(self) -> bool:
+        return (
+            self.enabled
+            and self.role is Role.OPERATOR
+            and not self.must_change_password
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AccountManagementSnapshot:
+    accounts: tuple[Account, ...]
+    auto_login_account_id: str | None
+
 
 @dataclass(frozen=True, slots=True)
 class SessionSnapshot:

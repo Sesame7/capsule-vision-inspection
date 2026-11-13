@@ -191,13 +191,14 @@ administrative work from replacing a newer session decision. Password work stays
 outside the session lock; short authorized transactions and their session
 publication are serialized together.
 
-The private account store validates v1/v2 records and migrates them to v3 in one
-transaction, preserving IDs, credentials and Last Login. LocalIdentity owns both
-first setup and subsequent online mutations under its existing lease and audit
-owner. Setup leaves the session anonymous. A verified temporary password commits
-Last Login and publishes a restricted revision. All role admissions, including
-Guest replay, reject that revision. Only logout and a revision-bound password
-rotation are available. PBKDF2 runs outside the lock. The final password update,
+The private account store validates v1/v2/v3 records and migrates them to v4 in one
+transaction, preserving IDs, verifiers, Last Login and rotation flags. The v4
+store has one optional slot for an authorized Operator account ID. LocalIdentity
+owns first setup and subsequent online mutations under its existing lease and
+audit owner. Setup leaves the session anonymous. A verified temporary password
+commits Last Login and publishes a restricted revision. Role-based commands
+reject that revision. Logout and revision-bound password rotation remain
+available. PBKDF2 runs outside the lock. The final password update,
 rotation-flag clearance and session publication share the service commit boundary.
 Cancellation invalidates uncommitted rotation and cannot undo a completed change.
 
@@ -212,15 +213,24 @@ Startup acquires identity ownership before creating application resources and
 passes that owner into the existing Application lifetime. Close drains it and
 joins the actual worker after the existing source/History cleanup. Missing account
 storage remains Guest without creating a database. Unavailable storage remains
-explicit. The window presents Login, Logout, Switch User, Change Password and
+explicit. After restoring the saved configuration, normal startup queues one
+auto-login attempt on the same identity worker. The attempt shares manual
+authentication's revision and supersession checks. The store rechecks the saved
+ID and eligible Operator inside the Last Login transaction. Publication creates
+the ordinary Operator revision. Application Close fences the startup attempt at
+admission and retains the existing identity worker drain during cleanup.
+The window presents Login, Logout, Switch User, Change Password and
 Administrator account management through this same service. The forced-change
 form is window-modal. Credential forms clear secrets on submission or dismissal.
 The service worker handles authentication and account IO. Qt receives results
-through its destruction-safe queue and ignores superseded sessions. The existing shell refresh observes role
-changes. Manage Users presents a read-only four-column table and captures account
-IDs in separate role and disable-confirmation dialogs. Switch User retains the
-current login until successful replacement. Dismissing its pending credential form
-invalidates authentication at the service boundary as well as queued Qt delivery.
+through its destruction-safe queue and ignores superseded sessions. The existing
+shell refresh observes role changes. Manage Users presents a read-only four-column
+table and captures account IDs in separate role and disable-confirmation dialogs.
+The Administrator also authorizes or revokes auto login through the worker's
+audited account mutation path. Account changes revoke a matching authorization
+in the account transaction. Switch User retains the current login until successful
+replacement. Dismissing its pending credential form invalidates authentication at
+the service boundary and fences queued Qt delivery.
 Dismissing pending first setup or forced rotation fences the initiating revision.
 Dismissing an ordinary account-management dialog stops delivery to that form.
 The service completes accepted work under its authorization checks. The shell
@@ -228,20 +238,19 @@ disables account UI on confirmed Close. Application retains worker stop/join
 ownership. Login/logout never controls an inspection session.
 
 Production checks the session at command admission under the Application lock.
-Start freezes automatic reporting and Guest demonstration provenance for the
-admitted generation. Saved Recipe installation additionally validates the
-initiating session revision and request identity. Startup supplies restored
+Start and source Pause, Resume and Step require Operator or higher. Start freezes
+the reporting selection and initiating account for the admitted generation.
+Identity changes leave admitted operations running. Stop and Close remain
+available independently of role. Saved Recipe installation additionally validates
+the initiating session revision and request identity. Startup supplies restored
 settings and candidate during construction. Normal startup always supplies a
 LocalIdentity, including when account storage is unavailable. Explicit identity-free
-engineering compositions remain trusted. Runtime delivery and shutdown keep their
-existing owners. See the [Production policy](configuration.md#local-accounts).
+engineering compositions remain trusted. See the [Production policy](configuration.md#local-accounts).
 
 The Qt shell refreshes permission-sensitive controls when the observed session
 revision changes. The Recipe page can present an immutable catalog entry while
 the editing owner retains its working copy. Its existing metadata worker reads
 the displayed Model and checks that Model again before delivering labels.
-Production exposes its Guest replay eligibility and generation provenance for
-the player. Command owners still validate each operation at admission.
 
 Engineering commands use the same LocalIdentity and revision as Production.
 A pending confirmation, staged Model import or Vision validation retains its
@@ -306,9 +315,9 @@ The development-record replacement tool rejects stores containing configuration
 revisions or captured Run resources, preserving that evidence independently of
 synthetic record provenance.
 
-Authentication, logout, actual Start/Stop, Batch changes, unbatched statistics
-clearing, saved Recipe selection and important security or persistence failures
-submit observations without waiting.
+Authentication (including `session.auto_login`), logout, actual Start/Stop, Batch
+changes, unbatched statistics clearing, saved Recipe selection and important
+security or persistence failures submit observations without waiting.
 The audit writer exposes a separate storage issue and count of unconfirmed writes
 for its lifetime. An abrupt process exit can lose queued best-effort observations.
 Inspection, automatic reporting and Stop continue through audit loss. Close drains
@@ -542,10 +551,10 @@ DISCONNECTING and source FAULT reject another Start connection attempt; mismatch
 connected mappings require explicit recovery. There is no automatic replacement,
 reconnection or retry. Connection survives page/Recipe/Batch changes and successful
 Production Stop. CONNECTED/ARMED is independent of inspection RUNNING. Idle connected
-frames are retrieved, validated and released without cycles, counters, display
-publication or PLC reports. One optional
-idle capture request copies only the selected camera's next matching frame into a
-Future for Vision; it does not enter the Production path.
+frames are retrieved, validated and released without cycles, counters, Production
+display publication or PLC reports. At most one idle capture request copies the
+selected camera's next matching frame into a Future for Vision; it never enters
+the Production path.
 Acquisition runs through `ContinuousBaslerSource` on this connection owner;
 `application.basler` provides read-only discovery, serial validation and shared SDK
 observations.
@@ -709,7 +718,7 @@ or lend a client to this operation. Start warm-up does not apply parameters.
 
 An Operator-or-higher saved Recipe selection/configuration, or Engineer's successful
 changed selected Save and automatic preparation, admits application at the captured
-session revision. Guest restoration does not write and leaves overridden candidates
+session revision. Startup restoration is read-only and leaves overridden candidates
 ineligible until authorized re-selection. Empty overrides require neither a target
 nor PLC I/O. Save success is independent of later preparation/application failure.
 The candidate stays available as diagnostic evidence on failure; there is no
@@ -787,9 +796,8 @@ later Batch. The Run records its start observation, active Recipe/Model identity
 and reporting mode, base and endpoint when enabled. Its **Start Account** stores
 the account ID and username captured at Start admission in the same transaction
 as the Run. A subsequent login during warm-up cannot change the recorded actor.
-An admitted anonymous replay records Guest when it opens a Run. Identity-free
-launches and historical Runs without an actor show a dash. An unactivated Run
-and its provisional account association are removed together.
+Identity-free launches and historical Runs without an actor show a dash. An
+unactivated Run and its provisional account association are removed together.
 If unbatched Run recording fails, inspection continues with a visible warning
 that totals and detail may be incomplete. Individual Cycle records are still
 offered to History on a best-effort basis. Unbatched Folder Replay continues to
@@ -840,10 +848,14 @@ Only the lifecycle worker waits for
 Run confirmation. Stored Cycle rows have independent persistent IDs and unique
 `(run_id, cycle_id)` identities. Compact details retain configured camera/slot/
 channel identities, business/technical/judgment states and existing abnormal
-reason codes. Images, masks, raw outputs, measurements and full snapshots are
-excluded. History reads each stored judgment and reason as recorded under the
+reason codes. When effective ViMo findings exist, the same Cycle transaction
+records their labels, original image rectangles and channel associations under
+the observed camera. Shared findings retain every effective assignment and
+distinct findings retain their multiplicity. Unassigned labels remain separate
+camera observations. History reads each stored judgment and reason as recorded under the
 inspection policy in effect at the time. Neither judgments nor PLC delivery
-depend on storage success.
+depend on storage success. Image pixels and raw inference outputs stay outside
+the History payload.
 
 Accepted Cycle admissions, terminal results and eligible four-Cycle completions
 enter this owner through bounded non-waiting handoffs. Each eligible completed group
@@ -1018,24 +1030,34 @@ and applies to the full defect-report scope, with paging reset on selection chan
 Page entry, filters and Refresh request data; the scalar warning refresh
 does not poll the database. The read-only detail matrix uses stored camera order
 and slot/ChannelId mappings, with one row per camera. Each channel shows its business
-status and an independent technical ERR when present. Selection shows only additional
-defect or failure reasons, with localized captions for known codes. Selecting a camera
-can also show its recorded unassigned labels. List summaries always show OK then NG,
+status and an independent technical ERR when present. The selected channel shows
+one compact summary of recorded defect labels and localized reasons. Repeated
+labels and matching reasons from both capsule views appear once, and the summary
+wraps when needed. The generic model-defect reason remains available for older
+details. Selecting a camera can show its recorded unassigned labels separately.
+List summaries always show OK then NG,
 including zeros. EMPTY, UNKNOWN and independent technical ERR follow only when nonzero. A channel may
 contribute to both a business count and ERR. Cycle-level anomalies absent from those counts
 remain explicit; routine COMPLETE/SUCCESS is implicit in the presentation only.
 Query failures remain explicit. For each visible Cycle the same query request
 loads committed archive paths by Run/Cycle/Camera. Selecting a camera or one of
 its channels enables **Open Image** only when that camera has a link. One click
-opens the recorded PNG in the system viewer. History reports a missing file or
-a rejected desktop open. History has no Web API.
+opens the PNG in a native read-only dialog. Its initial size fits the image at
+its original aspect ratio, allowing for the window frame, margins and caption
+within about 92% of the screen's available width and height. Resizing refits the
+complete image. The dialog pins the selected record and camera, and paints only their
+stored effective ViMo rectangles with matching image dimensions. Coincident
+rectangles are drawn once. Stored reasons remain available for images without
+geometry. Missing, unreadable, invalid and dimension-mismatched images produce
+feedback in the Records detail area. The native Close control and Esc dismiss
+the dialog. History has no Web API.
 
 On the same History writer and in the Cycle transaction, new records capture
 distinct effective ViMo labels and traditional NG reasons per channel. ViMo
 identity includes its saved Model and artifact digest. The pipeline has already
 applied the Recipe label filter and EMPTY gate. Unassigned regions, execution
 errors, UNKNOWN and forced collection rejection supply no product category.
-The stored evidence contains scalar identities and categories only.
+This classification evidence contains scalar identities and categories.
 
 Either a Cycle or the eligible PLC group can arrive last. Once all four distinct
 members have complete classification records covering the group's channels, the
@@ -1502,14 +1524,19 @@ summary scroll area. Side-by-side Size/Color controls have independent enablemen
 and expansion; mode switches retain frozen-image ownership, cached measurements
 and viewport geometry. Explicit length/color sampling edits only Recipe draft
 targets from that cached evidence, as described in
-[configuration](configuration.md#editing-and-persistence). Capture uses the same
-SDK owner, accepts one pending request with a monotonic deadline and first requires
-an empty complete SDK boundary.
-It never sends software/PLC triggers or opens another camera. Camera/source changes,
-Disconnect, Start and Close cancel pending capture; a Qt request token rejects stale
-delivery. A frame already buffered at request processing is not substituted for a
-new capture. The boundary is an SDK observation, not proof of physical exposure time.
-Capture success is temporary canvas data, never inspection admission or accounting.
+[configuration](configuration.md#editing-and-persistence). Vision's Capture button
+toggles passive preview of the selected connected Basler camera. The existing SDK
+owner supplies the next matching validated idle frame after arming each request;
+preview does not wait for peer cameras or expire while idle. Qt requests another
+frame only after accepting the previous one, updating the canvas without resetting
+the ROI interaction for frames in the same image coordinates. Stop keeps the last
+image. Camera/source changes, disconnect, Production Start, loss of admission,
+page exit and Close cancel preview without automatic resumption. Qt rejects stale
+deliveries and each new request checks Operator admission and session revision.
+The separate timed single-capture path and Production attachment still require
+an empty, complete SDK boundary. An SDK observation is not proof of physical
+exposure time. Preview never opens another camera, sends a software/PLC trigger,
+or creates an inspection, archive or accounting record.
 
 Normal startup owns a Qt-independent `WebRuntime` control thread and at most one
 Web publisher/serial HTTP pair. Production Stop/Start leaves Web independent.

@@ -13,7 +13,7 @@ fallback, automatic repair of saved geometry or fake inference is used for recov
 | `data/communication.json` | optional Production reporting, Diagnostics, Web and PLC status-service preferences |
 | `data/alarm_definitions.json` | optional equipment-local replacement for the bundled alarm signal definitions |
 | `data/history.sqlite3` | generated internal SQLite Production history; not operator configuration |
-| `data/security.sqlite3` | optional local accounts and versioned password verifiers; independent of History |
+| `data/security.sqlite3` | optional local accounts, versioned password verifiers and Operator auto-login authorization, independent of History |
 | `data/audit.sqlite3` | append-only application audit records with their own schema and writer |
 | `data/logs/` | opt-in, process-lifetime [runtime diagnostic logs](architecture.md#runtime-diagnostics) controlled by the startup argument |
 | `data/security.lock` | application/offline-maintenance ownership lock; file presence does not mean it is held |
@@ -136,8 +136,8 @@ behavior and logging destinations. Explicit `QT_LOGGING_CONF` and
 ## Local accounts
 
 Normal startup owns the Qt-independent `LocalIdentity` service for entry-relative
-`data/security.sqlite3`. Every process starts as anonymous Guest; no login is
-restored. Guest has no account row. When storage is missing or validated as empty,
+`data/security.sqlite3`. The initial session is anonymous Guest. Guest has no
+account row. When storage is missing or validated as empty,
 the normal launcher offers first Administrator setup. Dismiss it to continue as
 Guest, or reopen setup from the user menu. Explicit setup creates the chosen
 account on the live identity worker and enables ordinary login immediately.
@@ -153,16 +153,31 @@ Operator < Engineer < Administrator. Usernames are 1–64 printable characters w
 edge whitespace; uniqueness uses Unicode `casefold`, independently of SQLite's
 ASCII-only NOCASE. No username renaming or account deletion is provided.
 
-Account schema version 3 stores a required boolean `must_change_password`.
-Opening a valid v1 or v2 database validates its schema and rows before migrating
-in one SQLite transaction. Existing accounts retain their ID, verifier, role,
-enabled state and any UTC Last Login. Their rotation flag defaults to false.
-New databases use v3 directly. Failed migrations roll back.
+Account schema version 4 adds one optional auto-login authorization containing
+only the selected immutable account ID. Opening a valid v1, v2 or v3 database
+validates its schema and rows before migrating in one SQLite transaction.
+Existing IDs, verifiers, roles, enabled state, Last Login and rotation flags
+are preserved where present. Missing `must_change_password` flags default to
+false. Migrated and new stores start with auto login disabled. Failed migrations
+roll back.
 The verifier remains PBKDF2-HMAC-SHA256 version 1, with a random 16-byte salt,
 32-byte digest and iteration count. New passwords use 600,000 iterations; supported
 stored counts are bounded to 100,000–2,000,000. Passwords are nonempty UTF-8 text,
 at most 1024 encoded bytes. Verification uses constant-time digest comparison.
 Plaintext passwords are not persisted, returned in observations or logged.
+
+In Manage Users an Administrator can set auto login for one enabled account
+with the exact Operator role and a completed password rotation. Setting it for
+another eligible account replaces the previous authorization. Anyone who can
+launch the application in the trusted local Windows environment can use that
+shared Operator session. Engineer and Administrator sessions require credentials.
+Normal startup checks the saved authorization once on the identity worker. Missing,
+invalid or unavailable authorization leaves the session as Guest. A successful
+attempt records `session.auto_login` in Audit with the shared Operator's identity.
+Disabling the account, changing its role or administratively resetting its
+password revokes its authorization in the same account transaction. Disabling
+auto login in Manage Users applies on the next launch. Logout ends the current
+session and a new login requires credentials until the next launch.
 
 Successful authentication rechecks its attempt identity and session revision,
 commits Last Login as UTC ISO 8601 text, and then publishes the immutable
@@ -176,14 +191,15 @@ metadata is not an audit trail.
 Accounts created by an Administrator and accounts receiving an administrative or
 offline reset have a temporary password. Verified temporary credentials commit
 Last Login and enter a restricted session. That session permits password
-rotation and logout. Even Guest replay admission is denied. The new password
-must differ from the verified temporary credential. Rotation updates the verifier
+rotation and logout. The new password must differ from the verified temporary
+credential. Rotation updates the verifier
 and clears the flag together, then publishes the authorized role with a fresh
 revision. Cancel returns to Guest. Failures, logout and restart preserve the
 durable requirement. Ordinary self-change still verifies the current password.
 
-Administrator authorization covers listing, creation, role changes, enablement
-and resets. Creating or promoting an Administrator requires explicit confirmation.
+Administrator authorization covers listing, creation, role changes, enablement,
+resets and auto-login authorization. Creating or promoting an Administrator
+requires explicit confirmation.
 Existing Administrators, including the actor, are protected from administrative
 reset, role and enablement changes. Each can change their own password through
 verified self-change. The store independently protects the last enabled
@@ -279,20 +295,25 @@ Change Password verifies the current password and confirms the new one. The
 Administrator's resizable Manage Users dialog prefers 850×500 Qt logical pixels,
 bounded by the available screen work area on first display. Its read-only,
 single-selection table allocates its viewport width to Username / Role / Status /
-Last Login in 30% / 22% / 16% / 32% proportions. Shared column edges round to logical
-pixels and use the entire viewport, including after scrollbar changes. Widths
-respond to viewport, language and font changes, independently of account text and
-selection. Headers and cells align left; long text elides. Account count changes
+Last Login in 30% / 19% / 22% / 29% proportions. Shared column edges round to logical
+pixels and use the entire viewport, including after scrollbar changes. The shares
+stay fixed across language and font changes and are independent of account text
+and selection. Headers and cells align left; long text elides. Account count changes
 do not resize the dialog. Disabled accounts remain visible,
 additional accounts scroll, and refresh preserves selection by account ID. Full
 cell values remain available through tooltips and accessibility.
-All actions sit below the table: New User and icon-only Refresh on the left;
-Change Role, Enable/Disable User and Reset Password on the right. Ordinary fonts
-use one row; constrained widths or enlarged fonts wrap the groups without
-overlapping controls. There is no separate selected-account summary or Close button.
+Status shows Auto login for the authorized Operator, Enabled for other enabled
+accounts and Disabled for disabled accounts. The authorized row's tooltip and
+accessible text include both enablement and auto-login status. Set Auto authorizes
+the selected eligible Operator, replacing any prior authorization. Clear Auto
+revokes the selected Operator's authorization. Both captions share one action
+slot next to New User and icon-only Refresh. Chinese and English use compact
+captions. Other languages use their existing localized wording. Change Role,
+Enable/Disable User and Reset Password sit on the right. Constrained widths or
+enlarged fonts wrap the groups without overlapping controls.
 Change Role opens a separate role selector with Save/Cancel; unchanged roles
 cannot be saved. Disabling requires a confirmation naming the target; enabling
-does not. Selecting any existing Administrator disables all three account-specific
+does not. Selecting any existing Administrator disables the account-specific
 actions. The service enforces the same restriction regardless of the UI.
 Account creation and password reset retain the existing masked forms. Every action
 uses the account service's own authorization and validation; there is no delete or
@@ -310,21 +331,21 @@ values or selected role identities. Unrelated optional UI entries retain their
 English fallback. Passwords are cleared from
 fields on submission/dismissal; feedback never echoes credentials or raw errors.
 
-Normal startup restores the saved Production candidate and reporting selection as
-Guest. Operator or higher can select or re-prepare a Recipe, set Batch, Start,
-Reset Fault and connect or disconnect configured Basler sources. Changing automatic
-PLC reporting requires Engineer or higher. Guest can Start or single-step from
-READY only with a current prepared Folder Replay candidate and reporting disabled.
-Only a generation admitted under that Guest exception permits Guest Pause, Resume
-or Step while running. All roles can observe, Stop and Close. Identity changes leave
-accepted operations running and invalidate pending interactive Recipe selections.
+Normal startup restores the saved Production candidate and reporting selection
+before the auto-login attempt. Start, Pause, Resume and Step require Operator or
+higher in the normal application regardless of source or reporting configuration.
+Operator or higher can also select or re-prepare a Recipe, set Batch, Reset Fault
+and connect or disconnect configured Basler sources. Changing automatic PLC
+reporting requires Engineer or higher. Guest can view existing observations. All
+roles can Stop and Close. Identity changes leave admitted Runs and commands
+running and invalidate pending interactive Recipe selections.
 
 Engineer or Administrator can save or delete Recipes, save MachineLayout and
 CameraSources, inspect and publish Model imports, rename or delete Models, and
 prepare their caches. Reading saved definitions and viewing existing status is
 available to every role, including the selected Model's complete label catalog.
 Device enumeration and new tuning measurements require Engineer. Passive
-capture on an existing connection keeps its Operator admission.
+Vision preview on an existing idle Basler connection requires Operator or higher.
 
 All five pages remain available in every session. On the Recipe page, Guest
 and Operator browse saved definitions. The displayed metadata, inspection
@@ -335,10 +356,9 @@ Administrator return to the working draft, including any unsaved edits.
 Production's saved-Recipe selector is a separate Operator command.
 
 Production and Vision combine the current role with lifecycle, source readiness
-and editing constraints. Guest player controls follow the admitted replay
-generation. Stop and application Close remain available under their normal
-lifecycle rules. Vision reference images and configuration remain viewable
-while engineering mutations are disabled.
+and editing constraints. The Production player shows its existing source-specific
+controls and disables actions that require a higher role. Vision reference images
+and configuration remain viewable while engineering mutations are disabled.
 
 Vision checks each file publication separately. If the session changes between
 saves, the first successful file remains saved and the other draft remains
@@ -370,10 +390,12 @@ read access, incomplete evidence and retention.
 New records capture the active resolved Recipe's display name alongside its stable
 ID in the compact detail payload. Renaming a Recipe does not relabel past cycles.
 The current detail payload contains channel evidence, camera evidence and an
-optional Recipe name. Exactly three elements are required; former two-element
-payloads are unsupported and follow the existing corrupt-record query error
-behavior. A null name in the current format remains valid. The Inspection table
-shows a dash and exposes the stored Recipe ID in its tooltip.
+optional Recipe name. The three-element payload also supports an optional
+per-camera extension containing original image dimensions and effective ViMo
+labels, rectangles and channel associations. Existing camera entries without
+this extension remain readable with their stored reasons. Former two-element
+payloads follow the existing corrupt-record query error behavior. A null Recipe
+name displays as a dash with the stored Recipe ID in its tooltip.
 
 The same database stores the selected Production Batch, Run lifecycle and cumulative
 totals. Startup restores the selection by UUID. Labels are unique per IPC after
@@ -386,8 +408,8 @@ Cycle and physical-group detail expire incrementally after 30 days by their host
 observations. Batch/Run identities, end events, summaries and completeness flags
 persist independently of this window. An optional table in current
 History databases associates newly published archive paths with their exact
-Run, Cycle and camera. Existing detail payloads are unchanged. Paths expire
-with detail; the [archived PNGs](architecture.md#image-archiving) have separate ownership.
+Run, Cycle and camera. Paths and captured finding details expire with the Cycle.
+The [archived PNGs](architecture.md#image-archiving) have separate ownership.
 The History owner adds companion tables for durable Run position summaries,
 Run start accounts, named Batch
 information and observed inspection spans on current stores. Existing
@@ -913,7 +935,8 @@ flag or activation mode. These are raw values, with no scaling or unit conversio
 Loading and editing retain immutable configuration values. Preparing the selected
 saved Recipe admits the separate [process application](communication.md#process-parameter-application)
 for Operator or higher; a changed selected Save triggers the same preparation.
-Guest startup restores the candidate without writes. Omission never restores a PLC default.
+Startup candidate restoration is read-only, including with Operator auto login.
+Omission never restores a PLC default.
 
 All catalog parameters are signed 32-bit DINT definitions occupying two consecutive
 DM words. Addresses below are the first word; the on-demand preview decodes the
@@ -1098,6 +1121,8 @@ second SDK owner or automatic retry.
 Switching mode preserves both folders and serials. Disconnect before changing
 source mapping/mode; Recipe/Batch/page changes do not disconnect cameras.
 Live source keys are `basler:<serial>`; Folder keys are lexical normalized paths.
+Vision preview is temporary and starts only from its Capture button. It reads
+the selected camera on the existing connection without changing saved settings.
 
 Loading, browsing and Production Recipe selection do not rewrite source files.
 Explicit Vision Save writes the versionless definition atomically. This is source configuration,
@@ -1451,7 +1476,7 @@ saved multi-file outcomes. Read/validation failure keeps both drafts and reports
 details in the bottom strip. It neither writes files nor prepares/activates a
 candidate, commands sources or resets counters. Viewing pixels, selection and zoom
 remain temporary viewing state. The action is disabled when clean, editing is locked,
-IO is busy or a capture is pending. Changed saved camera identities/order require
+IO is busy or preview is active. Changed saved camera identities/order require
 reopening the application; connected sources must be disconnected explicitly before
 reloading an externally changed source mapping. Navigation's Discard uses the same
 file reload and waits for its completion.

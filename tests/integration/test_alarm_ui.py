@@ -71,7 +71,7 @@ def test_guest_close_waits_for_the_inflight_alarm_owner(tmp_path: Path) -> None:
         assert all(t.name != "PLCStatusService" for t in threads())
 
 
-def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
+def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     data = saved_data(tmp_path)
@@ -114,14 +114,15 @@ def test_saved_monitor_runs_across_guest_start_stop_logout_and_saved_changes(
                 app.alarm_page(AlarmQuery())
             with pytest.raises(AuthorizationError):
                 app.history.alarm_page(AlarmQuery())
-            app.start().result(WAIT)
-            app.stop().result(WAIT)
             assert app.alarm_snapshot().active[0].id == "emergency_stop"
             identity.login("Admin", TEST_PASSWORD).result(WAIT)
             provision_account(identity, "Line", Role.OPERATOR, TEST_PASSWORD)
             provision_account(identity, "Tech", Role.ENGINEER, TEST_PASSWORD)
             identity.login("Line", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
+            app.start().result(WAIT)
+            app.stop().result(WAIT)
+            assert app.alarm_snapshot().active[0].id == "emergency_stop"
             assert (
                 not page.alarm_enabled.isEnabled()
                 and window.history_tabs.isTabEnabled(3)

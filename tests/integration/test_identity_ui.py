@@ -8,7 +8,7 @@ from threading import Event, current_thread, main_thread
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import (
     QApplication,
@@ -39,6 +39,7 @@ from capsule_vision.application.account_maintenance import initialize_administra
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
     Account,
+    AccountManagementSnapshot,
     Role,
     SecurityStorageError,
     SessionSnapshot,
@@ -60,7 +61,7 @@ from capsule_vision.ui.identity_controls import (
 from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.ui.production_bridge import QtProductionBridge
 from capsule_vision.ui.shell import NavigationBar
-from capsule_vision.ui.style import Style, apply_theme, theme_colors
+from capsule_vision.ui.style import Style, Theme, apply_theme, theme_colors
 
 SECRET = "isolated UI test credential"
 NEW_SECRET = "replacement UI test credential"
@@ -259,7 +260,7 @@ def assert_account_table_columns(dialog: UsersDialog) -> tuple[int, ...]:
     width = table.viewport().width()
     widths = tuple(table.columnWidth(i) for i in range(4))
     assert sum(widths) == width
-    for actual, percent in zip(widths, (30, 22, 16, 32), strict=True):
+    for actual, percent in zip(widths, (30, 19, 22, 29), strict=True):
         floor, remainder = divmod(width * percent, 100)
         assert floor <= actual <= floor + bool(remainder), (width, widths, percent)
     assert table.horizontalScrollBar().maximum() == 0
@@ -298,6 +299,190 @@ def change_role(controls: IdentityControls, role: Role) -> None:
     dialog.role.setCurrentIndex(dialog.role.findData(role))
     assert dialog.submit.isEnabled()
     dialog.submit.click()
+
+
+@pytest.mark.parametrize(("language", "theme"), [("en", "dark"), ("zh", "light")])
+def test_manage_users_presents_and_changes_auto_login(
+    identity_screen: tuple[MainWindow, LocalIdentity],
+    language: Language,
+    theme: Theme,
+) -> None:
+    window, owner = identity_screen
+    window.set_language(language)
+    window.set_theme(theme)
+    ui = window.identity_controls
+    login(ui)
+    completed(
+        owner.create_account("Pending", Role.OPERATOR, "temporary fixture credential")
+    )
+    other = completed(
+        owner.create_account("Other", Role.OPERATOR, "temporary fixture credential")
+    )
+    pending = completed(owner.login(other.username, "temporary fixture credential"))
+    owner.rotate_password(SECRET, pending.revision).result(5)
+    completed(owner.login("Admin", SECRET))
+    users = manager(ui)
+    button = users.controls["identity_set_auto_login"]
+    assert users.table.columnCount() == 4
+    below_table = users.body.itemAt(1)
+    assert below_table is not None and below_table.widget() is users.action_area
+    set_caption, clear_caption, auto_status = (
+        ("设为自动", "取消自动", "自动登录")
+        if language == "zh"
+        else ("Set Auto", "Clear Auto", "Auto login")
+    )
+    enabled, disabled = (
+        text(key, language) for key in ("identity_enabled", "identity_disabled")
+    )
+
+    def assert_status(
+        username: str, caption: str, description: str | None = None
+    ) -> None:
+        row = next(
+            i
+            for i, account in enumerate(users.accounts)
+            if account.username == username
+        )
+        item = users.table.item(row, 2)
+        assert item is not None and item.text() == caption
+        assert (
+            item.toolTip()
+            == item.data(Qt.ItemDataRole.AccessibleTextRole)
+            == (description or caption)
+        )
+
+    def assert_authorized(account: Account) -> None:
+        until(
+            lambda: not users.busy and users.auto_login_account_id == account.account_id
+        )
+        assert users.selected() == account and account.enabled
+        assert_status(
+            account.username,
+            auto_status,
+            f"{enabled} · {text('identity_auto_login', language)}",
+        )
+        assert_full_caption(button, clear_caption)
+        assert (
+            button.toolTip()
+            == button.accessibleName()
+            == text("identity_disable_auto_login", language)
+        )
+
+    for name in ("Admin", "Pending"):
+        select(users, name)
+        assert not button.isEnabled()
+        assert_status(name, enabled)
+    users.table.clearSelection()
+    assert not button.isEnabled()
+    worker = select(users, "Worker")
+    assert button.isEnabled()
+    assert_status(worker.username, enabled)
+    assert_full_caption(button, set_caption)
+    assert (
+        button.toolTip()
+        == button.accessibleName()
+        == text("identity_set_auto_login", language)
+    )
+    QApplication.processEvents()
+    slot = QRect(button.mapTo(users, QPoint()), button.size())
+    button.click()
+    assert_authorized(worker)
+    assert QRect(button.mapTo(users, QPoint()), button.size()) == slot
+    other = select(users, other.username)
+    assert button.isEnabled() and button.text() == set_caption
+    button.click()
+    assert_authorized(other)
+    assert_status(worker.username, enabled)
+    users.controls["short_refresh"].click()
+    assert_authorized(other)
+    button.click()
+    until(lambda: not users.busy and users.auto_login_account_id is None)
+    assert_status(other.username, enabled)
+    assert button.text() == set_caption
+    QApplication.processEvents()
+    assert QRect(button.mapTo(users, QPoint()), button.size()) == slot
+    button.click()
+    assert_authorized(other)
+    users.controls["identity_disable"].click()
+    confirm_disable(ui)
+    until(lambda: not users.busy and users.auto_login_account_id is None)
+    selected = users.selected()
+    assert (
+        selected is not None
+        and selected.account_id == other.account_id
+        and not selected.enabled
+    )
+    assert_status(other.username, disabled)
+    assert not button.isEnabled()
+    select(users, worker.username)
+    button.click()
+    assert_authorized(worker)
+    change_role(ui, Role.ENGINEER)
+    until(lambda: not users.busy and users.auto_login_account_id is None)
+    selected = users.selected()
+    assert selected is not None and selected.role is Role.ENGINEER
+    assert_status(worker.username, enabled)
+    assert not button.isEnabled()
+
+
+def test_old_users_refresh_cannot_restore_previous_auto_login(
+    identity_screen: tuple[MainWindow, LocalIdentity], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, owner = identity_screen
+    ui = window.identity_controls
+    login(ui)
+    users = manager(ui)
+    worker = select(users, "Worker")
+    read_accounts = owner.account_management
+    old_snapshot = completed(read_accounts())
+    old_refresh: Future[AccountManagementSnapshot] = Future()
+    monkeypatch.setattr(owner, "account_management", lambda: old_refresh)
+    users.controls["short_refresh"].click()
+    assert users.busy and not users.controls["identity_set_auto_login"].isEnabled()
+    users.close()
+    assert ui.users is None
+
+    monkeypatch.setattr(owner, "account_management", read_accounts)
+    users = manager(ui)
+    select(users, worker.username)
+    button = users.controls["identity_set_auto_login"]
+    button.click()
+    until(lambda: not users.busy and users.auto_login_account_id == worker.account_id)
+    old_refresh.set_result(old_snapshot)
+    QApplication.processEvents()
+
+    assert ui.users is users and users.selected() == worker
+    item = users.table.item(users.table.currentRow(), 2)
+    assert item is not None and item.text() == "Auto login"
+    assert button.text() == "Clear Auto"
+
+
+def test_rejected_auto_login_keeps_status_and_shows_feedback(
+    identity_screen: tuple[MainWindow, LocalIdentity],
+) -> None:
+    window, owner = identity_screen
+    ui = window.identity_controls
+    login(ui)
+    users = manager(ui)
+    worker = select(users, "Worker")
+    # Keep the last UI snapshot while the real owner makes the target ineligible.
+    completed(owner.set_enabled(worker.account_id, False))
+    button = users.controls["identity_set_auto_login"]
+    assert button.isEnabled()
+    button.click()
+    until(lambda: not users.busy)
+    assert users.status.isVisible() and users.status.text() == text(
+        "identity_denied", "en"
+    )
+    item = users.table.item(users.table.currentRow(), 2)
+    assert item is not None and item.text() == "Enabled"
+    assert completed(owner.account_management()).auto_login_account_id is None
+
+    users.controls["short_refresh"].click()
+    until(lambda: not users.busy)
+    item = users.table.item(users.table.currentRow(), 2)
+    assert item is not None and item.text() == "Disabled"
+    assert not button.isEnabled() and not users.status.isVisible()
 
 
 def test_guest_login_wrong_disabled_switch_logout_and_self_password(
@@ -1257,6 +1442,78 @@ def test_users_and_role_geometry_all_supported_languages(qapp: QApplication) -> 
         host.close()
 
 
+@pytest.mark.parametrize("language", ["zh", "en", "de"])
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_users_common_values_fit_at_preferred_width(
+    qapp: QApplication, language: Language, theme: Theme
+) -> None:
+    ensure_test_fonts()
+    host = QWidget()
+    font = QFont()
+    font.setFamilies(Style.font_families)
+    host.setFont(font)
+    apply_theme(host, theme)
+    users = UsersDialog(host)
+    stamp = datetime(2099, 12, 31, 15, 59, tzinfo=UTC)
+    operator = Account("shift", "Shared Shift", Role.OPERATOR, True, stamp)
+    users.install_accounts(
+        (
+            operator,
+            Account("engineer", "Line Engineer", Role.ENGINEER, True, stamp),
+            Account("admin", "Review Admin", Role.ADMINISTRATOR, True, stamp),
+            Account("former", "Former Operator", Role.OPERATOR, False),
+        ),
+        operator.account_id,
+    )
+    users.present(language)
+    users.show()
+    users.resize(850, 500)
+    table = users.table
+    try:
+        for enlarged in (False, True):
+            if enlarged:
+                table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+                table.setStyleSheet("QTableWidget#accounts {font-size: 20px;}")
+            QApplication.processEvents()
+            until(
+                lambda: (
+                    sum(table.columnWidth(i) for i in range(4))
+                    == table.viewport().width()
+                )
+            )
+            assert table.verticalScrollBar().isVisible() == enlarged
+            assert table.horizontalScrollBar().maximum() == 0
+            assert users.selected() == operator
+            for column in range(4):
+                required = max(
+                    table.sizeHintForColumn(column),
+                    table.horizontalHeader().sectionSizeHint(column),
+                )
+                assert table.columnWidth(column) >= required, (
+                    language,
+                    theme,
+                    enlarged,
+                    column,
+                    table.columnWidth(column),
+                    required,
+                )
+        status = table.item(0, 2)
+        assert status is not None
+        assert (
+            status.text()
+            == {"zh": "自动登录", "en": "Auto login", "de": "Auto-Anmeldung"}[language]
+        )
+        description = f"{text('identity_enabled', language)} · {text('identity_auto_login', language)}"
+        assert (
+            status.toolTip()
+            == status.data(Qt.ItemDataRole.AccessibleTextRole)
+            == description
+        )
+    finally:
+        users.close()
+        host.close()
+
+
 @pytest.mark.parametrize("count", [0, 2, 10])
 def test_users_layout_counts_resize_and_complete_timestamps(
     qapp: QApplication, count: int
@@ -1485,6 +1742,8 @@ def test_users_long_translated_captions_wrap_with_full_accessibility(
         "identity_reset": "Reset the selected account password",
         "identity_role": "Configured account authorization role",
         "identity_status": "Current account availability status",
+        "identity_set_auto_login": "Set automatic login for this account",
+        "identity_disable_auto_login": "Clear this account's automatic login",
     }
 
     def translated(key: str, language: Language) -> str:
@@ -1498,7 +1757,8 @@ def test_users_long_translated_captions_wrap_with_full_accessibility(
     host = QWidget()
     apply_theme(host, "dark")
     users = UsersDialog(host)
-    users.install_accounts((Account("user", "Account", Role.OPERATOR, True),))
+    accounts = (Account("user", "Account", Role.OPERATOR, True),)
+    users.install_accounts(accounts)
     users.present("af")
     users.show()
     users.resize(850, 500)
@@ -1525,6 +1785,18 @@ def test_users_long_translated_captions_wrap_with_full_accessibility(
                 == heading.text()
             )
         assert users.table.horizontalScrollBar().maximum() == 0
+        auto = users.controls["identity_set_auto_login"]
+        assert_full_caption(auto, captions["identity_set_auto_login"])
+        slot = QRect(auto.mapTo(users, QPoint()), auto.size())
+        users.install_accounts(accounts, accounts[0].account_id)
+        QApplication.processEvents()
+        assert_full_caption(auto, captions["identity_disable_auto_login"])
+        assert (
+            auto.toolTip()
+            == auto.accessibleName()
+            == captions["identity_disable_auto_login"]
+        )
+        assert QRect(auto.mapTo(users, QPoint()), auto.size()) == slot
         users.controls["identity_reset"].setFocus()
         users.present("en")
         until(
@@ -1534,6 +1806,11 @@ def test_users_long_translated_captions_wrap_with_full_accessibility(
             )
         )
         assert users.controls["identity_reset"].hasFocus()
+        assert_full_caption(auto, "Clear Auto")
+        assert auto.accessibleName() == "Disable Auto Login"
+        item = users.table.item(0, 2)
+        assert item is not None and item.text() == "Auto login"
+        assert item.toolTip() == "Enabled · Auto Login"
     finally:
         users.close()
         host.close()

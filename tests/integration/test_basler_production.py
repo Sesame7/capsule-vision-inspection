@@ -15,6 +15,8 @@ import cv2
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.support.application import WAIT
 from tests.support.cycles import image_result
@@ -55,7 +57,11 @@ from capsule_vision.application.basler_connection import (
 )
 from capsule_vision.application.basler_control import BaslerControlSnapshot
 from capsule_vision.application.history import ProductionHistory
-from capsule_vision.application.identity_models import AuthorizationError, Role
+from capsule_vision.application.identity_models import (
+    AuthorizationError,
+    Role,
+    StaleSessionError,
+)
 from capsule_vision.application.image_archive import (
     ArchiveImage,
     ImageArchive,
@@ -961,7 +967,7 @@ def test_configured_basler_commands_require_operator(
                 app.start()
             assert app.snapshot() == before and not passive.prepared
             owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
-            # Even a physically ready (fake) source cannot turn into a Guest demo.
+            # A connected source still requires Operator admission.
             app.connect_source()
             owner.logout()
             before, source = app.snapshot(), app.source_snapshot()
@@ -970,6 +976,7 @@ def test_configured_basler_commands_require_operator(
                 app.disconnect_source,
                 app.start,
                 app.step_source,
+                lambda: app.capture_image(CameraId("CAM1"), timeout=None),
             ):
                 with pytest.raises(AuthorizationError):
                     command()
@@ -1046,11 +1053,17 @@ def test_operator_can_use_connected_source_while_engineering_settings_are_read_o
         vision.connect_source.click()
         until(lambda: not window.editing.busy)
         assert vision.disconnect_source.isEnabled() and vision.capture.isEnabled()
+        vision.capture.click()
+        until(lambda: app.source_snapshot().capture_waiting)
+        assert vision.capture.isChecked()
         window.identity_controls.logout()
         assert (
             not vision.disconnect_source.isEnabled() and not vision.capture.isEnabled()
         )
-        assert app.source_snapshot().state is ConnectionState.CONNECTED
+        assert not vision.capture.isChecked()
+        connection = app.source_snapshot()
+        assert connection.state is ConnectionState.CONNECTED
+        assert connection.capture_camera is None
         window.navigate(0)
         assert not window.buttons["operation"].isEnabled()
     finally:
@@ -1196,9 +1209,23 @@ def test_capture_timeout_cancel_and_busy_boundary_are_deterministic(
 
 @pytest.mark.parametrize(
     "action",
-    ["success", "timeout", "cancel", "switch", "disconnect", "close", "start", "late"],
+    [
+        "stream",
+        "cancel",
+        "switch",
+        "disconnect",
+        "close",
+        "start",
+        "page",
+        "role",
+        "loss",
+        "invalid_image",
+        "late_switch",
+        "late_restart",
+        "late_start",
+    ],
 )
-def test_vision_capture_cancellation_and_stale_delivery(
+def test_vision_continuous_preview(
     qapp: QApplication,
     tmp_path: Path,
     passive: PassiveBackend,
@@ -1208,6 +1235,15 @@ def test_vision_capture_cancellation_and_stale_delivery(
     data = saved_data(tmp_path)
     save_basler(data.sources)
     without_folders(data.sources)
+    archive = tmp_path / "archive"
+    recipe = data.recipes / "local.json"
+    save_recipe(
+        recipe,
+        replace(
+            load_recipe(recipe),
+            image_archive=ImageArchiveSettings(str(archive), save_empty=True),
+        ),
+    )
     engine = Engine()
     engine.release_warm.set()
     now = [1.0]
@@ -1220,15 +1256,24 @@ def test_vision_capture_cancellation_and_stale_delivery(
     startup = authenticated_startup(data, engine_factory=lambda _: engine)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
+    assert isinstance(app, ProductionReportingCommands)
+    owner = app.identity
+    assert owner is not None
     captures: list[Future[CameraSnapshot]] = []
     original_capture = app.capture_image
 
-    def capture(camera: CameraId, *, timeout: float = 10) -> Future[CameraSnapshot]:
-        future = original_capture(camera, timeout=timeout)
+    def capture(
+        camera: CameraId, *, timeout: float | None = 10, revision: int | None = None
+    ) -> Future[CameraSnapshot]:
+        assert timeout is None and revision == app.session_revision
+        assert all(pending.done() for pending in captures)
+        future = original_capture(camera, timeout=timeout, revision=revision)
         captures.append(future)
         return future
 
     monkeypatch.setattr(app, "capture_image", capture)
+    if action == "role":
+        provision_account(owner, "Actor", Role.OPERATOR, TEST_PASSWORD)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.show()
@@ -1243,38 +1288,83 @@ def test_vision_capture_cancellation_and_stale_delivery(
             not c.device.isEnabled() and not c.folder.isVisible()
             for c in workspace.camera_cards.values()
         )
+        assert not captures and not workspace.capture.isChecked()
+        assert (
+            workspace.capture.toolTip()
+            == workspace.capture.accessibleName()
+            == text("vision_preview_start", window.language)
+        )
         workspace.capture.click()
         pending = captures[-1]
-        assert pending is not None and not workspace.capture.isEnabled()
-        assert workspace.cancel_capture_button.isVisible()
-        assert workspace.capture.toolTip() == text("vision_capture", window.language)
+        assert workspace.capture.isEnabled() and workspace.capture.isChecked()
+        assert (
+            workspace.capture.toolTip()
+            == workspace.capture.accessibleName()
+            == text("vision_preview_stop", window.language)
+        )
         until(lambda: app.source_snapshot().capture_waiting)
         geometry = workspace.draft.definition
-        if action == "success":
-            passive.expose(1)
-            until(lambda: workspace.frame is not None)
+        if action == "stream":
+            now[0] += 15
+            # A frame can arrive while the other cameras are still transferring.
+            # Rearm on the idle stream without failing on this partial ordinal.
+            passive.expose(1, (0,))
+            until(lambda: len(captures) == 2 and app.source_snapshot().capture_waiting)
             assert workspace.frame is not None
             assert workspace.frame.frame_id.camera_id == CameraId("CAM1")
             assert int(workspace.frame.image[0, 0, 0]) == 10
-        elif action == "timeout":
-            now[0] = 11.0
-            until(
-                lambda: (
-                    window.event_label.accessibleName()
-                    == text("vision_capture_timeout", window.language)
-                )
+            assert not captures[1].done()
+            assert workspace.feedback is None
+            workspace.select_roi(2)
+            canvas = workspace.canvas
+            canvas.zoom(8.0)
+            rect = canvas.model.rect
+            transform = canvas.model.transform(canvas.width(), canvas.height())
+            assert rect is not None and transform is not None
+            x, y, w, h = transform.rectangle(rect)
+            center = QPoint(round(x + w / 2), round(y + h / 2))
+            QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=center)
+            assert canvas.cursor().shape() == Qt.CursorShape.SizeAllCursor
+            passive.expose(1, (1, 2, 3, 4, 5))
+            until(lambda: app.source_snapshot().received_frames == 6)
+            passive.expose(2)
+            until(lambda: len(captures) == 3 and app.source_snapshot().capture_waiting)
+            displayed = workspace.frame
+            assert displayed.frame_id.sequence == 2
+            assert int(displayed.image[0, 0, 0]) == 20
+            assert canvas.model.scale == 8 and canvas.model.rect == rect
+            assert workspace.selected_index == 2
+            assert canvas.cursor().shape() == Qt.CursorShape.SizeAllCursor
+            QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=center)
+            window.set_language("zh")
+            assert workspace.capture.accessibleName() == text(
+                "vision_preview_stop", "zh"
             )
-            assert window.event_label.accessibleName() == text(
-                "vision_capture_timeout", window.language
-            )
+            QTest.keyClick(workspace.capture, Qt.Key.Key_Space)
+            assert captures[-1].cancelled() and not workspace.capture.isChecked()
+            passive.expose(3)
+            until(lambda: app.source_snapshot().received_frames == 18)
+            assert workspace.frame is displayed and len(captures) == 3
+            assert app.reporting_snapshot() is None and not engine.calls
         elif action == "cancel":
-            workspace.cancel_capture_button.click()
+            workspace.capture.click()
             assert pending.cancelled()
-        elif action == "late":
+        elif action == "late_switch":
             # Complete without pumping Qt, then change selection before queued delivery.
             passive.expose(1)
             pending.result(WAIT)
             workspace.camera_cards[CameraId("CAM3")].click()
+        elif action == "late_restart":
+            passive.expose(1)
+            pending.result(WAIT)
+            workspace.capture.click()
+            workspace.capture.click()
+            until(lambda: app.source_snapshot().capture_waiting)
+            QApplication.processEvents()
+            assert len(captures) == 2 and not captures[-1].done()
+            assert workspace.frame is None and workspace.capture.isChecked()
+            workspace.capture.click()
+            assert captures[-1].cancelled()
         elif action == "switch":
             workspace.camera_cards[CameraId("CAM3")].click()
             assert pending.cancelled()
@@ -1283,32 +1373,68 @@ def test_vision_capture_cancellation_and_stale_delivery(
             workspace.disconnect_source.click()
             until(lambda: not window.recipe_page.busy)
             assert pending.cancelled() and passive.closed
-        elif action == "start":
+            workspace.source_modes["folder"].click()
+            assert not workspace.capture.isVisible()
+            assert workspace.sources is not None
+            workspace.sources.discard()
+        elif action in ("start", "late_start"):
+            if action == "late_start":
+                passive.expose(1)
+                pending.result(WAIT)
             app.start().result(WAIT)
-            assert pending.cancelled()
+            assert pending.cancelled() == (action == "start")
             app.stop().result(WAIT)
+        elif action == "page":
+            window.navigate(0)
+            assert pending.cancelled() and window.vision_workspace is None
+            window.navigate(4)
+            reopened = window.vision_workspace
+            assert reopened is not None and not reopened.capture.isChecked()
+        elif action == "role":
+            revision = app.session_revision
+            owner.login("Actor", TEST_PASSWORD).result(WAIT)
+            window.identity_controls.refresh()
+            assert pending.cancelled() and workspace.capture.isEnabled()
+            with pytest.raises(StaleSessionError):
+                original_capture(CameraId("CAM1"), timeout=None, revision=revision)
+        elif action == "loss":
+            passive.failure = True
+            until(lambda: app.source_snapshot().state is ConnectionState.FAULT)
+            until(lambda: not workspace.capture.isChecked())
+            assert pending.cancelled()
+            assert workspace.feedback == (
+                "source_connection_error",
+                "Injected source loss",
+            )
+        elif action == "invalid_image":
+            retrieve = passive.retrieve
+
+            def invalid(serial: str) -> tuple[AcquisitionMetadata, NDArray[np.uint8]]:
+                row, pixels = retrieve(serial)
+                return row, pixels[:, :-1]
+
+            monkeypatch.setattr(passive, "retrieve", invalid)
+            passive.expose(1)
+            until(lambda: not workspace.capture.isChecked())
+            assert workspace.feedback == (
+                "vision_capture_failed",
+                "ValueError: Camera snapshot dimensions differ from metadata",
+            )
         else:
             window.close()
             until(lambda: window.bridge.closed)
             assert pending.cancelled() and passive.closed
         QApplication.processEvents()
-        assert (workspace.frame is not None) == (action == "success")
+        if window.vision_workspace is workspace:
+            assert not workspace.capture.isChecked()
+        assert (workspace.frame is not None) == (action == "stream")
+        assert all(pending.done() for pending in captures)
         assert workspace.draft.definition == geometry
         assert (
             app.snapshot().counters == ProductionCounters()
             and not startup.frames.snapshot().frames
         )
-        if action == "success":
-            workspace.disconnect_source.click()
-            until(lambda: not window.recipe_page.busy)
-            workspace.source_modes["folder"].click()
-            until(lambda: not window.recipe_page.busy)
-            assert workspace.capture.toolTip() == text(
-                "vision_capture", window.language
-            )
-            assert not workspace.capture.isVisible()
-            assert workspace.sources is not None
-            workspace.sources.discard()
+        assert not tuple(archive.rglob("*.png"))
         assert app.history is not None
         assert app.history.snapshot().accepted == app.history.snapshot().persisted == 0
     finally:

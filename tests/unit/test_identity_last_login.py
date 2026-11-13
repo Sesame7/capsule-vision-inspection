@@ -101,12 +101,22 @@ def upgrade_fixture_to_v2(path: Path) -> None:
         db.execute("PRAGMA user_version=2")
 
 
-def test_v2_migration_preserves_credentials_identity_and_last_login(
+@pytest.mark.parametrize("version", [2, 3])
+def test_migration_preserves_credentials_identity_and_last_login(
     v1_store: Path,
+    version: int,
 ) -> None:
     upgrade_fixture_to_v2(v1_store)
     stamp = "2026-08-11T09:31:41.123456+00:00"
     with closing(sqlite3.connect(v1_store)) as db, db:
+        if version == 3:
+            db.execute(
+                "ALTER TABLE accounts ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1))"
+            )
+            db.execute(
+                "UPDATE accounts SET must_change_password=1 WHERE username='Worker'"
+            )
+            db.execute("PRAGMA user_version=3")
         db.execute(
             "UPDATE accounts SET last_login_utc=? WHERE username='Admin'", (stamp,)
         )
@@ -114,10 +124,11 @@ def test_v2_migration_preserves_credentials_identity_and_last_login(
     with opened(v1_store) as owner:
         assert owner.storage_snapshot().state is StorageState.READY
     with closing(sqlite3.connect(v1_store)) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (3,)
-        assert db.execute("SELECT * FROM accounts ORDER BY account_id").fetchall() == [
-            (*row, 0) for row in before
-        ]
+        assert db.execute("PRAGMA user_version").fetchone() == (4,)
+        assert db.execute("SELECT * FROM accounts ORDER BY account_id").fetchall() == (
+            [(*row, 0) for row in before] if version == 2 else before
+        )
+        assert db.execute("SELECT * FROM auto_login").fetchall() == []
 
 
 def test_valid_v1_migrates_once_preserving_every_existing_field(v1_store: Path) -> None:
@@ -128,7 +139,7 @@ def test_valid_v1_migrates_once_preserving_every_existing_field(v1_store: Path) 
     for _ in range(2):
         store = AccountStore(v1_store)
         try:
-            assert store.connection.execute("PRAGMA user_version").fetchone() == (3,)
+            assert store.connection.execute("PRAGMA user_version").fetchone() == (4,)
             after = store.connection.execute(
                 "SELECT * FROM accounts ORDER BY username_key"
             ).fetchall()
@@ -143,12 +154,13 @@ def test_valid_v1_migrates_once_preserving_every_existing_field(v1_store: Path) 
             store.close()
 
 
-def test_new_store_is_v3_without_a_login_or_guest_record(tmp_path: Path) -> None:
+def test_new_store_is_v4_without_a_login_or_guest_record(tmp_path: Path) -> None:
     path = tmp_path / "data/security.sqlite3"
     admin = initialize_administrator(path, "Admin", SECRET)
     assert admin.last_login_utc is None
     with closing(sqlite3.connect(path)) as connection, connection:
-        assert connection.execute("PRAGMA user_version").fetchone() == (3,)
+        assert connection.execute("PRAGMA user_version").fetchone() == (4,)
+        assert connection.execute("SELECT * FROM auto_login").fetchall() == []
         assert connection.execute(
             "SELECT username, last_login_utc FROM accounts"
         ).fetchall() == [("Admin", None)]
@@ -157,7 +169,7 @@ def test_new_store_is_v3_without_a_login_or_guest_record(tmp_path: Path) -> None
     assert login_values(path) == {"Admin": None}
 
 
-@pytest.mark.parametrize("failure", ["alter", "version", "commit"])
+@pytest.mark.parametrize("failure", ["alter", "version", "auto_login", "commit"])
 def test_migration_failure_rolls_back_schema_version_and_accounts(
     v1_store: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -185,6 +197,11 @@ def test_migration_failure_rolls_back_schema_version_and_accounts(
                     and action == sqlite3.SQLITE_PRAGMA
                     and arg1 == "user_version"
                     and arg2 == "2"
+                )
+                or (
+                    failure == "auto_login"
+                    and action == sqlite3.SQLITE_CREATE_TABLE
+                    and arg1 == "auto_login"
                 )
                 or (
                     failure == "commit"

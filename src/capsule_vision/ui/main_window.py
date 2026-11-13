@@ -945,17 +945,6 @@ class MainWindow(QMainWindow):
         app = self.bridge.application
         basler = isinstance(app, SourceProductionApplication) and app.basler_available
         operator = permits(app, Role.OPERATOR)
-        demo_start = (
-            not operator
-            and permits(app, Role.GUEST)
-            and isinstance(app, SourceProductionApplication)
-            and app.guest_replay_available
-        )
-        demo_controls = (
-            isinstance(app, SourceProductionApplication)
-            and permits(app, Role.GUEST)
-            and app.is_guest_demo(self.snapshot.generation)
-        )
         source_state = (
             app.source_snapshot().state
             if isinstance(app, SourceProductionApplication) and basler
@@ -972,8 +961,6 @@ class MainWindow(QMainWindow):
             source_state,
             source_ready,
             operator,
-            demo_start,
-            demo_controls,
             tuple(actions.items()),
             middle_step,
             self.language,
@@ -1001,13 +988,7 @@ class MainWindow(QMainWindow):
                         self.snapshot.process_required or self.snapshot.process_applying
                     )
                 )
-            permitted = (
-                operator
-                or action is None
-                or action == "stop"
-                or (action == "start" and demo_start)
-                or (action.startswith("replay_") and demo_controls)
-            )
+            permitted = operator or action in (None, "stop")
             button.setEnabled(bool(enabled and permitted))
             label = text(
                 "replay_continue"

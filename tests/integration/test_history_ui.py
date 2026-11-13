@@ -12,21 +12,23 @@ from time import time
 from uuid import uuid4
 
 import pytest
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPixmap
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QScreen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QHeaderView,
+    QPushButton,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
+    QWidget,
 )
 from tests.support.application import WAIT, production
 from tests.support.business import channel as business_channel
-from tests.support.business import mixed_result
+from tests.support.business import history_review, mixed_result
 from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.startup import saved_data
 
@@ -40,9 +42,10 @@ from capsule_vision.application.history import (
     HistoryRecord,
     ProductionHistory,
 )
+from capsule_vision.application.image_archive import ArchiveImage, write_png
 from capsule_vision.application.startup import load_startup
 from capsule_vision.inference import BoundingRect
-from capsule_vision.inspection import CycleStatus
+from capsule_vision.inspection import CycleStatus, Frame
 from capsule_vision.inspection.production import (
     ChannelId,
     FindingSource,
@@ -56,6 +59,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
+from capsule_vision.ui.history_image import HistoryImageDialog
 from capsule_vision.ui.history_page import HistoryPage
 from capsule_vision.ui.records_filters import RecordsFilters
 from capsule_vision.ui.style import Style, Theme, apply_theme, theme_colors
@@ -84,7 +88,7 @@ def cycle_record(page: HistoryPage, row: int = 0) -> HistoryRecord:
 
 
 def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    qapp: QApplication, tmp_path: Path
 ) -> None:
     history = ProductionHistory(tmp_path / "history.sqlite3")
     ctx = HistoryContext(
@@ -96,14 +100,7 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
     pixels = QImage(4, 3, QImage.Format.Format_RGB32)
     pixels.fill(Qt.GlobalColor.green)
     assert pixels.save(str(photo))
-    target = QUrl.fromLocalFile(str(photo))
-    opened: list[QUrl] = []
-
-    def open_url(url: QUrl) -> bool:
-        opened.append(url)
-        return len(opened) == 1
-
-    monkeypatch.setattr(QDesktopServices, "openUrl", open_url)
+    original = photo.read_bytes()
     try:
         history.start_run(None, ctx.run_id, ctx.active, None).result(WAIT)
         assert history.offer(ctx, mixed_result())
@@ -117,7 +114,7 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
         assert button.menu() is None
         assert page.cycles.columnCount() == 6 and not button.isEnabled()
         QTest.mouseClick(button, Qt.MouseButton.LeftButton)
-        assert not opened
+        assert page.image_dialog is None
         history.offer_image(
             PublishedImage(ctx.run_id, 1, "CAM2", photo, ctx.completed_at)
         )
@@ -131,21 +128,48 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
         )  # Camera name as well as any of its channel cells.
         assert button.isEnabled() and button.toolTip() == str(photo)
         QTest.mouseClick(button, Qt.MouseButton.LeftButton)
-        assert opened == [target]
+        viewer = page.image_dialog
+        assert viewer is not None and viewer.isVisible()
+        assert "归档图像 · CAM2" in viewer.windowTitle()
+        assert viewer.viewport.image.size() == pixels.size()
+        assert viewer.viewport.image.pixelColor(0, 0) == pixels.pixelColor(0, 0)
+        assert not viewer.viewport.overlays
+        assert not viewer.findChildren(QPushButton)
+        area, frame = viewer.screen().availableGeometry(), viewer.frameGeometry()
+        assert area.contains(frame)
+        QTest.keyClick(viewer, Qt.Key.Key_Escape)
+        assert page.image_dialog is None
         page.set_language("en")
         assert button.text() == button.accessibleName() == "Open Image"
-        page.channels.setCurrentCell(1, 3)
+        page.channels.setCurrentCell(1, 4)
         button.setFocus()
-        QTest.keyClick(button, Qt.Key.Key_Space)  # Desktop handler refuses this open.
-        assert opened == [target, target]
-        assert (
-            text("history_image_open_failed", "en") in page.channel_detail.toPlainText()
-        )
+        QTest.keyClick(button, Qt.Key.Key_Space)
+        viewer = page.image_dialog
+        assert viewer is not None
+        assert text("records_model_defect", "en") in viewer.caption.accessibleName()
+        assert viewer.close() and page.image_dialog is None
+        assert photo.read_bytes() == original
         photo.rename(photo.with_name("moved.png"))
         QTest.mouseClick(button, Qt.MouseButton.LeftButton)
         assert (
-            opened == [target, target]
+            page.image_dialog is None
             and text("history_image_missing", "en") in page.channel_detail.toPlainText()
+        )
+        for payload in (original[:15], b"not a PNG"):
+            photo.write_bytes(payload)
+            button.click()
+            assert page.image_dialog is None
+            assert (
+                text("history_image_open_failed", "en")
+                in page.channel_detail.toPlainText()
+            )
+        wrong_format = tmp_path / "different.bmp"
+        assert pixels.save(str(wrong_format))
+        photo.write_bytes(wrong_format.read_bytes())
+        button.click()
+        assert page.image_dialog is None
+        assert (
+            text("history_image_open_failed", "en") in page.channel_detail.toPlainText()
         )
         page.channels.setCurrentCell(0, 2)
         assert not button.isEnabled()
@@ -153,12 +177,202 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
         page.channels.setCurrentCell(1, 3)
         assert not button.isEnabled()
         QTest.mouseClick(button, Qt.MouseButton.LeftButton)
-        assert opened == [target, target]
+        assert page.image_dialog is None
     finally:
         page.dispose()
         page.close()
         history.request_stop()
         assert history.join(WAIT)
+        page.deleteLater()
+
+
+@pytest.mark.parametrize(
+    "language,dent_label,wraps",
+    [
+        ("en", "Dent", False),
+        ("zh", "压痕", False),
+        ("en", "Dent along the edge of the capsule shell " * 4 + "near the join", True),
+        ("zh", "胶囊壳边缘有较长的连续凹陷" * 5, True),
+    ],
+    ids=["en", "zh", "en-long", "zh-long"],
+)
+def test_archived_camera_uses_frozen_effective_findings_and_refits(
+    qapp: QApplication, tmp_path: Path, language: Language, dent_label: str, wraps: bool
+) -> None:
+    ensure_test_fonts()
+    result, image = history_review(tmp_path, dent_label=dent_label)
+    ctx = HistoryContext(
+        time(), "segment", None, uuid4().hex, ConfigurationIdentity("r", "m", "c" * 64)
+    )
+    camera = result.cameras[1]
+    assert camera.frame_id is not None
+    photo = write_png(
+        tmp_path / "archive",
+        ArchiveImage(
+            1, Frame(camera.frame_id, 0, image), datetime.now(), 1, ctx.run_id
+        ),
+    )
+    original = photo.read_bytes()
+    history = ProductionHistory(tmp_path / "history.sqlite3")
+    page = HistoryPage(history)
+    try:
+        history.start_run(None, ctx.run_id, ctx.active, None).result(WAIT)
+        assert history.offer(ctx, result)
+        assert history.offer(ctx, mixed_result(2))
+        history.offer_image(
+            PublishedImage(ctx.run_id, 1, "CAM2", photo, ctx.completed_at)
+        )
+        until(lambda: history.snapshot().images_linked == 1)
+        page.set_language(language)
+        apply_theme(page, "light")
+        page.resize(1920 if wraps else 1080, 900)
+        page.show()
+        page.activate()
+        until(lambda: not page.busy)
+        page.cycles.selectRow(1)
+        page.channels.setCurrentCell(1, 2)
+        summary = ("、" if language == "zh" else ", ").join(
+            (
+                "Scratch",
+                dent_label,
+                text("preview_length", language),
+                text("preview_tolerance", language),
+            )
+        )
+        detail = page.channel_detail
+        qapp.processEvents()
+        assert detail.toPlainText() == summary
+        assert {
+            "capsule.color.upper.tolerance",
+            "capsule.color.lower.tolerance",
+        }.issubset(channel_at(page, 1, 2).reasons)
+        assert detail.document().firstBlock().layout().lineCount() == 1
+        if wraps:
+            one_line_height = detail.height()
+            page.resize(880, 900)
+            until(
+                lambda: (
+                    detail.height() > one_line_height
+                    and not detail.verticalScrollBar().isVisible()
+                )
+            )
+            assert detail.document().firstBlock().layout().lineCount() > 1
+            assert detail.toPlainText() == summary
+        page.channels.setCurrentCell(1, 3)
+        assert page.channel_detail.toPlainText() == "Scratch"
+        page.channels.setCurrentCell(1, 1)
+        assert page.channel_detail.toPlainText() == ""
+        page.channels.setCurrentCell(1, 0)
+        assert page.channel_detail.toPlainText() == text(
+            "records_unassigned", language
+        ).format(labels="Background")
+        page.channels.setCurrentCell(2, 1)
+        assert (
+            text("records_missing_frame", language) in page.channel_detail.toPlainText()
+        )
+        assert not page.image_button.isEnabled()
+        page.channels.setCurrentCell(1, 2)
+        page.image_button.click()
+        viewer = page.image_dialog
+        assert viewer is not None
+        title_suffix = f"CAM2 · {text('history_cycle', language)} 1"
+        assert viewer.windowTitle().endswith(title_suffix)
+        assert f"CH08 · {summary}" in viewer.caption.accessibleName()
+        assert (
+            len(viewer.viewport.overlays) == 3
+        )  # Shared/identical geometry is drawn once.
+        assert "Scratch · CH08, CH09" in viewer.viewport.accessibleDescription()
+        assert "Background" not in viewer.viewport.accessibleDescription()
+        page.cycles.selectRow(0)
+        page.channels.setCurrentCell(0, 1)
+        assert page.image_dialog is viewer and not page.image_button.isEnabled()
+        assert viewer.windowTitle().endswith(title_suffix)
+        assert "CH08" in viewer.caption.accessibleName()
+        for width, height in ((800, 380), (440, 690)):
+            viewer.resize(width, height)
+            qapp.processEvents()
+            viewport = viewer.viewport
+            shot = viewport.grab()
+            assert viewer.size() == QSize(width, height)
+            raster, dpr = shot.toImage(), shot.devicePixelRatio()
+            scale = min(viewport.width() / 504, viewport.height() / 120)
+            left = (viewport.width() - 504 * scale) / 2
+            top = (viewport.height() - 120 * scale) / 2
+            # Midpoint of the shared rectangle's right edge, away from the label.
+            x, y = round((left + 165 * scale) * dpr), round((top + 23 * scale) * dpr)
+            assert QColor(Style.ng) in [
+                raster.pixelColor(x + offset, y) for offset in range(-2, 3)
+            ]
+            assert raster.pixelColor(5, 5) == QColor("#0d0f12")
+            assert viewport.height() > 0.85 * viewer.height()
+        assert viewer.close() and page.image_dialog is None
+        assert photo.read_bytes() == original
+        page.cycles.selectRow(1)
+        page.channels.setCurrentCell(1, 2)
+        mismatched = QImage(12, 12, QImage.Format.Format_RGB32)
+        mismatched.fill(Qt.GlobalColor.black)
+        assert mismatched.save(str(photo))
+        page.image_button.click()
+        assert page.image_dialog is None
+        assert (
+            text("history_image_size_mismatch", language)
+            in page.channel_detail.toPlainText()
+        )
+    finally:
+        page.dispose()
+        page.close()
+        history.request_stop()
+        assert history.join(WAIT)
+        page.deleteLater()
+
+
+@pytest.mark.parametrize(
+    "work_area",
+    [QRect(80, 40, 1920, 1040), QRect(-1080, 0, 1080, 1920)],
+    ids=["landscape-screen", "portrait-screen"],
+)
+@pytest.mark.parametrize(
+    "image_size",
+    [(320, 180), (320, 240), (240, 240), (240, 320)],
+    ids=["16-9", "4-3", "square", "3-4"],
+)
+def test_history_image_initial_geometry_fits_image_and_screen(
+    qapp: QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    work_area: QRect,
+    image_size: tuple[int, int],
+) -> None:
+    def available_geometry(_screen: QScreen) -> QRect:
+        return work_area
+
+    monkeypatch.setattr(QScreen, "availableGeometry", available_geometry)
+    parent = QWidget()
+    pixels = QImage(*image_size, QImage.Format.Format_RGB32)
+    color = QColor("#95a8bb")
+    pixels.fill(color)
+    viewer = HistoryImageDialog(parent, pixels, (), "Archived Image", "CH08 · Scratch")
+    try:
+        viewer.open()
+        qapp.processEvents()
+        frame = viewer.frameGeometry()
+        assert work_area.contains(frame)
+        assert (work_area.center() - frame.center()).manhattanLength() <= 2
+        assert (
+            0.90
+            <= max(
+                frame.width() / work_area.width(), frame.height() / work_area.height()
+            )
+            <= 0.95
+        )
+        canvas = viewer.viewport.grab().toImage()
+        assert viewer.viewport.width() == pytest.approx(
+            viewer.viewport.height() * image_size[0] / image_size[1], abs=2
+        )
+        assert canvas.pixelColor(2, 2) == color
+        assert canvas.pixelColor(canvas.width() - 3, canvas.height() - 3) == color
+    finally:
+        viewer.close()
+        parent.deleteLater()
 
 
 def test_history_filters_pagination_selection_and_presentation(
@@ -221,10 +435,9 @@ def test_history_filters_pagination_selection_and_presentation(
             Qt.MouseButton.LeftButton,
             pos=page.channels.visualItemRect(item).center(),
         )
-        assert page.channel_detail.toPlainText().splitlines() == [
-            text("records_model_defect", "zh"),
-            text("execution_error", "zh"),
-        ]
+        assert page.channel_detail.toPlainText() == "、".join(
+            (text("records_model_defect", "zh"), text("execution_error", "zh"))
+        )
         assert "NG · ERR" in item.text()
         assert (
             cycle_record(page).context.active.model_sha256 == first.active.model_sha256
@@ -613,13 +826,13 @@ def test_stored_recipe_names_missing_names_and_content_sized_channel_details(
             text("execution_error", language),
         )
         for col, expected in (
-            (6, [defect]),
-            (5, [failure]),
-            (4, [defect, failure]),
+            (6, defect),
+            (5, failure),
+            (4, ("、" if language == "zh" else ", ").join((defect, failure))),
         ):
             page.channels.setCurrentCell(0, col)
             assert page.channel_detail.isVisible()
-            assert page.channel_detail.toPlainText().splitlines() == expected
+            assert page.channel_detail.toPlainText() == expected
             assert (
                 24
                 <= page.channel_detail.height()
@@ -786,10 +999,9 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             errors = [c for c in stored.channels if c.technical == "ERROR"]
             assert len(errors) == 12 and sum(c.business == "NG" for c in errors) == 6
             page.channels.setCurrentCell(0, 4)
-            assert page.channel_detail.toPlainText().splitlines() == [
-                text("records_model_defect", "zh"),
-                text("execution_error", "zh"),
-            ]
+            assert page.channel_detail.toPlainText() == "、".join(
+                (text("records_model_defect", "zh"), text("execution_error", "zh"))
+            )
             assert "NG · ERR" in content(page.channels, 0, 4)
         elif scenario in ("ok", "empty"):
             assert (
@@ -980,10 +1192,12 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
         assert channel_at(page, 0, 6).channel == 1
         page.channels.setCurrentCell(0, 4)
         assert "NG · ERR" in content(page.channels, 0, 4)
-        assert page.channel_detail.toPlainText().splitlines() == [
-            text("records_model_defect", page.language),
-            text("execution_error", page.language),
-        ]
+        assert page.channel_detail.toPlainText() == "、".join(
+            (
+                text("records_model_defect", page.language),
+                text("execution_error", page.language),
+            )
+        )
         page.grab()
         page.cycles.clearSelection()
         page.cycles.setCurrentCell(-1, -1)

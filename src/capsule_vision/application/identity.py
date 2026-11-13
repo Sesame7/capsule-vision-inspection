@@ -28,6 +28,7 @@ from .audit import (
 from .identity_models import (
     Account,
     AccountConflictError,
+    AccountManagementSnapshot,
     AuthenticationError,
     AuthorizationError,
     IdentityError,
@@ -85,6 +86,7 @@ class LocalIdentity:
         self._accepting = True
         self._session = SessionSnapshot()
         self._authentication: Future[SessionSnapshot] | None = None
+        self._startup_login: Future[SessionSnapshot] | None = None
         self._login_cancelled = Event()
         self._storage = SecurityStorageSnapshot()
         self._store: AccountStore | None = None
@@ -307,14 +309,7 @@ class LocalIdentity:
                         account = self._available().record_login(
                             record[0].account_id, datetime.now(UTC)
                         )
-                        session = self._publish(account)
-                        self.audit.record(
-                            AuditOperation.by(
-                                session, "session.login", account.account_id
-                            ),
-                            "success",
-                        )
-                        return session
+                        return self._publish_login(account, "session.login")
                 except Exception as exc:
                     self.audit.record(
                         AuditOperation.by(initiator, "session.login", username),
@@ -331,6 +326,71 @@ class LocalIdentity:
             self._authentication = attempt
             self._login_cancelled = cancelled
             return attempt
+
+    def begin_startup_login(self) -> Future[SessionSnapshot] | None:
+        """Observe one saved authorization on the worker during normal startup."""
+        with self._lock:
+            if (
+                self._startup_login is not None
+                or self._session.revision != 0
+                or self._authentication is not None
+                or self._storage.state is not StorageState.READY
+                or not self._accepting
+                or self._queue.full()
+            ):
+                return None
+            revision = self._session.revision
+            cancelled = Event()
+
+            def authenticate() -> SessionSnapshot:
+                target = None
+                try:
+                    with self._lock:
+                        self._check_authentication(attempt, revision)
+                    store = self._available()
+                    target = store.auto_login_id()
+                    with self._lock:
+                        self._check_authentication(attempt, revision)
+                        if target is not None:
+                            account = store.record_auto_login(target, datetime.now(UTC))
+                            if account is not None:
+                                return self._publish_login(
+                                    account, "session.auto_login"
+                                )
+                            self.audit.record(
+                                AuditOperation(
+                                    "system", "System", "session.auto_login", target
+                                ),
+                                "denied",
+                            )
+                        return self._session
+                except Exception as exc:
+                    if target is not None:
+                        self.audit.record(
+                            AuditOperation(
+                                "system", "System", "session.auto_login", target
+                            ),
+                            "cancelled" if cancelled.is_set() else error_outcome(exc),
+                            type(exc).__name__,
+                        )
+                    raise
+                finally:
+                    with self._lock:
+                        if self._authentication is attempt:
+                            self._authentication = None
+
+            attempt = self._enqueue(authenticate)
+            self._startup_login = self._authentication = attempt
+            self._login_cancelled = cancelled
+            return attempt
+
+    def _publish_login(self, account: Account, action: str) -> SessionSnapshot:
+        # Both paths commit Last Login while holding the session lock.
+        session = self._publish(account)
+        self.audit.record(
+            AuditOperation.by(session, action, account.account_id), "success"
+        )
+        return session
 
     def _check_authentication(
         self, attempt: Future[SessionSnapshot], revision: int
@@ -356,6 +416,11 @@ class LocalIdentity:
             self._authentication = None
             return True
 
+    def cancel_startup_login(self) -> None:
+        attempt = self._startup_login
+        if attempt is not None:
+            self.cancel_login(attempt)
+
     def _admin[T](self, operation: Callable[[AccountStore], T]) -> Future[T]:
         with self._lock:
             self._admission()
@@ -371,6 +436,22 @@ class LocalIdentity:
 
     def list_accounts(self) -> Future[tuple[Account, ...]]:
         return self._admin(lambda store: store.accounts())
+
+    def account_management(self) -> Future[AccountManagementSnapshot]:
+        def read(store: AccountStore) -> AccountManagementSnapshot:
+            accounts = store.accounts()
+            target = store.auto_login_id()
+            authorized = next(
+                (
+                    account.account_id
+                    for account in accounts
+                    if account.account_id == target and account.auto_login_eligible
+                ),
+                None,
+            )
+            return AccountManagementSnapshot(accounts, authorized)
+
+        return self._admin(read)
 
     def setup_administrator(
         self, username: str, password: str, *, revision: int | None = None
@@ -463,6 +544,18 @@ class LocalIdentity:
             str(enabled),
             None,
             lambda store, _: store.update(account_id, enabled=enabled),
+            revision=revision,
+        )
+
+    def set_auto_login(
+        self, account_id: str, enabled: bool, *, revision: int | None = None
+    ) -> Future[Account]:
+        return self._mutate(
+            "account.set_auto_login" if enabled else "account.disable_auto_login",
+            account_id,
+            "",
+            None,
+            lambda store, _: store.set_auto_login(account_id, enabled),
             revision=revision,
         )
 

@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from .identity_models import (
     Account,
     AccountConflictError,
+    AuthorizationError,
     IdentityValidationError,
     LastAdministratorError,
     Role,
@@ -43,6 +44,12 @@ _ROTATION_COLUMN = "must_change_password INTEGER NOT NULL DEFAULT 0 CHECK(must_c
 _SCHEMA = _SCHEMA_V2.replace(
     "last_login_utc TEXT", "last_login_utc TEXT, " + _ROTATION_COLUMN
 )
+_AUTO_LOGIN_SCHEMA = """
+CREATE TABLE auto_login (
+    slot INTEGER PRIMARY KEY CHECK (slot = 1),
+    account_id TEXT NOT NULL REFERENCES accounts(account_id)
+);
+"""
 
 
 def _schema_text(sql: str) -> str:
@@ -87,8 +94,9 @@ class AccountStore:
             if initialize:
                 with self.transaction():
                     self.connection.execute(_SCHEMA)
+                    self.connection.execute(_AUTO_LOGIN_SCHEMA)
                     self.connection.execute(f"PRAGMA application_id={APPLICATION_ID}")
-                    self.connection.execute("PRAGMA user_version=3")
+                    self.connection.execute("PRAGMA user_version=4")
             self.validate()
         except BaseException:
             self.connection.close()
@@ -115,7 +123,7 @@ class AccountStore:
             version: object = self.connection.execute("PRAGMA user_version").fetchone()[
                 0
             ]
-            if version not in (1, 2, 3):
+            if version not in (1, 2, 3, 4):
                 raise SecurityStorageError("Corrupt or unsupported security database")
             self._validate_schema(version)
             if version == 1:
@@ -130,6 +138,10 @@ class AccountStore:
                 )
                 self.connection.execute("PRAGMA user_version=3")
                 self._validate_schema(3)
+            if version in (1, 2, 3):
+                self.connection.execute(_AUTO_LOGIN_SCHEMA)
+                self.connection.execute("PRAGMA user_version=4")
+                self._validate_schema(4)
             # BEGIN IMMEDIATE alone can succeed on a read-only connection.
             # This requires write access while changing no rows or metadata.
             self.connection.execute(
@@ -150,18 +162,22 @@ class AccountStore:
             1: (_COLUMNS_V1, _SCHEMA_V1),
             2: (_COLUMNS_V2, _SCHEMA_V2),
             3: (_COLUMNS, _SCHEMA),
+            4: (_COLUMNS, _SCHEMA),
         }[version]
         if [row[1] for row in columns] != names.split(", "):
             raise SecurityStorageError("Unsupported account schema")
         schema: list[tuple[object, ...]] = self.connection.execute(
             "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','view','trigger')"
         ).fetchall()
-        if (
-            len(schema) != 1
-            or schema[0][:2] != ("table", "accounts")
-            or not isinstance(schema[0][2], str)
-            or _schema_text(schema[0][2]) != _schema_text(ddl)
-        ):
+        expected = {("table", "accounts", _schema_text(ddl))}
+        if version == 4:
+            expected.add(("table", "auto_login", _schema_text(_AUTO_LOGIN_SCHEMA)))
+        actual = {
+            (kind, name, _schema_text(sql))
+            for kind, name, sql in schema
+            if isinstance(sql, str)
+        }
+        if len(schema) != len(expected) or actual != expected:
             raise SecurityStorageError("Unsupported account schema")
         rows: list[tuple[object, ...]] = self.connection.execute(
             f"SELECT {names} FROM accounts"
@@ -233,6 +249,33 @@ class AccountStore:
             f"SELECT {_COLUMNS} FROM accounts ORDER BY username_key"
         ).fetchall()
         return tuple(self.decode(row)[0] for row in rows)
+
+    def auto_login_id(self) -> str | None:
+        row: tuple[object, ...] | None = self.connection.execute(
+            "SELECT account_id FROM auto_login WHERE slot=1"
+        ).fetchone()
+        return row[0] if row is not None and isinstance(row[0], str) else None
+
+    def set_auto_login(self, account_id: str, enabled: bool) -> Account:
+        if type(enabled) is not bool:
+            raise IdentityValidationError("Enabled must be boolean")
+        with self.transaction():
+            account, _ = self.by_id(account_id)
+            if enabled:
+                if not account.auto_login_eligible:
+                    raise AuthorizationError("Auto login requires an eligible Operator")
+                self.connection.execute(
+                    "INSERT INTO auto_login VALUES (1,?) ON CONFLICT(slot) DO UPDATE SET account_id=excluded.account_id",
+                    (account_id,),
+                )
+            else:
+                self._revoke_auto_login(account_id)
+        return account
+
+    def _revoke_auto_login(self, account_id: str) -> None:
+        self.connection.execute(
+            "DELETE FROM auto_login WHERE account_id=?", (account_id,)
+        )
 
     def empty(self) -> bool:
         return (
@@ -323,6 +366,13 @@ class AccountStore:
                     account_id,
                 ),
             )
+            if (
+                account.role is not previous.role
+                or enabled is False
+                or account.enabled != previous.enabled
+                or (verifier is not None and temporary)
+            ):
+                self._revoke_auto_login(account_id)
             if not self.connection.execute(
                 "SELECT count(*) FROM accounts WHERE role=3 AND enabled=1"
             ).fetchone()[0]:
@@ -332,11 +382,26 @@ class AccountStore:
         return account
 
     def record_login(self, account_id: str, timestamp: datetime) -> Account:
-        value = timestamp.astimezone(UTC).isoformat(timespec="microseconds")
         with self.transaction():
-            self.connection.execute(
-                "UPDATE accounts SET last_login_utc=? WHERE account_id=?",
-                (value, account_id),
-            )
-            account, _ = self.by_id(account_id)
+            return self._record_login(account_id, timestamp)
+
+    def record_auto_login(self, account_id: str, timestamp: datetime) -> Account | None:
+        with self.transaction():
+            if self.auto_login_id() != account_id:
+                return None
+            try:
+                account, _ = self.by_id(account_id)
+            except AccountConflictError:
+                return None  # A dangling authorization has no account privileges.
+            if not account.auto_login_eligible:
+                return None
+            return self._record_login(account_id, timestamp)
+
+    def _record_login(self, account_id: str, timestamp: datetime) -> Account:
+        value = timestamp.astimezone(UTC).isoformat(timespec="microseconds")
+        self.connection.execute(
+            "UPDATE accounts SET last_login_utc=? WHERE account_id=?",
+            (value, account_id),
+        )
+        account, _ = self.by_id(account_id)
         return account

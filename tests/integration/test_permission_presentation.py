@@ -13,6 +13,7 @@ from tests.support.qt import close_window, until
 from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
+    close,
     provision_account,
     saved_data,
 )
@@ -22,6 +23,8 @@ from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
+from capsule_vision.application.source_control import SourceControlState
+from capsule_vision.application.startup import load_startup
 from capsule_vision.configuration import (
     load_camera_sources,
     load_model_definition,
@@ -127,7 +130,13 @@ def test_page_controls_combine_role_and_state(
     window.communication.protocol.setCurrentIndex(protocol)
     login(window, role)
     engineer, operator = role >= Role.ENGINEER, role >= Role.OPERATOR
-    assert window.pages.count() == 5 and window.buttons["operation"].isEnabled()
+    assert window.pages.count() == 5
+    assert window.buttons["operation"].isVisible()
+    assert window.buttons["operation"].isEnabled() == operator
+    if not operator:
+        assert window.buttons["operation"].toolTip() == text(
+            "permission_operator", window.language
+        )
     assert window.buttons["batch"].isEnabled() == operator
     assert window.production_recipes.recipes.isEnabled() == operator
     window.navigate(1)
@@ -292,33 +301,117 @@ def test_invalid_or_missing_browsed_definition_keeps_draft(
     assert page.recipes.currentIndex() == -1 and session.entry is entry
 
 
-@pytest.mark.parametrize("starter", [Role.GUEST, Role.OPERATOR])
-def test_running_guest_controls_require_demo_provenance(
-    screen: MainWindow, starter: Role
-) -> None:
+def test_guest_can_observe_and_stop_running_replay(screen: MainWindow) -> None:
     app = screen.bridge.application
     assert isinstance(app, SourceProductionApplication)
-    login(screen, starter)
+    login(screen, Role.OPERATOR)
     app.start().result(WAIT)
     screen.bridge.refresh()
     login(screen, Role.GUEST)
+    running = app.snapshot()
+    assert running.state is ApplicationState.RUNNING
     assert screen.buttons["stop"].isEnabled()
-    assert screen.buttons["pause"].isEnabled() == (starter is Role.GUEST)
+    assert not screen.buttons["pause"].isEnabled()
+    assert screen.buttons["pause"].toolTip() == text(
+        "permission_operator", screen.language
+    )
+    until(
+        lambda: (
+            app.snapshot().counters.cycles_completed > running.counters.cycles_completed
+        )
+    )
     login(screen, Role.OPERATOR)
     app.pause_source().result(WAIT)
     screen.bridge.refresh()
+    assert (
+        screen.buttons["operation"].isEnabled() and screen.buttons["pause"].isEnabled()
+    )
     login(screen, Role.GUEST)
     for key in ("operation", "pause"):
-        assert screen.buttons[key].isEnabled() == (starter is Role.GUEST)
+        button = screen.buttons[key]
+        assert button.isVisible() and not button.isEnabled()
+        assert button.toolTip() == text("permission_operator", screen.language)
+    assert screen.buttons["stop"].isEnabled()
     screen.buttons["stop"].click()
     until(lambda: app.snapshot().state is ApplicationState.READY)
-    login(screen, Role.ADMINISTRATOR)
-    app.set_reporting_selection(replace(app.reporting_selection(), enabled=True))
-    login(screen, Role.GUEST)
+    screen.bridge.refresh()
     assert not screen.buttons["operation"].isEnabled()
     assert screen.buttons["operation"].toolTip() == text(
         "permission_operator", screen.language
     )
+
+
+def test_auto_login_and_manual_login_grant_the_same_production_controls(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    data = saved_data(tmp_path)
+    save_camera_sources(
+        data.sources, replace(load_camera_sources(data.sources), loop=True)
+    )
+    saved = authenticated_startup(data)
+    try:
+        owner = saved.application.identity
+        assert owner is not None
+        operator = provision_account(
+            owner, "Shared Shift", Role.OPERATOR, TEST_PASSWORD
+        )
+        owner.set_auto_login(operator.account_id, True).result(WAIT)
+    finally:
+        close(saved)
+
+    engine = ReplayEngine()
+    startup = load_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceProductionApplication) and app.identity is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        window.show()
+        primary, middle = window.buttons["operation"], window.buttons["pause"]
+        operator_detail = (
+            f"{operator.username} · {text('identity_operator', window.language)}"
+        )
+        until(
+            lambda: (
+                window.navbar.user.accessibleName() == operator_detail
+                and primary.isEnabled()
+            )
+        )
+        assert app.identity.snapshot().role is Role.OPERATOR
+        assert app.snapshot().state is ApplicationState.READY and not engine.calls
+
+        primary.click()
+        until(lambda: middle.isEnabled())
+        middle.click()
+        until(
+            lambda: primary.accessibleName() == text("replay_continue", window.language)
+        )
+        paused = app.control_snapshot()
+        assert paused is not None and paused.state is SourceControlState.PAUSED
+        running = app.snapshot()
+        window.identity_controls.controls["identity_logout"].trigger()
+        assert window.navbar.user.text() == "Guest"
+        assert not primary.isEnabled() and not middle.isEnabled()
+        assert window.buttons["stop"].isEnabled() and app.control_snapshot() == paused
+        assert app.snapshot().run_id == running.run_id
+
+        window.identity_controls.controls["identity_login"].trigger()
+        form = window.identity_controls.form
+        assert form is not None
+        form.fields["identity_username"].setText(operator.username)
+        form.fields["identity_password"].setText(TEST_PASSWORD)
+        form.submit.click()
+        until(lambda: window.identity_controls.form is None and primary.isEnabled())
+        assert middle.isEnabled() and app.identity.snapshot().role is Role.OPERATOR
+        assert (
+            app.snapshot().run_id == running.run_id and app.control_snapshot() == paused
+        )
+        window.identity_controls.controls["identity_logout"].trigger()
+        assert app.snapshot().state is ApplicationState.RUNNING
+    finally:
+        close_window(window)
+        delivery.detach()
+    assert engine.closed and app.identity.join(0)
 
 
 def test_stale_reader_never_fills_browsed_recipe(
@@ -365,7 +458,7 @@ def test_fault_reset_is_operator_only_and_close_remains_available(
     monkeypatch.setattr(ReplayEngine, "__init__", failing)
     app = screen.bridge.application
     assert isinstance(app, SourceProductionApplication)
-    login(screen, Role.GUEST)
+    login(screen, Role.OPERATOR)
     app.step_source()
     until(
         lambda: (
@@ -374,6 +467,7 @@ def test_fault_reset_is_operator_only_and_close_remains_available(
         )
     )
     screen.bridge.refresh()
+    login(screen, Role.GUEST)
     assert not screen.buttons["secondary"].isEnabled()
     login(screen, Role.OPERATOR)
     assert screen.buttons["secondary"].isEnabled()

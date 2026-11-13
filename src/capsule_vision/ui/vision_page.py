@@ -177,7 +177,14 @@ class _SourceCard(QPushButton):
             if self.isChecked()
             else colors.primary
         )
-        camera_icon(color).paint(painter, 14, 13, Style.icon, Style.icon)
+        heading_top, heading_height = 6, 28
+        camera_icon(color).paint(
+            painter,
+            14,
+            heading_top + (heading_height - Style.icon) // 2,
+            Style.icon,
+            Style.icon,
+        )
         metrics = self.fontMetrics()
         summary_width = min(
             metrics.horizontalAdvance(self.summary) + 4, self.width() // 3
@@ -185,13 +192,15 @@ class _SourceCard(QPushButton):
         if self.status_color:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(self.status_color))
-            painter.drawEllipse(self.width() - 24, 16, 8, 8)
+            painter.drawEllipse(
+                self.width() - 24, heading_top + (heading_height - 8) // 2, 8, 8
+            )
         painter.setPen(QColor(colors.secondary))
         painter.drawText(
             self.width() - (34 if self.status_color else 14) - summary_width,
-            6,
+            heading_top,
             summary_width,
-            28,
+            heading_height,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             metrics.elidedText(
                 self.summary, Qt.TextElideMode.ElideRight, summary_width
@@ -204,9 +213,9 @@ class _SourceCard(QPushButton):
         title_width = max(0, self.width() - 70 - summary_width)
         painter.drawText(
             44,
-            6,
+            heading_top,
             title_width,
-            28,
+            heading_height,
             Qt.AlignmentFlag.AlignVCenter,
             metrics.elidedText(self.title, Qt.TextElideMode.ElideRight, title_width),
         )
@@ -315,7 +324,7 @@ class VisionPage(QWidget):
         self._discovering = False
         self._capture_future: Future[CameraSnapshot] | None = None
         self._capture_token = 0
-        self._capture_timeout = False
+        self._preview_admission: tuple[int, int | None] | None = None
         self._capture_delivery = FutureDelivery()
         self._capture_delivery.emitter.completed.connect(
             self._capture_finished, Qt.ConnectionType.QueuedConnection
@@ -480,12 +489,10 @@ class VisionPage(QWidget):
         references.setSpacing(Style.small)
         references.addWidget(self.icon_button("vision_import", "folder"))
         references.addWidget(self.icon_button("vision_runtime", "runtime"))
-        self.capture = self.icon_button("vision_capture", "capture")
-        self.cancel_capture_button = self.icon_button("cancel", "cancel")
+        self.capture = self.icon_button("vision_preview_start", "capture")
+        self.capture.setCheckable(True)
         references.addWidget(self.capture)
-        references.addWidget(self.cancel_capture_button)
-        self.capture.clicked.connect(self.capture_image)
-        self.cancel_capture_button.clicked.connect(self.cancel_capture)
+        self.capture.clicked.connect(self.toggle_preview)
         self.buttons["vision_import"].clicked.connect(self.import_image)
         self.buttons["vision_runtime"].clicked.connect(
             lambda: self.set_reference_mode("runtime")
@@ -728,8 +735,6 @@ class VisionPage(QWidget):
             ("vision_import", "folder"),
             ("vision_runtime", "runtime"),
             ("source_discover", "discover"),
-            ("vision_capture", "capture"),
-            ("cancel", "cancel"),
             ("vision_discard", "refresh"),
             ("save", "save"),
         ):
@@ -743,6 +748,7 @@ class VisionPage(QWidget):
         self.source_modes["basler"].setIcon(camera_icon(colors.primary))
         self.connect_source.setIcon(image_icon("connect", colors.primary))
         self.disconnect_source.setIcon(image_icon("disconnect", colors.primary))
+        self._refresh_preview_icon(colors.primary)
 
     def set_language(self, language: Language) -> None:
         self.language = language
@@ -787,8 +793,7 @@ class VisionPage(QWidget):
                 "vision_import",
                 "vision_runtime",
                 "source_discover",
-                "vision_capture",
-                "cancel",
+                "vision_preview_start",
                 "vision_discard",
                 "roi_set_rect",
             ):
@@ -1095,78 +1100,114 @@ class VisionPage(QWidget):
                     item.setToolTip(card.device.itemText(index))
             card.device.blockSignals(False)
 
-    def capture_image(self) -> None:
-        if not self._can_capture() or self.connection is None:
+    def toggle_preview(self) -> None:
+        if self._capture_future is not None:
+            self.cancel_capture()
             return
-        self._reference_revision += 1
-        self._capture_token += 1
-        self._error = ""
-        try:
-            self._capture_future = self.connection.capture_image(self.camera)
-        except Exception as exc:
-            self._report_error(exc, "vision_capture_failed")
-            self.refresh()
-            return
-        self._capture_timeout = False
-        self._capture_delivery.watch(str(self._capture_token), self._capture_future)
+        if self._can_capture():
+            app = self.editing.bridge.application
+            # A brief Production Start/Stop can finish before queued frame delivery.
+            self._preview_admission = (app.snapshot().generation, app.session_revision)
+            self._reference_revision += 1
+            self._error = ""
+            self._request_preview_frame()
         self.refresh()
 
+    def _request_preview_frame(self) -> bool:
+        assert self.connection is not None and self._preview_admission is not None
+        _, revision = self._preview_admission
+        try:
+            future = self.connection.capture_image(
+                self.camera, timeout=None, revision=revision
+            )
+        except Exception as exc:
+            self._cancel_capture()
+            self._report_error(exc, "vision_capture_failed")
+            return False
+        self._capture_token += 1
+        self._capture_future = future
+        self._capture_delivery.watch(str(self._capture_token), future)
+        return True
+
     def _can_capture(self) -> bool:
+        app = self.editing.bridge.application
         return (
-            permits(self.editing.bridge.application, Role.OPERATOR)
+            permits(app, Role.OPERATOR)
             and self._allowed()
             and not self._preparing
             and not self._reading
-            and self._capture_future is None
             and self.sources is not None
             and self.sources.definition.mode == "basler"
             and self.connection is not None
             and self.connection.source_snapshot().state is ConnectionState.CONNECTED
+            and (
+                self._preview_admission is None
+                or self._preview_admission
+                == (app.snapshot().generation, app.session_revision)
+            )
         )
 
-    def cancel_capture(self) -> None:
+    def _cancel_capture(self) -> None:
         future, self._capture_future = self._capture_future, None
-        self._capture_token += 1
+        self._preview_admission = None
         if future is not None:
             future.cancel()
-            self._capture_timeout = False
+
+    def cancel_capture(self) -> None:
+        self._cancel_capture()
         self.refresh()
+
+    def _refresh_preview_icon(self, color: str) -> None:
+        icon = (
+            production_icon("stop", color)
+            if self._capture_future is not None
+            else camera_icon(color)
+        )
+        if self.capture.icon().cacheKey() != icon.cacheKey():
+            self.capture.setIcon(icon)
 
     @Slot(str, object, object)
     def _capture_finished(self, token: str, value: object, error: object) -> None:
-        if token != str(self._capture_token) or self._capture_future is None:
+        pending = self._capture_future
+        if token != str(self._capture_token) or pending is None:
             return
-        self._capture_future = None
-        self._capture_timeout = False
-        if (
-            isinstance(error, CancelledError)
-            or not self._allowed()
-            or self.connection is None
-            or self.connection.source_snapshot().state is not ConnectionState.CONNECTED
-            or self.sources is None
-            or self.sources.definition.mode != "basler"
-        ):
-            pass
-        elif isinstance(error, TimeoutError):
-            self._capture_timeout = True
-        elif isinstance(error, BaseException):
+        if isinstance(error, CancelledError) or not self._can_capture():
+            self.cancel_capture()
+            return
+        if isinstance(error, BaseException):
             self._report_error(error, "vision_capture_failed")
-        elif isinstance(value, CameraSnapshot) and value.camera_id == self.camera:
-            self._reference_modes[self.camera] = "capture"
-            # Cycle zero is a canvas-only identity, never published to Production.
-            self._set_reference(
-                DisplayFrame(
-                    FrameId(CycleId(0), self.camera, value.metadata.image_number or 0),
-                    0,
-                    value.metadata.received_at,
-                    self._capture_token,
-                    value.pixels,
-                    "basler:" + value.metadata.serial,
-                )
-            )
-        else:
+            self.cancel_capture()
+            return
+        if not isinstance(value, CameraSnapshot) or value.camera_id != self.camera:
             self._report_error("Invalid camera snapshot", "vision_capture_failed")
-        self.refresh()
+            self.cancel_capture()
+            return
+
+        # Cycle zero is a canvas-only identity, never published to Production.
+        frame = DisplayFrame(
+            FrameId(CycleId(0), value.camera_id, value.metadata.image_number or 0),
+            0,
+            value.metadata.received_at,
+            self._capture_token,
+            value.pixels,
+            "basler:" + value.metadata.serial,
+        )
+        previous = self.frame
+        same_view = (
+            previous is not None
+            and self.reference_mode == "capture"
+            and previous.frame_id.camera_id == value.camera_id
+            and previous.source_key == frame.source_key
+            and previous.image.shape == frame.image.shape
+        )
+        self._reference_modes[value.camera_id] = "capture"
+        if same_view:
+            self.frame = frame
+            self.canvas.set_frame(frame, keep_view=True)
+        else:
+            self._set_reference(frame)
+        if self._capture_future is pending and not self._request_preview_frame():
+            self.refresh()
 
     def import_image(self) -> None:
         if self._reading or self._preparing:
@@ -1230,8 +1271,6 @@ class VisionPage(QWidget):
         self.refresh()
 
     def _set_reference(self, frame: DisplayFrame | None) -> None:
-        if self._capture_future is None:
-            self._capture_timeout = False
         self.frame = frame
         self.canvas.set_frame(frame)
         self.draft.bounds.pop(self.camera, None)
@@ -1436,12 +1475,10 @@ class VisionPage(QWidget):
 
     def refresh(self) -> None:
         colors = theme_colors(self)
-        if self._capture_future is not None and (
-            not self._allowed()
-            or self.connection is None
-            or self.connection.source_snapshot().state is not ConnectionState.CONNECTED
-        ):
-            self.cancel_capture()
+        can_capture = self._can_capture()
+        if self._capture_future is not None and not can_capture:
+            self._cancel_capture()
+            can_capture = self._can_capture()
         self._connection_bounds()
         self.canvas.rois = self.draft.rois(self.camera)
         if self.frame is None:
@@ -1495,15 +1532,19 @@ class VisionPage(QWidget):
             self.sources is not None and self.sources.definition.mode == "folder"
         )
         self.capture.setVisible(not folder_mode and self.connection is not None)
-        self.capture.setEnabled(self._can_capture())
-        self.cancel_capture_button.setVisible(self._capture_future is not None)
+        previewing = self._capture_future is not None
+        self.capture.setEnabled(can_capture)
+        self.capture.setChecked(previewing)
+        self._refresh_preview_icon(colors.primary)
+        caption = text(
+            "vision_preview_stop" if previewing else "vision_preview_start",
+            self.language,
+        )
+        self.capture.setAccessibleName(caption)
         self.capture.setToolTip(
-            text(
-                "vision_capture"
-                if permits(self.editing.bridge.application, Role.OPERATOR)
-                else "permission_operator",
-                self.language,
-            )
+            caption
+            if permits(self.editing.bridge.application, Role.OPERATOR)
+            else text("permission_operator", self.language)
         )
         self.buttons["reference_previous"].setEnabled(
             viewing and folder_mode and index > 0
@@ -1726,10 +1767,6 @@ class VisionPage(QWidget):
             snapshot = self.connection.source_snapshot()
             if snapshot.state is ConnectionState.FAULT:
                 return "source_connection_error", snapshot.error
-        if self._capture_timeout:
-            return "vision_capture_timeout", text(
-                "vision_capture_timeout", self.language
-            )
         return None
 
     @property

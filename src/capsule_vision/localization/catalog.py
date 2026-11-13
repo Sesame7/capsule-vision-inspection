@@ -502,6 +502,12 @@ STRINGS: dict[str, tuple[str, str]] = {
     "identity_disabled": ("已停用", "Disabled"),
     "identity_guest": ("访客", "Guest"),
     "identity_login": ("登录", "Login"),
+    "identity_auto_login": ("自动登录", "Auto Login"),
+    "identity_set_auto_login": ("设置自动登录", "Set Auto Login"),
+    "identity_disable_auto_login": ("关闭自动登录", "Disable Auto Login"),
+    "short_auto_login": ("自动登录", "Auto login"),
+    "short_set_auto_login": ("设为自动", "Set Auto"),
+    "short_clear_auto_login": ("取消自动", "Clear Auto"),
     "identity_logout": ("退出登录", "Logout"),
     "identity_switch": ("切换用户", "Switch User"),
     "identity_change": ("修改密码", "Change Password"),
@@ -763,6 +769,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "history_cycle_unknown": ("周期 UNKNOWN", "Cycle UNKNOWN"),
     "history_select_channel": ("选择通道查看详情", "Select a channel for details"),
     "history_open_image": ("打开图片", "Open Image"),
+    "history_archived_image": ("归档图像", "Archived Image"),
     "history_no_image": (
         "所选相机没有已关联的图像",
         "No linked image for the selected camera",
@@ -774,6 +781,10 @@ STRINGS: dict[str, tuple[str, str]] = {
     "history_image_open_failed": (
         "无法打开已关联的图片。",
         "Could not open the linked image.",
+    ),
+    "history_image_size_mismatch": (
+        "图像尺寸与历史检测证据不符。",
+        "Image dimensions differ from the recorded evidence.",
     ),
     "history_image_link_warning": (
         "归档图像关联异常 · 未保存的关联：{count}",
@@ -1008,6 +1019,8 @@ STRINGS: dict[str, tuple[str, str]] = {
     "vision_imported": ("已导入", "Imported"),
     "vision_captured": ("已采集", "Captured"),
     "vision_runtime": ("使用运行图像", "Use runtime image"),
+    "vision_preview_start": ("开始相机预览", "Start camera preview"),
+    "vision_preview_stop": ("停止相机预览", "Stop camera preview"),
     "vision_capture": ("采集图像", "Capture image"),
     "vision_capture_timeout": (
         "采集超时；未收到匹配图像。",

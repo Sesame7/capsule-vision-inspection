@@ -374,6 +374,7 @@ def details(entry: AuditRecord, language: Language) -> str:
     op = entry.operation
     secret = "password" in op.action or op.action in (
         "session.login",
+        "session.auto_login",
         "session.logout",
         "account.setup",
         "account.recovery",

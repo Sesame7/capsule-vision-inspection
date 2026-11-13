@@ -55,9 +55,11 @@ class RoiCanvas(QWidget):
         self.setMinimumSize(320, 240)
         self.setMouseTracking(True)
 
-    def set_frame(self, frame: DisplayFrame | None) -> None:
-        self.cancel_gesture()
-        self.model.scale, self.model.pan = None, (0, 0)
+    def set_frame(self, frame: DisplayFrame | None, *, keep_view: bool = False) -> None:
+        # Same-camera preview frames share the current ROI coordinate space.
+        if not keep_view:
+            self.cancel_gesture()
+            self.model.scale, self.model.pan = None, (0, 0)
         if frame is None:
             self._image = QImage()
             self.model.size = None

@@ -19,7 +19,13 @@ from capsule_vision.communication.reporting import (
     ReportingSettings,
 )
 from capsule_vision.diagnostics import RuntimeDiagnostics
-from capsule_vision.inspection.production import ProductionInspectionResult
+from capsule_vision.inference import BoundingRect
+from capsule_vision.inspection.production import (
+    CameraInspectionResult,
+    ProductionInspectionResult,
+    ViMoFinding,
+)
+from capsule_vision.inspection.production.layout import valid_rect
 
 from . import (
     alarm_records,
@@ -80,6 +86,19 @@ class HistoryChannel:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryFinding:
+    label: str
+    bounding_rect: BoundingRect
+    channels: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryImageEvidence:
+    size: tuple[int, int] | None  # Original image width, height.
+    findings: tuple[HistoryFinding, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class HistoryCamera:
     camera: str
     technical: str
@@ -87,6 +106,7 @@ class HistoryCamera:
     reasons: tuple[str, ...]
     unassigned_labels: tuple[str, ...]
     image_path: Path | None = None
+    image_evidence: HistoryImageEvidence | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +184,77 @@ def _strings(value: object) -> tuple[str, ...]:
     if not all(isinstance(item, str) for item in values):
         raise ValueError("Invalid History reason codes")
     return cast(tuple[str, ...], tuple(values))
+
+
+def _camera_detail(camera: CameraInspectionResult) -> list[object]:
+    row: list[object] = [
+        str(camera.camera_id),
+        camera.assessment.technical_status.name,
+        camera.assessment.judgment.name,
+        (camera.collection_issue.code,) if camera.collection_issue else (),
+        tuple(dict.fromkeys(f.label for f in camera.unassigned_findings)),
+    ]
+    # Consume the channel's effective assignments, after filtering and occupancy.
+    by_finding: dict[ViMoFinding, list[int]] = {}
+    for assignment in camera.assigned_findings:
+        by_finding.setdefault(assignment.finding, []).append(assignment.channel_id)
+    if by_finding:
+        shape = camera.image_shape
+        row.append(
+            (
+                (shape[1], shape[0]) if shape is not None else None,
+                [
+                    (
+                        finding.label,
+                        (
+                            finding.bounding_rect.x,
+                            finding.bounding_rect.y,
+                            finding.bounding_rect.width,
+                            finding.bounding_rect.height,
+                        ),
+                        tuple(dict.fromkeys(channels)),
+                    )
+                    for finding, channels in by_finding.items()
+                ],
+            )
+        )
+    return row
+
+
+def _image_evidence(value: object, ng_channels: set[int]) -> HistoryImageEvidence:
+    dimensions, findings = _items(value)
+    size = None
+    if dimensions is not None:
+        width, height = _items(dimensions)
+        if type(width) is not int or type(height) is not int or min(width, height) <= 0:
+            raise ValueError("Invalid History image dimensions")
+        size = (width, height)
+    decoded: list[HistoryFinding] = []
+    for entry in _items(findings):
+        label, coordinates, associations = _items(entry)
+        rect = BoundingRect(
+            *cast(tuple[int, int, int, int], tuple(_items(coordinates)))
+        )
+        valid_rect(rect)
+        channels = _items(associations)
+        if (
+            not isinstance(label, str)
+            or not label.strip()
+            or not channels
+            or any(
+                type(channel) is not int or channel not in ng_channels
+                for channel in channels
+            )
+            or (
+                size is not None
+                and (rect.x + rect.width > size[0] or rect.y + rect.height > size[1])
+            )
+        ):
+            raise ValueError("Invalid History finding evidence")
+        decoded.append(
+            HistoryFinding(label, rect, cast(tuple[int, ...], tuple(channels)))
+        )
+    return HistoryImageEvidence(size, tuple(decoded))
 
 
 class ProductionHistory:
@@ -820,16 +911,7 @@ class ProductionHistory:
                         codes,
                     )
                 )
-        cameras = [
-            (
-                str(c.camera_id),
-                c.assessment.technical_status.name,
-                c.assessment.judgment.name,
-                (c.collection_issue.code,) if c.collection_issue else (),
-                tuple(dict.fromkeys(f.label for f in c.unassigned_findings)),
-            )
-            for c in result.cameras
-        ]
+        cameras = [_camera_detail(camera) for camera in result.cameras]
         detail = zlib.compress(
             json.dumps(
                 [channels, cameras, context.recipe_name],
@@ -1063,6 +1145,16 @@ class ProductionHistory:
                 _strings(r[3]),
                 _strings(r[4]),
                 images.get((record_id, str(r[0]))),
+                _image_evidence(
+                    r[5],
+                    {
+                        c.channel
+                        for c in channels
+                        if c.camera == r[0] and c.business == "NG"
+                    },
+                )
+                if len(r) > 5
+                else None,
             )
             for r in (_items(v) for v in _items(payload[1]))
         )

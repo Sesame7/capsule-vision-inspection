@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import Future
-from typing import Literal, cast
+from typing import Literal
 
 from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QResizeEvent, QShowEvent
@@ -35,6 +35,7 @@ from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
     Account,
     AccountConflictError,
+    AccountManagementSnapshot,
     AuthenticationError,
     AuthorizationError,
     IdentityError,
@@ -63,6 +64,19 @@ _ROLES = {
     Role.ADMINISTRATOR: "identity_administrator",
 }
 FormKind = Literal["login", "setup", "change", "rotate", "create", "reset", "recover"]
+_USER_GLOBAL_ACTIONS = ("identity_create", "short_refresh", "identity_set_auto_login")
+_AUTO_LOGIN_SHORT = {
+    "identity_auto_login": "short_auto_login",
+    "identity_set_auto_login": "short_set_auto_login",
+    "identity_disable_auto_login": "short_clear_auto_login",
+}
+
+
+def _users_caption(key: str, language: Language) -> str:
+    # Other languages keep their existing native identity wording.
+    return text(
+        _AUTO_LOGIN_SHORT.get(key, key) if language in ("zh", "en") else key, language
+    )
 
 
 def identity_feedback(error: object) -> str:
@@ -258,6 +272,7 @@ class UsersDialog(_AccountDialog):
         super().__init__(parent)
         self.resize(850, 500)
         self.accounts: tuple[Account, ...] = ()
+        self.auto_login_account_id: str | None = None
         self._installed = False
         self._first_show = True
         self._layout_timer = QTimer(self)
@@ -296,9 +311,9 @@ class UsersDialog(_AccountDialog):
         self._action_grid.setColumnStretch(1, 1)
         self.global_actions = QWidget()
         self.account_actions = QWidget()
-        global_row = QHBoxLayout(self.global_actions)
+        self._global_row = QHBoxLayout(self.global_actions)
         self._account_row = QHBoxLayout(self.account_actions)
-        for row in (global_row, self._account_row):
+        for row in (self._global_row, self._account_row):
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(6)
         for key in (
@@ -307,15 +322,12 @@ class UsersDialog(_AccountDialog):
             "identity_change_role",
             "identity_disable",
             "identity_reset",
+            "identity_set_auto_login",
         ):
             button = QPushButton()
             button.setMinimumHeight(Style.touch)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            row = (
-                global_row
-                if key in ("identity_create", "short_refresh")
-                else self._account_row
-            )
+            row = self._global_row if key in _USER_GLOBAL_ACTIONS else self._account_row
             row.addWidget(button)
             self.controls[key] = button
             button.installEventFilter(self)
@@ -325,7 +337,7 @@ class UsersDialog(_AccountDialog):
             self.global_actions, 0, 0, Qt.AlignmentFlag.AlignLeft
         )
         self._action_grid.addWidget(self.account_actions, 0, 1)
-        self._action_mode = (False, False)
+        self._action_mode = (False, False, False)
         self.body.addWidget(self.action_area)
         self.body.addWidget(self.status)
         self.table.itemSelectionChanged.connect(self.selection_changed)
@@ -336,6 +348,12 @@ class UsersDialog(_AccountDialog):
         item = self.table.currentItem() if self.table.selectedItems() else None
         account_id = item.data(Qt.ItemDataRole.UserRole) if item else None
         return next((a for a in self.accounts if a.account_id == account_id), None)
+
+    def _is_auto_login(self, account: Account) -> bool:
+        return (
+            account.auto_login_eligible
+            and account.account_id == self.auto_login_account_id
+        )
 
     @Slot()
     def selection_changed(self) -> None:
@@ -385,52 +403,59 @@ class UsersDialog(_AccountDialog):
         self._layout_columns()
 
     def _layout_actions(self) -> None:
+        variants = {
+            "identity_disable": ("identity_enable", "identity_disable"),
+            "identity_set_auto_login": (
+                "identity_set_auto_login",
+                "identity_disable_auto_login",
+            ),
+        }
         for key, button in self.controls.items():
             if key == "short_refresh":
                 continue
             button.setMinimumHeight(
                 max(Style.touch, button.fontMetrics().height() + 14)
             )
-            captions = (
-                (
-                    text("identity_enable", self.language),
-                    text("identity_disable", self.language),
-                )
-                if key == "identity_disable"
-                else (button.text(),)
+            captions = tuple(
+                _users_caption(k, self.language) for k in variants.get(key, ())
             )
-            button.setMinimumWidth(
+            width = max(
+                104,
                 max(
-                    104,
-                    max(button.fontMetrics().horizontalAdvance(c) for c in captions)
-                    + 28,
+                    button.fontMetrics().horizontalAdvance(c)
+                    for c in captions or (button.text(),)
                 )
+                + 28,
             )
+            if key == "identity_set_auto_login":
+                button.setFixedWidth(width)
+            else:
+                button.setMinimumWidth(width)
         widths = {
             key: max(button.minimumWidth(), button.sizeHint().width())
             for key, button in self.controls.items()
         }
-        global_width = widths["identity_create"] + widths["short_refresh"] + 6
-        account_width = (
-            sum(
-                widths[k]
-                for k in ("identity_change_role", "identity_disable", "identity_reset")
-            )
-            + 12
+        global_width = sum(widths[key] for key in _USER_GLOBAL_ACTIONS) + (
+            self._global_row.spacing() * (self._global_row.count() - 1)
         )
+        account_width = sum(
+            width for key, width in widths.items() if key not in _USER_GLOBAL_ACTIONS
+        ) + self._account_row.spacing() * (self._account_row.count() - 1)
         width = self.action_area.width()
         wrapped = width < global_width + 18 + account_width
-        stacked = width < account_width
-        mode = wrapped, stacked
+        mode = wrapped, width < global_width, width < account_width
         if mode != self._action_mode:
             self._action_mode = mode
             self._action_grid.removeWidget(self.global_actions)
             self._action_grid.removeWidget(self.account_actions)
-            self._account_row.setDirection(
-                QBoxLayout.Direction.TopToBottom
-                if stacked
-                else QBoxLayout.Direction.LeftToRight
-            )
+            for row, stacked in zip(
+                (self._global_row, self._account_row), mode[1:], strict=True
+            ):
+                row.setDirection(
+                    QBoxLayout.Direction.TopToBottom
+                    if stacked
+                    else QBoxLayout.Direction.LeftToRight
+                )
             if wrapped:
                 self._action_grid.addWidget(
                     self.global_actions, 0, 0, 1, 2, Qt.AlignmentFlag.AlignLeft
@@ -446,9 +471,9 @@ class UsersDialog(_AccountDialog):
         width = self.table.viewport().width()
         if width <= 0:
             return
-        # Round shared edges so each column stays within one pixel of its
-        # 30:22:16:32 share, with no unused space or accumulated rounding error.
-        edges = [width * percent // 100 for percent in (0, 30, 52, 68, 100)]
+        # Round shared edges for 30:19:22:29 so the Status column has room for
+        # localized captions while the columns still fill the viewport exactly.
+        edges = [width * percent // 100 for percent in (0, 30, 49, 71, 100)]
         for column in range(4):
             value = edges[column + 1] - edges[column]
             if self.table.columnWidth(column) != value:
@@ -474,6 +499,19 @@ class UsersDialog(_AccountDialog):
                 self.language,
             )
         )
+        auto_login = self.controls["identity_set_auto_login"]
+        auto_login.setEnabled(
+            not busy and selected is not None and selected.auto_login_eligible
+        )
+        key = (
+            "identity_disable_auto_login"
+            if selected is not None and self._is_auto_login(selected)
+            else "identity_set_auto_login"
+        )
+        caption = text(key, self.language)
+        auto_login.setText(_users_caption(key, self.language))
+        auto_login.setAccessibleName(caption)
+        auto_login.setToolTip(caption)
         for key in ("identity_change_role", "identity_disable", "identity_reset"):
             button = self.controls[key]
             button.setAccessibleName(button.text())
@@ -484,9 +522,12 @@ class UsersDialog(_AccountDialog):
             )
         self._queue_layout()
 
-    def install_accounts(self, accounts: tuple[Account, ...]) -> None:
+    def install_accounts(
+        self, accounts: tuple[Account, ...], auto_login_account_id: str | None = None
+    ) -> None:
         previous = self.selected()
         self.accounts = accounts
+        self.auto_login_account_id = auto_login_account_id
         with QSignalBlocker(self.table):
             self.table.setRowCount(0)
             self.table.setRowCount(len(accounts))
@@ -528,13 +569,16 @@ class UsersDialog(_AccountDialog):
             item.setToolTip(item.text())
             item.setData(Qt.ItemDataRole.AccessibleTextRole, item.text())
         for index, account in enumerate(self.accounts):
+            status = text(
+                "identity_enabled" if account.enabled else "identity_disabled", language
+            )
+            authorized = self._is_auto_login(account)
             values = (
                 account.username,
                 text(_ROLES[account.role], language),
-                text(
-                    "identity_enabled" if account.enabled else "identity_disabled",
-                    language,
-                ),
+                _users_caption("identity_auto_login", language)
+                if authorized
+                else status,
                 account.last_login_utc.astimezone().strftime("%Y-%m-%d %H:%M")
                 if account.last_login_utc is not None
                 else "—",
@@ -542,10 +586,17 @@ class UsersDialog(_AccountDialog):
             for column, value in enumerate(values):
                 item = self.table.item(index, column)
                 assert item is not None
+                detail = (
+                    f"{status} · {text('identity_auto_login', language)}"
+                    if column == 2 and authorized
+                    else value
+                )
                 item.setText(value)
-                item.setToolTip(value)
-                item.setData(Qt.ItemDataRole.AccessibleTextRole, value)
+                item.setToolTip(detail)
+                item.setData(Qt.ItemDataRole.AccessibleTextRole, detail)
         for key, button in self.controls.items():
+            if key == "identity_set_auto_login":
+                continue
             caption = text(
                 "identity_new_user" if key == "identity_create" else key, language
             )
@@ -991,6 +1042,7 @@ class IdentityControls(QObject):
         users.controls["identity_reset"].clicked.connect(self._reset_password)
         users.controls["identity_change_role"].clicked.connect(self._set_role)
         users.controls["identity_disable"].clicked.connect(self._set_enabled)
+        users.controls["identity_set_auto_login"].clicked.connect(self._set_auto_login)
         users.controls["short_refresh"].clicked.connect(self._list_accounts)
         users.show()
         self._list_accounts()
@@ -1012,7 +1064,27 @@ class IdentityControls(QObject):
     def _list_accounts(self) -> None:
         if self.owner is not None and self.users is not None:
             self.users.set_busy(True)
-            self._request("list", self.owner.list_accounts)
+            self._request("list", self.owner.account_management)
+
+    @Slot()
+    def _set_auto_login(self) -> None:
+        users, owner = self.users, self.owner
+        account = users.selected() if users else None
+        if (
+            users is None
+            or owner is None
+            or account is None
+            or users.busy
+            or not account.auto_login_eligible
+        ):
+            return
+        enable = account.account_id != users.auto_login_account_id
+        revision = owner.snapshot().revision
+        users.set_busy(True)
+        self._request(
+            "auto_login",
+            lambda: owner.set_auto_login(account.account_id, enable, revision=revision),
+        )
 
     @Slot()
     def _reset_password(self) -> None:
@@ -1141,17 +1213,19 @@ class IdentityControls(QObject):
         if kind == "role" and self.role_dialog is not None:
             self.role_dialog.busy = False
             self.role_dialog.accept()
-        if kind == "list" and self.users is not None and isinstance(value, tuple):
-            records = cast(tuple[object, ...], value)
-            accounts = tuple(
-                account for account in records if isinstance(account, Account)
-            )
-            self.users.install_accounts(accounts)
+        if (
+            kind == "list"
+            and self.users is not None
+            and isinstance(value, AccountManagementSnapshot)
+        ):
+            self.users.install_accounts(value.accounts, value.auto_login_account_id)
             self.users.set_busy(False)
             self.users.feedback("", self.language)
         self.refresh()
         if kind != "list" and self.users is not None:
-            self.users.feedback("identity_done", self.language)
+            # The refreshed Status cells confirm an auto-login change.
+            if kind != "auto_login":
+                self.users.feedback("identity_done", self.language)
             self._list_accounts()
 
     def begin_close(self) -> None:

@@ -4,6 +4,9 @@ from .languages import Language
 
 EXTRA_STRINGS: dict[Language, dict[str, str]] = {
     "ja": {
+        "identity_auto_login": "自動ログイン",
+        "identity_set_auto_login": "自動ログインを設定",
+        "identity_disable_auto_login": "自動ログインを無効化",
         "records_batches": "ロット",
         "audit_action": "操作",
         "audit_target": "対象",
@@ -404,6 +407,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "長さ",
     },
     "ko": {
+        "identity_auto_login": "자동 로그인",
+        "identity_set_auto_login": "자동 로그인 설정",
+        "identity_disable_auto_login": "자동 로그인 해제",
         "records_batches": "배치",
         "audit_action": "작업",
         "audit_target": "대상",
@@ -804,6 +810,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "길이",
     },
     "es": {
+        "identity_auto_login": "Inicio automático",
+        "identity_set_auto_login": "Configurar inicio automático",
+        "identity_disable_auto_login": "Desactivar inicio automático",
         "records_batches": "Lotes",
         "audit_action": "Acción",
         "audit_target": "Objetivo",
@@ -1204,6 +1213,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Longitud",
     },
     "pt-BR": {
+        "identity_auto_login": "Login automático",
+        "identity_set_auto_login": "Configurar login automático",
+        "identity_disable_auto_login": "Desativar login automático",
         "records_batches": "Lotes",
         "audit_action": "Ação",
         "audit_target": "Alvo",
@@ -1604,6 +1616,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Comprimento",
     },
     "it": {
+        "identity_auto_login": "Accesso automatico",
+        "identity_set_auto_login": "Imposta accesso automatico",
+        "identity_disable_auto_login": "Disattiva accesso automatico",
         "records_batches": "Lotti",
         "audit_action": "Azione",
         "audit_target": "Oggetto",
@@ -2004,6 +2019,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Lunghezza",
     },
     "id": {
+        "identity_auto_login": "Masuk otomatis",
+        "identity_set_auto_login": "Atur masuk otomatis",
+        "identity_disable_auto_login": "Nonaktifkan masuk otomatis",
         "records_batches": "Batch",
         "audit_action": "Tindakan",
         "audit_target": "Target",
@@ -2404,6 +2422,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Panjang",
     },
     "fr": {
+        "identity_auto_login": "Connexion automatique",
+        "identity_set_auto_login": "Régler la connexion auto",
+        "identity_disable_auto_login": "Désactiver la connexion auto",
         "records_batches": "Lots",
         "audit_action": "Action",
         "audit_target": "Cible",
@@ -2804,6 +2825,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Longueur",
     },
     "de": {
+        "identity_auto_login": "Auto-Anmeldung",
+        "identity_set_auto_login": "Auto-Anmeldung festlegen",
+        "identity_disable_auto_login": "Auto-Anmeldung deaktivieren",
         "records_batches": "Chargen",
         "audit_action": "Aktion",
         "audit_target": "Ziel",
@@ -3204,6 +3228,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Länge",
     },
     "ru": {
+        "identity_auto_login": "Автовход",
+        "identity_set_auto_login": "Настроить автовход",
+        "identity_disable_auto_login": "Отключить автовход",
         "records_batches": "Партии",
         "audit_action": "Действие",
         "audit_target": "Объект",
@@ -3604,6 +3631,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Длина",
     },
     "tr": {
+        "identity_auto_login": "Otomatik oturum",
+        "identity_set_auto_login": "Otomatik oturumu ayarla",
+        "identity_disable_auto_login": "Otomatik oturumu kapat",
         "records_batches": "Partiler",
         "audit_action": "İşlem",
         "audit_target": "Hedef",
@@ -4004,6 +4034,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Uzunluk",
     },
     "zh-TW": {
+        "identity_auto_login": "自動登入",
+        "identity_set_auto_login": "設定自動登入",
+        "identity_disable_auto_login": "停用自動登入",
         "records_batches": "批次",
         "audit_action": "操作",
         "audit_target": "目標",
@@ -4407,6 +4440,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "長度",
     },
     "nl": {
+        "identity_auto_login": "Automatisch inloggen",
+        "identity_set_auto_login": "Stel auto-inlog in",
+        "identity_disable_auto_login": "Schakel auto-inlog uit",
         "records_batches": "Batches",
         "audit_action": "Actie",
         "audit_target": "Doel",
@@ -4861,6 +4897,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Lengte",
     },
     "pl": {
+        "identity_auto_login": "Automatyczne logowanie",
+        "identity_set_auto_login": "Ustaw autologowanie",
+        "identity_disable_auto_login": "Wyłącz autologowanie",
         "records_batches": "Partie",
         "audit_action": "Czynność",
         "audit_target": "Obiekt",
@@ -5315,6 +5354,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Długość",
     },
     "uk": {
+        "identity_auto_login": "Автовхід",
+        "identity_set_auto_login": "Налаштувати автовхід",
+        "identity_disable_auto_login": "Вимкнути автовхід",
         "records_batches": "Партії",
         "audit_action": "Дія",
         "audit_target": "Об’єкт",
@@ -5769,6 +5811,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Довжина",
     },
     "ro": {
+        "identity_auto_login": "Autentificare automată",
+        "identity_set_auto_login": "Setează autentificarea auto",
+        "identity_disable_auto_login": "Dezactivează autentificarea auto",
         "records_batches": "Loturi",
         "audit_action": "Acțiune",
         "audit_target": "Țintă",
@@ -6223,6 +6268,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Lungime",
     },
     "cs": {
+        "identity_auto_login": "Automatické přihlášení",
+        "identity_set_auto_login": "Nastavit autopřihlášení",
+        "identity_disable_auto_login": "Vypnout autopřihlášení",
         "records_batches": "Šarže",
         "audit_action": "Akce",
         "audit_target": "Cíl",
@@ -6677,6 +6725,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Délka",
     },
     "hu": {
+        "identity_auto_login": "Automatikus bejelentkezés",
+        "identity_set_auto_login": "Automatikus belépés beállítása",
+        "identity_disable_auto_login": "Automatikus belépés kikapcsolása",
         "records_batches": "Tételek",
         "audit_action": "Művelet",
         "audit_target": "Cél",
@@ -7131,6 +7182,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Hossz",
     },
     "sv": {
+        "identity_auto_login": "Automatisk inloggning",
+        "identity_set_auto_login": "Ställ in automatisk inloggning",
+        "identity_disable_auto_login": "Stäng av automatisk inloggning",
         "records_batches": "Partier",
         "audit_action": "Åtgärd",
         "audit_target": "Mål",
@@ -7585,6 +7639,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Längd",
     },
     "da": {
+        "identity_auto_login": "Automatisk login",
+        "identity_set_auto_login": "Indstil automatisk login",
+        "identity_disable_auto_login": "Slå automatisk login fra",
         "records_batches": "Batch",
         "audit_action": "Handling",
         "audit_target": "Mål",
@@ -8039,6 +8096,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Længde",
     },
     "fi": {
+        "identity_auto_login": "Automaattinen kirjautuminen",
+        "identity_set_auto_login": "Aseta automaattikirjautuminen",
+        "identity_disable_auto_login": "Poista automaattikirjautuminen",
         "records_batches": "Erät",
         "audit_action": "Toiminto",
         "audit_target": "Kohde",
@@ -8493,6 +8553,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Pituus",
     },
     "nb": {
+        "identity_auto_login": "Automatisk innlogging",
+        "identity_set_auto_login": "Angi automatisk innlogging",
+        "identity_disable_auto_login": "Slå av automatisk innlogging",
         "records_batches": "Partier",
         "audit_action": "Handling",
         "audit_target": "Mål",
@@ -8947,6 +9010,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Lengde",
     },
     "sk": {
+        "identity_auto_login": "Automatické prihlásenie",
+        "identity_set_auto_login": "Nastaviť autoprihlásenie",
+        "identity_disable_auto_login": "Vypnúť autoprihlásenie",
         "records_batches": "Šarže",
         "audit_action": "Akcia",
         "audit_target": "Cieľ",
@@ -9401,6 +9467,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Dĺžka",
     },
     "bg": {
+        "identity_auto_login": "Автоматичен вход",
+        "identity_set_auto_login": "Настрой автоматичен вход",
+        "identity_disable_auto_login": "Изключи автоматичния вход",
         "records_batches": "Партиди",
         "audit_action": "Действие",
         "audit_target": "Обект",
@@ -9855,6 +9924,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Дължина",
     },
     "hr": {
+        "identity_auto_login": "Automatska prijava",
+        "identity_set_auto_login": "Postavi automatsku prijavu",
+        "identity_disable_auto_login": "Isključi automatsku prijavu",
         "records_batches": "Serije",
         "audit_action": "Radnja",
         "audit_target": "Cilj",
@@ -10309,6 +10381,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Duljina",
     },
     "sr-Latn": {
+        "identity_auto_login": "Automatska prijava",
+        "identity_set_auto_login": "Podesi automatsku prijavu",
+        "identity_disable_auto_login": "Isključi automatsku prijavu",
         "records_batches": "Serije",
         "audit_action": "Radnja",
         "audit_target": "Cilj",
@@ -10763,6 +10838,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Dužina",
     },
     "el": {
+        "identity_auto_login": "Αυτόματη σύνδεση",
+        "identity_set_auto_login": "Ορισμός αυτόματης σύνδεσης",
+        "identity_disable_auto_login": "Απενεργοποίηση αυτόματης σύνδεσης",
         "records_batches": "Παρτίδες",
         "audit_action": "Ενέργεια",
         "audit_target": "Στόχος",
@@ -11217,6 +11295,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Μήκος",
     },
     "pt-PT": {
+        "identity_auto_login": "Início de sessão automático",
+        "identity_set_auto_login": "Configurar sessão automática",
+        "identity_disable_auto_login": "Desativar sessão automática",
         "records_batches": "Lotes",
         "audit_action": "Ação",
         "audit_target": "Alvo",
@@ -11671,6 +11752,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Comprimento",
     },
     "vi": {
+        "identity_auto_login": "Đăng nhập tự động",
+        "identity_set_auto_login": "Đặt đăng nhập tự động",
+        "identity_disable_auto_login": "Tắt đăng nhập tự động",
         "records_batches": "Lô",
         "audit_action": "Thao tác",
         "audit_target": "Đối tượng",
@@ -12125,6 +12209,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Chiều dài",
     },
     "ms": {
+        "identity_auto_login": "Log masuk automatik",
+        "identity_set_auto_login": "Tetapkan log masuk automatik",
+        "identity_disable_auto_login": "Matikan log masuk automatik",
         "records_batches": "Kelompok",
         "audit_action": "Tindakan",
         "audit_target": "Sasaran",
@@ -12579,6 +12666,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Panjang",
     },
     "fil": {
+        "identity_auto_login": "Awtomatikong pag-login",
+        "identity_set_auto_login": "Itakda ang auto-login",
+        "identity_disable_auto_login": "I-off ang auto-login",
         "records_batches": "Mga batch",
         "audit_action": "Aksyon",
         "audit_target": "Target",
@@ -13033,6 +13123,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "haba",
     },
     "sw": {
+        "identity_auto_login": "Kuingia kiotomatiki",
+        "identity_set_auto_login": "Weka kuingia kiotomatiki",
+        "identity_disable_auto_login": "Zima kuingia kiotomatiki",
         "records_batches": "Makundi",
         "audit_action": "Kitendo",
         "audit_target": "Lengo",
@@ -13487,6 +13580,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Urefu",
     },
     "th": {
+        "identity_auto_login": "เข้าสู่ระบบอัตโนมัติ",
+        "identity_set_auto_login": "ตั้งค่าเข้าสู่ระบบอัตโนมัติ",
+        "identity_disable_auto_login": "ปิดการเข้าสู่ระบบอัตโนมัติ",
         "records_batches": "แบตช์",
         "audit_action": "การดำเนินการ",
         "audit_target": "เป้าหมาย",
@@ -13941,6 +14037,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "ความยาว",
     },
     "hi": {
+        "identity_auto_login": "स्वचालित लॉगिन",
+        "identity_set_auto_login": "स्वचालित लॉगिन सेट करें",
+        "identity_disable_auto_login": "स्वचालित लॉगिन बंद करें",
         "records_batches": "बैच",
         "audit_action": "कार्रवाई",
         "audit_target": "लक्ष्य",
@@ -14395,6 +14494,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "लंबाई",
     },
     "bn": {
+        "identity_auto_login": "স্বয়ংক্রিয় লগইন",
+        "identity_set_auto_login": "স্বয়ংক্রিয় লগইন সেট করুন",
+        "identity_disable_auto_login": "স্বয়ংক্রিয় লগইন বন্ধ করুন",
         "records_batches": "ব্যাচ",
         "audit_action": "কার্যক্রম",
         "audit_target": "লক্ষ্য",
@@ -14849,6 +14951,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "দৈর্ঘ্য",
     },
     "ta": {
+        "identity_auto_login": "தானியங்கு உள்நுழைவு",
+        "identity_set_auto_login": "தானியங்கு உள்நுழைவை அமை",
+        "identity_disable_auto_login": "தானியங்கு உள்நுழைவை நிறுத்து",
         "records_batches": "தொகுதிகள்",
         "audit_action": "செயல்",
         "audit_target": "இலக்கு",
@@ -15303,6 +15408,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "நீளம்",
     },
     "te": {
+        "identity_auto_login": "స్వయంచాలక లాగిన్",
+        "identity_set_auto_login": "స్వయంచాలక లాగిన్ సెట్ చేయండి",
+        "identity_disable_auto_login": "స్వయంచాలక లాగిన్ ఆపండి",
         "records_batches": "బ్యాచ్‌లు",
         "audit_action": "చర్య",
         "audit_target": "లక్ష్యం",
@@ -15757,6 +15865,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "పొడవు",
     },
     "mr": {
+        "identity_auto_login": "स्वयंचलित लॉगिन",
+        "identity_set_auto_login": "स्वयंचलित लॉगिन सेट करा",
+        "identity_disable_auto_login": "स्वयंचलित लॉगिन बंद करा",
         "records_batches": "बॅच",
         "audit_action": "कृती",
         "audit_target": "लक्ष्य",
@@ -16211,6 +16322,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "लांबी",
     },
     "ne": {
+        "identity_auto_login": "स्वचालित लगइन",
+        "identity_set_auto_login": "स्वचालित लगइन सेट गर्नुहोस्",
+        "identity_disable_auto_login": "स्वचालित लगइन बन्द गर्नुहोस्",
         "records_batches": "ब्याच",
         "audit_action": "कार्य",
         "audit_target": "लक्ष्य",
@@ -16665,6 +16779,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "लम्बाइ",
     },
     "si": {
+        "identity_auto_login": "ස්වයංක්‍රීය පිවිසුම",
+        "identity_set_auto_login": "ස්වයංක්‍රීය පිවිසුම සකසන්න",
+        "identity_disable_auto_login": "ස්වයංක්‍රීය පිවිසුම අක්‍රිය කරන්න",
         "records_batches": "කාණ්ඩ",
         "audit_action": "ක්‍රියාව",
         "audit_target": "ඉලක්කය",
@@ -17119,6 +17236,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "දිග",
     },
     "am": {
+        "identity_auto_login": "ራስ-ሰር መግቢያ",
+        "identity_set_auto_login": "ራስ-ሰር መግቢያ አዘጋጅ",
+        "identity_disable_auto_login": "ራስ-ሰር መግቢያ አጥፋ",
         "records_batches": "ባች",
         "audit_action": "ድርጊት",
         "audit_target": "ዒላማ",
@@ -17573,6 +17693,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "ርዝመት",
     },
     "km": {
+        "identity_auto_login": "ចូលដោយស្វ័យប្រវត្តិ",
+        "identity_set_auto_login": "កំណត់ការចូលស្វ័យប្រវត្តិ",
+        "identity_disable_auto_login": "បិទការចូលស្វ័យប្រវត្តិ",
         "records_batches": "បាច់",
         "audit_action": "សកម្មភាព",
         "audit_target": "គោលដៅ",
@@ -18027,6 +18150,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "ប្រវែង",
     },
     "lt": {
+        "identity_auto_login": "Automatinis prisijungimas",
+        "identity_set_auto_login": "Nustatyti automatinį prisijungimą",
+        "identity_disable_auto_login": "Išjungti automatinį prisijungimą",
         "records_batches": "Partijos",
         "audit_action": "Veiksmas",
         "audit_target": "Objektas",
@@ -18481,6 +18607,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Ilgis",
     },
     "lv": {
+        "identity_auto_login": "Automātiska pierakstīšanās",
+        "identity_set_auto_login": "Iestatīt automātisko pierakstīšanos",
+        "identity_disable_auto_login": "Izslēgt automātisko pierakstīšanos",
         "records_batches": "Partijas",
         "audit_action": "Darbība",
         "audit_target": "Objekts",
@@ -18935,6 +19064,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Garums",
     },
     "et": {
+        "identity_auto_login": "Automaatne sisselogimine",
+        "identity_set_auto_login": "Määra automaatne sisselogimine",
+        "identity_disable_auto_login": "Keela automaatne sisselogimine",
         "records_batches": "Partiid",
         "audit_action": "Toiming",
         "audit_target": "Sihtobjekt",
@@ -19389,6 +19521,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Pikkus",
     },
     "sl": {
+        "identity_auto_login": "Samodejna prijava",
+        "identity_set_auto_login": "Nastavi samodejno prijavo",
+        "identity_disable_auto_login": "Izklopi samodejno prijavo",
         "records_batches": "Serije",
         "audit_action": "Dejanje",
         "audit_target": "Cilj",
@@ -19843,6 +19978,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Dolžina",
     },
     "sq": {
+        "identity_auto_login": "Hyrje automatike",
+        "identity_set_auto_login": "Cakto hyrjen automatike",
+        "identity_disable_auto_login": "Çaktivizo hyrjen automatike",
         "records_batches": "Lote",
         "audit_action": "Veprim",
         "audit_target": "Objekt",
@@ -20297,6 +20435,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Gjatësia",
     },
     "ca": {
+        "identity_auto_login": "Inici de sessió automàtic",
+        "identity_set_auto_login": "Configura l’inici automàtic",
+        "identity_disable_auto_login": "Desactiva l’inici automàtic",
         "records_batches": "Lots",
         "audit_action": "Acció",
         "audit_target": "Objectiu",
@@ -20751,6 +20892,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Longitud",
     },
     "af": {
+        "identity_auto_login": "Outomatiese aanmelding",
+        "identity_set_auto_login": "Stel outomatiese aanmelding in",
+        "identity_disable_auto_login": "Skakel outomatiese aanmelding af",
         "records_batches": "Bondels",
         "audit_action": "Aksie",
         "audit_target": "Teiken",
@@ -21205,6 +21349,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Lengte",
     },
     "zu": {
+        "identity_auto_login": "Ukungena ngokuzenzakalela",
+        "identity_set_auto_login": "Setha ukungena okuzenzakalelayo",
+        "identity_disable_auto_login": "Vala ukungena okuzenzakalelayo",
         "records_batches": "Amaqoqo",
         "audit_action": "Isenzo",
         "audit_target": "Okuqondiwe",
@@ -21659,6 +21806,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Ubude",
     },
     "ha": {
+        "identity_auto_login": "Shiga ta atomatik",
+        "identity_set_auto_login": "Saita shiga ta atomatik",
+        "identity_disable_auto_login": "Kashe shiga ta atomatik",
         "records_batches": "Rukunai",
         "audit_action": "Aiki",
         "audit_target": "Manufa",
@@ -22113,6 +22263,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Tsawo",
     },
     "kk": {
+        "identity_auto_login": "Автоматты кіру",
+        "identity_set_auto_login": "Автоматты кіруді баптау",
+        "identity_disable_auto_login": "Автоматты кіруді өшіру",
         "records_batches": "Партиялар",
         "audit_action": "Әрекет",
         "audit_target": "Нысан",
@@ -22567,6 +22720,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Ұзындығы",
     },
     "uz": {
+        "identity_auto_login": "Avtomatik kirish",
+        "identity_set_auto_login": "Avtomatik kirishni sozlash",
+        "identity_disable_auto_login": "Avtomatik kirishni oʻchirish",
         "records_batches": "Partiyalar",
         "audit_action": "Amal",
         "audit_target": "Obyekt",
@@ -23021,6 +23177,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Uzunligi",
     },
     "mn": {
+        "identity_auto_login": "Автоматаар нэвтрэх",
+        "identity_set_auto_login": "Автомат нэвтрэлтийг тохируулах",
+        "identity_disable_auto_login": "Автомат нэвтрэлтийг унтраах",
         "records_batches": "Багцууд",
         "audit_action": "Үйлдэл",
         "audit_target": "Объект",
@@ -23475,6 +23634,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Урт",
     },
     "so": {
+        "identity_auto_login": "Gelitaan otomaatig ah",
+        "identity_set_auto_login": "Deji gelitaanka otomaatiga ah",
+        "identity_disable_auto_login": "Dami gelitaanka otomaatiga ah",
         "records_batches": "Dufcado",
         "audit_action": "Ficil",
         "audit_target": "Bartilmaameed",
@@ -23929,6 +24091,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Dhererku",
     },
     "tk": {
+        "identity_auto_login": "Awtomatik giriş",
+        "identity_set_auto_login": "Awtomatik girişi sazla",
+        "identity_disable_auto_login": "Awtomatik girişi öçür",
         "records_batches": "Toparlar",
         "audit_action": "Amal",
         "audit_target": "Nyşan",
@@ -24383,6 +24548,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Uzynlygy",
     },
     "tg": {
+        "identity_auto_login": "Вуруди худкор",
+        "identity_set_auto_login": "Танзими вуруди худкор",
+        "identity_disable_auto_login": "Хомӯш кардани вуруди худкор",
         "records_batches": "Дастаҳо",
         "audit_action": "Амал",
         "audit_target": "Ҳадаф",
@@ -24837,6 +25005,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Дарозӣ",
     },
     "az-Latn": {
+        "identity_auto_login": "Avtomatik giriş",
+        "identity_set_auto_login": "Avtomatik girişi qur",
+        "identity_disable_auto_login": "Avtomatik girişi söndür",
         "records_batches": "Partiyalar",
         "audit_action": "Əməliyyat",
         "audit_target": "Hədəf",
@@ -25291,6 +25462,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Uzunluq",
     },
     "mg": {
+        "identity_auto_login": "Fidirana mandeha ho azy",
+        "identity_set_auto_login": "Amboary ny fidirana mandeha ho azy",
+        "identity_disable_auto_login": "Atsaharo ny fidirana mandeha ho azy",
         "records_batches": "Andiany",
         "audit_action": "Asa",
         "audit_target": "Kendrena",
@@ -25745,6 +25919,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "halavany",
     },
     "ky": {
+        "identity_auto_login": "Автоматтык кирүү",
+        "identity_set_auto_login": "Автоматтык кирүүнү жөндөө",
+        "identity_disable_auto_login": "Автоматтык кирүүнү өчүрүү",
         "records_batches": "Партиялар",
         "audit_action": "Аракет",
         "audit_target": "Объект",
@@ -26199,6 +26376,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Узундугу",
     },
     "ka": {
+        "identity_auto_login": "ავტომატური შესვლა",
+        "identity_set_auto_login": "ავტომატური შესვლის დაყენება",
+        "identity_disable_auto_login": "ავტომატური შესვლის გამორთვა",
         "records_batches": "პარტიები",
         "audit_action": "მოქმედება",
         "audit_target": "ობიექტი",
@@ -26653,6 +26833,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "სიგრძე",
     },
     "hy": {
+        "identity_auto_login": "Ավտոմատ մուտք",
+        "identity_set_auto_login": "Կարգավորել ավտոմատ մուտքը",
+        "identity_disable_auto_login": "Անջատել ավտոմատ մուտքը",
         "records_batches": "Խմբաքանակներ",
         "audit_action": "Գործողություն",
         "audit_target": "Թիրախ",
@@ -27107,6 +27290,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "length": "Երկարությունը",
     },
     "ti": {
+        "identity_auto_login": "ኣውቶማቲክ ምእታው",
+        "identity_set_auto_login": "ኣውቶማቲክ ምእታው ኣንቅሕ",
+        "identity_disable_auto_login": "ኣውቶማቲክ ምእታው ኣጥፍእ",
         "records_batches": "ጉጅለታት",
         "audit_action": "ተግባር",
         "audit_target": "ዕላማ",
