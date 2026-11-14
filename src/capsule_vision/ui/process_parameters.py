@@ -340,14 +340,13 @@ class ProcessParametersCard(QFrame):
 
     def _caption(self) -> None:
         title = text("process_parameters", self.language)
-        count = text("process_override_count", self.language).format(
-            count=len(self.values())
-        )
+        overrides = len(self.values())
+        count = text("process_override_count", self.language).format(count=overrides)
         self.title.setText(text("process_title", self.language))
         self.title.setToolTip(title)
         self.title.setAccessibleName(title)
         self.override_count.setText(
-            text("process_set_count", self.language).format(count=len(self.values()))
+            text("process_set_count", self.language).format(count=overrides)
         )
         self.override_count.setToolTip(count)
         self.override_count.setAccessibleName(count)
@@ -365,11 +364,7 @@ class ProcessParametersCard(QFrame):
         set_button_caption(
             self.view_plc,
             text("process_view_plc", language),
-            button_width(
-                self.view_plc,
-                ("process_view_plc",),
-                languages=("zh", "en"),
-            ),
+            button_width(self.view_plc, ("process_view_plc",)),
         )
         self.view_plc.setAccessibleDescription(text("process_plc_hold", language))
         self.set_plc_available(self._plc_allowed)

@@ -254,7 +254,6 @@ class BatchesPage(RecordsPage):
 
     def _load_list(self) -> None:
         if self.app.history is None:
-            self._error = text("history_unavailable", self.language)
             self._render()
             return
         self._listing = True
@@ -382,11 +381,7 @@ class BatchesPage(RecordsPage):
                     elif uid == self._expanded and offset == len(self._run_rows):
                         self._run_rows.extend(value.runs)
                 else:
-                    self._errors[uid] = (
-                        str(error)
-                        if error is not None
-                        else text("history_unavailable", self.language)
-                    )
+                    self._errors[uid] = str(error) if error is not None else ""
         self._render()
         self._load_detail()
 
@@ -503,12 +498,17 @@ class BatchesPage(RecordsPage):
             not self._listing
             and (self._cursor is not None if self._newer else self._page.more)
         )
-        read_errors = " · ".join(dict.fromkeys(self._errors.values()))
+        unavailable = text("history_unavailable", self.language)
+        read_errors = " · ".join(
+            dict.fromkeys(error or unavailable for error in self._errors.values())
+        )
         message = (
             self._error
             or read_errors
             or (
-                text("report_no_batches", self.language)
+                unavailable
+                if self.app.history is None
+                else text("report_no_batches", self.language)
                 if not self._page.rows and not self._listing
                 else ""
             )

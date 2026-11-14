@@ -12,7 +12,7 @@ from time import time
 from uuid import uuid4
 
 import pytest
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QDate, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QScreen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from tests.support.application import WAIT, production
 from tests.support.business import channel as business_channel
 from tests.support.business import history_review, mixed_result
-from tests.support.qt import close_window, ensure_test_fonts, until
+from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
 from tests.support.startup import saved_data
 
 from capsule_vision.application import ConfigurationIdentity
@@ -90,6 +90,7 @@ def cycle_record(page: HistoryPage, row: int = 0) -> HistoryRecord:
 def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
     qapp: QApplication, tmp_path: Path
 ) -> None:
+    ensure_test_fonts()
     history = ProductionHistory(tmp_path / "history.sqlite3")
     ctx = HistoryContext(
         time(), "segment", None, uuid4().hex, ConfigurationIdentity("r", "m", "c" * 64)
@@ -155,6 +156,39 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
             page.image_dialog is None
             and text("history_image_missing", "en") in page.channel_detail.toPlainText()
         )
+        slot = button.size()
+        for language in LANGUAGES:
+            page.set_language(language)
+            qapp.processEvents()
+            assert text("history_image_missing", language) in (
+                page.channel_detail.toPlainText()
+            )
+            assert_full_caption(button, text("history_open_image", language))
+            assert button.accessibleName() == text("history_open_image", language)
+            assert button.toolTip() == button.accessibleDescription() == str(photo)
+            assert button.isEnabled() and button.size() == slot
+            assert page.rect().contains(button.mapTo(page, button.rect().bottomRight()))
+            row = page.cycles.currentRow()
+            group = page.cycles.item(row, 2)
+            assert group is not None
+            assert group.toolTip().splitlines()[0] == (
+                f"{text('records_run', language)} ID: {ctx.run_id}"
+            )
+            assert page.image_dialog is None
+        page.set_language("zh")
+        page.channels.setCurrentCell(0, 2)
+        assert (
+            text("history_image_missing", "zh") not in page.channel_detail.toPlainText()
+        )
+        page.channels.setCurrentCell(1, 4)
+        page.set_language("en")
+        assert (
+            text("history_image_missing", "en") not in page.channel_detail.toPlainText()
+        )
+        photo.write_bytes(original)
+        button.click()
+        viewer = page.image_dialog
+        assert viewer is not None and viewer.close()
         for payload in (original[:15], b"not a PNG"):
             photo.write_bytes(payload)
             button.click()
@@ -1214,6 +1248,34 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
         page.deleteLater()
 
 
+def test_invalid_typed_records_date_exposes_the_retained_filter(
+    qapp: QApplication,
+) -> None:
+    filters = RecordsFilters(None)
+    start = filters.start
+    changes: list[object] = []
+    filters.changed.connect(lambda: changes.append(filters.scope))
+    start.set_date(QDate(2026, 2, 24))
+    selected = filters.scope
+    start.setText("2026-02-30")
+    assert len(changes) == 1 and filters.scope == selected
+    assert start.text() == "2026-02-30" and start.property("dateInvalid") is True
+    for language in ("zh", "en"):
+        filters.set_language(language)
+        assert text("records_invalid_date", language) in start.toolTip()
+        assert text("records_date_retained", language).format(date="2026-02-24") in (
+            start.accessibleDescription()
+        )
+        assert filters.scope == selected
+    start.clear()
+    assert len(changes) == 2 and start.value is None
+    assert start.property("dateInvalid") is False
+    start.setText("2026-13-01")
+    assert len(changes) == 2 and start.value is None
+    assert text("records_date_unset", "en") in start.toolTip()
+    filters.deleteLater()
+
+
 @pytest.mark.parametrize("size", [(1080, 1500), (1920, 1017)])
 def test_bilingual_geometry_segments_top_pagination_and_calendar(
     qapp: QApplication,
@@ -1488,6 +1550,8 @@ def test_loading_stale_delivery_empty_unavailable_and_warning(
         page.refresh()
         until(lambda: not page.busy)
         assert page.status.text() == text("history_unavailable", "zh")
+        assert page.status.accessibleDescription() == page.status.toolTip()
+        assert page.status.accessibleDescription()
         until(page.warning.isVisible)
         assert "1" in page.warning.text()
     finally:
@@ -1501,6 +1565,10 @@ def test_loading_stale_delivery_empty_unavailable_and_warning(
     try:
         unavailable.activate()
         assert unavailable.status.text() == text("history_unavailable", "zh")
+        unavailable.set_language("de")
+        assert unavailable.status.text() == text("history_unavailable", "de")
+        assert not unavailable.status.toolTip()
+        assert not unavailable.status.accessibleDescription()
         assert not unavailable.refresh_button.isEnabled()
     finally:
         unavailable.dispose()

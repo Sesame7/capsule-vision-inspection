@@ -33,7 +33,7 @@ from capsule_vision.communication.reporting import (
     ReportOutcome,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.languages import LANGUAGES, Language
 
 from .style import (
     ChevronComboBox,
@@ -401,7 +401,7 @@ class ReportingPanel(QFrame):
                 self.merge_label.fontMetrics().horizontalAdvance(
                     text("plc_merge_count", lang)
                 )
-                for lang in ("zh", "en")
+                for lang in LANGUAGES
             )
             + Style.small
         )

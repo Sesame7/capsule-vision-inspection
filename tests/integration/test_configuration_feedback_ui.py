@@ -108,10 +108,24 @@ def test_recipe_preparation_cannot_resolve_communication_warning(
         if not succeeds:
             (startup.data.models / "general/model.vimosln").write_bytes(b"invalid")
         select_production_recipe(window)
+        assert text("startup_communication", window.language) in (
+            window.event_label.accessibleName()
+        )
+        assert startup.communication_error in window.event_label.accessibleDescription()
+        assert text("preparing", window.language) in (
+            window.buttons["operation"].accessibleDescription()
+        )
         until(lambda: not window.recipe_page.busy)
         assert bool(applied) is succeeds
         if not succeeds:
             assert startup.application.snapshot().candidate_prepared is candidate
+            assert text("recipe_prepare_error", window.language) in (
+                window.event_label.accessibleName()
+            )
+            assert (
+                startup.communication_error
+                in window.event_label.accessibleDescription()
+            )
         window.navigate(1)
         assert "startup_communication" in window.configuration_messages
         assert startup.communication_error in window.event_label.toolTip()

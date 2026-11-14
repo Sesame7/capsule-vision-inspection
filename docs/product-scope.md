@@ -137,7 +137,12 @@ implemented attribution, reject projection and completion timing; the
 
 ### 3.3 Production presentation
 
-- In single-/four-Cycle group modes, main counters are **Batches, OK, NG, EMPTY, Batch Duration**. Here Batches counts completed attributable PLC groups, not operator production Batches; count each channel once per group. Batch Duration runs from first Cycle admission to the last required terminal result (one or four), using the reporting owner's monotonic clock. Publish it only for eligible groups; exclude subsequent attribution checks, writes and ACK. Cycle diagnostics remain separate.
+- Display the operator's Batch label as **批号 / Batch ID**. In Merge 1 and 4, use
+  **组数 / Groups**, **OK**, **NG**, **EMPTY**, and **组耗时 / Group time** in Qt
+  and Web. Count completed attributable PLC groups and count each channel once
+  per group. Use the [current timing boundaries](communication.md#four-cycle-reporting)
+  for eligible groups. Raw inspection cycles retain **周期 / Cycles** and
+  Merge 0 retains its per-Cycle presentation.
 - Single-Cycle groups retain ordinary single-result indicators and the matching
   single-Cycle image, with physical-group counters.
 - Keep 5/6 responsive camera cards and their six channels per camera. In four-Cycle mode each channel is represented by a stable **2 × 2 mini-tile**. Populate one cell per completed attributable Cycle: first top-left, second top-right, third bottom-left, fourth bottom-right. Green OK, red reject/NG, grey confirmed EMPTY, neutral for not-yet-observed. A new group's first completed Cycle resets the tile sequence.

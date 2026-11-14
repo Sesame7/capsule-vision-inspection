@@ -288,7 +288,7 @@ The selected Production Batch accumulates these totals across Runs and restarts.
 Cycle History retains per-exposure evidence and joins it to group membership by
 Run and Cycle identity. See [Production history](architecture.md#production-history).
 
-Batch Duration uses the worker's monotonic clock and runs from first Cycle
+**Group time / 组耗时** uses the worker's monotonic clock and runs from first Cycle
 admission until the last required distinct terminal result arrives (the sole
 result in Merge = 1),
 regardless of callback order. It is published only at eligibility
@@ -433,7 +433,7 @@ not emit periodic Audit Trail records. Close waits for actual worker exit.
 
 The compact **Status / 状态** card retains the shared service header, actual
 read/write health and a draft Enable/Disable action. Protocol, IPv4 and Port
-appear once. Heartbeat, Fault, Alarm and Running are four independently editable WR
+appear once. Heartbeat, Fault, Alarm and Run bit are four independently editable WR
 addresses in one equal-width row below them, with responsive wrapping when
 necessary. These controls remain visible when the signal
 section is collapsed, and reflow using actual available width. Guest/Operator
@@ -447,7 +447,7 @@ service previews use the existing bounded background file job, without PLC I/O.
 The global alarm strip remains an alarm-read observation, independent of
 heartbeat-write success.
 
-The independently configured Running target defaults to **W16.1**, fixed bit 1
+The independently configured **Run bit / 运行位** target defaults to **W16.1**, fixed bit 1
 (0 stopped, 1 running). Only its word is editable. It is not an automatic output
 or part of the monitor's polling sequence; configuration alone never opens a
 connection or reads the bit. A Running-only Save retains the current connection,
@@ -567,10 +567,18 @@ not delayed Qt delivery. Failed/malformed reads retain the last successful value
 and timestamp, with an ERR marker on the affected group, a stale/error icon and
 color. Full group names remain in tooltips; values and batch status do not expand
 runtime diagnostics. Failure and uncertainty remain visible near the operation.
-Unvisited groups remain explicitly stale. Manual and auto passes use the same
-presentation; an empty watch list has no empty table viewport. Write ACK/error/uncertain
-execution appears beside writing. Detailed errors remain in the existing bounded
-observations, without runtime error tooltips. Typed READ and WRITE requests support
+Unvisited groups remain explicitly stale. Saving or reloading a different
+Diagnostics endpoint marks retained Watch readings stale, with the last successful
+read time labeled as historical. A manual failure reports a failed read;
+an automatic failure reports that refresh stopped. In both cases an earlier
+timestamp describes the last successful read. An empty watch list has no empty
+table viewport. The **Write registers** disclosure opens the editor; **Write**
+dispatches the command. The UI distinguishes a proven pre-send failure, a valid
+PLC rejection, an uncertain outcome after a possible send, and a protocol ACK.
+It identifies the owner of a blocked Reporting or Status reservation. A retained
+**Last ACK** is a previous observation while a new attempt is pending or fails.
+Detailed errors remain in the existing bounded observations, without runtime
+error tooltips. Typed READ and WRITE requests support
 diagnostics; a single-word read uses READ with count 1. Register groups and current
 read/write panel observations are session-local. Manual writes also pass through
 the [Audit Trail](architecture.md#audit-trail). Before sending, the diagnostic
@@ -624,11 +632,12 @@ effective startup defaults; invalid files require explicit review/Save. Persiste
 failure leaves the runtime unchanged. Lifecycle failure retains the successfully
 saved preference and shows the actual failure; it never pretends the service ran.
 
-**Apply changes** appears only when saved settings differ from the running Web
-configuration. Save or Discard Web network edits before applying them; unrelated
-drafts are not applied. Saving alone never starts/rebinds Web or changes an active
-session. Applying reuses the existing Stop/join/Start owner; there is no second
-listener. Power-off persists disabled, so the next process launch stays off.
+**Restart Web** appears when saved enabled settings differ from the running Web
+configuration. If the saved selection is disabled, the action reads
+**Stop Web per saved settings**. Save or Discard Web network edits before
+applying the saved settings. Saving alone leaves the active service in place.
+Applying reuses the existing serial Web owner. The separate power-off action
+persists disabled, so the next process launch stays off.
 
 The effective running URL is a browser action between the Web title/state group
 and the power action. Unavailable URLs are hidden; long URLs
@@ -641,9 +650,12 @@ assigned local IPv4s without network scanning; 127.0.0.1 and manual entry are al
 available. An unavailable saved IP survives Save/Discard but fails actual startup;
 there is no wildcard or alternative-address fallback. Restart stops/joins the old
 HTTP/publisher/socket owner before starting a replacement. Failed binding attempts
-one safe restoration of the previous running configuration; the failed saved
-configuration remains saved for review. A failed restoration stays FAILED. Close
-waits asynchronously for actual Web and diagnostic termination; it does not
+one safe restoration of the previous running configuration. The global feedback
+distinguishes a failed restart with the previous service restored from an
+unavailable service. The attempted configuration remains saved for review.
+Web command admission and preference-write errors remain on the Communication
+page and survive an independent settings Save. A failed restoration stays FAILED.
+Close waits asynchronously for actual Web and diagnostic termination; it does not
 abandon blocked work or claim socket release on timeout. Web errors never fault
 Production. Reporting places actual lifecycle beside its title and keeps its
 power-style Enable/Disable toggle on the right.

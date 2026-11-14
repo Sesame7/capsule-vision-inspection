@@ -293,11 +293,14 @@ def test_preview_geometry_language_and_explicit_extension_remain_isolated(
         qapp.processEvents()
         values = card.values()
         assert startup.editor is not None
-        for language in ("zh", "en", "de"):
+        action_size = card.view_plc.size()
+        for language in ("zh", "en", "de", "hi", "pt-PT", "uk", "bn", "si", "ti"):
             window.set_language(language)
             for theme in ("dark", "light"):
                 window.set_theme(theme)
                 qapp.processEvents()
+                assert card.view_plc.size() == action_size
+                assert card.view_plc.text() == text("process_view_plc", language)
                 geometry = (
                     card.geometry(),
                     card.view_plc.geometry(),

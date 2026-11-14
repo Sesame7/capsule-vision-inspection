@@ -934,7 +934,9 @@ A single shared filter bar contains two clearable dates and a searchable Batch
 selector. Both dates start empty (no bounds), with Start Date / End Date
 placeholders; clearing restores that empty value. Native calendar popups omit
 week-number headers and use Qt's available-screen placement. Opening an empty
-date shows the current calendar month without selecting a query bound. Start-only
+date shows the current calendar month without selecting a query bound. Invalid
+typed dates mark the field and describe its retained effective date or unset
+bound in the tooltip and accessibility text. Start-only
 and end-only ranges are valid. Bounds use host-local calendar days: inclusive start midnight and exclusive
 midnight after the inclusive end date, including DST changes. Inspection uses
 Cycle completion, Audit operation time, and Alarms event observation time. Selections
@@ -1050,18 +1052,24 @@ List summaries always show OK then NG,
 including zeros. EMPTY, UNKNOWN and independent technical ERR follow only when nonzero. A channel may
 contribute to both a business count and ERR. Cycle-level anomalies absent from those counts
 remain explicit; routine COMPLETE/SUCCESS is implicit in the presentation only.
-Query failures remain explicit. For each visible Cycle the same query request
-loads committed archive paths by Run/Cycle/Camera. Selecting a camera or one of
-its channels enables **Open Image** only when that camera has a link. One click
-opens the PNG in a native read-only dialog. Its initial size fits the image at
+Query failures remain explicit. Audit and Alarm History indicate when a new query
+is pending, including when rows from the previous query remain visible. Independent
+storage and query failures retain their own details. For each visible Cycle the
+same query request loads committed archive paths by Run/Cycle/Camera. Selecting a camera or one of
+its channels enables **Open Image** only when that camera has a link. The action
+reserves space for the longest shaped caption across the supported languages
+and retains the linked path in its tooltip. One click opens the PNG in a native
+read-only dialog. Its initial size fits the image at
 its original aspect ratio, allowing for the window frame, margins and caption
 within about 92% of the screen's available width and height. Resizing refits the
 complete image. The dialog pins the selected record and camera, and paints only their
 stored effective ViMo rectangles with matching image dimensions. Coincident
 rectangles are drawn once. Stored reasons remain available for images without
 geometry. Missing, unreadable, invalid and dimension-mismatched images produce
-feedback in the Records detail area. The native Close control and Esc dismiss
-the dialog. History has no Web API.
+feedback in the Records detail area. An open error follows the selected Cycle,
+Camera and linked path across language and theme changes. A different image
+selection or a new open attempt clears that error. The native Close control and
+Esc dismiss the dialog. History has no Web API.
 
 On the same History writer and in the Cycle transaction, new records capture
 distinct effective ViMo labels and traditional NG reasons per channel. ViMo
@@ -1322,9 +1330,10 @@ DPR-aware vector icons. Normal startup maximizes the native framed window, keepi
 taskbar clearance; portrait Production retains two columns and three rows. Theme
 switching is presentation-only and is not persisted. Language retains its existing
 preference behavior. The fixed bottom strip preserves source identification and
-connection counts, summarizes observed production-reporting worker, alarm monitor
-and Web states, and retains current feedback. The three service groups have no runtime tooltips;
-actionable failures use the existing visible feedback. Reporting retains its
+connection counts, summarizes observed production-reporting and alarm-monitor
+states, and retains current feedback, including Web failures. Source state uses
+its observed symbol. Unconfigured and routine Status observations use neutral
+symbols. Preparation uses the clock, and faults retain warning symbols. Reporting retains its
 visible lifecycle and ACK/success/ERR summary without runtime diagnostic tooltips;
 detailed observations stay with their existing owners.
 ACK is not connectivity, PLC consumption or physical rejection. It
@@ -1334,9 +1343,12 @@ language's concise states, recalculated on language/font changes rather than sta
 updates. This avoids both English-only clipping and reserving other languages'
 longest captions at the expense of feedback. Longer source observations elide with
 full accessible text; the event/error group receives all remaining horizontal
-space. Its tooltip
-retains full actionable failure/recovery text when the fixed row elides it, plus
-specific configuration/file recovery detail. It does not expand routine telemetry.
+space. The event tooltip and accessible description retain actionable details,
+including unresolved configuration, service and archive issues alongside
+higher-priority feedback. Routine preparation does not hide these issues.
+Start guidance names the applicable source, Recipe, process, Batch, draft or
+permission blocker. Command feedback keeps its owning operation and ignores
+superseded results. A matching recovery clears the corresponding error.
 Only the event group stretches when the window grows; status changes do not
 move the persistent groups.
 
@@ -1354,8 +1366,10 @@ Field labels use IPv4, units and short localized names.
 Full localized meanings remain in tooltips and
 accessibility text. Routine disabled services show localized Off captions; waiting for the next
 Start, active transitions, failures and ACK observations remain distinct. Idle
-diagnostics omit no-request prose; watch success uses `OK` with its observation
-time, while read/write failures remain visible. The diagnostic target stays
+diagnostics omit no-request prose. Watch success uses `OK` with its observation
+time. A failed automatic pass reports that refresh stopped; a failed manual pass
+reports the read failure. Any retained time is identified as the last successful
+read. Read/write failures remain visible. The diagnostic target stays
 explicit and is not evidence that an edited preference was saved or applied.
 
 The main window title is `Capsule Vision Inspection` on every page. The five
@@ -1415,11 +1429,12 @@ either confirmation returns to the editor with its input intact.
 The stacked player and Batch fit the existing ordinary-font header height, leaving
 the metrics row and camera grid geometry unchanged. The Production identity has two
 rows: state with conditional inline active/requested identity, then the saved-Recipe
-selector and Refresh. The selector shows the installed candidate, including startup
-restoration; synchronization never prepares. During preparation it retains that
-candidate while the first row identifies the request. Divergent active identity
-and full candidate/request details remain available inline and in accessible
-names/tooltips. Refresh never relabels a prepared definition from newer saved data.
+selector and Refresh. The selector reflects the accepted saved Recipe, including
+startup restoration. An incomplete selection keeps that identity and shows setup
+guidance with Start disabled. Request and active details remain available in the
+accessible text and tooltips. Refresh lists saved definitions without preparing
+them or relabeling the selected identity. Camera cards replace the empty-canvas
+guidance when a prepared layout becomes available.
 The selector prefers 170 logical pixels; long names elide only in its closed label,
 with full text retained in the model, tooltips and accessibility.
 Header space after Batch and selector width can shrink while preserving the player
@@ -1455,8 +1470,8 @@ The Folder Replay middle control becomes Step while paused. Folder and internal
 Basler admission retain distinct source-boundary semantics. Reset is a separate
 fault-recovery action. Basler control only affects software admission, never
 equipment or PLC mode. Empty canvases and routine acquisition waits stay quiet.
-Read-only channel symbols retain static
-ChannelId tooltips and accessible short states, without expanding runtime evidence.
+Read-only channel symbols show camera, channel and the short observed state in
+tooltips and accessibility, without expanding runtime evidence.
 Only identity-matched results draw defect boxes.
 
 Production shows localized Cycles, `OK`, `NG`, `EMPTY` and `Δt` captions for completed
@@ -1466,15 +1481,17 @@ timing displays `--`. Whole metric groups wrap when their text cannot fit one ro
 These are cumulative occurrences, retained by Stop/Start and Recipe changes and
 scoped to the selected Batch.
 
-An enabled single-/four-cycle session instead presents completed **Batches** and
-separate cumulative channel-position OK, NG and EMPTY totals. Final NG includes
-every authoritative reject bit, including conservative rejection. The Batches
-tooltip exposes the original raw inspection-cycle count. **Batch Duration** runs
-from the first Cycle admission to the arrival of all required terminal results at the reporting
-owner, excluding later attribution checks, writes and ACK. Unavailable timing is
-`--`; per-Cycle timing remains separate in camera diagnostics. The five metric
-groups and their wrapping behavior are unchanged. Chinese/English group-counting captions
-use the existing English fallback in other languages.
+An enabled single-/four-cycle session instead presents **Groups / 组数** and
+separate cumulative channel-position OK, NG and EMPTY totals. Groups counts
+completed inspection groups attributable to a PLC counter. The **Batch ID / 批号**
+identifies the operator's production Batch separately. Final NG includes every
+authoritative reject bit, including conservative rejection. The Groups tooltip
+also exposes the original raw inspection-cycle count. **Group time / 组耗时** runs
+from first Cycle admission to the last required terminal result at the reporting
+owner. It is published for eligible groups and excludes later attribution checks,
+writes and ACK. Unavailable timing is `--`; per-Cycle timing remains available in
+camera diagnostics. Qt and Web use the same group definitions. Qt captions follow
+the shared localization coverage and its explicit translation-review fallbacks.
 
 The last successfully activated session determines the displayed counting unit,
 including after Stop; editing future reporting settings or a failed Start cannot
@@ -1554,8 +1571,9 @@ Web publisher/serial HTTP pair. Production Stop/Start leaves Web independent.
 Missing communication preferences leave Web and PLC reporting disabled; valid
 saved settings restore independently of camera source mode.
 Communication's header power action persists only Web enablement, then starts or
-stops using saved network settings. Conditional Apply changes restarts differing
-saved/running settings; drafts never become runtime inputs implicitly. Admission
+stops using saved network settings. When the running configuration differs, the
+conditional action restarts Web with enabled saved settings or stops it with a
+saved disabled selection. Drafts never become runtime inputs implicitly. Admission
 allows one operation, with no restart backlog or completed-result history. The
 control owner constructs/binds off Qt; Stop interrupts HTTP I/O and joins both
 actual service threads/socket before releasing ownership or rebinding. Close

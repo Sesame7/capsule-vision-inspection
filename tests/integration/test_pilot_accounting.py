@@ -208,7 +208,7 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
 
 
 @pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-def test_four_cycle_metrics_use_group_duration_and_language_accessibility(
+def test_group_metrics_use_group_duration_and_language_accessibility(
     screen: tuple[MainWindow, FakeSession], size: tuple[int, int]
 ) -> None:
     window, _ = screen
@@ -236,6 +236,18 @@ def test_four_cycle_metrics_use_group_duration_and_language_accessibility(
         assert len(window.metrics) == 5
         assert window.metrics["cycles"][0].text() == "2"
         assert window.metrics["cycles"][1].text() == text("pilot_batches", language)
+        assert window.metrics["cycles"][1].accessibleDescription() == text(
+            "pilot_batches_help", language
+        )
+        assert window.metrics["processing"][0].accessibleDescription() == text(
+            "batch_duration_help", language
+        )
+        if language in ("zh", "en"):
+            groups, duration = (
+                ("组数", "组耗时") if language == "zh" else ("Groups", "Group time")
+            )
+            assert window.metrics["cycles"][1].text() == groups
+            assert window.metrics["processing"][1].text() == duration
         assert (
             text("pilot_raw_cycles", language).format(count="8")
             in window.metrics["cycles"][0].toolTip()
@@ -259,7 +271,19 @@ def test_four_cycle_metrics_use_group_duration_and_language_accessibility(
                 <= caption.width()
             )
         assert window.size().toTuple() == size
-    window.bridge.snapshot_changed.emit(replace(snapshot, pilot_counting=False))
+    window.set_language("en")
+    window.bridge.snapshot_changed.emit(
+        replace(snapshot, reporting_mode=ReportingMode.SINGLE_CYCLE)
+    )
+    assert window.metrics["cycles"][1].text() == "Groups"
+    assert window.metrics["processing"][1].text() == "Group time"
+    assert window.batch_caption.text() == "Batch ID"
+    window.bridge.snapshot_changed.emit(
+        replace(snapshot, pilot_counting=False, reporting_mode=ReportingMode.PER_CYCLE)
+    )
     assert window.metrics["cycles"][0].text() == "8"
+    assert window.metrics["cycles"][1].text() == "Cycles"
+    assert window.metrics["processing"][1].text() == "Δt"
+    assert not window.metrics["processing"][0].accessibleDescription()
     assert window.metrics["channel_ok"][0].text() == "24"
     assert window.metrics["channel_ng"][1].text() == "NG"

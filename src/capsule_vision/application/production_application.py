@@ -592,7 +592,8 @@ class SourceProductionApplication(ProductionApplication):
                     ):
                         raise ReportingWriteProtectedError(
                             f"Manual write overlaps active PLC status W{status.heartbeat_address}, "
-                            f"W{status.fault_address}"
+                            f"W{status.fault_address}",
+                            owner="status",
                         )
             with self._reporting_lock:
                 starting = (

@@ -251,7 +251,13 @@ class AlarmMonitorPanel(QFrame):
         self._render_power()
 
     def _render_power(self) -> None:
-        set_service_title(self.title_icon, self.title, "alarm")
+        snapshot = self.snapshot
+        warning = (
+            snapshot.issue
+            or snapshot.state in ("partial", "unavailable")
+            or (snapshot.read_ok and snapshot.active)
+        )
+        set_service_title(self.title_icon, self.title, "alarm" if warning else "status")
         self.enabled.setIcon(production_icon("power", theme_colors(self).primary))
         action = text(
             "plc_disable" if self.enabled.isChecked() else "plc_enable", self.language

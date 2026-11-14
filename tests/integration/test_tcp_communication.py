@@ -145,6 +145,58 @@ def test_tcp_watch_errors_use_existing_feedback_and_stop_refresh(
             close(page)
 
 
+def test_tcp_write_feedback_distinguishes_send_boundary_and_retained_ack(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    with TcpPeer() as peer:
+        page = CommunicationPage()
+        page.configure_preferences(
+            tmp_path / "communication.json", CommunicationPreferences()
+        )
+        page.set_language("en")
+        page.port.setValue(peer.port)
+        page.timeout.setValue(0.2)
+        page.persist_settings()
+        page.area.setCurrentIndex(0)  # DM
+        page.manual_button.click()
+        page.show()
+        try:
+            assert page.dispatch(RequestKind.WRITE)
+            until(lambda: not page.busy)
+            assert peer.words(100, area=FinsMemoryArea.DM.value) == (4321,)
+            assert page.status.isHidden()
+            assert page.success.text().startswith("Write acknowledged")
+            ack = page.last_response
+            failures: tuple[tuple[Stage, Fault, str, int], ...] = (
+                (
+                    "handshake",
+                    "reject",
+                    "Write not sent · FINS response protocol error",
+                    4321,
+                ),
+                ("sequence", "plc", "PLC rejected the write · 0x2101", 4321),
+                ("sequence", "sid", "Write outcome unknown", 7777),
+                ("sequence", "drop_after", "Write outcome unknown", 7777),
+            )
+            for stage, fault, expected, observed in failures:
+                before = len(peer.packets)
+                peer.fail_next(stage, fault)
+                page.write_values.setText("7777")
+                assert page.dispatch(RequestKind.WRITE)
+                until(lambda: not page.busy)
+                assert len(peer.packets) == before + (stage != "handshake")
+                assert peer.words(100, area=FinsMemoryArea.DM.value) == (observed,)
+                assert page.status.text().startswith(expected)
+                if fault == "sid":
+                    assert "FINS response protocol error" in page.status.text()
+                assert "UDP" not in page.status.text()
+                assert page.success.text().startswith("Last ACK")
+                assert "FINS/TCP" in page.success.text()
+                assert page.last_response is ack
+        finally:
+            close(page)
+
+
 @pytest.mark.parametrize("area", list(FinsMemoryArea))
 def test_tcp_roundtrip_bilingual_owner_and_routes(
     qapp: QApplication,

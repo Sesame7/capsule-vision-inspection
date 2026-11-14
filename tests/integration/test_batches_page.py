@@ -62,6 +62,20 @@ def child(item: QTreeWidgetItem, row: int = 0) -> QTreeWidgetItem:
     return result
 
 
+def test_batch_storage_unavailable_follows_current_language(qapp: QApplication) -> None:
+    app = ProductionApplication(lambda _p, _g: FakeSession())
+    page = BatchesPage(app)
+    try:
+        page.refresh()
+        assert page.message.text() == text("history_unavailable", "zh")
+        page.set_language("ja")
+        assert page.message.text() == text("history_unavailable", "ja")
+    finally:
+        page.dispose()
+        page.close()
+        close(app)
+
+
 def test_batch_search_and_paging_on_a_25_hour_local_day(
     qapp: QApplication,
     tmp_path: Path,
@@ -338,7 +352,7 @@ def test_all_runs_expand_without_changing_batch_selection(
             ] == [f"run-{n}" for n in range(count - 1, -1, -1)]
             assert "Interrupted" in child(many, count - 1).text(0)
             assert "incomplete" in child(many, count - 1).toolTip(4)
-            for lang in ("zh", "en", "de", "it"):
+            for lang in ("zh", "en", "de", "it", "pt-PT", "uk", "sw", "bn", "ti"):
                 page.set_language(lang)
                 qapp.processEvents()
                 assert many.childCount() == count

@@ -371,6 +371,13 @@ def test_async_selection_is_bounded_and_stale_results_cannot_install(
             with pytest.raises(ApplicationStateError):
                 window.bridge.application.start()
         assert requested_name in picker.feedback[1]
+    if completion == "failure":
+        failure = picker.feedback
+        picker.refresh_button.click()
+        window.navigate(2)
+        window.navigate(0)
+        assert picker.feedback == failure
+        assert requested_name in picker.recipes.toolTip()
     assert window.identity_label.isVisible() == (completion in ("failure", "close"))
     window.editing.resume()
 

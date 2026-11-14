@@ -236,7 +236,7 @@ class WebSettingsPanel(QFrame):
             self.editable,
             self.can_manage,
             self.saved_available,
-            bool(self.operation_error),
+            self.operation_error,
             self._address_error,
             self.language,
             colors,
@@ -307,17 +307,23 @@ class WebSettingsPanel(QFrame):
                 self.language,
             )
         )
+        self.power.setAccessibleDescription(self.operation_error)
+        if self.operation_error:
+            self.power.setToolTip(self.power.toolTip() + "\n" + self.operation_error)
         changed = (
             observed is not None
             and observed.state is WebState.RUNNING
             and observed.configuration != self.saved
         )
+        apply_key = "web_apply_changes" if self.saved.enabled else "web_apply_disabled"
         self.apply_changes.setVisible(changed)
         self.apply_changes.setIcon(production_icon("reset", colors.primary))
         set_button_caption(
             self.apply_changes,
-            text("web_apply_changes", self.language),
-            button_width(self.apply_changes, ("web_apply_changes",)),
+            text(apply_key, self.language),
+            button_width(
+                self.apply_changes, ("web_apply_changes", "web_apply_disabled")
+            ),
         )
         self.apply_changes.setEnabled(
             not blocked and not self.dirty and self.saved_available
@@ -328,10 +334,11 @@ class WebSettingsPanel(QFrame):
                 if not self.can_manage
                 else "web_save_first"
                 if self.dirty
-                else "web_apply_changes",
+                else apply_key,
                 self.language,
             )
         )
+        self.apply_changes.setAccessibleDescription(self.operation_error)
         self.address_refresh.setIcon(
             production_icon(
                 "reset", colors.warning if self._address_error else colors.secondary

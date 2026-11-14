@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from threading import Event
 from threading import enumerate as threads
+from uuid import uuid4
 
 import pytest
 from PySide6.QtCore import QDate, Qt
@@ -33,6 +34,7 @@ from capsule_vision.application.identity_models import (
     Role,
     StaleSessionError,
 )
+from capsule_vision.application.models import ConfigurationIdentity
 from capsule_vision.application.startup import load_startup
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
 from capsule_vision.configuration import ConfigurationError
@@ -101,7 +103,7 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
                 )
             )
             assert identity.snapshot().role is Role.GUEST and bar.height() == 44
-            width = bar.alarm.width()
+            english_width = bar.alarm.width()
             assert (
                 not page.alarm_enabled.isEnabled()
                 and not window.history_tabs.isTabEnabled(3)
@@ -175,6 +177,11 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
             window.set_language("de")
             until(lambda: "Referenzfahrt erforderlich" in bar.alarm.toolTip())
             assert "Referenzfahrt erforderlich" in bar.alarm.accessibleDescription()
+            german_width = bar.alarm.width()
+            window.set_language("en")
+            assert bar.alarm.width() == english_width
+            window.set_language("de")
+            assert bar.alarm.width() == german_width
             ops = identity.audit_page(AuditQuery(action="communication.save")).result(
                 WAIT
             )
@@ -198,7 +205,7 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
                     and not app.alarm_snapshot().active
                 )
             )
-            assert bar.height() == 44 and bar.alarm.width() == width
+            assert bar.height() == 44 and bar.alarm.width() == german_width
             page.alarm_enabled.setChecked(False)
             page.persist_settings()
             assert load_communication_preferences(data.communication).status.enabled
@@ -322,6 +329,14 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
     app, delivery = startup.application, FutureDelivery()
     history, identity = app.history, app.identity
     assert history and identity
+    active = app.snapshot().candidate_prepared
+    assert active is not None
+    batch = history.select_batch("P").result(WAIT)
+    assert batch is not None
+    # The shared Batch picker validates the selected ID against persisted Runs.
+    history.start_run(
+        batch.uuid, uuid4().hex, ConfigurationIdentity.from_prepared(active), None
+    ).result(WAIT)
     today = datetime.now().astimezone()
     when = today.timestamp()
     long_label = "Reciprocating axis stroke not set after the secondary transfer station returned to its reference position"
@@ -341,7 +356,7 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
                     118,
                     5,
                     "equipment/v1 SHA-256 fixture",
-                    "stable-id" if i else "other-id",
+                    batch.uuid if i else "other-id",
                     "P" if i else "Q",
                     detail="Reciprocating axis stroke not set" if i == 56 else "",
                     translations=(("de", "Hub nicht eingestellt"),),
@@ -359,9 +374,16 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
         page.kind.setCurrentIndex(page.kind.findData("startup"))
         window.records_filters.start.set_date(QDate(today.year, today.month, today.day))
         window.records_filters.end.set_date(QDate(today.year, today.month, today.day))
-        window.records_filters.select_batch("stable-id", "P")
+        window.records_filters.select_batch(batch.uuid, batch.label)
         page.refresh()
-        until(lambda: len(page.rows) == 50 and page.older.isEnabled())
+        until(
+            lambda: (
+                len(page.rows) == 50
+                and page.older.isEnabled()
+                and page.scope.batch == batch.uuid
+                and not page.message.text()
+            )
+        )
         newer = page.rows
         # Compare languages at one viewport. Other pages' translated minimum
         # sizes can grow a normally shown test window during a language switch.
@@ -410,6 +432,15 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
         )
         assert page.table.fontMetrics().horizontalAdvance(long_label) > columns[2]
         assert columns == [page.table.columnWidth(col) for col in range(5)]
+        for language in ("pt-PT", "uk", "sw", "bn", "ti"):
+            window.set_language(language)
+            state = page.table.item(0, 3)
+            assert state and state.text() == text("records_seen_active", language)
+            assert state.toolTip() == text("alarm_observed_active", language)
+            name = page.table.item(0, 2)
+            assert name and name.text() == "Reciprocating axis stroke not set"
+            assert page.rows == newer
+            assert columns == [page.table.columnWidth(col) for col in range(5)]
         late: Future[tuple[AlarmRecord, ...]] = Future()
 
         def delayed(
@@ -419,6 +450,8 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
 
         monkeypatch.setattr(app, "alarm_page", delayed)
         page.refresh()
+        assert page.message.text() == text("history_loading", window.language)
+        assert not page.newer.isEnabled() and not page.older.isEnabled()
         identity.logout()
         window.identity_controls.refresh()
         late.set_result(newer)

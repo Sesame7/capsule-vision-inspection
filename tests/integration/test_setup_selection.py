@@ -55,6 +55,10 @@ def test_valid_saved_selection_survives_incomplete_setup(
         assert not any(i.key == "startup_recipe_identity" for i in startup.issues)
         picker = window.production_recipes
         assert picker.recipes.currentIndex() == -1
+        if missing == "machine":
+            assert window.configuration_placeholder.text() == text(
+                "configure_first", window.language
+            )
         picker.select(picker.recipes.findData("local"))
         until(lambda: not window.editing.busy)
         assert picker.recipes.currentData() == "local"
@@ -63,8 +67,22 @@ def test_valid_saved_selection_survives_incomplete_setup(
         assert snapshot.candidate is None and snapshot.active is None
         assert not snapshot.process_required and not snapshot.process_applying
         assert picker.feedback is not None
-        assert picker.feedback[0] == "configure_first"
+        assert picker.feedback[0] == "recipe_setup_required"
         assert not window.buttons["operation"].isEnabled()
+        for language in ("bg", "bn", "zh-TW", "en"):
+            window.language_selector.activated.emit(
+                window.language_selector.findData(language)
+            )
+            guidance = text("recipe_setup_required", language)
+            assert window.buttons["operation"].toolTip() == guidance
+            assert window.buttons["operation"].accessibleDescription() == guidance
+            assert window.event_label.accessibleName() == guidance
+            assert guidance in picker.recipes.toolTip()
+            if missing == "machine":
+                assert window.configuration_placeholder.isVisible()
+                assert window.configuration_placeholder.text() == guidance
+            assert startup.application.snapshot() == snapshot
+            assert picker.recipes.currentData() == "local"
         with pytest.raises(ApplicationStateError):
             startup.application.start()
         for page in (2, 3, 4, 0):
@@ -76,6 +94,10 @@ def test_valid_saved_selection_survives_incomplete_setup(
                 assert (
                     text("configure_first", window.language)
                     not in window.event_label.accessibleName()
+                )
+                assert (
+                    text("recipe_setup_required", window.language)
+                    not in window.event_label.toolTip()
                 )
                 assert (
                     text("camera_setup", window.language)
@@ -160,6 +182,7 @@ def test_setup_completion_requires_reselection_before_process_application(
                 not ready.candidate_requires_preparation and not ready.process_required
             )
             assert ready.active is None and not ready.runtime_owned
+            assert window.configuration_placeholder.isHidden()
             assert plc.words(102, 2, 0x82) == (73, 0)
             assert len(plc.packets) == 3  # Running read, DINT write, matching readback.
             assert load_preferences(data.preferences).last_applied_recipe_id == "other"

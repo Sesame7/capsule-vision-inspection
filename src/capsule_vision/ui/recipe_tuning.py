@@ -1032,11 +1032,9 @@ class RecipeTuning(QWidget):
     def import_image(self) -> None:
         if self.busy or self._close is not None:
             return
+        caption = text("vision_import", self.language)
         path, _ = QFileDialog.getOpenFileName(
-            self,
-            text("vision_import", self.language),
-            "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+            self, caption, "", f"{caption} (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
         )
         if path:
             self.load_image(Path(path))

@@ -19,6 +19,7 @@ from capsule_vision.application import (
     ApplicationState,
     ProductionCounters,
 )
+from capsule_vision.application.editing import VisionSaveResult
 from capsule_vision.application.folder_replay import FolderSourceError
 from capsule_vision.configuration import (
     CameraFolder,
@@ -269,6 +270,7 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
         until(lambda: not page.busy)
     assert page.status.text() == text("recipe_save_error", language)
     assert page.status.toolTip() == detail and detail not in page.status.text()
+    assert page.status.accessibleDescription() == detail
     assert session.dirty and session.entry.path.read_bytes() == original
     assert window.bridge.application.snapshot() == snapshot
     session.discard()
@@ -324,8 +326,12 @@ def test_preferences_retry_clears_its_own_error_without_clearing_recipe_error(
         assert not window.event_label.text() and not window.event_label.toolTip()
         window.navigate(1)
         window.bridge.command_failed.emit("recipe", ValueError("isolated command"))
-        window.set_language("zh")
-        assert text("recipe", "zh") in window.event_label.text()
+        with monkeypatch.context() as patch:
+            patch.setattr(bootstrap, "save_preferences", fail)
+            window.set_language("zh")
+        assert detail in window.event_label.toolTip()
+        window.set_language("en")
+        assert text("recipe", "en") in window.event_label.text()
         assert "ValueError" in window.event_label.toolTip()
         window.bridge.command_finished.emit("recipe")
         assert not window.event_label.text()
@@ -414,11 +420,23 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
         patch.setattr(workspace.draft, "save", fail)
         workspace.save_setup()
         until(lambda: not window.recipe_page.busy)
-    assert window.event_label.accessibleName() == text("vision_error", language)
+    assert window.event_label.accessibleName() == text(
+        "vision_sources_only_saved", language
+    )
     assert (
         window.event_label.toolTip()
-        == f"{text('vision_error', language)}\n{text('saved', language)}: CameraSources\nMachineLayout: ConfigurationIOError: {details}"
+        == f"{text('vision_sources_only_saved', language)}\nMachineLayout: ConfigurationIOError: {details}"
     )
+    workspace.channel.activated.emit(1)
+    assert workspace.selected_index == 1
+    window.set_theme("light")
+    other = "en" if language == "zh" else "zh"
+    window.set_language(other)
+    assert window.event_label.accessibleName() == text(
+        "vision_sources_only_saved", other
+    )
+    assert details in window.event_label.accessibleDescription()
+    window.set_language(language)
     with monkeypatch.context() as patch:
         patch.setattr(sources, "save", fail)
         workspace.save_setup()
@@ -426,9 +444,57 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
     assert window.event_label.accessibleName() == text("source_partial_save", language)
     assert (
         window.event_label.toolTip()
-        == f"{text('source_partial_save', language)}\n{text('saved', language)}: MachineLayout\nCameraSources: ConfigurationIOError: {details}"
+        == f"{text('source_partial_save', language)}\nCameraSources: ConfigurationIOError: {details}"
     )
     assert window.bridge.application.snapshot().candidate == candidate
     workspace.save_setup()
     until(lambda: not window.recipe_page.busy)
     assert not window.event_label.text() and not window.event_label.toolTip()
+
+
+def test_vision_partial_save_retranslates_saved_part_of_failure(
+    camera_screen: tuple[MainWindow, VisionPage, ControlledEngine],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, workspace, _ = camera_screen
+    show(window, "en")
+    failure = "CameraSources: write confirmation interrupted"
+    result = VisionSaveResult(
+        True, False, (failure,), unconfirmed=frozenset(("CameraSources",))
+    )
+
+    def save_vision(*_args: object) -> VisionSaveResult:
+        return result
+
+    monkeypatch.setattr(workspace.session, "save_vision", save_vision)
+    workspace.save_setup()
+    until(
+        lambda: (
+            window.event_label.accessibleName()
+            == text("configuration_confirmation_incomplete", "en")
+        )
+    )
+    languages: tuple[Language, ...] = (
+        "zh-TW",
+        "pt-PT",
+        "sr-Latn",
+        "az-Latn",
+        "bn",
+        "si",
+        "sw",
+        "ti",
+        "en",
+    )
+    draft = workspace.draft.definition
+    for language in languages:
+        window.set_language(language)
+        expected = "\n".join(
+            (
+                text("configuration_confirmation_incomplete", language),
+                f"{text('saved', language)}: {text('records_layout', language)}",
+                failure,
+            )
+        )
+        assert window.event_label.toolTip() == expected
+        assert workspace.status.accessibleDescription() == expected
+        assert workspace.draft.definition == draft

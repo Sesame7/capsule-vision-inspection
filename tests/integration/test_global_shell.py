@@ -19,7 +19,9 @@ from tests.support.qt import screen as screen
 from tests.support.qt import until
 
 from capsule_vision.application import ApplicationState
+from capsule_vision.application.alarm_monitor import AlarmSnapshot
 from capsule_vision.application.folder_replay import FolderSourceError
+from capsule_vision.application.identity_models import AuthorizationError
 from capsule_vision.communication.reporting import (
     ReportIdentity,
     ReportingSnapshot,
@@ -39,9 +41,68 @@ from capsule_vision.localization.languages import (
 )
 from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.ui.shell import PAGE_CAPTIONS
-from capsule_vision.ui.style import Style, theme_colors
+from capsule_vision.ui.style import Style, production_icon, shell_icon, theme_colors
 from capsule_vision.web import ProductionSnapshotService
 from capsule_vision.web.runtime import WebRuntime, WebRuntimeSnapshot, WebState
+
+
+def test_status_strip_artwork_matches_observed_state(
+    screen: tuple[MainWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, _ = screen
+    colors = theme_colors(window)
+    snapshot = window.snapshot
+    bar = window.event_frame
+    alarm = AlarmSnapshot()
+    monkeypatch.setattr(window.bridge.application, "alarm_snapshot", lambda: alarm)
+    window.bridge.snapshot_changed.emit(
+        replace(snapshot, state=ApplicationState.UNCONFIGURED)
+    )
+    assert (
+        bar.state_icon.pixmap().toImage()
+        == production_icon("unknown", colors.secondary).pixmap(20, 20).toImage()
+    )
+    assert (
+        bar.alarm_icon.pixmap().toImage()
+        == shell_icon("status", colors.secondary).pixmap(20, 20).toImage()
+    )
+    card_icon = window.communication.alarm_panel.title_icon
+    assert (
+        card_icon.pixmap().toImage()
+        == shell_icon("status", colors.secondary)
+        .pixmap(Style.icon, Style.icon)
+        .toImage()
+    )
+    window.production_recipes.feedback = ("preparing", "")
+    window.production_recipes.feedback_changed.emit()
+    assert (
+        window.event_icon.pixmap().toImage()
+        == production_icon("STARTING", colors.secondary)
+        .pixmap(Style.icon, Style.icon)
+        .toImage()
+    )
+    alarm = replace(alarm, state="partial", read_ok=True, issue="Heartbeat failed")
+    window.production_recipes.feedback_changed.emit()
+    assert (
+        bar.alarm_icon.pixmap().toImage()
+        == shell_icon("status", colors.secondary).pixmap(20, 20).toImage()
+    )
+    alarm = replace(alarm, state="unavailable", issue="unavailable", read_ok=False)
+    window.bridge.snapshot_changed.emit(replace(snapshot, state=ApplicationState.FAULT))
+    assert (
+        bar.state_icon.pixmap().toImage()
+        == production_icon("FAULT", colors.fault).pixmap(20, 20).toImage()
+    )
+    assert (
+        bar.alarm_icon.pixmap().toImage()
+        == shell_icon("alarm", colors.secondary).pixmap(20, 20).toImage()
+    )
+    assert (
+        card_icon.pixmap().toImage()
+        == shell_icon("alarm", colors.secondary)
+        .pixmap(Style.icon, Style.icon)
+        .toImage()
+    )
 
 
 def test_compact_status_roles_reserve_remaining_width_for_global_feedback(
@@ -210,7 +271,11 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
                     label.fontMetrics().horizontalAdvance(label.text()) <= label.width()
                 )
                 assert window.event_frame.height() == 44
-                assert window.event_label.toolTip() == feedback
+                assert window.event_label.toolTip().startswith(feedback)
+                if state is WebState.FAILED:
+                    assert "bind failed" in window.event_label.accessibleDescription()
+                else:
+                    assert window.event_label.toolTip() == feedback
                 assert window.event_icon.isVisible()
                 assert window.bridge.application.snapshot() == before
             # A failed restart may restore a running owner and retain its error.
@@ -222,6 +287,11 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
                 runtime.snapshot().restored
                 and runtime.snapshot().error == "bind failed"
             )
+            window.bridge.command_finished.emit("stop")
+            assert window.event_label.accessibleName() == text(
+                "web_restart_restored", language
+            )
+            assert "bind failed" in window.event_label.accessibleDescription()
             assert not window.communication.web_panel.actual.toolTip()
             # Even without an error string, FAILED must not look disabled.
             observed[0] = WebRuntimeSnapshot(state=WebState.FAILED)
@@ -678,6 +748,9 @@ def test_fault_and_authoritative_reset_across_pages(
         window.navigate(page)
         assert text("shutdown_error", language) in window.event_label.text()
         assert before.last_issue.exception_type in window.event_label.toolTip()
+        assert window.event_label.accessibleDescription() == text(
+            "fault_reset_available", language
+        )
         assert "private" not in window.event_label.toolTip()
         assert window.event_icon.isVisible()
         assert Style.fault in window.event_label.styleSheet()
@@ -711,6 +784,39 @@ def test_local_command_feedback_stays_with_owning_pages(
     for page in pages:
         window.navigate(page)
         assert not window.event_label.text()
+
+
+def test_unrelated_completion_does_not_clear_scoped_admission_failure(
+    screen: tuple[MainWindow, FakeSession],
+) -> None:
+    window, _ = screen
+    window.bridge.command_failed.emit("batch", AuthorizationError("private reason"))
+    expected = text("permission_operator", window.language)
+    assert window.event_label.accessibleName() == expected
+    window.bridge.command_finished.emit("stop")
+    assert window.event_label.accessibleName() == expected
+    window.navigate(2)
+    assert not window.event_label.text()
+    window.navigate(0)
+    assert window.event_label.accessibleName() == expected
+    window.bridge.command_finished.emit("batch")
+    assert not window.event_label.text()
+
+
+def test_queued_batch_success_does_not_clear_newer_rejection(
+    screen: tuple[MainWindow, FakeSession],
+) -> None:
+    window, _ = screen
+    window.bridge.start_batch("LOT-1")  # Successful completion is queued for Qt.
+    window.bridge.start_batch("")  # This newer request is rejected synchronously.
+    failure = window.event_label.accessibleName()
+    assert "ApplicationError" in failure
+    QApplication.processEvents()
+    assert window.snapshot.batch_id == "LOT-1"
+    assert window.event_label.accessibleName() == failure
+    window.bridge.start_batch("LOT-2")
+    until(lambda: not window.event_label.accessibleName())
+    assert window.snapshot.batch_id == "LOT-2"
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])

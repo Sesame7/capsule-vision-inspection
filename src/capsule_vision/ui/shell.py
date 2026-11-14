@@ -424,5 +424,4 @@ class StatusBar(QFrame):
         if (layout := self.layout()) is not None:
             layout.invalidate()
             layout.activate()
-        for label, kind in ((self.plc_icon, "plc"), (self.alarm_icon, "alarm")):
-            label.setPixmap(shell_icon(kind, colors.secondary).pixmap(20, 20))
+        self.plc_icon.setPixmap(shell_icon("plc", colors.secondary).pixmap(20, 20))

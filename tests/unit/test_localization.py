@@ -36,11 +36,24 @@ from capsule_vision.localization.translations import EXTRA_STRINGS
 from capsule_vision.ui.production_presentation import Indicator
 from capsule_vision.web.runtime import WebState
 
-ENGLISH_DETAIL_KEYS = {
-    "preview_scope_tip",
-    "history_clock",
-    "web_boundary",
-}
+PRIORITY_UI_LANGUAGES = (
+    "zh-TW",
+    "ja",
+    "ko",
+    "es",
+    "pt-BR",
+    "it",
+    "id",
+    "fr",
+    "de",
+    "ru",
+    "tr",
+    "nl",
+    "pl",
+    "vi",
+    "th",
+    "hi",
+)
 
 IDENTITY_UI_KEYS = {
     "identity_setup",
@@ -99,397 +112,1037 @@ IDENTITY_UI_KEYS = {
     "identity_busy",
 }
 
-OPTIONAL_UI_KEYS = {
-    "short_auto_login",
-    "short_set_auto_login",
-    "short_clear_auto_login",
-    "vision_preview_start",
-    "vision_preview_stop",
-    "length_sample",
-    "length_sample_missing",
-    "length_numeric_entry",
-    "archive_save_images",
-    "archive_folder",
-    "recipe_product_code",
-    "process_parameters",
-    "process_title",
-    "process_set_count",
-    "process_lift_short",
-    "process_drop_short",
-    "process_extend_short",
-    "process_running_short",
-    "process_rotation_short",
-    "process_open_comp_short",
-    "process_close_comp_short",
-    "process_view_plc",
-    "process_plc_hold",
-    "process_plc_expand",
-    "process_plc_loading",
-    "process_plc_values",
-    "process_plc_unavailable",
-    "process_plc_unmapped",
-    "process_applying",
-    "process_applying_short",
-    "process_unverified_short",
-    "process_apply_required",
-    "process_apply_failed",
-    "process_override_count",
-    "process_speed",
-    "process_photo",
-    "process_reject",
-    "process_lift",
-    "process_drop",
-    "process_extend",
-    "process_running_speed",
-    "process_rotation_speed",
-    "process_phase",
-    "process_compensation",
-    "process_open_phase",
-    "process_close_phase",
-    "process_open_compensation",
-    "process_close_compensation",
-    "process_value_hint",
-    "status_service",
-    "status_service_tip",
-    "status_enable_tip",
-    "status_heartbeat",
-    "status_fault",
-    "status_alarm_address",
-    "status_running",
-    "status_running_tip",
-    "status_heartbeat_tip",
-    "status_fault_tip",
-    "service_partial",
-    "alarm_signals",
-    "alarm_signal",
-    "alarm_active_count",
-    "alarm_enable_tip",
-    "alarm_stale_values",
-    "alarm_word",
-    "service_online",
-    "service_waiting",
-    "service_error",
-    "alarm_word_tip",
-    "alarm_preview",
-    "alarm_preview_waiting",
-    "alarm_preview_failed",
-    "alarm_preview_refresh",
-    "alarm_applied",
+# Untranslated optional entries used outside the covered Qt workflows, including
+# report-only text, and compact captions chosen only by the base UI languages.
+ENGLISH_FALLBACK_KEYS = {
     "alarm_current",
-    "alarm_stale",
+    "alarm_enable_tip",
+    "alarm_file_created",
+    "alarm_file_exists",
+    "alarm_file_invalid",
+    "alarm_file_missing",
+    "alarm_file_open",
+    "alarm_file_opened",
+    "alarm_file_unavailable",
     "alarm_raw_bit",
-    "alarm_active",
-    "alarm_inactive",
-    "customer_length",
-    "customer_color",
-    "customer_batch_total",
-    "customer_classification_unavailable",
-    "batch_create",
-    "batch_continue",
-    "batch_run",
-    "batch_recent_end",
+    "alarm_stale",
+    "alarm_station",
+    "alarm_word",
+    "audit_actor",
+    "audit_all_actions",
+    "audit_completed",
+    "audit_id",
+    "audit_remarks",
+    "batch_edit_idle",
+    "batch_edit_info",
+    "batch_first_run",
+    "batch_first_run_hint",
+    "batch_info_conflict",
     "batch_information",
-    "customer_statistics_unavailable",
-    "customer_end",
-    "customer_unit",
-    "run_statistics_unavailable",
-    "customer_batch",
-    "customer_defects",
-    "customer_audit",
-    "customer_alarm",
+    "batch_inspection_span",
+    "batch_recent_run",
+    "batch_recent_run_hint",
+    "batch_report_deferred",
+    "batch_view_inspections",
+    "customer_accounts_missing",
     "customer_alarm_period",
-    "alarm_no_matches",
-    "customer_audit_batch",
     "customer_audit_account",
-    "customer_audit_from",
     "customer_audit_before",
+    "customer_audit_capacity",
     "customer_audit_excluded",
+    "customer_audit_from",
     "customer_audit_required",
     "customer_audit_slot",
-    "customer_audit_capacity",
-    "customer_positions",
-    "customer_first",
-    "customer_last",
-    "customer_total_ng",
+    "customer_batch_basis",
+    "customer_batch_total",
+    "customer_classification_unavailable",
     "customer_classified_ng",
+    "customer_color",
+    "customer_cycle_coverage",
+    "customer_end",
+    "customer_errors",
+    "customer_first",
+    "customer_group_coverage",
+    "customer_last",
+    "customer_length",
+    "customer_missing_ng",
     "customer_prepared",
     "customer_reviewed",
-    "customer_batch_basis",
-    "customer_accounts_missing",
+    "customer_statistics_unavailable",
+    "customer_total_ng",
     "customer_unattributed",
-    "customer_errors",
-    "customer_group_coverage",
-    "customer_cycle_coverage",
     "customer_unclassified",
-    "customer_missing_ng",
+    "customer_unit",
+    "export_affected",
+    "export_all",
+    "export_batch",
+    "export_before",
+    "export_capsule",
+    "export_category",
+    "export_category_totals",
+    "export_channel_detail",
+    "export_classified_groups",
+    "export_complete",
+    "export_conservative",
+    "export_count",
+    "export_cycle_categories",
+    "export_cycles",
+    "export_defects",
+    "export_durable",
+    "export_evidence",
+    "export_explained",
+    "export_filtered_hint",
+    "export_from",
+    "export_group_categories",
+    "export_groups",
+    "export_items",
+    "export_measured_cycles",
+    "export_member_cycles",
+    "export_no_evidence",
+    "export_no_groups",
+    "export_none",
+    "export_note_capsule",
+    "export_note_defects",
+    "export_note_detections",
+    "export_occurrences",
+    "export_page",
+    "export_period",
+    "export_retained",
+    "export_source",
+    "export_total",
+    "export_traditional",
+    "export_type",
+    "export_unknown_ng",
+    "pilot_unknown",
+    "plc_four_cycle_hint",
+    "plc_mode_four_cycle_short",
+    "plc_mode_per_cycle_short",
+    "records_account_id",
+    "records_action_code",
+    "records_batch_id",
+    "records_batch_report",
+    "records_definition",
+    "records_signal",
+    "records_technical",
+    "report_as_of",
+    "report_completed_groups",
+    "report_counter",
+    "report_created",
+    "report_data",
+    "report_duration",
+    "report_empty",
+    "report_end_observed",
+    "report_err_cycles",
+    "report_exported",
+    "report_generated",
+    "report_groups",
+    "report_in_progress",
+    "report_ng_cycles",
+    "report_occurrences",
+    "report_page_total",
+    "report_partial",
+    "report_passed",
+    "report_recorded",
+    "report_reference",
+    "report_reject_rate",
+    "report_rejected",
+    "report_retained_cycles",
+    "report_retained_groups",
+    "report_runs",
+    "report_search",
+    "report_signature_date",
+    "report_started_cycles",
+    "report_summary",
+    "report_system_generated",
+    "report_workstation",
+    "short_auto_login",
+    "short_clear_auto_login",
+    "short_set_auto_login",
+}
+
+# These workflow captions supplement the shared required catalog. Other locales
+# can use the existing fallback unless the caption is in their safety subset.
+PRIORITY_UI_KEYS = {
+    "active_recipe",
+    "alarm_activated",
+    "alarm_active",
+    "alarm_active_count",
+    "alarm_all_types",
+    "alarm_applied",
+    "alarm_count",
+    "alarm_details",
+    "alarm_equipment",
+    "alarm_file",
+    "alarm_history",
+    "alarm_inactive",
+    "alarm_interlock",
+    "alarm_last_known",
+    "alarm_lost",
+    "alarm_monitor",
+    "alarm_no_matches",
+    "alarm_observed_active",
+    "alarm_observed_recovered",
+    "alarm_off",
+    "alarm_online",
+    "alarm_preview",
+    "alarm_preview_failed",
+    "alarm_preview_refresh",
+    "alarm_preview_waiting",
+    "alarm_recovered",
+    "alarm_signal",
+    "alarm_signals",
+    "alarm_software",
+    "alarm_stale_values",
+    "alarm_startup",
+    "alarm_type",
+    "alarm_unavailable",
+    "alarm_waiting",
+    "alarm_word_tip",
+    "archive_folder",
+    "archive_save_images",
+    "audit_after",
+    "audit_before",
+    "audit_cancelled",
+    "audit_denied",
+    "audit_details",
+    "audit_failed",
+    "audit_inspection",
+    "audit_no_matches",
+    "audit_requested",
+    "audit_required",
+    "audit_stale",
+    "audit_success",
+    "audit_time",
+    "audit_trail",
+    "audit_uncertain",
+    "audit_unresolved",
+    "audit_warning",
+    "batch.information",
+    "batch_continue",
+    "batch_create",
+    "batch_current",
+    "batch_duration",
+    "batch_duration_help",
+    "batch_end",
+    "batch_end_confirm",
+    "batch_expired",
+    "batch_info_failed",
+    "batch_input",
+    "batch_keep_open",
+    "batch_no_groups",
+    "batch_notes",
+    "batch_pending",
+    "batch_product",
+    "batch_recent_end",
+    "batch_run",
+    "batch_select",
+    "batch_specification",
+    "batch_start_account",
+    "batch_uncertain",
+    "clear_statistics_confirm",
+    "comm_holding_registers",
+    "comm_modbus_exception",
+    "comm_modbus_hint",
+    "comm_modbus_protocol_error",
+    "comm_modbus_transport_error",
+    "comm_watch_read_failed",
+    "comm_watch_stale",
+    "comm_write_not_sent",
+    "comm_write_rejected",
+    "configuration_confirmation_incomplete",
+    "configure_first",
+    "customer_alarm",
+    "customer_audit",
+    "customer_audit_batch",
+    "customer_batch",
+    "customer_defects",
+    "customer_deferred",
     "customer_detection_only",
     "customer_entire_batch",
-    "customer_deferred",
+    "customer_positions",
     "customer_select_batch",
-    "records_all_accounts",
-    "records_find_account",
-    "records_all_batches",
-    "records_from",
-    "records_to",
-    "records_find_batch",
-    "records_no_batch",
-    "records_audit_scope",
-    "batch_info_failed",
-    "batch.information",
-    "batch_first_run",
-    "batch_recent_run",
-    "batch_first_run_hint",
-    "batch_recent_run_hint",
-    "batch_inspection_span",
-    "batch_start_account",
-    "batch_product",
-    "batch_specification",
-    "batch_notes",
-    "batch_edit_info",
-    "batch_view_inspections",
-    "batch_no_groups",
-    "batch_info_conflict",
-    "batch_edit_idle",
-    "batch_report_deferred",
-    "export_filtered_hint",
-    "export_type",
-    "export_batch",
-    "export_groups",
-    "export_cycles",
     "export_basis",
-    "export_capsule",
-    "export_defects",
     "export_detections",
     "export_format",
     "export_language",
     "export_run",
-    "export_evidence",
-    "export_classified_groups",
-    "export_explained",
-    "export_conservative",
-    "export_unknown_ng",
-    "export_category",
-    "export_source",
-    "export_traditional",
-    "export_affected",
-    "export_occurrences",
-    "export_note_defects",
-    "export_note_detections",
-    "export_note_capsule",
-    "export_durable",
-    "export_retained",
-    "export_measured_cycles",
-    "export_no_evidence",
-    "export_no_groups",
-    "export_complete",
-    "export_channel_detail",
-    "export_member_cycles",
-    "export_period",
-    "export_from",
-    "export_before",
-    "export_all",
-    "export_none",
-    "export_group_categories",
-    "export_cycle_categories",
-    "export_category_totals",
     "export_value",
-    "export_count",
-    "export_total",
-    "export_items",
-    "export_page",
-    "report_page_total",
-    "report_exported",
-    "report_workstation",
-    "report_reference",
-    "report_system_generated",
-    "report_signature_date",
-    *base_resources.AUDIT_ACTIONS,
-    "records_account_id",
-    "records_action_code",
-    "records_signal",
-    "records_definition",
-    "records_batch_id",
-    "records_bit",
-    "records_batch_report",
-    "records_create_alarm_file",
-    "records_success",
-    "records_uncertain",
-    "records_unresolved",
-    "records_seen_active",
-    "records_seen_clear",
-    "records_after_gap",
-    "records_occupancy",
-    "records_model_defect",
-    "records_missing_frame",
-    "records_deadline",
-    "records_cycle_failed",
-    "records_unassigned",
-    "records_technical",
-    "records_config_error",
-    "records_config_io",
-    "records_sources",
-    "records_layout",
-    "records_software",
-    "records_run",
-    "alarm_history",
-    "alarm_monitor",
-    "alarm_file",
-    "alarm_file_open",
-    "alarm_file_created",
-    "alarm_file_opened",
-    "alarm_file_exists",
-    "alarm_file_missing",
-    "alarm_file_invalid",
-    "alarm_file_unavailable",
-    "alarm_all_types",
-    "alarm_type",
-    "alarm_details",
-    "alarm_station",
-    "alarm_startup",
-    "alarm_interlock",
-    "alarm_equipment",
-    "alarm_software",
-    "alarm_observed_active",
-    "alarm_activated",
-    "alarm_observed_recovered",
-    "alarm_recovered",
-    "alarm_lost",
-    "alarm_off",
-    "alarm_waiting",
-    "alarm_unavailable",
-    "alarm_online",
-    "alarm_count",
-    "alarm_last_known",
-    "audit_trail",
-    "audit_inspection",
-    "audit_time",
-    "audit_actor",
-    "audit_all_actions",
-    "audit_before",
-    "audit_after",
-    "audit_requested",
-    "audit_remarks",
-    "audit_id",
-    "audit_completed",
-    "audit_details",
-    "audit_warning",
-    "audit_required",
-    "configuration_confirmation_incomplete",
-    "audit_no_matches",
-    "audit_success",
-    "audit_failed",
-    "audit_cancelled",
-    "audit_stale",
-    "audit_denied",
-    "audit_unresolved",
-    "audit_uncertain",
-    "history_open_image",
+    "fault_reset_available",
     "history_archived_image",
-    "history_no_image",
+    "history_clock",
+    "history_image_link_warning",
     "history_image_missing",
     "history_image_open_failed",
     "history_image_size_mismatch",
-    "history_image_link_warning",
-    "report_export",
-    "report_search",
-    "previous_page",
+    "history_no_image",
+    "history_open_image",
+    "length_numeric_entry",
+    "length_sample",
+    "length_sample_missing",
+    "model_action_error",
+    "model_delete",
+    "model_delete_question",
+    "model_import",
+    "model_module",
+    "model_name",
+    "model_rename",
     "next_page",
-    "report_no_batches",
-    "report_writing",
-    "report_saved",
-    "report_failed",
-    "report_cancelled",
-    "report_summary",
-    "report_groups",
-    "report_created",
-    "report_as_of",
-    "report_generated",
-    "report_data",
-    "report_recorded",
-    "report_partial",
-    "report_completed_groups",
-    "report_retained_groups",
-    "report_inspected",
-    "report_passed",
-    "report_rejected",
-    "report_empty",
-    "report_pass_rate",
-    "report_reject_rate",
-    "report_occurrences",
-    "report_started_cycles",
-    "report_ng_cycles",
-    "report_err_cycles",
-    "report_runs",
-    "report_started",
-    "report_end_observed",
-    "report_retained_cycles",
-    "report_in_progress",
-    "report_stopped",
-    "report_interrupted",
-    "run_uncertain_totals",
-    "report_counter",
-    "report_duration",
-    "batch_current",
-    "batch_input",
-    "batch_keep_open",
-    "batch_end",
-    "batch_end_confirm",
-    "clear_statistics_confirm",
-    "batch_select",
-    "run_uncertain",
-    "batch_uncertain",
-    "batch_expired",
-    "batch_duration",
-    "batch_duration_help",
+    "permission_engineer",
+    "permission_operator",
     "pilot_batches",
     "pilot_batches_help",
     "pilot_channels_help",
-    "pilot_unknown",
     "pilot_raw_cycles",
-    "plc_mode",
-    "plc_merge_count",
-    "plc_merge_unsupported",
+    "plc_base_address",
     "plc_commit_observation",
-    "plc_merge_count_tip",
-    "plc_mode_per_cycle",
-    "plc_mode_four_cycle",
-    "plc_mode_single_cycle",
     "plc_group_hint",
-    "plc_mode_per_cycle_short",
-    "plc_mode_four_cycle_short",
-    "plc_four_cycle_hint",
+    "plc_merge_count",
+    "plc_merge_count_tip",
+    "plc_merge_unsupported",
+    "plc_modbus_base_hint",
+    "plc_modbus_base_required",
+    "plc_mode",
+    "plc_mode_four_cycle",
+    "plc_mode_per_cycle",
+    "plc_mode_single_cycle",
+    "plc_reporting_write_protected",
+    "plc_status_write_protected",
     "preview_ambiguous_body",
-    "permission_operator",
-    "permission_engineer",
+    "preview_scope_tip",
+    "previous_page",
+    "process_apply_failed",
+    "process_apply_required",
+    "process_applying",
+    "process_applying_short",
+    "process_close_comp_short",
+    "process_close_compensation",
+    "process_close_phase",
+    "process_compensation",
+    "process_drop",
+    "process_drop_short",
+    "process_extend",
+    "process_extend_short",
+    "process_lift",
+    "process_lift_short",
+    "process_open_comp_short",
+    "process_open_compensation",
+    "process_open_phase",
+    "process_override_count",
+    "process_parameters",
+    "process_phase",
+    "process_photo",
+    "process_plc_expand",
+    "process_plc_hold",
+    "process_plc_loading",
+    "process_plc_unavailable",
+    "process_plc_unmapped",
+    "process_plc_values",
+    "process_reject",
+    "process_rotation_short",
+    "process_rotation_speed",
+    "process_running_short",
+    "process_running_speed",
+    "process_set_count",
+    "process_speed",
+    "process_title",
+    "process_unverified_short",
+    "process_value_hint",
+    "process_view_plc",
+    "recipe_delete_protected",
+    "recipe_dirty_question",
+    "recipe_preparing_short",
+    "recipe_product_code",
     "recipe_reprepare",
     "recipe_reprepare_hint",
-    "recipe_preparing_short",
-    "active_recipe",
+    "records_after_gap",
+    "records_all_accounts",
+    "records_all_batches",
+    "records_audit_scope",
+    "records_bit",
+    "records_config_error",
+    "records_config_io",
+    "records_create_alarm_file",
+    "records_cycle_failed",
+    "records_date_retained",
+    "records_date_unset",
+    "records_deadline",
+    "records_find_account",
+    "records_find_batch",
+    "records_from",
+    "records_invalid_date",
+    "records_layout",
+    "records_missing_frame",
+    "records_model_defect",
+    "records_no_batch",
+    "records_occupancy",
+    "records_run",
+    "records_seen_active",
+    "records_seen_clear",
+    "records_software",
+    "records_sources",
+    "records_success",
+    "records_to",
+    "records_unassigned",
+    "records_uncertain",
+    "records_unresolved",
+    "report_cancelled",
+    "report_export",
+    "report_failed",
+    "report_inspected",
+    "report_interrupted",
+    "report_no_batches",
+    "report_pass_rate",
+    "report_saved",
+    "report_started",
+    "report_stopped",
+    "report_writing",
+    "run_statistics_unavailable",
+    "run_uncertain",
+    "run_uncertain_totals",
     "select_saved_recipe",
-    "recipe_dirty_question",
-    "plc_modbus_base_required",
-    "plc_modbus_base_hint",
-    "comm_modbus_transport_error",
+    "service_error",
+    "service_online",
+    "service_partial",
+    "service_waiting",
+    "source_save_first",
+    "start_vision_dirty",
+    "status_alarm_address",
+    "status_enable_tip",
+    "status_fault",
+    "status_fault_tip",
+    "status_heartbeat",
+    "status_heartbeat_tip",
+    "status_running",
+    "status_running_tip",
+    "status_service",
+    "status_service_tip",
+    "vision_preview_frame_tip",
+    "vision_preview_start",
+    "vision_preview_stop",
+    "vision_sources_layout_incomplete",
+    "vision_sources_only_saved",
+    "web_apply_disabled",
+    "web_boundary",
+    "web_restart_restored",
+    *base_resources.AUDIT_ACTIONS,
+}
+
+ADDITIONAL_SAFETY_KEYS = {
+    "comm_watch_read_failed",
+    "comm_watch_stale",
+    "comm_write_not_sent",
+    "comm_write_rejected",
+    "fault_reset_available",
+    "permission_engineer",
+    "permission_operator",
+    "plc_reporting_write_protected",
+    "plc_status_write_protected",
+    "process_apply_failed",
+    "process_apply_required",
+    "start_vision_dirty",
+}
+ADDITIONAL_SAFETY_LANGUAGES = ("uk", "pt-PT", "ms")
+
+# Operational text promoted from optional fallback. The other maintained
+# workflows keep their existing coverage requirements.
+OPERATIONAL_UI_KEYS = {
+    "alarm_active",
+    "alarm_active_count",
+    "alarm_applied",
+    "alarm_count",
+    "alarm_details",
+    "alarm_inactive",
+    "alarm_off",
+    "alarm_online",
+    "alarm_preview",
+    "alarm_preview_failed",
+    "alarm_preview_refresh",
+    "alarm_preview_waiting",
+    "alarm_signal",
+    "alarm_signals",
+    "alarm_stale_values",
+    "alarm_unavailable",
+    "alarm_waiting",
+    "alarm_word_tip",
+    "clear_statistics_confirm",
     "comm_holding_registers",
+    "comm_modbus_exception",
     "comm_modbus_hint",
     "comm_modbus_protocol_error",
-    "comm_modbus_exception",
+    "comm_modbus_transport_error",
+    "comm_watch_read_failed",
+    "comm_watch_stale",
+    "comm_write_not_sent",
+    "comm_write_rejected",
+    "configuration_confirmation_incomplete",
+    "configure_first",
+    "fault_reset_available",
+    "permission_engineer",
+    "permission_operator",
+    "pilot_batches",
+    "pilot_batches_help",
+    "pilot_channels_help",
+    "pilot_raw_cycles",
     "plc_base_address",
+    "plc_commit_observation",
+    "plc_group_hint",
+    "plc_merge_count",
+    "plc_merge_count_tip",
+    "plc_merge_unsupported",
+    "plc_modbus_base_hint",
+    "plc_modbus_base_required",
+    "plc_mode",
+    "plc_mode_four_cycle",
+    "plc_mode_per_cycle",
+    "plc_mode_single_cycle",
     "plc_reporting_write_protected",
-    "model_import",
-    "model_rename",
+    "plc_status_write_protected",
+    "service_error",
+    "service_online",
+    "service_partial",
+    "service_waiting",
+    "source_save_first",
+    "start_vision_dirty",
+    "status_alarm_address",
+    "status_enable_tip",
+    "status_fault",
+    "status_fault_tip",
+    "status_heartbeat",
+    "status_heartbeat_tip",
+    "status_running",
+    "status_running_tip",
+    "status_service",
+    "status_service_tip",
+    "vision_preview_frame_tip",
+    "vision_preview_start",
+    "vision_preview_stop",
+    "vision_sources_layout_incomplete",
+    "vision_sources_only_saved",
+    "web_apply_disabled",
+    "web_boundary",
+    "web_restart_restored",
+}
+
+# Retain truthful English for these specific technical explanations until their
+# translation can be reviewed confidently. This is not a whole-locale exemption.
+OPERATIONAL_REVIEW_KEYS = {
+    "pilot_channels_help",
+    "plc_commit_observation",
+    "plc_group_hint",
+    "plc_modbus_base_hint",
+    "status_running_tip",
+}
+OPERATIONAL_REVIEW_BY_LANGUAGE: dict[Language, set[str]] = {
+    "am": OPERATIONAL_REVIEW_KEYS,
+    "ha": OPERATIONAL_REVIEW_KEYS,
+    "km": OPERATIONAL_REVIEW_KEYS,
+    "mg": OPERATIONAL_REVIEW_KEYS,
+    "si": OPERATIONAL_REVIEW_KEYS,
+    "ti": OPERATIONAL_REVIEW_KEYS,
+    "tk": {"pilot_channels_help", "plc_commit_observation", "plc_group_hint"},
+    "zu": OPERATIONAL_REVIEW_KEYS,
+}
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_operational_coverage_and_specific_review_fallback(language: Language) -> None:
+    assert len(OPERATIONAL_UI_KEYS) == 75
+    assert OPERATIONAL_UI_KEYS <= PRIORITY_UI_KEYS
+    maintained = (
+        STRINGS.keys()
+        - ENGLISH_FALLBACK_KEYS
+        - TECHNICAL_TOKEN_KEYS
+        - OPTIONAL_NATIVE_KEYS
+    )
+    assert len(maintained) == 737
+    assert OPERATIONAL_UI_KEYS <= maintained
+    if language in ("zh", "en"):
+        return
+    review = OPERATIONAL_REVIEW_BY_LANGUAGE.get(language, set())
+    assert OPERATIONAL_UI_KEYS - EXTRA_STRINGS[language].keys() == review
+    for key in review:
+        assert text(key, language) == STRINGS[key][1]
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_operational_translations_preserve_protocol_and_outcome_boundaries(
+    language: Language,
+) -> None:
+    for key, tokens in (
+        ("plc_group_hint", ("Basler", "FINS/TCP", "W49", "W149")),
+        ("plc_commit_observation", ("PLC",)),
+        ("comm_local_write", ("PLC",)),
+        ("status_running_tip", ("WR", "0", "1")),
+        ("status_fault_tip", ("FAULT", "1")),
+        ("status_heartbeat_tip", ("16",)),
+        ("plc_merge_count_tip", ("0", "1", "4", "PLC")),
+        ("alarm_word_tip", ("WR", "W0", "W511")),
+        ("comm_modbus_hint", ("Modbus TCP", "255")),
+        ("plc_modbus_base_hint", ("HR", "0", "65532", "FINS")),
+    ):
+        assert all(token in text(key, language) for token in tokens), (language, key)
+    for keys in (
+        ("plc_mode_per_cycle", "plc_mode_single_cycle", "plc_mode_four_cycle"),
+        ("comm_write_not_sent", "comm_write_rejected", "comm_write_unknown"),
+        ("comm_watch_read_failed", "comm_watch_stale"),
+        ("alarm_active", "alarm_inactive", "alarm_waiting", "alarm_unavailable"),
+        ("service_online", "service_waiting", "service_error", "service_partial"),
+        ("ng", "error", "FAULT"),
+        ("batch_input", "export_run", "short_cycles", "pilot_batches"),
+        ("vision_sources_layout_incomplete", "vision_sources_only_saved"),
+        ("vision_preview_start", "vision_preview_stop"),
+    ):
+        assert len({text(key, language) for key in keys}) == len(keys), (language, keys)
+    assert "17" in text("pilot_raw_cycles", language).format(count=17)
+
+
+def test_operational_regional_spelling_and_meaningful_joiners() -> None:
+    assert "câmaras" in text("source_save_first", "pt-PT")
+    assert "Sačuvajte" in text("configure_first", "sr-Latn")
+    assert "yoxlama" in text("pilot_batches_help", "az-Latn")
+    assert "\u200d" in text("comm_write_rejected", "ne")
+    for language in ("sr-Latn", "az-Latn", "uz"):
+        assert not any(
+            "\u0400" <= char <= "\u04ff"
+            for key in OPERATIONAL_UI_KEYS
+            for char in text(key, language)
+        )
+
+
+RECIPE_WORKFLOW_KEYS = {
+    "active_recipe",
+    "archive_folder",
+    "archive_save_images",
+    "length_numeric_entry",
+    "length_sample",
+    "length_sample_missing",
+    "model_action_error",
     "model_delete",
     "model_delete_question",
+    "model_import",
     "model_module",
     "model_name",
-    "model_action_error",
+    "model_rename",
+    "preview_ambiguous_body",
+    "preview_scope_tip",
+    "process_apply_failed",
+    "process_apply_required",
+    "process_applying",
+    "process_applying_short",
+    "process_close_comp_short",
+    "process_close_compensation",
+    "process_close_phase",
+    "process_compensation",
+    "process_drop",
+    "process_drop_short",
+    "process_extend",
+    "process_extend_short",
+    "process_lift",
+    "process_lift_short",
+    "process_open_comp_short",
+    "process_open_compensation",
+    "process_open_phase",
+    "process_override_count",
+    "process_parameters",
+    "process_phase",
+    "process_photo",
+    "process_plc_expand",
+    "process_plc_hold",
+    "process_plc_loading",
+    "process_plc_unavailable",
+    "process_plc_unmapped",
+    "process_plc_values",
+    "process_reject",
+    "process_rotation_short",
+    "process_rotation_speed",
+    "process_running_short",
+    "process_running_speed",
+    "process_set_count",
+    "process_speed",
+    "process_title",
+    "process_unverified_short",
+    "process_value_hint",
+    "process_view_plc",
+    "recipe_delete_protected",
+    "recipe_dirty_question",
+    "recipe_preparing_short",
+    "recipe_product_code",
+    "recipe_reprepare",
+    "recipe_reprepare_hint",
+    "select_saved_recipe",
 }
+
+# Exact technical wording still requiring confident native-language review.
+RECIPE_REVIEW_BY_LANGUAGE: dict[Language, set[str]] = {
+    "am": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_value_hint",
+    },
+    "ha": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_value_hint",
+    },
+    "km": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_value_hint",
+    },
+    "mg": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_value_hint",
+    },
+    "si": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_close_comp_short",
+        "process_close_compensation",
+        "process_close_phase",
+        "process_compensation",
+        "process_open_comp_short",
+        "process_open_compensation",
+        "process_open_phase",
+        "process_phase",
+        "process_value_hint",
+    },
+    "ti": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_value_hint",
+    },
+    "tk": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_value_hint",
+    },
+    "zu": {
+        "preview_ambiguous_body",
+        "preview_scope_tip",
+        "process_value_hint",
+    },
+}
+
+
+RECORDS_WORKFLOW_KEYS = {
+    "account.change_password",
+    "account.create",
+    "account.enabled",
+    "account.reset_password",
+    "account.role",
+    "alarm_activated",
+    "alarm_all_types",
+    "alarm_definitions.create",
+    "alarm_equipment",
+    "alarm_file",
+    "alarm_history",
+    "alarm_interlock",
+    "alarm_last_known",
+    "alarm_lost",
+    "alarm_monitor",
+    "alarm_no_matches",
+    "alarm_observed_active",
+    "alarm_observed_recovered",
+    "alarm_recovered",
+    "alarm_software",
+    "alarm_startup",
+    "alarm_type",
+    "audit_after",
+    "audit_before",
+    "audit_cancelled",
+    "audit_denied",
+    "audit_details",
+    "audit_failed",
+    "audit_inspection",
+    "audit_no_matches",
+    "audit_requested",
+    "audit_required",
+    "audit_stale",
+    "audit_success",
+    "audit_time",
+    "audit_trail",
+    "audit_uncertain",
+    "audit_unresolved",
+    "audit_warning",
+    "batch.end",
+    "batch.information",
+    "batch.select",
+    "batch_continue",
+    "batch_create",
+    "batch_current",
+    "batch_duration",
+    "batch_duration_help",
+    "batch_end",
+    "batch_end_confirm",
+    "batch_expired",
+    "batch_info_failed",
+    "batch_input",
+    "batch_keep_open",
+    "batch_no_groups",
+    "batch_notes",
+    "batch_pending",
+    "batch_product",
+    "batch_recent_end",
+    "batch_run",
+    "batch_select",
+    "batch_specification",
+    "batch_start_account",
+    "batch_uncertain",
+    "communication.save",
+    "communication.web_power",
+    "customer_alarm",
+    "customer_audit",
+    "customer_audit_batch",
+    "customer_batch",
+    "customer_defects",
+    "customer_deferred",
+    "customer_detection_only",
+    "customer_entire_batch",
+    "customer_positions",
+    "customer_select_batch",
+    "export_basis",
+    "export_detections",
+    "export_format",
+    "export_language",
+    "export_run",
+    "export_value",
+    "history.storage",
+    "history_archived_image",
+    "history_clock",
+    "history_image_link_warning",
+    "history_image_missing",
+    "history_image_open_failed",
+    "history_image_size_mismatch",
+    "history_no_image",
+    "history_open_image",
+    "model.cache",
+    "model.delete",
+    "model.import",
+    "model.publish",
+    "model.rename",
+    "model.stage",
+    "next_page",
+    "plc.write",
+    "preferences.save",
+    "previous_page",
+    "production.clear_statistics",
+    "production.recipe",
+    "production.start",
+    "production.stop",
+    "recipe.delete",
+    "recipe.process_apply",
+    "recipe.process_value",
+    "recipe.save",
+    "records_after_gap",
+    "records_all_accounts",
+    "records_all_batches",
+    "records_audit_scope",
+    "records_bit",
+    "records_config_error",
+    "records_config_io",
+    "records_create_alarm_file",
+    "records_cycle_failed",
+    "records_date_retained",
+    "records_date_unset",
+    "records_deadline",
+    "records_find_account",
+    "records_find_batch",
+    "records_from",
+    "records_invalid_date",
+    "records_layout",
+    "records_missing_frame",
+    "records_model_defect",
+    "records_no_batch",
+    "records_occupancy",
+    "records_run",
+    "records_seen_active",
+    "records_seen_clear",
+    "records_software",
+    "records_sources",
+    "records_success",
+    "records_to",
+    "records_unassigned",
+    "records_uncertain",
+    "records_unresolved",
+    "report_cancelled",
+    "report_export",
+    "report_failed",
+    "report_inspected",
+    "report_interrupted",
+    "report_no_batches",
+    "report_pass_rate",
+    "report_saved",
+    "report_started",
+    "report_stopped",
+    "report_writing",
+    "run_statistics_unavailable",
+    "run_uncertain",
+    "run_uncertain_totals",
+    "security.admission",
+    "security.storage",
+    "session.login",
+    "session.logout",
+    "vision.layout",
+    "vision.sources",
+}
+
+# Keep uncertain timing, attribution and completeness explanations in English.
+RECORDS_REVIEW_BY_LANGUAGE: dict[Language, set[str]] = {
+    "am": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+    "ha": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+    "km": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+    "mg": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+    "si": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+    "ti": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+    "tk": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+    "zu": {
+        "batch_duration_help",
+        "customer_detection_only",
+        "history_clock",
+        "records_audit_scope",
+    },
+}
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_records_coverage_completes_maintained_interface_with_exact_exceptions(
+    language: Language,
+) -> None:
+    assert len(RECORDS_WORKFLOW_KEYS) == 159
+    assert RECORDS_WORKFLOW_KEYS <= PRIORITY_UI_KEYS
+    assert not RECORDS_WORKFLOW_KEYS & (OPERATIONAL_UI_KEYS | RECIPE_WORKFLOW_KEYS)
+    maintained = (
+        STRINGS.keys()
+        - ENGLISH_FALLBACK_KEYS
+        - TECHNICAL_TOKEN_KEYS
+        - OPTIONAL_NATIVE_KEYS
+    )
+    assert len(maintained) == 737
+    if language in ("zh", "en"):
+        return
+    review = RECORDS_REVIEW_BY_LANGUAGE.get(language, set())
+    assert RECORDS_WORKFLOW_KEYS - EXTRA_STRINGS[language].keys() == review
+    all_review = (
+        review
+        | OPERATIONAL_REVIEW_BY_LANGUAGE.get(language, set())
+        | RECIPE_REVIEW_BY_LANGUAGE.get(language, set())
+    )
+    assert maintained - EXTRA_STRINGS[language].keys() == all_review
+    for key in review:
+        assert text(key, language) == STRINGS[key][1]
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_recipe_workflow_coverage_and_specific_review_fallback(
+    language: Language,
+) -> None:
+    assert len(RECIPE_WORKFLOW_KEYS) == 60
+    assert RECIPE_WORKFLOW_KEYS <= PRIORITY_UI_KEYS
+    assert not RECIPE_WORKFLOW_KEYS & OPERATIONAL_UI_KEYS
+    maintained = (
+        STRINGS.keys()
+        - ENGLISH_FALLBACK_KEYS
+        - TECHNICAL_TOKEN_KEYS
+        - OPTIONAL_NATIVE_KEYS
+    )
+    assert len(maintained) == 737 and RECIPE_WORKFLOW_KEYS <= maintained
+    if language in ("zh", "en"):
+        return
+    review = RECIPE_REVIEW_BY_LANGUAGE.get(language, set())
+    assert RECIPE_WORKFLOW_KEYS - EXTRA_STRINGS[language].keys() == review
+    for key in review:
+        assert text(key, language) == STRINGS[key][1]
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_recipe_terms_keep_preview_preparation_and_application_distinct(
+    language: Language,
+) -> None:
+    for keys in (
+        (
+            "active_recipe",
+            "recipe_preparing_short",
+            "process_applying_short",
+            "process_unverified_short",
+        ),
+        ("model_import", "model_delete", "model_rename"),
+        ("process_plc_loading", "process_plc_values", "process_plc_unavailable"),
+        ("process_apply_required", "process_apply_failed"),
+    ):
+        assert len({text(key, language) for key in keys}) == len(keys)
+    for key in (
+        "process_plc_hold",
+        "process_plc_expand",
+        "process_plc_loading",
+        "process_plc_values",
+        "process_plc_unavailable",
+        "process_view_plc",
+    ):
+        assert "PLC" in text(key, language)
+    if language != "zh":
+        assert "EMPTY" in text("preview_scope_tip", language)
+    hint = text("process_value_hint", language).format(
+        name="QA_{CAM1}_用户", minimum=-20, maximum=150, addresses="D102–D103"
+    )
+    assert all(
+        value in hint for value in ("QA_{CAM1}_用户", "-20", "150", "D102–D103", "-")
+    )
+    for key in ("process_set_count", "process_override_count"):
+        assert "17" in text(key, language).format(count=17)
+
+
+def test_recipe_regional_terms_and_latin_script_identities() -> None:
+    assert "guardada" in text("select_saved_recipe", "pt-PT")
+    assert "keš" in text("model_delete_question", "sr-Latn")
+    assert "yoxlanılmayıb" in text("process_unverified_short", "az-Latn")
+    for language in ("sr-Latn", "az-Latn", "uz"):
+        assert not any(
+            "\u0400" <= char <= "\u04ff"
+            for key in RECIPE_WORKFLOW_KEYS
+            for char in text(key, language)
+        )
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_identity_ui_has_complete_native_coverage(language: Language) -> None:
     assert IDENTITY_UI_KEYS == {key for key in STRINGS if key.startswith("identity_")}
-    assert not IDENTITY_UI_KEYS & OPTIONAL_UI_KEYS
+    assert not IDENTITY_UI_KEYS & (ENGLISH_FALLBACK_KEYS | PRIORITY_UI_KEYS)
     values = (
         {key: STRINGS[key][0 if language == "zh" else 1] for key in IDENTITY_UI_KEYS}
         if language in ("zh", "en")
@@ -664,60 +1317,13 @@ EXPECTED_LANGUAGE_NAMES: dict[Language, str] = {
 # captions and technical explanations may use English in the named catalogs;
 # all other nontechnical/non-English-only keys require an authored value.
 OPTIONAL_NATIVE_KEYS = {
-    "apply",
-    "channel_count_help",
-    "channel_ng",
-    "channel_ok",
-    "cli_sources",
-    "collection_short",
-    "comm_busy",
-    "comm_closing",
-    "comm_idle",
-    "comm_local_write",
-    "comm_transport_error",
-    "comm_word",
-    "command_error",
-    "fault_note",
-    "history_cycle_disabled",
-    "history_cycle_error",
-    "history_cycle_unknown",
     "history_segment_observed",
-    "invalid_result",
-    "issue_note",
     "module_id",
-    "no_catalog",
-    "pause_unsupported",
-    "pending",
-    "preview_invalid_geometry",
     "recipe_id",
-    "recipe_labels_retained",
     "reference",
-    "reference_runtime_tip",
-    "reference_unavailable",
     "roi_applied",
     "roi_recipe_save",
-    "roi_workspace",
     "save_machine_first",
-    "setup_failed",
-    "simulation",
-    "source_paused",
-    "source_pausing",
-    "source_resuming",
-    "source_stepping",
-    "startup_configuration",
-    "startup_machine",
-    "startup_models",
-    "startup_preferences",
-    "startup_recipe_identity",
-    "startup_recipes",
-    "startup_source_unavailable",
-    "startup_sources",
-    "technical_note",
-    "traditional_short",
-    "unavailable_model",
-    "vision_fps_decrease",
-    "vision_fps_increase",
-    "web_power_tip",
 }
 
 OPTIONAL_NATIVE_KEYS_BY_LANGUAGE: dict[Language, set[str]] = {
@@ -920,10 +1526,16 @@ def test_language_identities_and_current_catalog_coverage() -> None:
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (
         OPTIONAL_NATIVE_KEYS
-        | OPTIONAL_UI_KEYS
-        | ENGLISH_DETAIL_KEYS
+        | ENGLISH_FALLBACK_KEYS
+        | PRIORITY_UI_KEYS
         | TECHNICAL_TOKEN_KEYS
         <= STRINGS.keys()
+    )
+    assert not ENGLISH_FALLBACK_KEYS & PRIORITY_UI_KEYS
+    assert ADDITIONAL_SAFETY_KEYS <= PRIORITY_UI_KEYS
+    assert (
+        set(PRIORITY_UI_LANGUAGES) | set(ADDITIONAL_SAFETY_LANGUAGES)
+        <= EXTRA_STRINGS.keys()
     )
     assert OPTIONAL_NATIVE_KEYS_BY_LANGUAGE.keys() <= EXTRA_STRINGS.keys()
     exceptions = {"zh": "中文", "zh-TW": "繁中", "sr-Latn": "SR", "az-Latn": "AZ"}
@@ -935,16 +1547,39 @@ def test_language_identities_and_current_catalog_coverage() -> None:
             continue
         required = (
             STRINGS.keys()
-            - OPTIONAL_UI_KEYS
-            - ENGLISH_DETAIL_KEYS
+            - ENGLISH_FALLBACK_KEYS
+            - PRIORITY_UI_KEYS
             - TECHNICAL_TOKEN_KEYS
             - OPTIONAL_NATIVE_KEYS_BY_LANGUAGE.get(language, set())
         )
+        if language in PRIORITY_UI_LANGUAGES:
+            required |= PRIORITY_UI_KEYS
+        elif language in ADDITIONAL_SAFETY_LANGUAGES:
+            required |= ADDITIONAL_SAFETY_KEYS
+        required |= OPERATIONAL_UI_KEYS - OPERATIONAL_REVIEW_BY_LANGUAGE.get(
+            language, set()
+        )
+        required |= RECIPE_WORKFLOW_KEYS - RECIPE_REVIEW_BY_LANGUAGE.get(
+            language, set()
+        )
+        required |= RECORDS_WORKFLOW_KEYS - RECORDS_REVIEW_BY_LANGUAGE.get(
+            language, set()
+        )
         assert required <= EXTRA_STRINGS[language].keys(), language
-        assert (
-            not (OPTIONAL_UI_KEYS | ENGLISH_DETAIL_KEYS)
-            & EXTRA_STRINGS[language].keys()
-        ), language
+        assert not ENGLISH_FALLBACK_KEYS & EXTRA_STRINGS[language].keys(), language
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_setup_guidance_and_recorded_recipe_recovery_are_distinct(
+    language: Language,
+) -> None:
+    setup = text("recipe_setup_required", language)
+    recovery = text("startup_recipe_identity", language)
+    assert len({setup, recovery, text("configure_first", language)}) == 3
+    assert "app.json" in recovery and "app.json" not in setup
+    if language not in ("zh", "en"):
+        assert "recipe_setup_required" in EXTRA_STRINGS[language]
+        assert setup != text("recipe_setup_required", "en")
 
 
 @pytest.mark.parametrize("language", ("lt", "lv", "et", "sl", "sq", "ca"))
@@ -1074,7 +1709,8 @@ def test_new_catalogs_preserve_critical_protocol_and_result_distinctions(
 ) -> None:
     assert "ACK" in text("plc_next_start", language)
     assert "EMPTY" in text("preview_scope_tip", language)
-    assert "Occupancy" in text("preview_scope_tip", language)
+    if "preview_scope_tip" not in EXTRA_STRINGS[language]:
+        assert "Occupancy" in text("preview_scope_tip", language)
     for key, code in (
         ("technical_success", "SUCCESS"),
         ("technical_error", "ERROR"),
@@ -1085,6 +1721,39 @@ def test_new_catalogs_preserve_critical_protocol_and_result_distinctions(
             else code
         )
         assert text(key, language) == expected
+
+
+def test_localized_operational_text_preserves_codes_and_distinctions() -> None:
+    for language in PRIORITY_UI_LANGUAGES:
+        for key, tokens in (
+            ("plc_group_hint", ("Basler", "FINS/TCP", "W49", "W149")),
+            ("plc_commit_observation", ("ACK", "PLC")),
+            ("comm_local_write", ("ACK", "PLC")),
+            ("status_running_tip", ("WR", "0", "1")),
+            ("status_fault_tip", ("FAULT", "0", "1")),
+            ("history_cycle_disabled", ("DISABLED",)),
+            ("history_cycle_unknown", ("UNKNOWN",)),
+            ("records_invalid_date", ("YYYY-MM-DD",)),
+            ("vision_remove_cam6_question", ("CAM6",)),
+        ):
+            assert all(token in text(key, language) for token in tokens), (
+                language,
+                key,
+            )
+        for keys in (
+            ("plc_mode_per_cycle", "plc_mode_single_cycle", "plc_mode_four_cycle"),
+            ("batch_input", "export_run", "short_cycles", "pilot_batches"),
+            ("comm_write_not_sent", "comm_write_rejected", "comm_write_unknown"),
+            ("report_writing", "report_saved", "report_failed", "report_cancelled"),
+        ):
+            assert len({text(key, language) for key in keys}) == len(keys), language
+    preview_presence: tuple[tuple[Language, str], ...] = (
+        ("zh-TW", "不執行占位判定"),
+        ("de", "ohne Anwesenheitserkennung"),
+        ("hi", "उपस्थिति नहीं जाँचता"),
+    )
+    for language, expected in preview_presence:
+        assert expected in text("preview_scope_tip", language)
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -1124,9 +1793,6 @@ def test_reviewed_camera_terms_preserve_camera_number_identity(
 
 def test_nepali_unsaved_and_failed_save_are_not_safety_or_success_claims() -> None:
     assert text("unsaved", "ne") == "सेभ नगरिएका परिवर्तनहरू"
-    assert text("dirty_question", "ne") == (
-        "सेभ नगरिएको मस्यौदा। सेभ गरी लागू गर्ने, परिवर्तन त्याग्ने वा रद्द गर्ने?"
-    )
     assert text("comm_settings_failed", "ne") == (
         "सेभ गर्न असफल; सेटिङ वा फाइल अनुमति जाँच्नुहोस्"
     )
@@ -1192,9 +1858,8 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
         "state_RUNNING",
         "state_STOPPING",
         "state_FAULT",
-        "save_apply",
+        "save",
         "recipe_discard",
-        "dirty_question",
         "cancel",
         "saved",
         "unsaved",
@@ -1323,12 +1988,18 @@ def test_watch_short_captions_are_explicit_for_every_language() -> None:
 
 
 def test_optional_ui_text_uses_existing_english_fallback() -> None:
-    for key in OPTIONAL_UI_KEYS | ENGLISH_DETAIL_KEYS:
+    for key in ENGLISH_FALLBACK_KEYS:
         assert key in STRINGS and STRINGS[key][0] and STRINGS[key][1]
         for language in LANGUAGES:
             assert text(key, language) == (
                 STRINGS[key][0] if language == "zh" else STRINGS[key][1]
             )
+
+
+def test_fins_transport_caption_is_neutral_in_every_language() -> None:
+    for language in LANGUAGES:
+        caption = text("comm_transport_error", language)
+        assert "FINS" in caption and "UDP" not in caption, language
 
 
 def test_record_captions_distinguish_witnessed_transitions_and_audit_outcomes() -> None:
@@ -1346,10 +2017,23 @@ def test_record_captions_distinguish_witnessed_transitions_and_audit_outcomes() 
                 "audit_denied",
                 "records_uncertain",
                 "records_unresolved",
+                "audit_cancelled",
+                "audit_stale",
             ),
+            ("report_writing", "report_saved", "report_cancelled", "report_failed"),
+            ("batch_input", "records_run", "history_cycle", "history_group"),
+            ("history_none", "history_unavailable", "history_loading"),
+            ("history_no_image", "history_image_missing", "history_image_open_failed"),
         ):
-            assert len({text(key, language) for key in keys}) == len(keys)
-        assert "Chip" in text("records_unassigned", language).format(labels="Chip")
+            assert len({text(key, language) for key in keys}) == len(keys), language
+        assert "Chip · Black spot" in text("records_unassigned", language).format(
+            labels="Chip · Black spot"
+        )
+        assert "LOT-A · 海蓝" in text("customer_entire_batch", language).format(
+            batch="LOT-A · 海蓝"
+        )
+        assert "YYYY-MM-DD" in text("records_invalid_date", language)
+        assert "PLC" in text("batch_no_groups", language)
 
 
 def test_technical_tokens_use_fallback_and_preserve_native_overrides() -> None:
@@ -1445,7 +2129,6 @@ def test_navigation_has_native_short_captions_and_one_protocol_identifier() -> N
 
 @pytest.mark.parametrize("language", tuple(EXTRA_STRINGS))
 def test_optional_translation_falls_back_to_english(language: Language) -> None:
-    assert "history_clock" not in EXTRA_STRINGS[language]
     for key in STRINGS.keys() - EXTRA_STRINGS[language].keys():
         assert text(key, language) == STRINGS[key][1], (key, language)
 
@@ -1658,15 +2341,18 @@ def test_language_codes_are_exact_and_invalid_types_remain_rejected() -> None:
 def test_traditional_chinese_uses_reviewed_industrial_terms() -> None:
     for key, expected in (
         ("page_communication", "通訊"),
-        ("save_apply", "儲存並套用"),
+        ("save", "儲存"),
         ("source_connected", "已連線"),
         ("comm_timeout", "逾時（秒）"),
         ("cache_prepare", "準備 TensorRT 快取"),
         ("plc_reporting", "生產結果回報"),
         ("comm_effective_endpoint", "實際目標"),
+        ("batch_select", "設定批號"),
+        ("alarm_stale_values", "歷史值 · 非目前讀值"),
     ):
         assert text(key, "zh-TW") == expected
-    assert text("history_clock", "zh-TW") == STRINGS["history_clock"][1]
+    assert "完成時刻" in text("history_clock", "zh-TW")
+    assert "曝光時間" in text("history_clock", "zh-TW")
 
 
 def test_localization_is_pure_and_retired_owners_do_not_export_localization() -> None:
@@ -1679,7 +2365,7 @@ with patch('threading.Thread.start', side_effect=AssertionError('import-time thr
         assert 'capsule_vision.localization.catalog' not in sys.modules
         from capsule_vision.localization import catalog, translations
 assert not any(n.startswith(('PySide6', 'capsule_vision.ui', 'capsule_vision.configuration')) for n in sys.modules)
-assert len(languages.LANGUAGES) == 64 and len(catalog.STRINGS) == 885
+assert len(languages.LANGUAGES) == 64 and 'comm_transport_error' in catalog.STRINGS
 assert len(translations.EXTRA_STRINGS) == 62
 """
     subprocess.run(

@@ -37,6 +37,7 @@ from capsule_vision.application.startup import Startup
 from capsule_vision.configuration import load_recipe, save_recipe
 from capsule_vision.configuration.process_parameters import load_process_catalog
 from capsule_vision.localization.catalog import text
+from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
@@ -142,6 +143,7 @@ def test_process_save_preserves_raw_errors_and_missing_target_blocks_application
         assert snapshot.active is None and snapshot.counters == ProductionCounters()
         assert not snapshot.runtime_owned and not calls
         assert snapshot.process_required and snapshot.last_issue
+        assert page.status.text() == "已保存 · 工艺参数应用失败"
         assert not startup.data.communication.exists()
 
 
@@ -234,7 +236,7 @@ def test_process_card_layout_collapse_localization_and_stability(
         QApplication.processEvents()
         assert len({group.x() for group in card.groups.values()}) == columns
         before = card.values()
-        for language in ("zh", "en", "ti"):
+        for language in LANGUAGES:
             window.set_language(language)
             for theme in ("dark", "light"):
                 window.set_theme(theme)
@@ -361,7 +363,7 @@ def test_recipe_draft_and_field_focus_survive_presentation_changes(
         expected = session.draft.to_recipe(session.process_catalog)
         fields = dict(card.fields)
         layouts: tuple[tuple[int, Theme], ...] = ((1080, "dark"), (1920, "light"))
-        for language in ("zh", "en", "ti"):
+        for language in ("zh", "en", "pt-PT", "sr-Latn", "bn", "si", "ti"):
             for width, theme in layouts:
                 card.fields["running_speed"].setFocus()
                 window.set_language(language)
@@ -491,8 +493,8 @@ def test_compact_process_captions_keep_full_meaning_and_custom_device_names(
         assert (
             card.title.accessibleName() == card.title.toolTip() == "Process Parameters"
         )
-        assert card.override_count.text() == "1 set"
-        assert card.override_count.accessibleName() == "1 overrides"
+        assert card.override_count.text() == "Overrides 1"
+        assert card.override_count.accessibleName() == "Recipe overrides: 1"
         assert card.group_titles["lift_valve"].text() == "Lift"
         assert card.group_titles["lift_valve"].toolTip() == "Lift valve"
         assert card.group_titles["drop_valve"].text() == "Drop"
@@ -512,9 +514,21 @@ def test_compact_process_captions_keep_full_meaning_and_custom_device_names(
         assert "Read-only" in card.view_plc.accessibleDescription()
         assert card.readings["running_speed"].text() == "99"
         card.set_language("zh")
-        assert card.title.text() == "工艺参数" and card.override_count.text() == "1 项"
+        assert (
+            card.title.text() == "工艺参数" and card.override_count.text() == "覆盖项 1"
+        )
         assert card.plc_previewing and not card.plc_status.isVisible()
         assert card.values() == before
+        for language in ("ja", "pt-PT", "sw", "bn", "si", "am", "ti"):
+            card.set_language(language)
+            assert card.title.accessibleName() == text("process_parameters", language)
+            assert (
+                text("process_plc_values", language)
+                in card.view_plc.accessibleDescription()
+            )
+            assert card.labels["running_speed"].text() == "Custom line speed"
+            assert card.readings["running_speed"].text() == "99"
+            assert card.values() == before and card.plc_previewing
         QTest.mouseRelease(card.view_plc, Qt.MouseButton.LeftButton)
         assert not card.plc_previewing and card.values() == before
         assert card.fields["running_speed"].isVisible() and card.expand.isChecked()

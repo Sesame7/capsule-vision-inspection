@@ -9,6 +9,7 @@ from .endpoints import Endpoint, open_client, protocol_name, validate_endpoint
 from .fins import (
     MAX_READ_WORDS,
     MAX_WRITE_WORDS,
+    FinsError,
     FinsMemoryArea,
     validate_integer,
     validate_word_range,
@@ -110,22 +111,29 @@ def execute_request(request: CommunicationRequest) -> CommunicationResponse:
     """
     request.validate()
     started = perf_counter()
-    with open_client(request.endpoint) as client:
-        if isinstance(client, ModbusTcpClient):
-            if request.kind is RequestKind.WRITE:
-                client.write_words(request.start, request.values)
-                values = None
+    entered = False
+    try:
+        with open_client(request.endpoint) as client:
+            entered = True
+            if isinstance(client, ModbusTcpClient):
+                if request.kind is RequestKind.WRITE:
+                    client.write_words(request.start, request.values)
+                    values = None
+                else:
+                    values = client.read_words(request.start, request.count)
             else:
-                values = client.read_words(request.start, request.count)
-        else:
-            assert isinstance(request.area, FinsMemoryArea)
-            if request.kind is RequestKind.WRITE:
-                client.write_words(request.start, request.values, area=request.area)
-                values = None
-            else:
-                values = client.read_words(
-                    request.start, request.count, area=request.area
-                )
+                assert isinstance(request.area, FinsMemoryArea)
+                if request.kind is RequestKind.WRITE:
+                    client.write_words(request.start, request.values, area=request.area)
+                    values = None
+                else:
+                    values = client.read_words(
+                        request.start, request.count, area=request.area
+                    )
+    except FinsError as exc:
+        if request.kind is RequestKind.WRITE and not entered:
+            exc.write_may_have_executed = False
+        raise
     return CommunicationResponse(
         request, values, (perf_counter() - started) * 1000, datetime.now(UTC)
     )

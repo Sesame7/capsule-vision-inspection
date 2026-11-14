@@ -8,7 +8,8 @@ from threading import Event, Thread, get_ident
 from threading import enumerate as threads
 
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 from tests.support.application import FakeSession
 from tests.support.qt import screen as screen
@@ -37,7 +38,7 @@ from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.communication_page import CommunicationPage
 from capsule_vision.ui.main_window import MainWindow
 
@@ -182,8 +183,9 @@ def test_validation_remote_read_and_write(
         page.deleteLater()
 
 
+@pytest.mark.parametrize("kind", [RequestKind.READ, RequestKind.WRITE])
 def test_real_udp_timeout_and_malformed_response_feedback(
-    page: CommunicationPage,
+    page: CommunicationPage, kind: RequestKind
 ) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as silent:
         silent.bind(("127.0.0.1", 0))
@@ -216,12 +218,47 @@ def test_real_udp_timeout_and_malformed_response_feedback(
         owner = Thread(target=send, name="h1b-test-malformed")
         owner.start()
         try:
-            page.dispatch(RequestKind.READ)
+            page.dispatch(kind)
             until(lambda: not page.busy)
         finally:
             owner.join(2)
         assert not owner.is_alive() and not failures
-        assert page.feedback_text == text("comm_protocol_error", page.language)
+        key = (
+            "comm_write_unknown" if kind is RequestKind.WRITE else "comm_protocol_error"
+        )
+        assert page.feedback_text == text(key, page.language)
+
+
+def test_manual_watch_failure_preserves_last_read_without_claiming_auto_stopped(
+    page: CommunicationPage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        if fail:
+            raise FinsTransportError("network unreachable")
+        values = (123,) if request.kind is RequestKind.READ else None
+        return CommunicationResponse(request, values, 1.0, datetime.now(UTC))
+
+    fail = False
+    monkeypatch.setattr(page, "_execute", execute)
+    page.set_language("en")
+    page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100))
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    fail = True
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    assert page.watch_status.text().startswith(
+        "Watch read failed · FINS transport error"
+    )
+    assert "auto refresh" not in page.watch_status.text()
+    assert "Last successful read" in page.watch_status.text()
+    assert not page.auto_refresh
+    failed_watch = page.watch_status.text()
+    fail = False
+    assert page.dispatch(RequestKind.WRITE)
+    until(lambda: not page.busy)
+    assert page.success.text().startswith("Write acknowledged")
+    assert page.watch_status.text() == failed_watch
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -584,13 +621,28 @@ def test_settings_and_disclosure_do_not_dispatch_or_change_active_watch(
     until(entered.is_set)
     try:
         assert not page.port.isEnabled()
+
+        def disclosure_pixels() -> QImage:
+            return (
+                page.manual_button.icon()
+                .pixmap(page.manual_button.iconSize())
+                .toImage()
+            )
+
+        collapsed = disclosure_pixels()
         page.manual_button.click()
+        assert disclosure_pixels() != collapsed
+        assert (
+            disclosure_pixels()
+            != page.write_button.icon().pixmap(page.write_button.iconSize()).toImage()
+        )
         page.watch_editor_button.click()
         assert page.manual_body.isVisible()
         assert not page.watch_add.isEnabled() and not page.write_button.isEnabled()
         page.set_language("en")
         assert page.host.accessibleName() == text("comm_host", "en")
         page.manual_button.click()
+        assert disclosure_pixels() == collapsed
         assert page.auto_refresh and page.busy and len(requests) == 1
         endpoint = requests[0].endpoint
         assert isinstance(endpoint, FinsUdpEndpoint)
@@ -601,6 +653,46 @@ def test_settings_and_disclosure_do_not_dispatch_or_change_active_watch(
         until(lambda: not page.busy)
     assert not page.auto_refresh and not page.manual_body.isVisible()
     assert not requests[0].values
+
+
+def test_saved_diagnostic_target_change_marks_retained_watch_readings_stale(
+    page: CommunicationPage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests: list[CommunicationRequest] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        requests.append(request)
+        return response(request)
+
+    monkeypatch.setattr(page, "_execute", execute)
+    page.set_language("en")
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4))
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    observed = page.watch_table.item(0, 4)
+    assert observed is not None
+    stamp = observed.text()
+    assert page.watch_status.text().startswith("OK")
+    page.port.setValue(19600)
+    assert page.watch_status.text().startswith("OK")  # Only a draft.
+    page.persist_settings()
+    until(lambda: not page.busy)
+    assert len(requests) == 1
+    retained = page.watch_table.item(0, 4)
+    assert retained is not None and retained.text() == stamp
+    item = page.watch_table.item(0, 0)
+    assert item is not None and not item.icon().isNull()
+    assert item.data(Qt.ItemDataRole.AccessibleDescriptionRole) == text(
+        "comm_watch_stale", "en"
+    )
+    assert page.watch_status.text().startswith(text("comm_watch_stale", "en"))
+    assert text("comm_last_read", "en") in page.watch_status.accessibleDescription()
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    assert requests[-1].endpoint.port == 19600
+    assert page.watch_status.text().startswith("OK")
+    current = page.watch_table.item(0, 0)
+    assert current is not None and current.icon().isNull()
 
 
 def test_watch_editor_validation_and_identity(page: CommunicationPage) -> None:
@@ -1195,3 +1287,42 @@ def test_localized_failures_settle_each_operation(
         page.request_close(lambda: None)
         until(lambda: page.closed)
         page.deleteLater()
+
+
+def test_operational_language_switch_keeps_failed_read_evidence_and_draft(
+    page: WatchProbe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[CommunicationRequest] = []
+    fail = False
+    observed = datetime(2026, 11, 14, 8, 20, 1, tzinfo=UTC)
+    detail = "Fixture read deadline · D112 · {external_detail}"
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        calls.append(request)
+        if fail:
+            raise FinsTimeoutError(detail)
+        return CommunicationResponse(request, (125,), 1.0, observed)
+
+    monkeypatch.setattr(page, "_execute", execute)
+    assert page.add_watch_group(
+        RegisterWatchGroup(FinsMemoryArea.DM, 112, name="Operator_{Line-A}")
+    )
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    retained = watch_cell(page, 0, 4)
+    fail = True
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    page.host.setText("192.0.2.23")
+    assert page.dirty
+    for language in LANGUAGES:
+        page.set_language(language)
+        QApplication.processEvents()
+        assert text("comm_watch_read_failed", language) in page.watch_status.text()
+        assert text("comm_last_read", language) in page.watch_status.text()
+        assert text("comm_timeout_error", language) in page.feedback_text
+        assert detail in page.feedback_error
+        assert watch_cell(page, 0, 2) == "125"
+        assert watch_cell(page, 0, 4) == retained
+        assert page.host.text() == "192.0.2.23" and page.dirty
+        assert len(calls) == 2 and not page.auto_refresh

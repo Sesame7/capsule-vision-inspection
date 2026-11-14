@@ -81,8 +81,26 @@ Language identities, validation, native names and display ordering belong to the
 Qt-independent `localization/languages.py`. Static base text/resolution and authored
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
-contract; visual styling and widgets consume Localization directly. Missing optional
-text uses canonical English; an unknown key fails before fallback.
+contract; visual styling and widgets consume Localization directly. The shared
+Qt interface covers 737 maintained keys across 64 locales. This includes
+Production and Recipe actions, camera and Model setup, PLC settings and
+diagnostics, Records, Batch, Audit, Alarms and report-export dialogs.
+Both the incomplete-selection guidance and unavailable recorded Recipe ID
+recovery caption are authored for every locale. General save/select/prepare
+guidance applies before selecting a saved Recipe. An incomplete selection shows
+the next setup and reselection step in Production, including in the Start tooltip
+and on the empty canvas when there are no camera cards.
+The 102 English fallback entries cover specific technical explanations in
+`am`, `ha`, `km`, `mg`, `si`, `ti`, `tk` and `zu`, and Sinhala
+phase/compensation captions. They include group timing, History clock
+observations, partial-group export limits and proven Batch/Audit association.
+The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
+Authored coverage does not imply native-speaker verification. The full 899-key
+catalog also contains optional, dormant and report-output text outside this set.
+Missing optional text uses canonical English. An unknown key fails before
+fallback. Device and user names, stored identities and paths are shown as supplied.
+The export dialog uses the interface language. PDF and Excel reports keep their
+independent Simplified Chinese or English output selection.
 
 UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chinese),
 `en` (English), `ja` (Japanese),
@@ -854,8 +872,8 @@ successful initialization. Model file operations reject live native ownership;
 Start/preparation cannot race admitted management work, and Close waits for its
 actual completion. Recursive
 operations reject symlinks/junctions/external paths instead of traversing them.
-New management tooltips/confirmations have Chinese/English resources; other
-languages use the existing optional English fallback. Existing translations remain unchanged.
+Model management tooltips and confirmations follow the shared Qt language
+coverage and fallback rules above.
 
 ## Recipe
 
@@ -997,9 +1015,9 @@ selector or derived second address set.
 Each extension requires all six fields shown above. Its group is one of `speed`,
 `photo`, `reject`, `lift_valve`, `drop_valve`, `extend_valve`, or a new ID declared in
 `groups`. New group/parameter labels require nonempty English and may include any
-supported language code; missing languages fall back to English. Built-in UI text
-uses Chinese/English with the existing optional English fallback. The feeder is
-an example extension, not an eighteenth default parameter.
+supported language code; missing languages fall back to English. Built-in editor
+captions and preview guidance follow the shared Qt language coverage above. The
+feeder illustrates an optional extension to the built-in catalog.
 
 IDs use 1–64 lowercase ASCII letters/digits/underscores, starting with a letter.
 Each starting address is an integer 0..65534. The occupied two-word ranges
@@ -1019,9 +1037,9 @@ external device configuration, not editable or watched by this card.
 
 The collapsible Process Parameters card sits after Image Archive and before
 Model information. Its compact header shows **Process** / **工艺参数**, a count
-such as **3 set** / **3 项**, View PLC and a separate disclosure in both states.
-The count describes saved/draft definitions, not PLC application status. Full
-meanings remain in tooltips and accessible names. Expansion uses a directional
+such as **Overrides 3** / **覆盖项 3**, View PLC and a separate disclosure in both
+states. The count describes the explicit overrides in the current Recipe draft.
+Full meanings remain in tooltips and accessible names. Expansion uses a directional
 indicator without a selected header fill; keyboard focus remains visible.
 
 Built-in mechanisms display in Lift, Drop, Extend, Speed, Reject, Photo order.
@@ -1253,7 +1271,8 @@ normal deterministic Folder order. Previous/Next and the image selector browse
 that Folder without wrapping; Refresh rereads the selected image, not the next.
 Basler tuning instead uses a frozen display frame matching the camera and current
 source key, without acquisition or a Folder fallback. Temporary image import is
-available in both modes. Each camera retains one selected frozen reference while
+available in both modes. The image file chooser uses the interface language for
+its import caption and image filter label. Each camera retains one selected frozen reference while
 tuning remains open; new display publications and switching Size/Color never
 replace it. Import/selection/Refresh are explicit changes. Closing tuning releases
 its references. IO and measurement share one bounded background job; stale work
@@ -1335,7 +1354,9 @@ boundary step buttons are disabled. Existing fractional or out-of-range FPS valu
 remain unchanged, with the full value in a tooltip and stepping disabled until
 explicit valid entry. Focus changes never clamp or rewrite them. This UI range does not
 change the persisted positive/finite FPS contract. Basler does not use these pacing
-settings. Connection/discovery actions are compact icons with localized tooltips;
+settings. Rejected FPS input retains the draft value and shows localized validation
+at the FPS control. Connection/discovery actions are compact icons with localized
+tooltips;
 the connection summary is numeric, with a localized accessible state and no
 runtime tooltip.
 Source cards do not duplicate device/status details in tooltips; full Folder paths
@@ -1360,9 +1381,10 @@ shows known dimensions as `— · W×H`; an unbounded view with ROIs says `ROI �
 its illustrative meaning in a tooltip. Without dimensions or initialized ROIs it
 shows `—`, with ROI editing unavailable until dimensions are known. The chooser
 retains image identity/blank-state meaning; the canvas does not duplicate it.
-Capture keeps a static action tooltip; waiting/cancellation use the existing
-control states, successful pixels use the image selector, and failures/timeouts
-use the global feedback strip. The chooser list is separate from this caption;
+The preview button describes Start or Stop in its tooltip and accessible name.
+Accepted preview pixels are identified as a preview frame in the image selector,
+including when retained after Stop. Capture errors use the global feedback strip.
+The chooser list is separate from this caption;
 source changes and asynchronous image delivery cannot reuse an old schematic caption.
 The canvas does not repeat status text. ROI channel selection changes
 the displayed slot; numeric Apply edits only the machine draft until Save.
@@ -1380,8 +1402,12 @@ Independent Save does not require Folder availability, a Recipe/Model or an engi
 It saves CameraSources even when other setup is incomplete. MachineLayout is saved
 only when every selected camera has complete, valid geometry; partial ROI edits
 remain an unsaved draft. Each file has its own outcome: a source Save can succeed
-while MachineLayout validation/write fails, or vice versa. Invalid or externally
-changed saved files require explicit reload/repair and are not silently replaced.
+while MachineLayout validation/write fails, or vice versa. Partial-save feedback
+identifies the saved definition and the other definition's unresolved outcome.
+It survives ROI and reference selection and language changes until a retry
+confirms the outcome or a confirmed reload restores the saved definitions.
+Invalid or externally changed saved files require explicit reload/repair and are
+not silently replaced.
 Save never prepares/applies a candidate or changes the connected source.
 
 After valid MachineLayout/source Saves, Recipe editing, explicit catalog Refresh
@@ -1394,14 +1420,11 @@ actual image; synthetic warm-up images are never published. Images are temporary
 canvas content, not independent persisted
 reference configuration. Replacing an image never rescales, repairs or saves ROIs.
 
-With Basler connected and inspection stopped, **Capture image** waits for the
-selected camera's next valid external-triggered frame (ten-second deadline).
-It never sends a trigger. Only one request can be pending; Cancel, camera/source
-changes, Disconnect, Start and Close invalidate it. Waiting, timeout, cancellation
-and success are explicit. Delivery is asynchronous and owns immutable BGR pixels;
-late callbacks cannot replace a different camera's image. This operation does not
-publish Production frames, infer, count or report. During inspection only existing
-frozen Runtime viewing is available. No image history/export/library is created.
+With Basler connected and inspection stopped, the Capture button toggles passive
+preview of the selected camera. The preview listens for external triggers through
+the existing SDK owner, with one pending request and no idle deadline. Stopping
+keeps the last accepted frame. See [Display and Web](architecture.md#display-and-web)
+for cancellation, source identity and delivery boundaries.
 
 Tune preview measures the current draft without Production admission, accounting,
 candidate activation or source reconfiguration. Frozen-reference ownership,
@@ -1496,7 +1519,7 @@ file path. Whenever a snapshot is present, missing captured sources reject Start
 the factory never substitutes a later disk definition. Launch paths without a
 dependency snapshot retain their established source selection.
 
-Vision's restore icon beside Save confirms discarding all unsaved source,
+Vision's Discard action beside Save confirms discarding all unsaved source,
 Loop/FPS and machine geometry edits together. It reloads and validates the current
 files off Qt dispatch before replacing either draft/baseline, including partially
 saved multi-file outcomes. Read/validation failure keeps both drafts and reports

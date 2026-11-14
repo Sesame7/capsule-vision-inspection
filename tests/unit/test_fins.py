@@ -688,6 +688,33 @@ def test_socket_setup_failure_preserves_cause_and_releases_socket(
     assert len(created) == 1 and created[0].fileno() == -1
 
 
+def test_write_deadline_setup_failure_is_known_before_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = OSError("test-only write deadline setup failure")
+    set_timeout = socket.socket.settimeout
+
+    class BrokenSocket(socket.socket):
+        def settimeout(self, value: float | None) -> None:
+            if self.configured:
+                raise failure
+            set_timeout(self, value)
+            self.configured = True
+
+        configured = False
+
+        def sendto(self, *_args: object, **_kwargs: object) -> int:
+            pytest.fail("A write was sent after deadline setup failed")
+
+    monkeypatch.setattr(socket, "socket", BrokenSocket)
+    with client(9600) as connection:
+        with pytest.raises(FinsTransportError) as caught:
+            connection.write_words(100, (4321,))
+        assert caught.value.__cause__ is failure
+        assert caught.value.write_may_have_executed is False
+        assert connection.closed
+
+
 def test_context_closes_on_caller_exception_without_an_online_handshake() -> None:
     connection = client(9600)  # Creation sends no packet or connectivity probe.
     with pytest.raises(RuntimeError, match="caller failure"):

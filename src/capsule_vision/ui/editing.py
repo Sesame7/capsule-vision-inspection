@@ -14,6 +14,7 @@ from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import ConfigurationError
 
 from .future_delivery import FutureDelivery
+from .permissions import failure_key
 from .production_bridge import QtProductionBridge
 
 
@@ -158,10 +159,10 @@ class EditingCoordinator(QObject):
             self.recipe_refresh = (value.recipe_id, "preparing", None)
             self.recipe_refresh_changed.emit()
 
-            def refreshed(failure: BaseException | None) -> None:
+            def refreshed(failure: BaseException | None, key: str) -> None:
                 self.recipe_refresh = (
                     value.recipe_id,
-                    "recipe_prepare_error" if failure else "READY",
+                    failure_key(failure, key) if failure is not None else "READY",
                     str(failure) if failure is not None else None,
                 )
                 self.recipe_refresh_changed.emit()
@@ -171,16 +172,19 @@ class EditingCoordinator(QObject):
         return self.run_model_io(save, saved, revision=revision)
 
     def select_saved(
-        self, recipe_id: str, completed: Callable[[BaseException | None], None]
+        self, recipe_id: str, completed: Callable[[BaseException | None, str], None]
     ) -> None:
         """Production selection is independent of Recipe selection and dirty drafts."""
         if not self.editable() or self.session is None:
-            completed(ConfigurationError("Production selection is unavailable"))
+            completed(
+                ConfigurationError("Production selection is unavailable"),
+                "recipe_prepare_error",
+            )
             return
         try:
             request = self.bridge.application.begin_recipe_selection(recipe_id)
         except RuntimeError as exc:
-            completed(exc)
+            completed(exc, "recipe_prepare_error")
             return
         self.recipe_refresh = None
         self.recipe_refresh_changed.emit()
@@ -190,12 +194,12 @@ class EditingCoordinator(QObject):
         self,
         request: RecipeSelection,
         recipe_id: str,
-        completed: Callable[[BaseException | None], None],
+        completed: Callable[[BaseException | None, str], None],
     ) -> None:
         if not self.editable() or self.session is None:
             error = ConfigurationError("Production preparation is unavailable")
             self.bridge.application.recipe_selection_failed(request, error)
-            completed(error)
+            completed(error, "recipe_prepare_error")
             return
         preparation = self.session.production_preparation()
 
@@ -219,12 +223,16 @@ class EditingCoordinator(QObject):
                 self.applied.emit(value)
                 self.bridge.refresh()
             except Exception as exc:
-                completed(exc)
+                completed(exc, "recipe_prepare_error")
             else:
+
+                def process_completed(failure: BaseException | None) -> None:
+                    completed(failure, "process_apply_failed")
+
                 if process.done():
-                    completed(process.exception())
+                    process_completed(process.exception())
                 else:
-                    self._process_completion = completed
+                    self._process_completion = process_completed
                     self._delivery.watch("process", process)
 
         def prepare() -> PreparedConfiguration:
@@ -234,7 +242,10 @@ class EditingCoordinator(QObject):
                 return preparation.prepare_saved(recipe_id)
 
         if not self.run_io(prepare, prepared):
-            completed(ConfigurationError("Production selection is unavailable"))
+            completed(
+                ConfigurationError("Production selection is unavailable"),
+                "recipe_prepare_error",
+            )
 
     @Slot(str, object, object)
     def _delivered(self, token: str, value: object, error: object) -> None:

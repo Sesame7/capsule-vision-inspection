@@ -233,17 +233,31 @@ def test_audit_tab_filters_pages_and_revokes_pending_delivery(
         until(lambda: len(page.rows) == 50)
         private_rows = page.rows
         late: Future[tuple[AuditRecord, ...]] = Future()
+        replacement: Future[tuple[AuditRecord, ...]] = Future()
+        pending = iter((late, replacement))
 
         def delayed(
             query: AuditQuery, revision: int | None
         ) -> Future[tuple[AuditRecord, ...]]:
-            return late
+            return next(pending)
 
         monkeypatch.setattr(identity, "audit_page", delayed)
         page.refresh()
+        assert page.message.text() == text("history_loading", window.language)
+        assert not page.newer.isEnabled() and not page.older.isEnabled()
+        late.set_exception(RuntimeError("private query details"))
+        monkeypatch.setattr(
+            identity.audit, "observation", lambda: (1, "Audit write failure")
+        )
+        unavailable = text("history_unavailable", window.language)
+        until(lambda: unavailable in page.message.text())
+        assert "RuntimeError" in page.message.accessibleDescription()
+        assert "private query details" not in page.message.toolTip()
+        assert "Audit write failure" in page.message.toolTip()
+        page.refresh()
         identity.logout()
         window.identity_controls.refresh()
-        late.set_result(private_rows)
+        replacement.set_result(private_rows)
         qapp.processEvents()
         for role in (Role.GUEST, Role.OPERATOR):
             if role == Role.OPERATOR:
@@ -545,7 +559,7 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
             base_filters: dict[int, tuple[QRect, ...]] = {}
             base_columns: dict[int, tuple[int, ...]] = {}
             common_pagers: set[tuple[tuple[int, int, int, int], ...]] = set()
-            for lang in ("zh", "en", "de", "el"):
+            for lang in LANGUAGES:
                 window.set_language(lang)
                 for i, key in enumerate(
                     (
@@ -564,8 +578,13 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                         tabs.tabText(i) == bar.accessibleTabName(i) == text(key, lang)
                     )
                     assert not tabs.tabIcon(i).isNull() and tabs.tabToolTip(i)
-                    if lang == "el":
-                        assert tabs.tabToolTip(i) == tabs.tabText(i)
+                    destination = (
+                        "records_batches",
+                        "audit_inspection",
+                        "audit_trail",
+                        "alarm_history",
+                    )[i]
+                    assert tabs.tabToolTip(i) == text(destination, lang)
                     page = (
                         window.batches_page,
                         window.history,

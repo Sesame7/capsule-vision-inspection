@@ -132,6 +132,7 @@ from .style import (
     navigation_icon,
     production_icon,
     set_button_caption,
+    shell_icon,
     theme_colors,
 )
 from .web_settings_panel import WebSettingsPanel
@@ -198,20 +199,24 @@ class CommunicationPage(QWidget):
         self.last_read: CommunicationResponse | None = None
         self._watch_groups: list[RegisterWatchGroup] = []
         self._watch_errors: list[str | None] = []
-        self._feedback_kind: RequestKind | None = None
         self._write_state = "comm_idle"
+        self._write_cause = ""
+        self._write_end_code: int | None = None
         self._last_write: CommunicationResponse | None = None
         self._settings_loading = False
         self._settings_missing = True
         self._settings_message, self._settings_detail = "", ""
+        self._web_issue_key = ""
         self._alarm_preview_attempted = False
         self._discard_dialog: QMessageBox | None = None
         self._watch_observations: list[CommunicationResponse | None] = []
         self._watch_fresh: set[int] = set()
         self._watch_pass = False
+        self._watch_automatic = False
         self._watch_stop: Event | None = None
         self._auto_refresh = False
         self._watch_state = "comm_watch_idle"
+        self._watch_failure = ("", "")
         self._watch_success: datetime | None = None
         self._auto_timer = QTimer(self)
         self._auto_timer.setSingleShot(True)
@@ -599,6 +604,16 @@ class CommunicationPage(QWidget):
     @Slot()
     def _toggle_manual(self) -> None:
         self.manual_body.setVisible(self.manual_button.isChecked())
+        self._refresh_manual_icon()
+
+    def _refresh_manual_icon(self) -> None:
+        color = theme_colors(self).primary
+        self.manual_button.setIcon(
+            shell_icon("chevron", color)
+            if self.manual_button.isChecked()
+            else image_icon("next", color)
+        )
+        self.manual_button.setIconSize(QSize(Style.icon, Style.icon))
 
     @Slot()
     def _toggle_watch_editor(self) -> None:
@@ -612,12 +627,12 @@ class CommunicationPage(QWidget):
             (self.watch_remove, "delete"),
             (self.watch_once, "refresh"),
             (self.watch_auto, "loop"),
-            (self.manual_button, "write"),
             (self.write_button, "write"),
             (self.save_settings, "save"),
         ):
             button.setIcon(image_icon(tool, colors.primary))
             button.setIconSize(QSize(Style.icon, Style.icon))
+        self._refresh_manual_icon()
         self.advanced_button.setIcon(navigation_icon(1, colors.primary))
         self.discard_settings.setIcon(production_icon("reset", colors.primary))
 
@@ -957,20 +972,23 @@ class CommunicationPage(QWidget):
             ),
             self.language,
         )
-        self.preferences_status.setText(status)
         failed = self._settings_message in (
             "audit_required",
             "comm_settings_failed",
             "comm_reload_failed",
-            "web_power_failed",
             "permission_engineer",
             "identity_stale",
         )
         detail = self._settings_detail if failed else ""
+        if self._web_issue_key:
+            web_message = text(self._web_issue_key, self.language)
+            status = " · ".join(dict.fromkeys((web_message, status)))
+            detail = "\n".join(filter(None, (detail, self.web_panel.operation_error)))
+        self.preferences_status.setText(status)
         self.preferences_status.setToolTip(detail)
         self.preferences_status.setAccessibleDescription(detail)
         self.preferences_status.setStyleSheet(
-            f"color: {theme_colors(self).warning if failed else theme_colors(self).secondary};"
+            f"color: {theme_colors(self).warning if failed or self._web_issue_key else theme_colors(self).secondary};"
         )
         editable = not (
             self.busy or self._auto_refresh or self._closing or self._disposed
@@ -1158,6 +1176,7 @@ class CommunicationPage(QWidget):
         elif value is not None:
             if value.diagnostic != self._preferences.diagnostic:
                 self._watch_fresh.clear()
+                self._render_watch()
             self._preferences = value
             self._settings_missing = False
             self.web_panel.saved_available = True
@@ -1376,6 +1395,7 @@ class CommunicationPage(QWidget):
         ):
             return
         self.web_panel.operation_error = ""
+        self._web_issue_key = ""
         try:
             revision = self._authorize(None) if self._authorize is not None else None
             if action == "power":
@@ -1422,7 +1442,6 @@ class CommunicationPage(QWidget):
                         self._preferences = replace(self._preferences, web=value.web)
                         self._settings_missing = False
                         self.web_panel.saved_available = True
-                        self._settings_message = self._settings_detail = ""
                         if not self._closing:
                             if target:
                                 runtime.apply(value.web, revision=revision)
@@ -1437,10 +1456,7 @@ class CommunicationPage(QWidget):
                         self.web_panel.operation_error = f"{type(exc).__name__}: {exc}"[
                             :2000
                         ]
-                        self._settings_message, self._settings_detail = (
-                            failure_key(exc, "web_power_failed"),
-                            self.web_panel.operation_error,
-                        )
+                        self._web_issue_key = failure_key(exc, "web_power_failed")
                     self._render_preferences()
 
                 if identity is not None:
@@ -1456,10 +1472,7 @@ class CommunicationPage(QWidget):
                     runtime.apply(self._preferences.web, revision=revision)
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self.web_panel.operation_error = f"{type(exc).__name__}: {exc}"[:2000]
-            self._settings_message, self._settings_detail = (
-                failure_key(exc, "web_power_failed"),
-                self.web_panel.operation_error,
-            )
+            self._web_issue_key = failure_key(exc, "web_power_failed")
         self._render_preferences()
 
     @Slot()
@@ -1519,10 +1532,9 @@ class CommunicationPage(QWidget):
             button.setProperty("iconAlignment", None)
         set_button_caption(
             self.manual_button,
-            text("comm_write", language),
-            button_width(self.manual_button, ("comm_write",)),
+            text("comm_registers", language),
+            button_width(self.manual_button, ("comm_registers",)),
         )
-        self.manual_button.setAccessibleName(text("comm_registers", language))
         self._watch_action_width = button_width(
             self.watch_auto,
             (
@@ -1730,6 +1742,11 @@ class CommunicationPage(QWidget):
                         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     if column == 0:
                         item.setToolTip(name)
+                        if observation and index not in self._watch_fresh:
+                            item.setData(
+                                Qt.ItemDataRole.AccessibleDescriptionRole,
+                                text("comm_watch_stale", self.language),
+                            )
                     colors = theme_colors(self)
                     item.setForeground(
                         QColor(
@@ -1826,7 +1843,7 @@ class CommunicationPage(QWidget):
             self._refresh()
             return False
         self._watch_fresh.clear()
-        self._feedback_kind = RequestKind.READ
+        self._watch_automatic = self._auto_refresh
         try:
             # Manual register fields do not affect watch requests. Endpoint and
             # routing are captured once, then each group gets its own read range.
@@ -1839,7 +1856,7 @@ class CommunicationPage(QWidget):
                 request.validate()
         except ValueError as exc:
             self._error(exc, None)
-            self._watch_state = "comm_watch_failed"
+            self._fail_watch()
             self._render_watch()
             self._refresh()
             return False
@@ -1852,13 +1869,12 @@ class CommunicationPage(QWidget):
             raise RuntimeError("Communication dispatch requires the GUI thread")
         if self.busy or self._auto_refresh or self._closing or self._disposed:
             return False
-        self._feedback_kind = kind
         request: CommunicationRequest | None = None
         try:
             request = self._snapshot(kind, count)
             request.validate()
         except (ValueError, PermissionError) as exc:
-            self._error(exc, request)
+            self._error(exc, request, kind=kind)
             self._refresh()
             return False
         return self._launch((request,))
@@ -1908,7 +1924,7 @@ class CommunicationPage(QWidget):
                 )
             self._error(exc, requests[0])
             if watch:
-                self._watch_state = "comm_watch_failed"
+                self._fail_watch()
             self._refresh()
             return False
         self._request = requests[0]
@@ -1917,8 +1933,10 @@ class CommunicationPage(QWidget):
         self._sequence += 1
         self._completion = None
         self._state_key, self._detail = "comm_busy", ""
-        if self._feedback_kind is RequestKind.WRITE:
+        if requests[0].kind is RequestKind.WRITE:
             self._write_state = "comm_write_busy"
+            self._write_cause = ""
+            self._write_end_code = None
         future: Future[CommunicationResponse | _WatchOutcome] = Future()
         execute = self._execute
         guard = (
@@ -1973,8 +1991,7 @@ class CommunicationPage(QWidget):
             self._watch_stop = None
             self._error(exc, requests[0])
             if watch:
-                self._auto_refresh = False
-                self._watch_state = "comm_watch_failed"
+                self._fail_watch()
             self._refresh()
             return False
         self._monitor.start()
@@ -2012,9 +2029,7 @@ class CommunicationPage(QWidget):
             elif isinstance(error, BaseException):
                 self._error(error, request)
                 if was_watch:
-                    self._auto_refresh = False
-                    self._auto_timer.stop()
-                    self._watch_state = "comm_watch_failed"
+                    self._fail_watch()
             elif isinstance(value, CommunicationResponse) and value.request == request:
                 self.last_response = value
                 self._state_key = "comm_" + value.request.kind.value + "_ok"
@@ -2027,9 +2042,7 @@ class CommunicationPage(QWidget):
             else:
                 self._error(RuntimeError("Invalid communication result"), request)
                 if was_watch:
-                    self._auto_refresh = False
-                    self._auto_timer.stop()
-                    self._watch_state = "comm_watch_failed"
+                    self._fail_watch()
         self._refresh()
         self._check_closed()
 
@@ -2046,10 +2059,8 @@ class CommunicationPage(QWidget):
                 self._watch_errors[failed] = (
                     f"{type(outcome.error).__name__}: {outcome.error}"[:1200]
                 )
-            self._auto_refresh = False
-            self._auto_timer.stop()
-            self._watch_state = "comm_watch_failed"
             self._error(outcome.error, outcome.failed_request)
+            self._fail_watch()
         else:
             self._state_key, self._detail = "comm_read_ok", ""
             self._watch_state = (
@@ -2065,57 +2076,77 @@ class CommunicationPage(QWidget):
                 self._auto_timer.start()
         self._render_watch()
 
+    def _fail_watch(self) -> None:
+        self._watch_failure = (
+            "comm_watch_failed" if self._watch_automatic else "comm_watch_read_failed",
+            self._state_key,
+        )
+        self._auto_refresh = False
+        self._auto_timer.stop()
+        self._watch_state = "comm_watch_failed"
+
     def _error(
-        self, error: BaseException, request: CommunicationRequest | None
+        self,
+        error: BaseException,
+        request: CommunicationRequest | None,
+        *,
+        kind: RequestKind | None = None,
     ) -> None:
+        write = (request.kind if request is not None else kind) is RequestKind.WRITE
+        cause = ""
         if isinstance(error, ReportingWriteProtectedError):
-            key = "plc_reporting_write_protected"
+            key = (
+                "plc_status_write_protected"
+                if error.owner == "status"
+                else "plc_reporting_write_protected"
+            )
         elif isinstance(error, (IdentityError, AuditUnavailable)):
             key = failure_key(error, "permission_engineer")
         elif isinstance(error, PermissionError):
             key = "comm_permission"
-        elif isinstance(error, (FinsTimeoutError, ModbusTimeoutError)):
-            key = (
-                "comm_write_unknown"
-                if request and request.kind is RequestKind.WRITE
-                else "comm_timeout_error"
+        elif isinstance(error, (FinsProtocolError, FinsTransportError)):
+            reason = (
+                "comm_timeout_error"
+                if isinstance(error, FinsTimeoutError)
+                else "comm_protocol_error"
+                if isinstance(error, FinsProtocolError)
+                else "comm_transport_error"
             )
+            if write:
+                key = (
+                    "comm_write_not_sent"
+                    if error.write_may_have_executed is False
+                    else "comm_write_unknown"
+                )
+                cause = reason
+            else:
+                key = reason
+        elif isinstance(error, ModbusTimeoutError):
+            key = "comm_write_unknown" if write else "comm_timeout_error"
         elif isinstance(error, FinsPlcError):
-            key = "comm_plc_error"
+            key = "comm_write_rejected" if write else "comm_plc_error"
         elif isinstance(error, ModbusExceptionResponse):
             key = "comm_modbus_exception"
         elif isinstance(error, ModbusProtocolError):
-            key = (
-                "comm_write_unknown"
-                if request and request.kind is RequestKind.WRITE
-                else "comm_modbus_protocol_error"
-            )
-        elif isinstance(error, FinsProtocolError):
-            key = "comm_protocol_error"
+            key = "comm_write_unknown" if write else "comm_modbus_protocol_error"
         elif isinstance(error, ModbusTransportError):
-            key = (
-                "comm_write_unknown"
-                if request and request.kind is RequestKind.WRITE
-                else "comm_modbus_transport_error"
-            )
-        elif isinstance(error, FinsTransportError):
-            key = "comm_transport_error"
+            key = "comm_write_unknown" if write else "comm_modbus_transport_error"
         elif isinstance(error, ValueError):
             key = "comm_invalid"
         else:
             key = "comm_unexpected_error"
         self._state_key = key
         self._detail = f"{type(error).__name__}: {error}"[:1200]
-        if (
-            isinstance(error, (ModbusProtocolError, ModbusTransportError))
-            and request
-            and request.kind is RequestKind.WRITE
-        ):
+        if isinstance(error, (ModbusProtocolError, ModbusTransportError)) and write:
             self._detail += " · " + text("comm_write_unknown", self.language)
         if isinstance(error, FinsPlcError):
             self._detail += f" · 0x{error.end_code:04X}"
-        if self._feedback_kind is RequestKind.WRITE:
+        if write:
             self._write_state = key
+            self._write_cause = cause
+            self._write_end_code = (
+                error.end_code if isinstance(error, FinsPlcError) else None
+            )
 
     @staticmethod
     def _response_description(response: CommunicationResponse) -> str:
@@ -2200,59 +2231,82 @@ class CommunicationPage(QWidget):
             self.write_button.setToolTip(text("permission_engineer", self.language))
         self.write_button.setAccessibleDescription(self.write_button.toolTip())
         key = "comm_closing" if self._closing else self._write_state
-        self.status.setText(text(key, self.language))
-        self.status.setVisible(key != "comm_idle")
+        message = text(key, self.language)
+        if key == "comm_write_rejected" and self._write_end_code is not None:
+            message += f" · 0x{self._write_end_code:04X}"
+        if not self._closing and self._write_cause:
+            message += f" · {text(self._write_cause, self.language)}"
+        self.status.setText(message)
+        self.status.setVisible(key not in ("comm_idle", "comm_write_ok"))
         self.status.setToolTip("")
         self.status.setAccessibleDescription("")
         self.status.setStyleSheet(
-            f"color: {theme_colors(self).warning if self._write_state not in ('comm_idle', 'comm_write_busy', 'comm_write_ok') else theme_colors(self).accent};"
+            f"color: {theme_colors(self).warning if key not in ('comm_idle', 'comm_write_busy', 'comm_write_ok', 'comm_closing') else theme_colors(self).accent};"
         )
         self.success.setText(
-            text("service_ack", self.language)
+            text(
+                "comm_write_ok" if key == "comm_write_ok" else "service_ack",
+                self.language,
+            )
             + " · "
             + self._response_description(self._last_write)
             if self._last_write
             else ""
         )
         self.success.setVisible(self._last_write is not None)
+        watch_state = self._watch_state
+        if (
+            watch_state in ("comm_watch_ok", "comm_watch_wait")
+            and not self._watch_fresh
+        ):
+            watch_state = (
+                "comm_watch_stale"
+                if any(self._watch_observations)
+                else "comm_watch_idle"
+            )
         watch_text = (
             "OK"
-            if self._watch_state in ("comm_watch_ok", "comm_watch_wait")
+            if watch_state in ("comm_watch_ok", "comm_watch_wait")
             else text("web_stopped", self.language)
-            if self._watch_state == "comm_watch_stopped"
+            if watch_state == "comm_watch_stopped"
             else text("comm_watch_once_short", self.language) + "…"
-            if self._watch_state == "comm_watch_busy"
-            else text(self._watch_state, self.language)
+            if watch_state == "comm_watch_busy"
+            else text(watch_state, self.language)
         )
-        if self._watch_state == "comm_watch_failed" and self._state_key in (
-            "permission_engineer",
-            "identity_stale",
-        ):
-            watch_text = text(self._state_key, self.language)
-        self.watch_status.setText(
-            watch_text
-            + (
-                " · " + self._watch_success.astimezone().strftime("%H:%M:%S")
-                if self._watch_success
-                else ""
+        watch_name = text(watch_state, self.language)
+        if watch_state == "comm_watch_failed":
+            watch_name = watch_text = " · ".join(
+                text(key, self.language) for key in self._watch_failure
             )
-        )
+        last_read = ""
+        if self._watch_success:
+            last_read = self._watch_success.astimezone().strftime("%H:%M:%S")
+            if watch_state not in ("comm_watch_ok", "comm_watch_wait"):
+                last_read = text("comm_last_read", self.language) + " " + last_read
+        self.watch_status.setText(watch_text + (" · " + last_read if last_read else ""))
         self.watch_status.setToolTip("")
-        self.watch_status.setAccessibleDescription("")
-        self.watch_status.setAccessibleName(text(self._watch_state, self.language))
+        self.watch_status.setAccessibleDescription(last_read)
+        self.watch_status.setAccessibleName(watch_name)
         self.watch_status.setVisible(
-            bool(self._watch_groups) and self._watch_state != "comm_watch_idle"
+            bool(self._watch_groups) and watch_state != "comm_watch_idle"
         )
-        self.watch_status.setStyleSheet(
-            f"color: {theme_colors(self).warning if self._watch_state == 'comm_watch_failed' else theme_colors(self).accent};"
+        colors = theme_colors(self)
+        watch_color = (
+            colors.warning
+            if watch_state == "comm_watch_failed"
+            else colors.secondary
+            if watch_state == "comm_watch_stale"
+            else colors.accent
         )
+        self.watch_status.setStyleSheet(f"color: {watch_color};")
         self._render_preferences()
 
     @property
     def feedback_text(self) -> str:
         return text(self._state_key, self.language) + (
             " · " + self._detail.rsplit(" · ", 1)[-1]
-            if self._state_key == "comm_plc_error" and self._detail
+            if self._state_key in ("comm_plc_error", "comm_write_rejected")
+            and self._detail
             else ""
         )
 

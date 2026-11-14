@@ -282,8 +282,8 @@ class CameraCard(QFrame):
                 button.setStyleSheet(
                     f"border: 1px solid {palette.warning if error else 'transparent'}; border-radius: 8px;"
                 )
-            description = f"{text('channel', self.language)} {slot.channel_id} · {text(state.value, self.language)}"
-            button.setToolTip(f"{layout.camera_id} CH{slot.channel_id}")
+            description = f"{layout.camera_id} · {text('channel', self.language)} {slot.channel_id} · {text(state.value, self.language)}"
+            button.setToolTip(description)
             button.setAccessibleName(description)
         result = self.result
         technical = (

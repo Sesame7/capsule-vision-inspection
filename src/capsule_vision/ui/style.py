@@ -347,6 +347,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton#visionSourceCard:disabled {{ background: {c.surface}; border-color: {c.border}; }}
     QFrame#visionSources QLineEdit#visionSourceValue, QFrame#visionSources QComboBox#visionSourceValue {{ font-weight: 600; }}
     QFrame#visionFps {{ background: {c.background}; border: 1px solid {c.border}; border-radius: 7px; }}
+    QFrame#visionFps[fpsInvalid="true"] {{ border-color: {c.warning}; }}
     QFrame#visionFps QPushButton, QFrame#visionFps QLineEdit {{ background: transparent; border: none; padding: 0; }}
     QFrame#visionFps QPushButton:hover:enabled {{ background: {c.selected}; }}
     QFrame#visionFps QLineEdit:focus {{ border: 1px solid {c.accent}; }}
@@ -380,6 +381,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton#webPower:disabled, QPushButton#reportingPower:disabled, QPushButton#alarmPower:disabled {{ color: {c.secondary}; border-color: {c.border}; background: {c.raised}; }}
     QComboBox QAbstractItemView, QMenu {{ background: {c.surface}; color: {c.primary}; border: 1px solid {c.border}; selection-background-color: {c.selected}; }}
     QLineEdit, QSpinBox, QDoubleSpinBox, QAbstractSpinBox#recipeLength {{ background: {c.surface}; color: {c.primary}; padding: 7px; border: 1px solid {c.border}; border-radius: 6px; selection-background-color: {c.selected}; }}
+    QLineEdit[dateInvalid="true"] {{ color: {c.warning}; }}
     QDialog#productionBatchDialog QLineEdit {{ selection-color: {c.primary}; }}
     QSpinBox, QDoubleSpinBox, QAbstractSpinBox#recipeLength,
     QSpinBox QLineEdit, QDoubleSpinBox QLineEdit, QAbstractSpinBox#recipeLength QLineEdit {{ selection-color: {c.primary}; }}
@@ -688,8 +690,8 @@ def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
     """Shared monochrome shell symbols drawn with Qt, independent of icon fonts."""
     if kind == "plc":
         return navigation_icon(2, color)
-    if kind == "state":
-        return production_icon("READY", color)
+    if kind == "status":
+        return production_icon("unknown", color)
     if kind == "alarm":
         return production_icon("FAULT", color)
     icon = QIcon()

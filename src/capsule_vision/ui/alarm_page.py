@@ -44,6 +44,7 @@ class AlarmPage(HistoryEventTable):
         self._token = 0
         self._revision: int | None = None
         self._query = AlarmQuery()
+        self._reading = False
         self._error = ""
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
@@ -63,12 +64,14 @@ class AlarmPage(HistoryEventTable):
         self._token += 1
         self._revision = None
         self.rows = ()
+        self._reading = False
         self._error = ""
         self.table.setRowCount(0)
         self.search.clear()
         self.clear_details()
         self.message.clear()
         self.message.setToolTip("")
+        self.message.setAccessibleDescription("")
         self.message.hide()
         self.newer.setEnabled(False)
         self.older.setEnabled(False)
@@ -130,6 +133,10 @@ class AlarmPage(HistoryEventTable):
         self._token += 1
         self._query = query
         self._revision = self.application.session_revision
+        self._reading = True
+        self.newer.setEnabled(False)
+        self.older.setEnabled(False)
+        self.refresh_status()
         try:
             future = self.application.alarm_page(query, self._revision)
         except RuntimeError as exc:
@@ -152,6 +159,7 @@ class AlarmPage(HistoryEventTable):
         ):
             self.clear()
             return
+        self._reading = False
         self._error = str(error) if error else ""
         records = (
             cast(tuple[AlarmRecord, ...], value) if isinstance(value, tuple) else ()
@@ -198,12 +206,16 @@ class AlarmPage(HistoryEventTable):
         history = self.application.history
         lost, issue = history.alarm_storage() if history else (0, "")
         msg = text("alarm_lost", self.language).format(count=lost) if lost else ""
-        if self._error or (issue and not lost):
+        if self._reading:
+            msg = (text("history_loading", self.language) + "  " + msg).strip()
+        elif self._error or (issue and not lost):
             msg = (msg + "  " + text("history_unavailable", self.language)).strip()
         self.message.setText(
             msg or ("" if self.rows else text("history_none", self.language))
         )
-        self.message.setToolTip(self._error or issue)
+        detail = "\n".join(dict.fromkeys(filter(None, (self._error, issue))))
+        self.message.setToolTip(detail)
+        self.message.setAccessibleDescription(detail)
         self.message.setVisible(bool(self.message.text()))
 
     def _details(self) -> None:

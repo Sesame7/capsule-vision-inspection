@@ -155,7 +155,11 @@ def test_production_preparation_ignores_editor_selection_but_fences_close(
         return prepared
 
     monkeypatch.setattr(RecipeEditorSession, "prepare_saved", blocked)
-    window.editing.select_saved(session.entry.recipe.recipe_id, errors.append)
+
+    def completed(error: BaseException | None, _key: str) -> None:
+        errors.append(error)
+
+    window.editing.select_saved(session.entry.recipe.recipe_id, completed)
     try:
         until(entered.is_set)
         session.entry = replace(session.entry)
@@ -168,7 +172,7 @@ def test_production_preparation_ignores_editor_selection_but_fences_close(
     entered.clear()
     release.clear()
     errors.clear()
-    window.editing.select_saved(session.entry.recipe.recipe_id, errors.append)
+    window.editing.select_saved(session.entry.recipe.recipe_id, completed)
     closed: list[bool] = []
     try:
         until(entered.is_set)

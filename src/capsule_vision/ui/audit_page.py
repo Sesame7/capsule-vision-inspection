@@ -51,7 +51,8 @@ class AuditPage(HistoryEventTable):
         self._token = 0
         self._revision: int | None = None
         self._query = AuditQuery()
-        self._read_error = False
+        self._reading = False
+        self._read_error = ""
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
             self._completed, Qt.ConnectionType.QueuedConnection
@@ -74,7 +75,8 @@ class AuditPage(HistoryEventTable):
         self._cancel.set()
         self._token += 1
         self._revision = None
-        self._read_error = False
+        self._reading = False
+        self._read_error = ""
         self.rows = ()
         self.table.setRowCount(0)
         self.accounts.clear()
@@ -82,6 +84,7 @@ class AuditPage(HistoryEventTable):
         self.message.clear()
         self.message.hide()
         self.message.setToolTip("")
+        self.message.setAccessibleDescription("")
         self.older.setEnabled(False)
         self.newer.setEnabled(False)
 
@@ -134,6 +137,10 @@ class AuditPage(HistoryEventTable):
             self.clear()
             return
         self._revision = self.identity.snapshot().revision
+        self._reading = True
+        self.newer.setEnabled(False)
+        self.older.setEnabled(False)
+        self.refresh_status()
         try:
             if self.scope.batch is not None or self.scope.unbatched:
                 if self.history is None:
@@ -175,7 +182,8 @@ class AuditPage(HistoryEventTable):
         self.older.setEnabled(
             self._query.before is not None if self._query.newer else len(page) > 50
         )
-        self._read_error = error is not None
+        self._reading = False
+        self._read_error = type(error).__name__ if error is not None else ""
         self.refresh_status()
         self._render()
 
@@ -184,17 +192,22 @@ class AuditPage(HistoryEventTable):
         if self.identity is None or self._revision is None:
             return
         lost, issue = self.identity.audit.observation()
-        self.message.setText(
-            (text("audit_warning", self.language).format(count=lost) if issue else "")
-            or (
-                text("history_unavailable", self.language)
-                if self._read_error
-                else text("audit_no_matches", self.language)
-                if not self.rows
-                else ""
-            )
+        storage = (
+            text("audit_warning", self.language).format(count=lost) if issue else ""
         )
-        self.message.setToolTip(issue)
+        query = (
+            text("history_loading", self.language)
+            if self._reading
+            else text("history_unavailable", self.language)
+            if self._read_error
+            else text("audit_no_matches", self.language)
+            if not self.rows and not issue
+            else ""
+        )
+        self.message.setText(" · ".join(filter(None, (query, storage))))
+        detail = "\n".join(filter(None, (self._read_error, issue)))
+        self.message.setToolTip(detail)
+        self.message.setAccessibleDescription(detail)
         self.message.setVisible(bool(self.message.text()))
 
     def _render(self) -> None:

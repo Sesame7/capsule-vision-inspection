@@ -1313,6 +1313,9 @@ def test_vision_continuous_preview(
             assert workspace.frame is not None
             assert workspace.frame.frame_id.camera_id == CameraId("CAM1")
             assert int(workspace.frame.image[0, 0, 0]) == 10
+            preview = text("vision_preview_frame_tip", window.language)
+            assert workspace.reference.toolTip() == preview
+            assert preview in workspace.reference.accessibleDescription()
             assert not captures[1].done()
             assert workspace.feedback is None
             workspace.select_roi(2)

@@ -75,12 +75,13 @@ def test_active_status_write_protection_survives_pending_disable(
         try:
             assert peer.entered.wait(WAIT)
             for address, count in ((45, 2), (46, 1), (210, 2), (211, 1)):
-                with pytest.raises(ReportingWriteProtectedError):
+                with pytest.raises(ReportingWriteProtectedError) as denied:
                     app.validate_manual_request(
                         replace(
                             request, start=address, count=count, values=(1,) * count
                         )
                     )
+                assert denied.value.owner == "status"
             with pytest.raises(ReportingWriteProtectedError):
                 execute_manual(
                     request,

@@ -46,7 +46,8 @@ from capsule_vision.application.report_scope import (
     ReportRequest,
 )
 from capsule_vision.communication.reporting import ReportingMode
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.catalog import text
+from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.history_page import HistoryPage
@@ -254,6 +255,14 @@ def test_context_export_defaults_permissions_language_and_failure(
         assert (
             len(dialog.findChildren(QComboBox)) == 3
         )  # no type or repeated Batch chooser
+        for language in LANGUAGES:
+            window.set_language(language)
+            assert dialog.windowTitle() == text("customer_batch", language)
+            assert "LOT-104" in dialog.scope_label.text()
+            assert dialog.batch == selected
+            assert dialog.format.currentData() == "pdf"
+            assert dialog.output_language.currentData() == "en"
+        window.set_language("en")
         choose_file(dialog, None)
         assert not target.exists()
         dialog.format.setCurrentIndex(dialog.format.findData("xlsx"))
@@ -282,9 +291,14 @@ def test_context_export_defaults_permissions_language_and_failure(
         assert dialog.basis.count() == 1 and dialog.basis.currentData() == "detections"
         assert dialog.hint.isVisible() and dialog.format.currentData() == "pdf"
         dialog.output_language.setCurrentIndex(dialog.output_language.findData("zh"))
-        window.set_language("zh")
+        for language in LANGUAGES:
+            window.set_language(language)
+            assert dialog.windowTitle() == text("customer_defects", language)
+            assert dialog.hint.text() == text("customer_detection_only", language)
+            assert dialog.filters.result == frozenset(("ERROR",))
+            assert dialog.basis.currentData() == "detections"
+            assert dialog.output_language.currentData() == "zh"
         window.set_language("en")
-        assert dialog.output_language.currentData() == "zh"
         pdf = tmp_path / "defects.pdf"
         choose_file(dialog, pdf)
         until(
@@ -308,6 +322,7 @@ def test_context_export_defaults_permissions_language_and_failure(
         assert failed
         until(failed.export.isEnabled)
         failed.format.setCurrentIndex(failed.format.findData("xlsx"))
+        failed.output_language.setCurrentIndex(failed.output_language.findData("zh"))
 
         def locked(_source: Path, _target: Path) -> Path:
             raise PermissionError("Destination is locked")
@@ -316,7 +331,13 @@ def test_context_export_defaults_permissions_language_and_failure(
             patch.setattr(Path, "replace", locked)
             choose_file(failed, tmp_path / "failure.xlsx")
             until(lambda: failed.feedback.text().startswith("Export failed"))
-        assert "Destination is locked" in failed.feedback.text()
+        for language in ("hi", "pt-PT", "sw", "bn", "ti"):
+            window.set_language(language)
+            assert failed.windowTitle() == text("customer_defects", language)
+            assert failed.feedback.text().startswith(text("report_failed", language))
+            assert "Destination is locked" in failed.feedback.text()
+            assert failed.output_language.currentData() == "zh"
+            assert failed.format.currentData() == "xlsx"
         assert not (tmp_path / "failure.xlsx").exists()
     finally:
         close_window(window)
@@ -394,6 +415,12 @@ def test_defect_basis_selection_late_scope_and_export_dismissal(
         page.export_button.click()
         pending = page.report_dialog
         assert pending and not pending.export.isEnabled()
+        pending.output_language.setCurrentIndex(pending.output_language.findData("zh"))
+        window.set_language("de")
+        assert pending.windowTitle() == text("customer_defects", "de")
+        assert pending.feedback.text() == text("history_loading", "de")
+        assert not pending.export.isEnabled()
+        assert pending.output_language.currentData() == "zh"
         identity.logout()
         until(lambda: page.report_dialog is None)
         late.set_result(DefectScope(4, 1, "Complete", 4))

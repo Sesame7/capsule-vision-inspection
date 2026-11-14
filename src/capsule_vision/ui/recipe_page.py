@@ -1145,6 +1145,7 @@ class RecipePage(QWidget):
                 if part
             )
         )
+        self.status.setAccessibleDescription(self.status.toolTip())
 
     def _report_error(
         self, error: BaseException | str, key: str = "recipe_error"

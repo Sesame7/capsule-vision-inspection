@@ -11,6 +11,8 @@ from tests.unit.test_alarm_report import event, offer
 from capsule_vision.application.alarm_report import AlarmReportRequest
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.report_scope import HistoryQuery
+from capsule_vision.localization.catalog import text
+from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.report_dialog import ReportDialog
@@ -43,10 +45,18 @@ def test_alarm_dialog_scope_language_empty_and_identity(
         assert len([c for c in dialog.findChildren(QComboBox) if c.isVisible()]) == 2
         assert dialog.basis.isHidden() and dialog.hint.isHidden()
         dialog.output_language.setCurrentIndex(0)
-        window.set_language("zh")
-        assert dialog.windowTitle() == "报警记录报告"
+        for language in LANGUAGES:
+            window.set_language(language)
+            assert dialog.windowTitle() == text("customer_alarm", language)
+            assert text("alarm_equipment", language) in dialog.scope_label.text()
+            assert dialog.alarm.category == page.kind.currentData() == "equipment"
+            assert dialog.format.currentData() == "pdf"
+            assert dialog.output_language.currentData() == "zh"
+            assert [dialog.output_language.itemData(i) for i in range(2)] == [
+                "zh",
+                "en",
+            ]
         window.set_language("en")
-        assert dialog.output_language.currentData() == "zh"
         target = tmp_path / "alarm.pdf"
         choose_file(dialog, target)
         until(

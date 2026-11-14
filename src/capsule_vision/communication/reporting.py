@@ -109,7 +109,13 @@ class ReportingSelection:
 
 
 class ReportingWriteProtectedError(PermissionError):
-    """Manual writes conflict with the automatic reporting owner's address range."""
+    """Manual writes conflict with a service-owned address range."""
+
+    def __init__(
+        self, message: str, *, owner: Literal["reporting", "status"] = "reporting"
+    ) -> None:
+        super().__init__(message)
+        self.owner = owner
 
 
 @dataclass(frozen=True, slots=True)

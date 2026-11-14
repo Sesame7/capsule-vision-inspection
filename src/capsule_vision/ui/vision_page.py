@@ -314,11 +314,11 @@ class VisionPage(QWidget):
         self._error = ""
         self._error_key = "vision_error"
         self._bounds_issue = ""
+        self._fps_invalid = False
         self._last_feedback: tuple[str, str] | None = None
-        self._feedback = ""
+        self._save_issue: tuple[str, tuple[str, ...], tuple[str, ...]] | None = None
         self._preparing = False
         self._reloading = False
-        self._save_failed = False
         self._decision: QMessageBox | None = None
         self._devices: tuple[BaslerDevice, ...] = ()
         self._discovering = False
@@ -487,7 +487,7 @@ class VisionPage(QWidget):
         references = QHBoxLayout(reference_controls)
         references.setContentsMargins(0, 0, 0, 0)
         references.setSpacing(Style.small)
-        references.addWidget(self.icon_button("vision_import", "folder"))
+        references.addWidget(self.icon_button("vision_import", "file_import"))
         references.addWidget(self.icon_button("vision_runtime", "runtime"))
         self.capture = self.icon_button("vision_preview_start", "capture")
         self.capture.setCheckable(True)
@@ -570,7 +570,7 @@ class VisionPage(QWidget):
         save_row.setContentsMargins(0, 0, 0, 0)
         save_row.setSpacing(Style.small)
         save_row.addWidget(self.status)
-        save_row.addWidget(self.icon_button("vision_discard", "refresh"))
+        save_row.addWidget(self.icon_button("vision_discard", "cancel"))
         primary = self.button("save")
         primary.setObjectName("start")
         primary.setProperty("compactAction", True)
@@ -732,10 +732,10 @@ class VisionPage(QWidget):
             ("roi_set_rect", "apply"),
             ("roi_common", "common"),
             ("roi_distribute", "distribute"),
-            ("vision_import", "folder"),
+            ("vision_import", "file_import"),
             ("vision_runtime", "runtime"),
             ("source_discover", "discover"),
-            ("vision_discard", "refresh"),
+            ("vision_discard", "cancel"),
             ("save", "save"),
         ):
             self.buttons[key].setIcon(
@@ -837,7 +837,7 @@ class VisionPage(QWidget):
         self.cancel_capture()
         if connect and (self.sources is None or self.sources.dirty):
             self._report_error(
-                text("source_save_first", self.language), "vision_validation_error"
+                text("source_save_first", self.language), "source_save_first"
             )
             self.refresh()
             return
@@ -887,7 +887,6 @@ class VisionPage(QWidget):
             self._folder_paths.pop(camera, None)
             self._positions.pop(camera, None)
             self._reference_modes[camera] = "folder"
-        self._save_failed = False
         self.draft.bounds.pop(camera, None)
         if camera == self.camera:
             self._reference_revision += 1
@@ -941,7 +940,6 @@ class VisionPage(QWidget):
             return
         self._populate_devices()
         if self.sources.definition.mode == "folder":
-            self._save_failed = False
             self._changed()
             self.refresh()
         else:
@@ -963,12 +961,14 @@ class VisionPage(QWidget):
             self.refresh()
             return
         if value == str(self.sources.definition.target_fps):
+            self._fps_invalid = False
             self.refresh()  # An untouched saved value remains authoritative.
             return
         if value not in {str(i) for i in range(1, 11)}:
-            self._report_error(text("vision_fps_invalid", self.language))
+            self._fps_invalid = True
             self.refresh()
             return
+        self._fps_invalid = False
         self.sources.set_fps(float(value))
         self._error = ""
         self._changed()
@@ -995,7 +995,15 @@ class VisionPage(QWidget):
             self.fps.setText(str(int(value)) if standard else str(value))
         self.fps_decrease.setEnabled(standard and value > 1)
         self.fps_increase.setEnabled(standard and value < 10)
-        self.fps.setToolTip(text("vision_fps", self.language) + f": {value}")
+        hint = text("vision_fps_invalid", self.language) if self._fps_invalid else ""
+        tip = text("vision_fps", self.language) + f": {value}"
+        self.fps.setToolTip("\n".join(filter(None, (tip, hint))))
+        self.fps.setAccessibleDescription(hint)
+        if self.fps_stepper.property("fpsInvalid") != self._fps_invalid:
+            self.fps_stepper.setProperty("fpsInvalid", self._fps_invalid)
+            self.fps_stepper.style().unpolish(self.fps_stepper)
+            self.fps_stepper.style().polish(self.fps_stepper)
+            self.fps_stepper.update()
         self.fps_stepper.setToolTip(self.fps.toolTip())
 
     def set_source_mode(self, mode: Literal["folder", "basler"]) -> None:
@@ -1212,11 +1220,9 @@ class VisionPage(QWidget):
     def import_image(self) -> None:
         if self._reading or self._preparing:
             return
+        caption = text("vision_import", self.language)
         path, _ = QFileDialog.getOpenFileName(
-            self,
-            text("vision_import", self.language),
-            "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+            self, caption, "", f"{caption} (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
         )
         if path:
             self.load_image(Path(path))
@@ -1262,7 +1268,7 @@ class VisionPage(QWidget):
 
     def _source_identity_changed(self) -> None:
         self.cancel_capture()
-        self._save_failed = False
+        self._fps_invalid = False
         self._reference_modes.clear()
         self._reference_revision += 1
         self._set_reference(None)
@@ -1615,7 +1621,7 @@ class VisionPage(QWidget):
             else "setup_saving"
             if self._preparing
             else "vision_error"
-            if self._save_failed
+            if self._save_issue is not None
             else "unsaved"
             if self.draft.dirty or (self.sources is not None and self.sources.dirty)
             else "UNCONFIGURED"
@@ -1625,12 +1631,19 @@ class VisionPage(QWidget):
         )
         status_text = text(status_key, self.language)
         if (
-            self.sources is not None
+            status_key == "UNCONFIGURED"
+            and self.sources is not None
             and self.sources.persisted
             and not self.draft.persisted
         ):
-            status_text = text("saved", self.language) + " · " + status_text
+            status_text = text("vision_sources_layout_incomplete", self.language)
         self.status.setAccessibleName(status_text)
+        save_feedback = self._save_feedback()
+        self.status.setAccessibleDescription(
+            "\n".join((text(save_feedback[0], self.language), save_feedback[1]))
+            if save_feedback is not None
+            else ""
+        )
         self.status.setToolTip("")
         status_color = (
             colors.warning
@@ -1650,6 +1663,8 @@ class VisionPage(QWidget):
                     if status_key == "saved"
                     else "FAULT"
                     if status_key == "vision_error"
+                    else "unknown"
+                    if status_key == "UNCONFIGURED"
                     else "STARTING",
                     status_color,
                 )
@@ -1688,6 +1703,11 @@ class VisionPage(QWidget):
             if self.frame is None
             else f"{position} · {self.frame.image.shape[1]}×{self.frame.image.shape[0]}"
         )
+        preview_hint = (
+            text("vision_preview_frame_tip", self.language)
+            if self.frame is not None and self.reference_mode == "capture"
+            else ""
+        )
         self.reference.setToolTip(
             str(paths[index])
             if self.frame is not None
@@ -1697,6 +1717,8 @@ class VisionPage(QWidget):
             and self.reference_mode == "folder"
             else self.frame.source_key or info
             if self.frame is not None and self.reference_mode == "import"
+            else preview_hint
+            if preview_hint
             else text(
                 "vision_schematic"
                 if self.frame is None
@@ -1745,6 +1767,8 @@ class VisionPage(QWidget):
             if self.frame is None
             else info
         )
+        if preview_hint:
+            meaning += "\n" + preview_hint
         self.reference.setAccessibleDescription(meaning)
         self.canvas.setAccessibleDescription(meaning)
         self.canvas.setToolTip("")
@@ -1760,7 +1784,12 @@ class VisionPage(QWidget):
     def feedback(self) -> tuple[str, str] | None:
         """Page-scoped error evidence for the existing global status presenter."""
         if self._error:
-            return self._error_key, self._error
+            return (
+                self._error_key,
+                "" if self._error_key == "source_save_first" else self._error,
+            )
+        if self._save_issue is not None:
+            return self._save_feedback()
         if self._bounds_issue:
             return "roi_geometry_error", self._bounds_issue
         if self.connection is not None:
@@ -1768,6 +1797,15 @@ class VisionPage(QWidget):
             if snapshot.state is ConnectionState.FAULT:
                 return "source_connection_error", snapshot.error
         return None
+
+    def _save_feedback(self) -> tuple[str, str] | None:
+        if self._save_issue is None:
+            return None
+        key, errors, saved_keys = self._save_issue
+        if saved_keys:
+            names = ", ".join(text(name, self.language) for name in saved_keys)
+            errors = (f"{text('saved', self.language)}: {names}", *errors)
+        return key, "\n".join(errors)
 
     @property
     def vision_dirty(self) -> bool:
@@ -1894,8 +1932,9 @@ class VisionPage(QWidget):
                     )
             self._populate_devices()
             self._sync_configured_camera()
-            self._save_failed = False
-            self._error = self._feedback = ""
+            self._fps_invalid = False
+            self._save_issue = None
+            self._error = ""
             self._selector_key = None
             self._populate_devices()
             self.sync_size()
@@ -1938,9 +1977,14 @@ class VisionPage(QWidget):
                 state_text + f" · {count}/{len(self.draft.camera_ids)}"
             )
             operator = permits(self.editing.bridge.application, Role.OPERATOR)
+            source_saved = self.sources is not None and not self.sources.dirty
             self.connect_source.setToolTip(
                 text(
-                    "source_connect" if operator else "permission_operator",
+                    "permission_operator"
+                    if not operator
+                    else "source_connect"
+                    if source_saved
+                    else "source_save_first",
                     self.language,
                 )
             )
@@ -1951,16 +1995,15 @@ class VisionPage(QWidget):
                 )
             )
             self.connect_source.setEnabled(
-                permits(self.editing.bridge.application, Role.OPERATOR)
+                operator
                 and self._allowed()
                 and not self._preparing
                 and not connection.locked
-                and self.sources is not None
                 and basler_mode
-                and not self.sources.dirty
+                and source_saved
             )
             self.disconnect_source.setEnabled(
-                permits(self.editing.bridge.application, Role.OPERATOR)
+                operator
                 and self._allowed()
                 and not self._preparing
                 and connection.locked
@@ -2092,8 +2135,7 @@ class VisionPage(QWidget):
             return False
         try:
             action()
-            self._error = self._feedback = ""
-            self._save_failed = False
+            self._error = ""
             self.sync_size()
             self._changed()
         except (ValueError, ConfigurationError) as exc:
@@ -2157,8 +2199,7 @@ class VisionPage(QWidget):
             self.refresh()
             return
         self._preparing = True
-        self._save_failed = False
-        self._error = self._feedback = ""
+        self._error = ""
         connection = self.connection.source_snapshot() if self.connection else None
         self.refresh()
 
@@ -2179,9 +2220,11 @@ class VisionPage(QWidget):
         def saved_files(result: object, error: BaseException | None) -> None:
             self._preparing = False
             if not isinstance(result, VisionSaveResult) or error is not None:
-                self._save_failed = True
-                self._report_error(
-                    error or RuntimeError("Missing Vision save result"), "vision_error"
+                failure = error or RuntimeError("Missing Vision save result")
+                self._save_issue = (
+                    failure_key(failure, "vision_error"),
+                    (f"{type(failure).__name__}: {failure}",),
+                    (),
                 )
                 self.refresh()
                 return
@@ -2190,7 +2233,6 @@ class VisionPage(QWidget):
                 result.machine_saved,
                 result.sources_saved,
             )
-            self._save_failed = bool(errors)
             if result.unconfirmed:
                 self.editing.bridge.application.observe_saved_vision(
                     self.draft.definition
@@ -2201,30 +2243,28 @@ class VisionPage(QWidget):
                     sources_known="CameraSources" in result.unconfirmed,
                 )
             if errors:
-                saved = ", ".join(
+                key = failure_key(
+                    result.permission_error,
+                    "configuration_confirmation_incomplete"
+                    if result.unconfirmed
+                    else "source_partial_save"
+                    if machine_saved and not source_saved
+                    else "vision_sources_only_saved"
+                    if source_saved and not machine_saved
+                    else "vision_error",
+                )
+                saved_keys = tuple(
                     name
                     for name, succeeded in (
-                        ("MachineLayout", machine_saved),
-                        ("CameraSources", source_saved),
+                        ("records_layout", machine_saved),
+                        ("records_sources", source_saved),
                     )
                     if succeeded
+                    and key not in ("source_partial_save", "vision_sources_only_saved")
                 )
-                self._report_error(
-                    "\n".join(
-                        ([f"{text('saved', self.language)}: {saved}"] if saved else [])
-                        + list(errors)
-                    ),
-                    failure_key(
-                        result.permission_error,
-                        "configuration_confirmation_incomplete"
-                        if result.unconfirmed
-                        else "source_partial_save"
-                        if machine_saved and not source_saved
-                        else "vision_error",
-                    ),
-                )
+                self._save_issue = key, errors, saved_keys
             else:
-                self._feedback = "saved"
+                self._save_issue = None
             self.setup_saved.emit(machine_saved, source_saved)
             self._changed()
             self.refresh()
@@ -2260,7 +2300,7 @@ class VisionPage(QWidget):
             return
         dialog = QMessageBox(self)
         dialog.setWindowTitle(text("roi_workspace", self.language))
-        dialog.setText(text("dirty_question", self.language))
+        dialog.setText(text("unsaved", self.language))
         save = dialog.addButton(
             text("save", self.language), QMessageBox.ButtonRole.AcceptRole
         )

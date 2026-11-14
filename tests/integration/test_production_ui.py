@@ -1012,7 +1012,7 @@ def test_batch_dialog_applies_only_submitted_input(
         current, field, submit, end = {
             "zh": ("当前批号", "批号", "设置批号", "结束批次"),
             "en": ("Current Batch ID", "Batch ID", "Set Batch ID", "End Batch"),
-            "ja": ("Current Batch ID", "ロット", "Set Batch ID", "End Batch"),
+            "ja": ("現在のロット番号", "ロット", "ロット番号を設定", "ロットを終了"),
         }[language]
         assert {w.text() for w in editor.findChildren(QLabel) if w.text()} == {
             current,
@@ -1238,8 +1238,8 @@ def test_ng_is_quiet_but_technical_errors_keep_fixed_status_geometry(
         )
         QApplication.processEvents()
         assert window.metrics["channel_ng"][0].text() == str(36 * cycle)
-        # This fixture has no Occupancy evidence; omit routine unavailable prose.
-        assert window.cards[0].indicators[0].toolTip() == "CAM1 CH1"
+        # This fixture has no matched frame; preserve the channel's identity.
+        assert window.cards[0].indicators[0].toolTip().startswith("CAM1 · ")
         if status is TechnicalStatus.SUCCESS:
             assert not window.event_label.text()
         else:
@@ -1335,7 +1335,8 @@ def test_empty_technical_error_and_failed_occupancy_remain_visible(
     assert not button.pixmap().isNull()
     assert text(state.value, window.language) in button.accessibleName()
     assert Style.warning in button.styleSheet()
-    assert button.toolTip() == "CAM1 CH1"
+    assert button.toolTip() == button.accessibleName()
+    assert "CAM1" in button.toolTip()
     assert window.cards[0].result is not None
     assert window.cards[0].result.channels[0].reasons
     assert (
@@ -1896,16 +1897,14 @@ def _inspect_and_assert_business_presentation(
             )
             assert not button.pixmap().isNull()
             assert text(state.value, language) in button.accessibleName()
-            assert button.toolTip() == f"{camera.layout.camera_id} CH{row.channel_id}"
+            assert button.toolTip() == button.accessibleName()
+            assert button.toolTip().startswith(f"{camera.layout.camera_id} · ")
             assert card.result == camera
             assert button.size() == QSize(Style.touch, Style.touch)
             if size != Style.minimum:
                 assert card.indicator_group.rect().contains(button.geometry())
         empty, conflict = card.indicators[1], card.indicators[3]
-        assert (
-            empty.toolTip()
-            == f"{camera.layout.camera_id} CH{camera.channels[1].channel_id}"
-        )
+        assert text("empty", language) in empty.toolTip()
         assert text("error_ng", language) in conflict.accessibleName()
         assert camera.channels[3].occupancy is not None
         assert camera.channels[3].assessment.technical_status is TechnicalStatus.ERROR
@@ -2014,7 +2013,8 @@ def _assert_batch_snapshots(
     batch_id: str | None,
     baseline: ProductionApplicationSnapshot,
 ) -> None:
-    full_text = f"{text('batch_id', language)} {batch_id or '—'}"
+    caption = text("batch_input" if language in ("zh", "en") else "batch_id", language)
+    full_text = f"{caption} {batch_id or '—'}"
     operation_positions: list[QPoint] = []
     for state in (
         ApplicationState.READY,
@@ -2049,11 +2049,11 @@ def _assert_batch_snapshots(
         else:
             assert window.batch_label.text() != batch_id
             assert "…" in window.batch_label.text()
-        assert window.batch_caption.text() == text("batch_id", language)
+        assert window.batch_caption.text() == caption
         assert window.batch_caption.geometry().bottom() < window.batch_label.y()
         assert window.batch_caption.x() == window.batch_label.x()
         assert window.batch_caption.width() == window.batch_label.width() <= 180
-        assert window.batch_caption.accessibleName() == text("batch_id", language)
+        assert window.batch_caption.accessibleName() == caption
         assert (
             window.batch_caption.toolTip() == window.batch_group.toolTip() == full_text
         )
@@ -2262,7 +2262,9 @@ def test_multilingual_player_captions_fit_without_moving_camera_layout(
                 assert button.toolTip() and not button.icon().isNull()
                 assert window.operation_group.rect().contains(button.geometry())
             assert len({button.size().toTuple() for button in buttons}) == 1
-            assert window.batch_caption.accessibleName() == text("batch_id", language)
+            assert window.batch_caption.accessibleName() == text(
+                "batch_input" if language in ("zh", "en") else "batch_id", language
+            )
             assert window.batch_caption.geometry().bottom() < window.batch_label.y()
             assert window.summary.rect().contains(window.operation_group.geometry())
     assert window.bridge.application.snapshot() == before and not session.cycles

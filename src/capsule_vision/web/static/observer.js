@@ -10,7 +10,12 @@
     retained: ["Retained image", "保留图像"], fault: ["Application fault", "应用故障"],
     last: ["last observed", "最后观察"],
     slot: ["Slot", "槽位"], technical: ["Technical", "技术状态"],
-    batches: ["Batches", "批次"], duration: ["Batch Duration", "批次耗时"],
+    groups: ["Groups", "组数"], duration: ["Group time", "组耗时"],
+    groupMetrics: ["PLC group metrics", "PLC 检测组统计"],
+    groupHelp: [
+      "Completed inspection groups attributable to a PLC counter. Group time runs from first Cycle admission to the last required terminal result for an eligible group, excluding later PLC attribution checks, writes and ACK.",
+      "已完成且可归属到 PLC 计数器的检测组数。符合条件的组从首个周期接纳计时至最后一个所需结果完成，不含后续 PLC 归属检查、写入和确认。",
+    ],
   };
   const t = key => words[key][zh ? 1 : 0];
   const element = id => document.getElementById(id);
@@ -268,8 +273,19 @@
     const modeChanged = Boolean(latest?.four_cycle) !== Boolean(snapshot.four_cycle);
     latest = snapshot;
     const metrics = element("metrics"), counts = snapshot.metrics;
-    metrics.hidden = !snapshot.group_counting || !counts;
-    if (!metrics.hidden) metrics.textContent = `${t("batches")} ${counts.batches} · OK ${counts.ok} · NG ${counts.ng} · EMPTY ${counts.empty} · ${t("duration")} ${counts.duration_ms == null ? "--" : `${Math.round(counts.duration_ms)} ms`}`;
+    const hidden = !snapshot.group_counting || !counts;
+    if (metrics.hidden !== hidden) metrics.hidden = hidden;
+    if (!hidden) {
+      const caption = `${t("groups")} ${counts.batches} · OK ${counts.ok} · NG ${counts.ng} · EMPTY ${counts.empty} · ${t("duration")} ${counts.duration_ms == null ? "--" : `${Math.round(counts.duration_ms)} ms`}`;
+      if (metrics.textContent !== caption) metrics.textContent = caption;
+      if (metrics.title !== t("groupHelp")) metrics.title = t("groupHelp");
+      if (metrics.getAttribute("aria-label") !== t("groupMetrics")) metrics.setAttribute("aria-label", t("groupMetrics"));
+      if (metrics.getAttribute("aria-description") !== metrics.title) metrics.setAttribute("aria-description", metrics.title);
+    } else if (metrics.title) {
+      metrics.removeAttribute("title");
+      metrics.removeAttribute("aria-label");
+      metrics.removeAttribute("aria-description");
+    }
     const order = snapshot.configured_camera_ids;
     for (const [id, card] of cards) {
       if (!order.includes(id)) { clearImage(card); cards.delete(id); }

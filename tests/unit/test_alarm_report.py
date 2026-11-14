@@ -155,7 +155,7 @@ def test_scope_snapshot_all_pages_order_and_exact_batch(
         "Activated",
         "Recovered",
         "Active on read",
-        "Clear on read",
+        "Inactive on read",
     }
     assert "Same time" not in str(values) and batch not in str(values)
     # A later event cannot enter an existing snapshot.
@@ -299,7 +299,9 @@ def test_details_unknown_state_and_missing_fields(
         v not in str(values) for v in ("fins_tcp", "W18", "bit 5", "definition/")
     )
     assert values[3][2] == "Unknown" and "Timeout" in str(values[3][1])
-    assert values[4][2] == "Clear on read" and "communication gap" in str(values[4][1])
+    assert values[4][2] == "Inactive on read" and "communication gap" in str(
+        values[4][1]
+    )
 
 
 @pytest.mark.parametrize(

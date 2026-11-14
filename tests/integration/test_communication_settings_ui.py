@@ -333,6 +333,9 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     until(lambda: not page.busy)
     assert runtime.snapshot().configuration == saved.web  # Save is not Apply.
     assert panel.apply_changes.isVisible() and panel.apply_changes.isEnabled()
+    assert panel.apply_changes.accessibleName() == text(
+        "web_apply_changes", window.language
+    )
     panel.host.setText("0.0.0.0")
     assert not panel.apply_changes.isEnabled()
     panel.requested.emit("apply")
@@ -373,6 +376,18 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     until(lambda: panel.available)
     assert runtime.snapshot().configuration == replace(saved.web, port=draft_port)
     assert load_communication_preferences(startup.data.communication).web.enabled
+    # An explicit reload can also restore a saved disabled selection while Web
+    # is running. Applying it stops that owner without editing the file.
+    save_communication_preferences(startup.data.communication, stopped)
+    page.reload_settings()
+    assert runtime.snapshot().state is WebState.RUNNING
+    assert panel.apply_changes.isEnabled()
+    assert panel.apply_changes.accessibleName() == text(
+        "web_apply_disabled", window.language
+    )
+    panel.apply_changes.click()
+    until(lambda: runtime.snapshot().state is WebState.STOPPED)
+    assert load_communication_preferences(startup.data.communication) == stopped
     assert startup.application.snapshot().generation == 0
     assert startup.application.snapshot().counters == ProductionCounters()
 
@@ -558,11 +573,23 @@ def test_web_power_first_use_defaults_or_invalid_file_preserve_drafts(
         )
         assert runtime.snapshot().state is WebState.STOPPED
         assert panel.operation_error and not runtime.snapshot().owned
+        failure = panel.operation_error
+        assert failure in panel.power.accessibleDescription()
+        page.save_settings.click()
+        until(lambda: not page.busy)
+        assert runtime.snapshot().state is WebState.STOPPED
+        assert failure in panel.power.toolTip()
+        assert (
+            text("web_power_failed", window.language) in page.preferences_status.text()
+        )
+        assert failure in page.preferences_status.toolTip()
+        assert not page.dirty
     else:
         until(lambda: panel.available)
         assert load_communication_preferences(startup.data.communication) == defaults
         assert runtime.snapshot().configuration == defaults.web
-    assert panel.port.value() == 19603 and page.port.value() == 19602 and page.dirty
+    assert panel.port.value() == 19603 and page.port.value() == 19602
+    assert page.dirty == (not invalid_file)
 
 
 def test_web_ipv4_choices_are_visible_and_refresh_preserves_manual_draft(
@@ -1502,6 +1529,36 @@ def test_drafts_do_not_redirect_diagnostic_writes_or_reporting(
     assert not panel.controller.reporting_snapshot()
 
 
+def test_authenticated_save_marks_existing_watch_rows_stale_immediately(
+    settings_window: tuple[Startup, MainWindow], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, window = settings_window
+    page = window.communication
+    window.set_language("en")
+    requests: list[CommunicationRequest] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        requests.append(request)
+        return CommunicationResponse(request, (72,), 1, datetime.now(UTC))
+
+    monkeypatch.setattr(page, "_execute", execute)
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100))
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    observed = page.watch_table.item(0, 4)
+    assert observed is not None
+    stamp = observed.text()
+    page.port.setValue(19602)
+    page.persist_settings()
+    until(lambda: not page.busy)
+    assert len(requests) == 1
+    assert page.watch_status.accessibleName() == text("comm_watch_stale", "en")
+    group = page.watch_table.item(0, 0)
+    retained = page.watch_table.item(0, 4)
+    assert group is not None and not group.icon().isNull()
+    assert retained is not None and retained.text() == stamp
+
+
 def test_failed_save_preserves_draft_file_and_effective_reporting(
     settings_window: tuple[Startup, MainWindow], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1616,7 +1673,8 @@ def test_discard_does_not_undo_observed_write(
     assert len(calls) == 1 and page.last_response is observed
     assert startup.application.history is not None
     assert not startup.application.history.query().result(5).records
-    assert page.success.text() and page.status.text()
+    assert page.success.text().startswith(text("comm_write_ok", page.language))
+    assert page.status.isHidden()
 
 
 @pytest.mark.parametrize("size", [(1080, 1857), (1300, 1017), (1920, 1017)])
@@ -1882,10 +1940,8 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 assert button.text() == "" and not button.icon().isNull()
                 assert button.width() == button.height() == Style.touch
                 assert button.accessibleName() in button.toolTip()
-            assert_full_caption(page.manual_button, text("comm_write", language))
-            assert page.manual_button.accessibleName() == text(
-                "comm_registers", language
-            )
+            assert_full_caption(page.manual_button, text("comm_registers", language))
+            assert page.manual_button.toolTip() == text("comm_registers", language)
             for button in buttons[:2]:
                 assert_full_caption(button, button.accessibleName())
                 assert button.accessibleName() in button.toolTip()
@@ -1897,6 +1953,13 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
             )
             assert not page.save_settings.icon().isNull()
             assert panel.title.text() == text("short_reporting", language)
+            assert panel.merge_label.text() == text("plc_merge_count", language)
+            assert (
+                panel.merge_label.fontMetrics().horizontalAdvance(
+                    panel.merge_label.text()
+                )
+                <= panel.merge_label.contentsRect().width()
+            )
             assert (
                 panel.title.toolTip()
                 == panel.title.accessibleName()

@@ -3,6 +3,7 @@
 from collections import Counter
 from dataclasses import replace
 from math import ceil
+from pathlib import Path
 
 from PySide6.QtCore import (
     QEvent,
@@ -306,6 +307,7 @@ class HistoryPage(QWidget):
         self._error = ""
         self._loaded = False
         self._detail_record_id: int | None = None
+        self._image_issue: tuple[int, str, Path, str] | None = None
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
             self._completed, Qt.ConnectionType.QueuedConnection
@@ -504,9 +506,7 @@ class HistoryPage(QWidget):
         self.result.setFixedWidth(176)
         desired_row = self.filter_bar.sizeHint().width()
         self.image_button.setFixedWidth(
-            button_width(
-                self.image_button, ("history_open_image",), languages=("zh", "en")
-            )
+            button_width(self.image_button, ("history_open_image",))
         )
         action_width = 3 * width + 3 * Style.small
         wrapped = self.workspace.width() < desired_row + action_width
@@ -745,7 +745,6 @@ class HistoryPage(QWidget):
 
     def _submit(self) -> None:
         if self.owner is None:
-            self._error = text("history_unavailable", self.language)
             self._present()
             return
         self.busy = True
@@ -770,20 +769,22 @@ class HistoryPage(QWidget):
 
     def _present(self) -> None:
         language = self.language
+        unavailable = self.owner is None or bool(self._error)
         self.status.setText(
             text(
                 "history_loading"
                 if self.busy
                 else "history_unavailable"
-                if self._error
+                if unavailable
                 else "history_none",
                 language,
             )
-            if self.busy or self._error or not self._data.records
+            if self.busy or unavailable or not self._data.records
             else ""
         )
-        self.status.setVisible(self.busy or bool(self._error) or not self._data.records)
+        self.status.setVisible(bool(self.status.text()))
         self.status.setToolTip(self._error)
+        self.status.setAccessibleDescription(self._error)
         self.refresh_button.setEnabled(not self.busy and self.owner is not None)
         self.newer.setEnabled(
             not self.busy
@@ -821,7 +822,10 @@ class HistoryPage(QWidget):
                 if column == 3:
                     item.setToolTip(record.context.batch_label or value)
                 if column == 2:
-                    description = f"Run ID: {record.context.run_id}\n{text('history_group', language)}: {value}"
+                    description = (
+                        f"{text('records_run', language)} ID: {record.context.run_id}\n"
+                        f"{text('history_group', language)}: {value}"
+                    )
                     item.setToolTip(description)
                 if column == 1:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -946,10 +950,10 @@ class HistoryPage(QWidget):
             item.data(Qt.ItemDataRole.UserRole) if item and item.isSelected() else None
         )
         reasons: list[str] = []
+        source = self._selected_camera()
         if isinstance(selected, (HistoryChannel, HistoryCamera)):
             labels: tuple[str, ...] = ()
             if isinstance(selected, HistoryChannel):
-                source = self._selected_camera()
                 evidence = source[1].image_evidence if source else None
                 if evidence is not None:
                     labels = tuple(
@@ -971,9 +975,22 @@ class HistoryPage(QWidget):
         separator = "\n"
         if isinstance(selected, HistoryChannel):
             separator = "、" if self.language == "zh" else ", "
-        self.channel_detail.setPlainText(
-            separator.join(dict.fromkeys(filter(None, reasons)))
-        )
+        detail = separator.join(dict.fromkeys(filter(None, reasons)))
+        if self._image_issue is not None:
+            record_id, camera, path, key = self._image_issue
+            if source and (
+                source[0].record_id,
+                source[1].camera,
+                source[1].image_path,
+            ) == (
+                record_id,
+                camera,
+                path,
+            ):
+                detail = "\n".join(filter(None, (detail, text(key, self.language))))
+            else:
+                self._image_issue = None
+        self.channel_detail.setPlainText(detail)
         self._image_selection_changed()
         self._size_detail()
 
@@ -1010,9 +1027,12 @@ class HistoryPage(QWidget):
         path = camera.image_path
         if path is None:
             return
-        self._channel_selected()  # Clear any earlier open error; retain the channel evidence.
+        self._image_issue = None
+        self._channel_selected()
         if not path.is_absolute() or path.suffix.lower() != ".png":
-            self._image_error("history_image_missing")
+            self._image_error(
+                record.record_id, camera.camera, path, "history_image_missing"
+            )
             return
         reader = QImageReader(str(path), b"png")
         reader.setAutoDetectImageFormat(False)
@@ -1026,7 +1046,7 @@ class HistoryPage(QWidget):
                 issue = "history_image_missing"
             except OSError:
                 pass
-            self._image_error(issue)
+            self._image_error(record.record_id, camera.camera, path, issue)
             return
         evidence = camera.image_evidence
         if (
@@ -1034,7 +1054,9 @@ class HistoryPage(QWidget):
             and evidence.size is not None
             and evidence.size != (image.width(), image.height())
         ):
-            self._image_error("history_image_size_mismatch")
+            self._image_error(
+                record.record_id, camera.camera, path, "history_image_size_mismatch"
+            )
             return
         language = self.language
         title = (
@@ -1060,9 +1082,9 @@ class HistoryPage(QWidget):
         self.image_dialog.finished.connect(self._image_closed)
         self.image_dialog.open()
 
-    def _image_error(self, key: str) -> None:
-        self.channel_detail.append(text(key, self.language))
-        self._size_detail()
+    def _image_error(self, record_id: int, camera: str, path: Path, key: str) -> None:
+        self._image_issue = record_id, camera, path, key
+        self._channel_selected()
 
     def _image_closed(self) -> None:
         self.image_dialog = None

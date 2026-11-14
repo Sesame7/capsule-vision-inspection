@@ -578,8 +578,13 @@ def test_source_dirty_navigation(
     assert workspace.sources is not None
     workspace.loop.setChecked(False)
     assert workspace.sources.dirty
+    assert not window.buttons["operation"].isEnabled()
+    assert window.buttons["operation"].accessibleDescription() == text(
+        "start_vision_dirty", window.language
+    )
     window.navigate(0)
     box = workspace.findChildren(QMessageBox)[0]
+    assert box.text() == text("unsaved", window.language)
     next(
         b for b in box.buttons() if b.text() == text(decision, window.language)
     ).click()
@@ -1700,11 +1705,22 @@ def test_fps_stepper_boundaries_and_keyboard_entry(
     sources = workspace.sources
     assert sources is not None
     saved = sources.path.read_bytes()
+    current = sources.definition.target_fps
+    workspace.fps.setText("11")
+    workspace.fps_changed()
+    assert sources.definition.target_fps == current and not sources.dirty
+    assert text("vision_fps_invalid", window.language) in (
+        workspace.fps.accessibleDescription()
+    )
+    workspace.channel.activated.emit(1)
+    window.set_language("en")
+    assert text("vision_fps_invalid", "en") in workspace.fps.toolTip()
     workspace.fps.setFocus()
     workspace.fps.selectAll()
     QTest.keyClicks(workspace.fps, "1")
     QTest.keyClick(workspace.fps, Qt.Key.Key_Return)
     assert sources.definition.target_fps == 1
+    assert text("vision_fps_invalid", "en") not in workspace.fps.toolTip()
     assert not workspace.fps_decrease.isEnabled() and workspace.fps_increase.isEnabled()
     workspace.fps_increase.click()
     assert sources.definition.target_fps == 2
@@ -2240,8 +2256,14 @@ def test_import_is_temporary_owned_bgr_and_preserves_geometry(
     geometry = workspace.draft.definition
     assert workspace.sources is not None
     source = workspace.sources.path.read_bytes()
+    window.set_language("bn")
 
-    def choose(*_args: object) -> tuple[str, str]:
+    def choose(
+        parent: object, title: str, directory: str, name_filter: str
+    ) -> tuple[str, str]:
+        assert parent is workspace and not directory
+        assert title == text("vision_import", "bn")
+        assert name_filter == f"{title} (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
         return str(path), ""
 
     monkeypatch.setattr(QFileDialog, "getOpenFileName", choose)

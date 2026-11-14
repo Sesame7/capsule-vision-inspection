@@ -203,8 +203,10 @@ class FinsTcpClient:
             request = b"\x80\x00\x02" + self._destination.to_bytes()
             request += self._source.to_bytes() + bytes((self._sid,)) + command + body
             deadline = monotonic() + self._timeout
+            sending = False
             try:
                 self._set_remaining(deadline)
+                sending = True  # A failing sendall may already have sent bytes.
                 self._socket.sendall(
                     b"FINS" + struct.pack("!III", 8 + len(request), 2, 0) + request
                 )
@@ -219,25 +221,35 @@ class FinsTcpClient:
             except TimeoutError as exc:
                 self._socket.close()
                 detail = (
-                    "; write execution is unknown" if command == WRITE_COMMAND else ""
+                    "; write execution is unknown"
+                    if command == WRITE_COMMAND and sending
+                    else ""
                 )
-                raise FinsTimeoutError(
+                error = FinsTimeoutError(
                     f"FINS TCP {command.hex(' ')} to {self._peer} timed out{detail}"
-                ) from exc
+                )
+                if command == WRITE_COMMAND:
+                    error.write_may_have_executed = sending
+                raise error from exc
             except OSError as exc:
                 self._socket.close()
                 detail = (
-                    "; write execution is unknown" if command == WRITE_COMMAND else ""
+                    "; write execution is unknown"
+                    if command == WRITE_COMMAND and sending
+                    else ""
                 )
-                raise FinsTransportError(
-                    f"FINS TCP to {self._peer}: {exc}{detail}"
-                ) from exc
+                error = FinsTransportError(f"FINS TCP to {self._peer}: {exc}{detail}")
+                if command == WRITE_COMMAND:
+                    error.write_may_have_executed = sending
+                raise error from exc
             except (FinsProtocolError, FinsTransportError) as exc:
                 self._socket.close()
                 if command == WRITE_COMMAND:
-                    exc.add_note(
-                        "Write execution is unknown; no retry/reconnect attempted."
-                    )
+                    exc.write_may_have_executed = sending
+                    if sending:
+                        exc.add_note(
+                            "Write execution is unknown; no retry/reconnect attempted."
+                        )
                 raise
             except FinsPlcError:
                 raise  # A valid PLC end code is the only recoverable exchange failure.

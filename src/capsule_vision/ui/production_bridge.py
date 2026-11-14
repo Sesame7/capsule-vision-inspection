@@ -89,6 +89,8 @@ class QtProductionBridge(QObject):
         self._timeout = close_timeout_ms / 1000
         self._timeout_reported = False
         self._detached = False
+        self._command_revision = 0
+        self._command_tokens: dict[str, int] = {}
         # Reuse the established destruction-safe Future delivery gate unchanged.
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
@@ -135,12 +137,15 @@ class QtProductionBridge(QObject):
 
     def _command(self, name: str, command: Callable[[], Future[None]]) -> None:
         self._check_thread()
+        self._command_revision += 1
+        revision = self._command_revision
+        self._command_tokens[name] = revision
         try:
             future = command()
         except Exception as exc:
             self.command_failed.emit(name, exc)
         else:
-            self._delivery.watch(name, future)
+            self._delivery.watch(f"{name}:{revision}", future)
         self.refresh()
 
     def _immediate(self, name: str, command: Callable[[], None]) -> None:
@@ -223,9 +228,15 @@ class QtProductionBridge(QObject):
         self._command("close", self.application.close)
 
     @Slot(str, object, object)
-    def _completed(self, name: str, value: object, error: object) -> None:
+    def _completed(self, token: str, _value: object, error: object) -> None:
         if self._detached:
             return
+        name, _, revision = token.rpartition(":")
+        if revision != str(self._command_tokens.get(name)):
+            # The operation still settles in Application; only stale UI feedback is skipped.
+            self.refresh()
+            return
+        self._command_tokens.pop(name)
         if isinstance(error, BaseException):
             if name == "close":
                 self._closing = False  # Explicit retry possible; never quit on failure.

@@ -34,6 +34,9 @@ def test_selected_save_applies_without_selection_audit_and_blocks_start_until_ve
             qapp.processEvents()
             assert window.editing.busy and app.snapshot().process_required
             assert not window.buttons["operation"].isEnabled()
+            assert window.buttons["operation"].accessibleDescription() == text(
+                "process_applying", window.language
+            )
             assert (
                 load_recipe(session.entry.path).process_parameters
                 == session.entry.recipe.process_parameters

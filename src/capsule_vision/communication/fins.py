@@ -45,6 +45,9 @@ class FinsMemoryArea(Enum):
 class FinsError(Exception):
     """Communication failure, never an inspection/product judgment."""
 
+    # Evidence for presentation. An unannotated write failure stays uncertain.
+    write_may_have_executed: bool | None = None
+
 
 class FinsProtocolError(FinsError):
     """Unexpected peer, request identity, framing, or response data."""
@@ -256,10 +259,13 @@ class FinsUdpClient:
             if len(request) > MAX_DATAGRAM or 14 + expected_bytes > MAX_DATAGRAM:
                 raise ValueError("FINS datagram exceeds the supported 2012-byte limit")
             deadline = monotonic() + self._timeout
+            sending = False
             try:
                 self._socket.settimeout(self._timeout)
+                sending = True
                 sent = self._socket.sendto(request, self._peer)
                 if sent != len(request):
+                    sending = False
                     raise FinsTransportError("Incomplete UDP send")
                 remaining = deadline - monotonic()
                 if remaining <= 0:
@@ -273,16 +279,26 @@ class FinsUdpClient:
             except TimeoutError as exc:
                 self._socket.close()
                 detail = (
-                    "; write execution is unknown" if command == WRITE_COMMAND else ""
+                    "; write execution is unknown"
+                    if command == WRITE_COMMAND and sending
+                    else ""
                 )
-                raise FinsTimeoutError(
+                error = FinsTimeoutError(
                     f"FINS {command.hex(' ')} to {self._peer} timed out{detail}"
-                ) from exc
+                )
+                if command == WRITE_COMMAND:
+                    error.write_may_have_executed = sending
+                raise error from exc
             except OSError as exc:
                 self._socket.close()
-                raise FinsTransportError(f"FINS UDP to {self._peer}: {exc}") from exc
-            except FinsProtocolError, FinsTransportError:
+                error = FinsTransportError(f"FINS UDP to {self._peer}: {exc}")
+                if command == WRITE_COMMAND:
+                    error.write_may_have_executed = sending
+                raise error from exc
+            except (FinsProtocolError, FinsTransportError) as exc:
                 self._socket.close()
+                if command == WRITE_COMMAND:
+                    exc.write_may_have_executed = sending
                 raise
         finally:
             self._operation.release()

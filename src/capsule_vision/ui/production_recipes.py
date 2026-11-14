@@ -118,21 +118,30 @@ class ProductionRecipes(QWidget):
     def sizeHint(self) -> QSize:
         return QSize(self.maximumWidth(), Style.touch)
 
+    @property
+    def setup_guidance_key(self) -> str:
+        if self.feedback is not None and self.feedback[0] == "recipe_setup_required":
+            return "recipe_setup_required"
+        return "configure_first"
+
     def reload(self) -> None:
-        if self.editing.busy or self.editing.closing:
+        if self.editing.busy or self.editing.closing or self._requested is not None:
             return
         session = self.editing.session
-        self.feedback = None
+        previous_catalog = self._catalog_feedback
+        self._catalog_feedback = None
         self._entries = ()
         if session is not None:
             catalog = session.catalog.discover()
             self._entries = catalog.entries
             if catalog.issues:
-                self.feedback = (
+                self._catalog_feedback = (
                     "recipe_error",
                     "\n".join(f"{e.path.name}: {e.message}" for e in catalog.issues),
                 )
-        self._catalog_feedback = self.feedback
+        # Scanning saved definitions cannot resolve a preparation failure.
+        if self.feedback == previous_catalog:
+            self.feedback = self._catalog_feedback
         self._catalog_revision += 1
         snapshot = self.editing.bridge.application.snapshot()
         refresh = self.editing.recipe_refresh
@@ -165,15 +174,13 @@ class ProductionRecipes(QWidget):
         self.refresh_state()
         self.feedback_changed.emit()
 
-        def completed(error: BaseException | None) -> None:
+        def completed(error: BaseException | None, key: str) -> None:
             self._requested = None
             if error is not None:
                 self.feedback = (
-                    "configure_first"
+                    "recipe_setup_required"
                     if isinstance(error, RecipeSetupRequired)
-                    else failure_key(
-                        error, "recipe_prepare_error", "permission_operator"
-                    ),
+                    else failure_key(error, key, "permission_operator"),
                     f"{requested_name} [{identity}]\n{error}",
                 )
             else:
@@ -264,9 +271,10 @@ class ProductionRecipes(QWidget):
                 details += f"\n{snapshot.last_issue.message}"
         if self.feedback is not None and self.feedback[0] in (
             "recipe_prepare_error",
+            "process_apply_failed",
             "permission_operator",
             "identity_stale",
-            "configure_first",
+            "recipe_setup_required",
         ):
             details += f"\n{text(self.feedback[0], self.language)}\n{self.feedback[1]}"
         if self._requested is not None:

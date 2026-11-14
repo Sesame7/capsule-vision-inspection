@@ -341,6 +341,13 @@ def test_archive_failures_are_observable_without_changing_production(
     window.bridge.refresh()
     assert text("archive_issue", window.language) == window.event_label.accessibleName()
     assert "PermissionError" in window.event_label.toolTip()
+    window.navigate(0)
+    window.production_recipes.feedback = ("preparing", "")
+    window.production_recipes.feedback_changed.emit()
+    assert window.event_label.accessibleName() == text("archive_issue", window.language)
+    window.bridge.command_failed.emit("stop", TimeoutError())
+    assert "TimeoutError" in window.event_label.accessibleName()
+    assert "PermissionError" in window.event_label.accessibleDescription()
     assert app.snapshot() == before and not runtimes
 
 

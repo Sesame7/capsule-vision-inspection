@@ -158,8 +158,14 @@ def test_temporary_import_stays_frozen_and_failure_keeps_pixels(
     until(lambda: not preview.busy)
     before, recipe = window.bridge.application.snapshot(), session.draft.to_recipe()
     path = tmp_path / "CAM1/image10.png"
+    window.set_language("de")
 
-    def choose_file(*args: object, **kwargs: object) -> tuple[str, str]:
+    def choose_file(
+        parent: object, title: str, directory: str, name_filter: str
+    ) -> tuple[str, str]:
+        assert parent is preview and not directory
+        assert title == text("vision_import", "de")
+        assert name_filter == f"{title} (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
         return str(path), ""
 
     monkeypatch.setattr(QFileDialog, "getOpenFileName", choose_file)

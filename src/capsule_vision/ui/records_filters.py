@@ -40,6 +40,7 @@ class OptionalDate(QLineEdit):
     def __init__(self, key: str) -> None:
         super().__init__()
         self.key = key
+        self.language: Language = "zh"
         self.value: QDate | None = None
         self.setClearButtonEnabled(True)
         self.setMinimumHeight(Style.touch)
@@ -86,18 +87,41 @@ class OptionalDate(QLineEdit):
 
     def _typed(self, value: str) -> None:
         date = QDate.fromString(value, "yyyy-MM-dd") if value else None
-        if date is not None and not date.isValid():
-            self.setToolTip("YYYY-MM-DD")
-            return
-        if date != self.value:
+        valid = date is None or date.isValid()
+        if valid and date != self.value:
             self.value = date
             self.changed.emit()
+        self._present_date(not valid)
+
+    def _present_date(self, invalid: bool) -> None:
+        label = text(self.key, self.language)
+        hint = "YYYY-MM-DD"
+        if invalid:
+            hint = (
+                text("records_invalid_date", self.language)
+                + " · "
+                + (
+                    text("records_date_retained", self.language).format(
+                        date=self.value.toString("yyyy-MM-dd")
+                    )
+                    if self.value is not None
+                    else text("records_date_unset", self.language)
+                )
+            )
+        self.setToolTip(label + " · " + hint)
+        self.setAccessibleDescription(hint)
+        if bool(self.property("dateInvalid")) != invalid:
+            self.setProperty("dateInvalid", invalid)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
 
     def set_language(self, language: Language) -> None:
+        self.language = language
         label = text(self.key, language)
         self.setPlaceholderText(label)
         self.setAccessibleName(label)
-        self.setToolTip(label + " · YYYY-MM-DD")
+        self._present_date(bool(self.property("dateInvalid")))
         self.calendar.setLocale(QLocale(language))
         self.calendar.setAccessibleName(label)
         self.calendar.setFirstDayOfWeek(self.calendar.locale().firstDayOfWeek())

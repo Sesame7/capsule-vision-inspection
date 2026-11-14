@@ -360,7 +360,7 @@ def test_batch_dialog_revision_confirmation_and_restart(
         monkeypatch.setattr(BatchDialog, "exec", choose)
         window.buttons["batch"].click()
         until(lambda: window.snapshot.batch_id == "Next")
-        assert window.batch_label.accessibleName() == "Batch Next"
+        assert window.batch_label.accessibleName() == "Batch ID Next"
     finally:
         close_window(window)
         delivery.detach()

@@ -688,7 +688,9 @@ test('four-cycle lamps survive blank fourth images and use independent group ide
     assert.equal(label.title, description);
     assert.deepEqual(label.children.map(lamp => lamp.className), ['lamp ok', 'lamp ng', 'lamp empty', 'lamp pending']);
   }
-  assert.match(h.node('metrics').textContent, /Batches 2.*NG 24.*Batch Duration 125 ms/);
+  assert.match(h.node('metrics').textContent, /Groups 2.*NG 24.*Group time 125 ms/);
+  assert.match(h.node('metrics').title, /first Cycle admission.*last required terminal result.*excluding later PLC attribution checks, writes and ACK/);
+  assert.equal(h.node('metrics').getAttribute('aria-description'), h.node('metrics').title);
   assert.equal(h.node('signals').hidden, false);
   assert.equal(h.channel(0).children.length, 4);
   assert.equal(h.maxActive, 1);
@@ -777,18 +779,20 @@ test('new group progress retains the preceding fourth image identity', async () 
 
 
 test('single-cycle group shows physical counters with ordinary single-result indicators', async () => {
-  const h = fixture();
+  const h = fixture("zh-CN");
   h.value.group_counting = true;
   h.value.four_cycle = false;
   h.value.metrics = { batches: 1, ok: 30, ng: 4, empty: 2, duration_ms: 90 };
   await h.start();
   assert.equal(h.node('metrics').hidden, false);
-  assert.match(h.node('metrics').textContent, /Batches 1.*NG 4/);
+  assert.match(h.node('metrics').textContent, /组数 1.*NG 4.*组耗时 90 ms/);
+  assert.match(h.node('metrics').title, /PLC 计数器.*周期接纳.*最后一个所需结果.*写入和确认/);
   assert.equal(h.channel(0).dataset.kind, 'ok');
   assert.equal(h.channel(0).children.length, 1);
   assert.notEqual(h.channel(0).children[0].className, 'lamp ok');
   h.value = h.snapshot(2);
   await h.tick();
   assert.equal(h.node('metrics').hidden, true);
+  assert.equal(h.node('metrics').getAttribute('aria-description'), null);
   h.stop();
 });

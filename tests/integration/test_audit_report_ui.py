@@ -16,7 +16,8 @@ from tests.unit.test_audit_report import fill
 from capsule_vision.application.audit_report import AuditReportRequest
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.catalog import text
+from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.report_dialog import ReportDialog
@@ -52,9 +53,20 @@ def test_audit_context_dialog_scope_export_and_empty_feedback(
         assert len([w for w in dialog.findChildren(QComboBox) if w.isVisible()]) == 2
         assert not dialog.basis.isVisible() and not dialog.hint.isVisible()
         dialog.output_language.setCurrentIndex(0)
-        window.set_language("zh")
+        for language in LANGUAGES:
+            window.set_language(language)
+            assert dialog.windowTitle() == text("customer_audit", language)
+            assert "LOT-A · Yellow" in dialog.scope_label.text()
+            assert "Former Operator" in dialog.scope_label.text()
+            assert dialog.audit.account.username == "Former Operator"
+            assert dialog.audit.filters.batch == batch
+            assert dialog.format.currentData() == "pdf"
+            assert dialog.output_language.currentData() == "zh"
+            assert [dialog.output_language.itemData(i) for i in range(2)] == [
+                "zh",
+                "en",
+            ]
         window.set_language("en")
-        assert dialog.output_language.currentData() == "zh"
         output = tmp_path / "audit.pdf"
         choose_file(dialog, output)
         until(
