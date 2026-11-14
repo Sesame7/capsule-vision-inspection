@@ -104,20 +104,34 @@ class RecipeDraft:
 
 class MachineLayoutDraft:
     def __init__(
-        self, machine: MachineLayoutDefinition | None, path: Path | None
+        self,
+        machine: MachineLayoutDefinition | None,
+        path: Path | None,
+        *,
+        sources: CameraSources | None = None,
     ) -> None:
         self.path = path
         self.bounds: dict[CameraId, tuple[int, int]] = {}
         self._file_present = path is not None and path.exists()
         self._saved = machine
+        self._saved_camera_ids = tuple(CameraId(f"CAM{i}") for i in range(1, 7))
+        self.accept_saved_sources(sources)
         self.reset(machine)
+
+    def accept_saved_sources(self, sources: CameraSources | None) -> None:
+        """Remember an explicit saved selection without clearing any ROI edits."""
+        if self.persisted:
+            return
+        default = tuple(CameraId(f"CAM{i}") for i in range(1, 7))
+        selected = tuple(c.camera_id for c in sources.cameras) if sources else ()
+        self._saved_camera_ids = (
+            selected if selected in (default[:5], default) else default
+        )
 
     def reset(self, machine: MachineLayoutDefinition | None) -> None:
         self._saved = machine
         self._camera_ids = (
-            machine.layout.camera_ids
-            if machine
-            else tuple(CameraId(f"CAM{i}") for i in range(1, 7))
+            machine.layout.camera_ids if machine else self._saved_camera_ids
         )
         self._geometry = (
             {c.camera_id: c for c in machine.layout.cameras} if machine else {}
@@ -167,7 +181,7 @@ class MachineLayoutDraft:
     @property
     def dirty(self) -> bool:
         if self._saved is None:
-            return bool(self._geometry) or len(self.camera_ids) != 6
+            return bool(self._geometry) or self.camera_ids != self._saved_camera_ids
         return not self.complete or self.definition != self._saved
 
     def rois(self, identity: CameraId) -> tuple[ChannelROI, ...]:
@@ -307,7 +321,14 @@ class MachineLayoutDraft:
     def discard(self) -> None:
         self.reset(self._saved)
 
-    def load_saved(self, machine: MachineLayoutDefinition | None) -> None:
+    def load_saved(
+        self,
+        machine: MachineLayoutDefinition | None,
+        *,
+        sources: CameraSources | None = None,
+    ) -> None:
+        self._saved = machine
+        self.accept_saved_sources(sources)
         self.reset(machine)
         self._file_present = self.path is not None and self.path.exists()
 

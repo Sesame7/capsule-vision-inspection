@@ -35,7 +35,7 @@ from capsule_vision.application.identity_models import (
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
-from capsule_vision.application.startup import Startup
+from capsule_vision.application.startup import ApplicationData, Startup
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
@@ -213,6 +213,63 @@ def test_first_vision_publications_capture_both_complete_files(tmp_path: Path) -
                 owner.audit.revision_content(row.record.operation.id).result(WAIT)
                 == path.read_bytes()
             )
+    finally:
+        close(startup)
+
+
+@pytest.mark.parametrize("failed", ["none", "publication", "confirmation"])
+def test_provisional_selection_needs_confirmed_source_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed: str
+) -> None:
+    data = ApplicationData.at_entry(tmp_path)
+    startup = authenticated_startup(data)
+    try:
+        editor, owner = startup.editor, startup.application.identity
+        assert editor and editor.camera_sources and owner
+        machine, sources = editor.machine_editor, editor.camera_sources
+        machine.remove_camera_six()
+        if failed == "publication":
+
+            def refuse(_publication: ConfigurationPublication) -> None:
+                raise ConfigurationIOError("isolated publication refusal")
+
+            monkeypatch.setattr(ConfigurationPublication, "publish", refuse)
+        elif failed == "confirmation":
+            trigger(
+                data.audit,
+                "CREATE TRIGGER refuse BEFORE INSERT ON completions BEGIN SELECT RAISE(ABORT,'isolated confirmation refusal'); END",
+            )
+        result = editor.save_vision(None, None)
+        assert result.sources_saved == (failed == "none")
+        assert bool(result.errors) == (failed != "none")
+        assert not result.machine_saved and not data.machine.exists()
+        assert machine.dirty == sources.dirty == (failed != "none")
+        (row,) = owner.audit.revisions("sources", data.sources.name).result(WAIT)
+        assert row.confirmed == (failed == "none")
+        assert (
+            row.record.outcome
+            == {
+                "none": "success",
+                "publication": "failed",
+                "confirmation": "unresolved",
+            }[failed]
+        )
+        content = owner.audit.revision_content(row.record.operation.id).result(WAIT)
+        assert content.count(b"CAM") == 5
+        if failed != "publication":
+            assert content == data.sources.read_bytes()
+        else:
+            assert not data.sources.exists()
+        if failed == "none":
+            assert editor.save_vision(None, None).sources_saved
+            assert (
+                len(owner.audit.revisions("sources", data.sources.name).result(WAIT))
+                == 1
+            )
+        elif failed == "confirmation":
+            assert result.unconfirmed == frozenset({"CameraSources"})
+        machine.discard()
+        assert len(machine.camera_ids) == (5 if failed == "none" else 6)
     finally:
         close(startup)
 

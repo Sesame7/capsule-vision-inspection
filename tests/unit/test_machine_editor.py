@@ -7,6 +7,8 @@ import pytest
 from tests.support.configuration import machine
 
 from capsule_vision.configuration import (
+    CameraFolder,
+    CameraSources,
     ConfigurationError,
     ConfigurationIOError,
     load_machine_layout,
@@ -250,6 +252,54 @@ def test_first_run_rejects_dimensions_that_cannot_form_valid_rois(
     with pytest.raises(ValueError):
         d.initialize(CameraId("CAM1"), width, height)
     assert not d.rois(CameraId("CAM1")) and not d.complete and not d.dirty
+
+
+@pytest.mark.parametrize(
+    "ids,expected",
+    [
+        ((), 6),
+        ((3,), 6),
+        ((2, 3, 4, 5, 6), 6),
+        (tuple(range(1, 6)), 5),
+        (tuple(range(1, 7)), 6),
+    ],
+)
+def test_only_explicit_canonical_sources_restore_provisional_selection(
+    tmp_path: Path, ids: tuple[int, ...], expected: int
+) -> None:
+    sources = CameraSources(tuple(CameraFolder(CameraId(f"CAM{i}")) for i in ids))
+    working = MachineLayoutDraft(None, tmp_path / "machine.tsv", sources=sources)
+    assert working.camera_ids == tuple(f"CAM{i}" for i in range(1, expected + 1))
+    assert not working.dirty and not working.complete and not working.persisted
+    assert all(not working.rois(c) for c in working.camera_ids)
+    assert not (tmp_path / "machine.tsv").exists()
+    if expected == 5:
+        working.restore_camera_six()
+    else:
+        working.remove_camera_six()
+    assert working.dirty
+    working.discard()
+    assert len(working.camera_ids) == expected and not working.dirty
+
+
+@pytest.mark.parametrize("count", [5, 6])
+def test_saved_machine_owns_camera_selection_even_with_conflicting_sources(
+    tmp_path: Path, count: int
+) -> None:
+    original = machine(mirrored=True)
+    if count == 5:
+        original = replace(
+            original, layout=InspectionLayout(original.layout.cameras[:5])
+        )
+    source_count = 6 if count == 5 else 5
+    sources = CameraSources(
+        tuple(CameraFolder(CameraId(f"CAM{i}")) for i in range(1, source_count + 1))
+    )
+    working = MachineLayoutDraft(original, tmp_path / "machine.tsv", sources=sources)
+    assert working.definition == original and not working.dirty
+    working.accept_saved_sources(sources)
+    working.discard()
+    assert working.definition == original and len(working.camera_ids) == count
 
 
 @pytest.mark.parametrize("present", [False, True])

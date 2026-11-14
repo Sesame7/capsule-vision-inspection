@@ -93,7 +93,15 @@ class RecipeEditorSession:
         self.managed_models = managed_models
         self.model_issues: tuple[str, ...] = ()
         self.machine_path = machine_path
-        self.machine_editor = MachineLayoutDraft(machine, machine_path)
+        self.machine_editor = MachineLayoutDraft(
+            machine,
+            machine_path,
+            sources=(
+                camera_sources.saved
+                if camera_sources is not None and camera_sources.persisted
+                else None
+            ),
+        )
         self.catalog, self.registry = catalog, registry
         self.base_directory = base_directory
         self.entry: RecipeEntry | None = None
@@ -334,7 +342,7 @@ class RecipeEditorSession:
             )
         if self.camera_sources is not None:
             self.camera_sources.load_saved(saved.sources)
-        self.machine_editor.load_saved(saved.machine)
+        self.machine_editor.load_saved(saved.machine, sources=saved.sources)
 
     def validate_vision_save(self, connection: SourceConnectionSnapshot | None) -> None:
         draft = self.machine_editor
@@ -385,6 +393,15 @@ class RecipeEditorSession:
         if self.camera_sources is not None:
             try:
                 draft = self.camera_sources
+                if not self.machine_editor.persisted:
+                    cameras = self.machine_editor.camera_ids
+                    draft.definition.validate_cameras(cameras, complete=False)
+                    # An explicit first-run Save records every selected identity,
+                    # even when its Folder/serial fields have not been assigned.
+                    draft.definition = replace(
+                        draft.definition,
+                        cameras=tuple(draft.definition.camera(c) for c in cameras),
+                    )
 
                 def sources_save(
                     write: Callable[[ConfigurationPublication], None],
@@ -405,6 +422,7 @@ class RecipeEditorSession:
                     sources_save,
                 )
                 sources_saved = True
+                self.machine_editor.accept_saved_sources(draft.saved)
             except (IdentityError, AuditUnavailable, ValueError, OSError) as exc:
                 if isinstance(exc, RevisionConfirmationError):
                     unconfirmed.add("CameraSources")

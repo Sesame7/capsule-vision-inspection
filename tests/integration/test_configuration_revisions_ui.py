@@ -227,10 +227,13 @@ def test_unconfirmed_sources_with_uninitialized_machine_remain_observable(
             page.feedback
             and page.feedback[0] == "configuration_confirmation_incomplete"
         )
-        assert not page.sources.persisted
+        assert not page.sources.persisted and page.sources.dirty
         (row,) = owner.audit.revisions("sources", "camera_sources.json").result(WAIT)
         assert not row.confirmed and row.record.outcome == "unresolved"
         assert not owner.audit.revisions("machine", "machine.tsv").result(WAIT)
     finally:
+        # Unconfirmed first-run entries remain genuine unsaved source edits.
+        assert startup.editor and startup.editor.camera_sources
+        startup.editor.camera_sources.discard()
         close_window(window)
         delivery.detach()

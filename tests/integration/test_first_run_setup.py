@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 from tests.support.cycles import image_result
 from tests.support.qt import close_window, until
-from tests.support.startup import authenticated_startup
+from tests.support.startup import authenticated_startup, close, saved_data
 
 from capsule_vision.application import (
     ApplicationError,
@@ -36,12 +36,15 @@ from capsule_vision.application import (
     ModelPreparationResult,
     ProductionCounters,
 )
+from capsule_vision.application.basler import BaslerDevice
 from capsule_vision.application.basler_connection import (
     ConnectedCamera,
     ConnectionState,
 )
-from capsule_vision.application.startup import ApplicationData
+from capsule_vision.application.startup import ApplicationData, load_startup
 from capsule_vision.configuration import (
+    ConfigurationIOError,
+    ConfigurationPublication,
     ModelDefinition,
     RecipeDefinition,
     load_camera_sources,
@@ -129,6 +132,81 @@ def choose_model_file(monkeypatch: pytest.MonkeyPatch, source: Path) -> None:
     monkeypatch.setattr(QFileDialog, "getOpenFileName", choose)
 
 
+@pytest.mark.parametrize("count,assigned", [(5, 5), (5, 0), (5, 3), (6, 0), (6, 6)])
+def test_provisional_camera_save_navigation_and_restart_without_geometry(
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    count: int,
+    assigned: int,
+) -> None:
+    data = ApplicationData.at_entry(tmp_path)
+    cameras = tuple(CameraId(f"CAM{i}") for i in range(1, count + 1))
+    devices = tuple(BaslerDevice(str(1000 + i), "simulated") for i in range(1, 7))
+    monkeypatch.setattr(
+        "capsule_vision.ui.vision_page.discover_basler_devices", lambda: devices
+    )
+
+    def no_engine(_prepared: object) -> Engine:
+        raise AssertionError("First-run source Save must not create an engine")
+
+    for restart in (False, True):
+        startup = authenticated_startup(data, engine_factory=no_engine)
+        delivery = FutureDelivery()
+        window = create_window(startup, delivery)
+        try:
+            window.show()
+            window.navigate(4)
+            until(lambda window=window: not window.recipe_page.busy)
+            workspace = window.vision_workspace
+            assert workspace is not None and workspace.sources is not None
+            if not restart:
+                assert len(workspace.draft.camera_ids) == 6
+                if count == 5:
+                    workspace.change_camera_configuration()
+                    assert workspace.vision_dirty
+                workspace.source_modes["basler"].click()
+                workspace.discover.click()
+                until(lambda window=window: not window.recipe_page.busy)
+                for i, camera in enumerate(cameras[:assigned], 1):
+                    field = workspace.camera_cards[camera].device
+                    index = field.findData(str(1000 + i))
+                    assert index >= 0
+                    field.setCurrentIndex(index)
+                    field.activated.emit(index)
+                workspace.buttons["save"].click()
+                until(lambda window=window: not window.recipe_page.busy)
+            saved = load_camera_sources(data.sources)
+            assert saved.mode == "basler"
+            assert tuple(c.camera_id for c in saved.cameras) == cameras
+            assert tuple(c.basler_serial for c in saved.cameras) == tuple(
+                str(1000 + i) if i <= assigned else "" for i in range(1, count + 1)
+            )
+            assert workspace.draft.camera_ids == cameras
+            assert not workspace.sources.dirty
+            assert not workspace.draft.complete and not workspace.draft.persisted
+            assert all(not workspace.draft.rois(c) for c in cameras)
+            assert not data.machine.exists()
+            assert not data.models.exists() and not data.recipes.exists()
+            assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+            assert startup.application.snapshot().counters == ProductionCounters()
+            window.navigate(0)
+            assert not workspace.vision_dirty
+            until(lambda window=window: window.vision_workspace is None)
+            assert not any(d.isVisible() for d in window.findChildren(QMessageBox))
+        finally:
+            # Failure cleanup affects this disposable fixture only.
+            if window.vision_workspace is not None:
+                for dialog in window.vision_workspace.findChildren(QMessageBox):
+                    dialog.reject()
+            assert startup.editor is not None
+            startup.editor.machine_editor.discard()
+            assert startup.editor.camera_sources is not None
+            startup.editor.camera_sources.discard()
+            close_window(window)
+            delivery.detach()
+
+
 def test_empty_vision_sources_save_independently_and_cam6_is_a_placeholder(
     first_run: tuple[MainWindow, VisionPage, ApplicationData, list[Engine]],
 ) -> None:
@@ -147,7 +225,9 @@ def test_empty_vision_sources_save_independently_and_cam6_is_a_placeholder(
     assert "camera_setup" in window.configuration_messages
     workspace.buttons["save"].click()
     until(lambda: not window.recipe_page.busy)
-    assert json.loads(data.sources.read_text(encoding="utf-8")) == {}
+    assert json.loads(data.sources.read_text(encoding="utf-8")) == {
+        f"CAM{i}": {} for i in range(1, 7)
+    }
     assert (
         not data.machine.exists()
         and not data.recipes.exists()
@@ -173,6 +253,41 @@ def test_empty_vision_sources_save_independently_and_cam6_is_a_placeholder(
         CameraId("CAM6")
     )
     assert not data.machine.exists()
+
+
+@pytest.mark.parametrize("kind", ["empty", "sparse", "invalid", "conflicting"])
+def test_startup_does_not_repair_sparse_invalid_or_conflicting_sources(
+    tmp_path: Path, kind: str
+) -> None:
+    data = saved_data(tmp_path, camera_count=5)
+    if kind != "conflicting":
+        data.machine.unlink()  # Disposable first-run fixture only.
+    raw = (
+        '{"CAM7": {}}'
+        if kind == "invalid"
+        else '{"CAM6": {}}'
+        if kind == "conflicting"
+        else '{"CAM3": {}}'
+        if kind == "sparse"
+        else "{}"
+    )
+    data.sources.write_text(raw, encoding="utf-8")
+    startup = load_startup(data)
+    try:
+        editor = startup.editor
+        assert editor is not None and editor.camera_sources is not None
+        assert len(editor.machine_editor.camera_ids) == (
+            5 if kind == "conflicting" else 6
+        )
+        assert not editor.machine_editor.dirty
+        assert editor.camera_sources.persisted == (kind in ("empty", "sparse"))
+        assert any(i.key == "startup_sources" for i in startup.issues) == (
+            kind in ("invalid", "conflicting")
+        )
+        assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+        assert data.sources.read_text(encoding="utf-8") == raw
+    finally:
+        close(startup)
 
 
 @pytest.mark.parametrize("available,count", [(True, 5), (True, 6), (False, 6)])
@@ -300,6 +415,8 @@ def test_partial_geometry_save_and_discard_keep_sources_and_view_separate(
     tmp_path: Path,
 ) -> None:
     window, workspace, data, engines = first_run
+    workspace.change_camera_configuration()
+    assert len(workspace.draft.camera_ids) == 5
     path = tmp_path / "import.png"
     write_image(path)
     workspace.load_image(path)
@@ -330,12 +447,60 @@ def test_partial_geometry_save_and_discard_keep_sources_and_view_separate(
     ).click()
     until(lambda: not window.recipe_page.busy)
     assert workspace.sources.definition == saved
+    assert len(workspace.draft.camera_ids) == 5
     assert not workspace.vision_dirty and not workspace.draft.rois(CameraId("CAM1"))
     assert workspace.frame is frame and not data.machine.exists()
     assert (
         not engines
         and window.bridge.application.snapshot().counters == ProductionCounters()
     )
+
+
+def test_provisional_source_failure_keeps_feedback_and_unsaved_camera_selection(
+    first_run: tuple[MainWindow, VisionPage, ApplicationData, list[Engine]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, workspace, data, engines = first_run
+    workspace.change_camera_configuration()
+    assert workspace.sources is not None and workspace.draft.dirty
+    publish = ConfigurationPublication.publish
+
+    def fail(value: ConfigurationPublication) -> None:
+        if value.path == data.sources:
+            raise ConfigurationIOError("isolated sources Save failure")
+        publish(value)
+
+    monkeypatch.setattr(ConfigurationPublication, "publish", fail)
+    workspace.buttons["save"].click()
+    until(lambda: not window.recipe_page.busy)
+    assert workspace.draft.dirty and workspace.sources.dirty
+    assert len(workspace.draft.camera_ids) == 5
+    assert not data.sources.exists() and not data.machine.exists()
+    assert "isolated sources Save failure" in window.event_label.toolTip()
+    assert not engines
+
+
+def test_saved_provisional_count_can_be_changed_and_discarded(
+    first_run: tuple[MainWindow, VisionPage, ApplicationData, list[Engine]],
+) -> None:
+    window, workspace, data, _engines = first_run
+    workspace.change_camera_configuration()
+    workspace.buttons["save"].click()
+    until(lambda: not window.recipe_page.busy)
+    assert not workspace.vision_dirty
+    saved = data.sources.read_bytes()
+    workspace.camera_cards[CameraId("CAM6")].configuration.click()
+    assert len(workspace.draft.camera_ids) == 6 and workspace.vision_dirty
+    workspace.buttons["vision_discard"].click()
+    dialog = next(d for d in workspace.findChildren(QMessageBox) if d.isVisible())
+    next(
+        b
+        for b in dialog.buttons()
+        if dialog.buttonRole(b) is QMessageBox.ButtonRole.DestructiveRole
+    ).click()
+    until(lambda: not window.recipe_page.busy)
+    assert len(workspace.draft.camera_ids) == 5 and not workspace.vision_dirty
+    assert data.sources.read_bytes() == saved and not data.machine.exists()
 
 
 def test_first_machine_save_uses_connected_dimensions_without_source_actions(

@@ -768,9 +768,12 @@ bounds validation. No silent clamping is performed. Saved MachineLayout is the
 sole persisted geometry authority: Recipes cannot override it, and opening or
 refreshing Vision never replaces or repairs saved geometry.
 
-With no saved MachineLayout, Vision starts with six editable source placeholders
-and no ROI geometry. CAM1–CAM5 are required; removing/restoring CAM6 selects 30/36
-channels. Each new camera initializes once from actual Folder/imported/captured
+With no valid saved MachineLayout, Vision restores five or six selected cameras
+only from an explicit, canonical CAM1–CAM5 or CAM1–CAM6 CameraSources set; otherwise
+it retains the six-camera default. This selection supplies no ROI geometry and
+does not imply readiness. A valid saved MachineLayout remains authoritative.
+CAM1–CAM5 are required; removing/restoring CAM6 selects 30/36 channels.
+Each new camera initializes once from actual Folder/imported/captured
 pixels or observed connected dimensions: boundaries `floor(i*W/6)`, i=0..6,
 partition the full width, with y=0 and height H. Width must be at least six pixels.
 Without dimensions, geometry stays uninitialized. This is an editable template,
@@ -1094,8 +1097,14 @@ Invalid present values, duplicate/unknown keys, arrays, embedded `camera_id`,
 There is no fallback to `data/sources/camera_sources.json`.
 
 Missing entries, including `{}`, are valid incomplete saved definitions.
-Vision presents missing configured cameras with blank fields; only an explicit
-edit adds that camera entry. Opening/browsing never fills or rewrites the file.
+Vision presents missing configured cameras with blank fields. Before the first
+valid MachineLayout Save, explicit Vision Save records every selected camera
+entry, including empty Folder/serial fields, so the provisional selection is
+unambiguous. Successful source publication confirms that selection without
+clearing partial ROI edits or creating `machine.tsv`. A subsequent unsaved count
+change remains dirty; failed source publication does not confirm it. With a saved
+MachineLayout, only an explicit source edit adds a missing camera entry.
+Opening/browsing never fills or rewrites sparse or invalid definitions.
 References outside the current MachineLayout are rejected when applying it.
 Basler preparation/connection/Start requires the complete configured camera set
 and distinct nonempty serials, resolved in MachineLayout order. Folder definitions
