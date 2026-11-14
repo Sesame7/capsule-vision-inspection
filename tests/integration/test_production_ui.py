@@ -618,6 +618,7 @@ def test_demo_uses_real_application_runtime_and_exits(
             bridge.stop()
             until(lambda: window.snapshot.state is ApplicationState.READY)
             assert not any(t.name.startswith("ProductionSource-") for t in threads())
+        if scenario == "normal":
             counters = window.snapshot.counters
             bridge.application.configure(next_recipe)
             bridge.refresh()

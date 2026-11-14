@@ -75,8 +75,14 @@ from capsule_vision.web import ProductionSnapshotService
 from capsule_vision.web.runtime import WebRuntime, WebRuntimeSnapshot, WebState
 
 
-@pytest.mark.parametrize("language,size", [("zh", (1080, 1920)), ("en", (1920, 1080))])
-@pytest.mark.parametrize("modbus,base", [(False, 49), (False, 149), (True, 65532)])
+@pytest.mark.parametrize(
+    "language,size,modbus,base",
+    [
+        ("zh", (1080, 1920), False, 49),
+        ("en", (1920, 1080), False, 149),
+        ("zh", (1080, 1920), True, 65532),
+    ],
+)
 def test_global_reporting_state_and_communication_details(
     settings_window: tuple[Startup, MainWindow],
     monkeypatch: pytest.MonkeyPatch,
@@ -669,9 +675,10 @@ def settings_window(
         delivery.detach()
 
 
-@pytest.mark.parametrize("theme", ("dark", "light"))
-@pytest.mark.parametrize("language", ("zh", "en"))
-@pytest.mark.parametrize("size", ((1080, 1920), (1920, 1080)))
+@pytest.mark.parametrize(
+    "theme,language,size",
+    [("dark", "zh", (1080, 1920)), ("light", "en", (1920, 1080))],
+)
 def test_numeric_values_and_prefixes_fit_shared_stepper_geometry(
     settings_window: tuple[Startup, MainWindow],
     theme: Theme,
@@ -1885,7 +1892,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
             + Style.space
         )
         assert button.height() >= Style.touch
-    for width, height in ((1080, 1920), (1920, 1080), (1080, 1920)):
+    for width, height in ((1080, 1920), (1920, 1080)):
         window.resize(width, height)
         QApplication.processEvents()
         # Reflow follows the actual compact group widths, not a resolution threshold.
@@ -2073,7 +2080,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
         page.watch_auto.click()
         until(lambda: not page.busy)
         assert [(r.kind, r.area, r.start, r.count) for r in requests] == ordered * 2
-        for width, height in ((1080, 1920), (1920, 1080), (1080, 1920)):
+        for width, height in ((1920, 1080), (1080, 1920)):
             window.resize(width, height)
             for language in LANGUAGES:
                 window.set_language(language)

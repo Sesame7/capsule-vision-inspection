@@ -98,16 +98,25 @@ def source(root: Path, cameras: int = 6) -> ApplicationData:
 
 def compact_plan():
     plan = schedule(date.today() - timedelta(days=1), timezone(timedelta(hours=8)))
-    return replace(
-        plan, runs=tuple(replace(r, groups=min(20, r.groups)) for r in plan.runs)
+    # Runs 7 and 12 carry the technical-error observations at group index 17.
+    runs = tuple(
+        replace(run, groups=20 if run.index in (7, 12) else 6) for run in plan.runs
     )
+    return replace(plan, runs=runs)
 
 
 @pytest.fixture(scope="module")
-def staged(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    root = tmp_path_factory.mktemp("showcase")
-    build(source(root / "source"), root / "stage", compact_plan())
-    return root / "stage"
+def showcase_source(tmp_path_factory: pytest.TempPathFactory) -> ApplicationData:
+    return source(tmp_path_factory.mktemp("showcase-source"))
+
+
+@pytest.fixture(scope="module")
+def staged(
+    tmp_path_factory: pytest.TempPathFactory, showcase_source: ApplicationData
+) -> Path:
+    stage = tmp_path_factory.mktemp("showcase") / "stage"
+    build(showcase_source, stage, compact_plan())
+    return stage
 
 
 def manifest(directory: Path) -> dict[str, object]:
@@ -116,38 +125,44 @@ def manifest(directory: Path) -> dict[str, object]:
     )
 
 
-@pytest.mark.parametrize("cameras", [5, 6])
-def test_scenario_repeats_with_independent_totals(tmp_path: Path, cameras: int) -> None:
-    data = source(tmp_path / "source", cameras)
+def test_scenario_repeats_with_independent_totals(
+    staged: Path, showcase_source: ApplicationData, tmp_path: Path
+) -> None:
+    plan = compact_plan()
+    data = showcase_source
     before = {
         str(p.relative_to(data.root)): digest(p)
         for p in data.root.rglob("*")
         if p.is_file()
     }
-    for name in ("first", "second"):
-        build(data, tmp_path / name, compact_plan())
-        assert verify(tmp_path / name) == {
-            "batches": 10,
-            "runs": 25,
-            "groups": 492,
-            "cycles": 1968,
-            "audit": 147,
-            "alarms": 8,
-        }
-    assert (tmp_path / "first/expected.json").read_bytes() == (
-        tmp_path / "second/expected.json"
+    second = tmp_path / "second"
+    build(data, second, plan)
+    assert verify(second) == {
+        "batches": 10,
+        "runs": 25,
+        "groups": 178,
+        "cycles": 712,
+        "audit": 147,
+        "alarms": 8,
+    }
+    assert (staged / "expected.json").read_bytes() == (
+        second / "expected.json"
     ).read_bytes()
     assert before == {
         str(p.relative_to(data.root)): digest(p)
         for p in data.root.rglob("*")
         if p.is_file()
     }
-    expected = object_map(manifest(tmp_path / "first")["expected"])
+    expected = object_map(manifest(second)["expected"])
     batches = [object_map(b) for b in cast(list[object], expected["batches"])]
     runs = [object_map(r) for r in cast(list[object], expected["runs"])]
     assert len({r["username"] for r in runs}) == 3
     assert sum(r["outcome"] == "interrupted" for r in runs) == 1
     assert sum(r["batch"] is None for r in runs) == 1
+    assert (
+        sum(cast(int, object_map(r["totals"])["technical_error_cycles"]) for r in runs)
+        == 2
+    )
     categories = {
         key for b in batches for key in object_map(object_map(b["totals"])["positions"])
     }
@@ -173,6 +188,21 @@ def test_scenario_repeats_with_independent_totals(tmp_path: Path, cameras: int) 
                 for r in runs
                 if r["batch"] == batch["uuid"]
             )
+
+
+def test_five_camera_showcase_preserves_30_channel_position_totals(
+    tmp_path: Path,
+) -> None:
+    plan = compact_plan()
+    build(source(tmp_path / "source", 5), tmp_path / "stage", plan)
+    document = manifest(tmp_path / "stage")
+    assert object_map(document["configuration"])["channels"] == 30
+    expected = object_map(document["expected"])
+    for value in cast(list[object], expected["runs"]):
+        totals = object_map(object_map(value)["totals"])
+        assert sum(
+            cast(int, totals[key]) for key in ("ok", "ng", "empty")
+        ) == 30 * cast(int, totals["groups"])
 
 
 def test_labels_and_optional_checks_are_grounded_in_configuration(

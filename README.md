@@ -105,7 +105,7 @@ licenses and local images retain their own licensing and authorization.
 | `app.py` | Normal Windows application entry point |
 | `src/capsule_vision/` | Application, UI, runtime and inspection packages |
 | `scripts/` | Engineering and equipment-free diagnostic tools |
-| `tests/` | Unit and integration coverage |
+| `tests/` | Unit, integration and launcher lifecycle coverage |
 | `docs/` | Current operational contracts and target product requirements |
 | `data/` | Local configuration and generated application data |
 | `models/` | Optional independent engineering model inputs |
@@ -228,9 +228,19 @@ uv run --no-sync pytest --tb=short --basetemp $pytestBase
 git diff --check
 ```
 
-Focused checks are appropriate for ordinary documentation changes. Native Qt
-screenshots, real-model startup and camera/PLC acceptance remain separate,
-manual validation.
+Choose a pytest directory for a focused run:
+
+- `tests/unit` covers domain contracts, file formats, protocols and tools.
+- `tests/integration` covers offscreen Qt presentation and Application workflows
+  with synthetic data, controlled workers and loopback peers.
+- `tests/lifecycle` covers launcher failure cleanup and normal Close. Launch
+  failure probes use fresh Qt processes. The Windows Close tests send
+  `WM_CLOSE` to a normal launcher with a temporary entry and data directory.
+
+Pass the directory to the pytest command above and generate a fresh
+`--basetemp` for each invocation. Run `node --test tests/web/observer.test.cjs`
+for browser changes. For live-desktop, real-model and camera/PLC acceptance,
+follow the [field validation runbook](docs/field-ui-validation.md).
 
 ## License
 

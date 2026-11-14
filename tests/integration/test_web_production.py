@@ -2,22 +2,29 @@
 
 import json
 import socket
-from collections.abc import Callable
+from collections.abc import Sequence
 from http.client import HTTPConnection
 from pathlib import Path
 from threading import enumerate as threads
+from time import monotonic
 
 import pytest
-from PySide6.QtWidgets import QApplication, QWidget
-from tests.support.qt import until
+from PySide6.QtWidgets import QApplication
+from tests.support.application import WAIT
+from tests.support.qt import close_window, until
 from tests.support.reporting import readback, seed, server
-from tests.support.startup import normal_replay, replay_state, saved_data
+from tests.support.startup import close, normal_replay, replay_state, saved_data
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.application import startup as startup_module
 from capsule_vision.application.identity_models import AuthorizationError
 from capsule_vision.application.source_control import SourceControlState
-from capsule_vision.application.startup import ApplicationData, Startup, load_startup
+from capsule_vision.application.startup import (
+    ApplicationData,
+    Startup,
+    create_web_runtime,
+    load_startup,
+)
 from capsule_vision.communication.reporting import ReportStage
 from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
@@ -26,68 +33,9 @@ from capsule_vision.configuration.communication_preferences import (
 )
 from capsule_vision.ui import bootstrap
 from capsule_vision.ui.future_delivery import FutureDelivery
-from capsule_vision.ui.identity_controls import IdentityControls
-from capsule_vision.ui.shell import NavigationBar
+from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.web import ProductionSnapshotService
 from capsule_vision.web.runtime import WebRuntime, WebState
-
-
-class StartupWindow(QWidget):
-    """Keep the bootstrap probe small while observing the real shell handoff."""
-
-    runtime: WebRuntime | None = None
-    identity_controls: IdentityControls
-
-    def compose(self, startup: Startup, _delivery: FutureDelivery) -> QWidget:
-        navbar = NavigationBar()
-        navbar.setParent(self)
-        self.identity_controls = IdentityControls(
-            navbar, startup.application.identity, self
-        )
-        return self
-
-    def bind_web_runtime(self, runtime: WebRuntime) -> None:
-        self.runtime = runtime
-
-    def finish_close(self) -> None:
-        self.identity_controls.dispose()
-        self.close()
-
-
-def run_startup(
-    qapp: QApplication,
-    root: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    observe: Callable[[WebRuntime], None],
-) -> None:
-    original_threads = {thread.ident for thread in threads()}
-    window = StartupWindow()
-
-    def existing_qt(_args: object) -> QApplication:
-        return qapp
-
-    def observe_before_close() -> int:
-        assert window.isVisible()
-        assert window.isMaximized()
-        setup = window.identity_controls.form
-        assert setup is not None and setup.kind == "setup" and setup.isVisible()
-        runtime = window.runtime
-        assert runtime is not None
-        until(lambda: not runtime.snapshot().busy)
-        observe(runtime)
-        return 0
-
-    monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
-    monkeypatch.setattr(bootstrap, "create_window", window.compose)
-    monkeypatch.setattr(qapp, "exec", observe_before_close)
-    try:
-        assert bootstrap.main(root, []) == 0
-        assert window.runtime is not None and window.runtime.closed
-        assert not window.runtime.snapshot().owned
-        assert not window.isVisible()
-    finally:
-        window.close()
-    assert not {thread.ident for thread in threads()} - original_threads
 
 
 def test_stop_restart_and_close_keep_web_independent_of_production(
@@ -232,13 +180,11 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         )
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_normal_startup_restores_saved_web_enablement_and_interval(
-    qapp: QApplication,
+@pytest.mark.parametrize("interval_ms", [None, 500, 1000, 2000])
+def test_saved_web_restoration_uses_effective_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    enabled: bool,
-    capsys: pytest.CaptureFixture[str],
+    interval_ms: int | None,
 ) -> None:
     services: list[ProductionSnapshotService] = []
 
@@ -248,18 +194,40 @@ def test_normal_startup_restores_saved_web_enablement_and_interval(
             super().start()
 
     monkeypatch.setattr(startup_module, "ProductionSnapshotService", ObservedService)
-
-    def observe(runtime: WebRuntime) -> None:
+    data = ApplicationData.at_entry(tmp_path)
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
+    settings = WebPreferences(
+        enabled=interval_ms is not None, port=port, interval_ms=interval_ms or 500
+    )
+    save_communication_preferences(
+        data.communication, CommunicationPreferences(web=settings)
+    )
+    saved = data.communication.read_bytes()
+    startup = load_startup(data)
+    runtime = create_web_runtime(startup, restore_saved=True)
+    try:
         with pytest.raises(AuthorizationError):
             runtime.stop()
-        assert runtime.snapshot().state is (
-            WebState.RUNNING if enabled else WebState.STOPPED
-        )
-        assert len(services) == int(enabled)
-        if services:
-            service = services[0]
+        if interval_ms is None:
+            assert runtime.restoration is None
+            assert runtime.snapshot().state is WebState.STOPPED
+            assert not runtime.snapshot().owned
+            assert not services
+        else:
+            assert runtime.restoration is not None
+            snapshot = runtime.restoration.result(WAIT)
+            assert snapshot.state is WebState.RUNNING and snapshot.owned
+            assert snapshot.configuration == settings
+            (service,) = services
+            assert service.interval == interval_ms / 1000
             assert service.http_alive and service.publisher_alive
-            until(lambda: service.publisher.latest() is not None)
+            assert service.publisher.refresh_interval_ms == interval_ms
+            deadline = monotonic() + WAIT
+            while service.publisher.latest() is None:
+                assert monotonic() < deadline, service.publisher.error()
+                service.stopping.wait(0.01)
             connection = HTTPConnection(service.host, service.port, timeout=2)
             try:
                 connection.request("GET", "/api/snapshot")
@@ -268,37 +236,25 @@ def test_normal_startup_restores_saved_web_enablement_and_interval(
                 metadata = json.loads(response.read())
             finally:
                 connection.close()
-            assert metadata["refresh_interval_ms"] == 500
+            assert metadata["refresh_interval_ms"] == interval_ms
             assert metadata["publisher_id"] == service.publisher.publisher_id
-            publication = service.publisher.latest()
-            assert publication is not None
-            assert json.loads(publication.metadata)["refresh_interval_ms"] == 500
-
-    with socket.socket() as available:
-        available.bind(("127.0.0.1", 0))
-        port = available.getsockname()[1]
-    save_communication_preferences(
-        ApplicationData.at_entry(tmp_path).communication,
-        CommunicationPreferences(web=WebPreferences(enabled=enabled, port=port)),
-    )
-    run_startup(qapp, tmp_path, monkeypatch, observe)
-    assert len(services) == int(enabled)
-    if services:
-        service = services[0]
-        assert service.interval == 0.5
+    finally:
+        runtime.request_close()
+        try:
+            assert runtime.join(WAIT) and not runtime.snapshot().owned
+        finally:
+            close(startup)
+    for service in services:
         assert service.stopping.is_set() and service.join(0)
         assert service.publisher.latest() is None
         assert not service.http_alive and not service.publisher_alive
         with socket.socket() as probe:
             assert probe.connect_ex(("127.0.0.1", port)) != 0
-    assert "Read-only Production snapshots:" not in capsys.readouterr().err
+    assert data.communication.read_bytes() == saved
 
 
-def test_missing_communication_starts_quietly_without_web_or_file_creation(
-    qapp: QApplication,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+def test_missing_communication_starts_without_web_or_file_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     data = saved_data(tmp_path)
     files = {path: path.read_bytes() for path in data.root.rglob("*.json")}
@@ -307,81 +263,22 @@ def test_missing_communication_starts_quietly_without_web_or_file_creation(
         pytest.fail("Missing settings must not create a Web service")
 
     monkeypatch.setattr(startup_module, "ProductionSnapshotService", forbidden)
-
-    def observe(runtime: WebRuntime) -> None:
+    startup = load_startup(data)
+    runtime = create_web_runtime(startup, restore_saved=True)
+    try:
+        assert runtime.restoration is None
         assert runtime.snapshot().state is WebState.STOPPED
         assert not runtime.snapshot().owned and runtime.snapshot().configuration is None
-
-    run_startup(qapp, tmp_path, monkeypatch, observe)
+    finally:
+        runtime.request_close()
+        try:
+            assert runtime.join(WAIT)
+        finally:
+            close(startup)
     assert not data.communication.exists()
     assert {path: path.read_bytes() for path in files} == files
     captured = capsys.readouterr()
     assert not captured.out and not captured.err
-
-
-@pytest.mark.parametrize(
-    "enabled,interval_ms,expected_interval",
-    [(True, 500, 0.5), (False, 500, None), (True, 2000, 2.0), (True, 1000, 1.0)],
-)
-def test_saved_web_interval_and_publication_metadata(
-    qapp: QApplication,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    enabled: bool,
-    interval_ms: int,
-    expected_interval: float | None,
-) -> None:
-    services: list[ProductionSnapshotService] = []
-
-    class InlineService(ProductionSnapshotService):
-        """Real constructor/publisher; no HTTP socket or publisher threads."""
-
-        active = False
-
-        def start(self) -> None:
-            services.append(self)
-            self.publisher.publish()
-            self.active = True
-
-        @property
-        def http_alive(self) -> bool:
-            return self.active
-
-        @property
-        def publisher_alive(self) -> bool:
-            return self.active
-
-        def request_stop(self) -> None:
-            super().request_stop()
-            self.active = False
-
-    monkeypatch.setattr(startup_module, "ProductionSnapshotService", InlineService)
-    settings = WebPreferences(enabled=enabled, interval_ms=interval_ms)
-    path = ApplicationData.at_entry(tmp_path).communication
-    save_communication_preferences(path, CommunicationPreferences(web=settings))
-    saved = path.read_bytes()
-
-    def observe(runtime: WebRuntime) -> None:
-        snapshot = runtime.snapshot()
-        assert snapshot.state is (WebState.RUNNING if enabled else WebState.STOPPED)
-        assert snapshot.configuration == (settings if enabled else None)
-        assert snapshot.owned is enabled
-        assert len(services) == int(expected_interval is not None)
-        if services:
-            service = services[0]
-            assert service.interval == expected_interval
-            assert service.publisher.refresh_interval_ms == interval_ms
-            publication = service.publisher.latest()
-            assert publication is not None
-            assert (
-                json.loads(publication.metadata)["refresh_interval_ms"] == interval_ms
-            )
-
-    run_startup(qapp, tmp_path, monkeypatch, observe)
-    assert path.read_bytes() == saved
-    for service in services:
-        assert service.stopping.is_set() and service.join(0)
-        assert not service.http_alive and not service.publisher_alive
 
 
 def test_occupied_web_port_does_not_prevent_normal_startup(
@@ -390,27 +287,35 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    window = StartupWindow()
+    windows: list[MainWindow] = []
+    runtimes: list[WebRuntime] = []
+    create_window = bootstrap.create_window
 
-    def existing_qt(_args: object) -> QApplication:
+    def observe_window(startup: Startup, delivery: FutureDelivery) -> MainWindow:
+        window = create_window(startup, delivery)
+        windows.append(window)
+        return window
+
+    def observe_runtime(startup: Startup, *, restore_saved: bool = False) -> WebRuntime:
+        runtime = create_web_runtime(startup, restore_saved=restore_saved)
+        runtimes.append(runtime)
+        return runtime
+
+    def observed_failure() -> int:
+        (window,) = windows
+        (runtime,) = runtimes
+        assert window.isVisible() and window.isMaximized()
+        setup = window.identity_controls.form
+        assert setup is not None and setup.kind == "setup" and setup.isVisible()
+        until(lambda: runtime.snapshot().state is WebState.FAILED)
+        return 0
+
+    def existing_qt(_args: Sequence[str]) -> QApplication:
         return qapp
 
     monkeypatch.setattr(bootstrap, "QApplication", existing_qt)
-    monkeypatch.setattr(bootstrap, "create_window", window.compose)
-
-    def observed_failure() -> int:
-        assert window.isVisible()
-        assert window.isMaximized()
-        assert window.runtime is not None
-        until(
-            lambda: (
-                window.runtime.snapshot().state is WebState.FAILED
-                if window.runtime
-                else False
-            )
-        )
-        return 0
-
+    monkeypatch.setattr(bootstrap, "create_window", observe_window)
+    monkeypatch.setattr(bootstrap, "create_web_runtime", observe_runtime)
     monkeypatch.setattr(qapp, "exec", observed_failure)
     try:
         with socket.socket() as occupied:
@@ -422,12 +327,14 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
                 CommunicationPreferences(web=WebPreferences(port=port)),
             )
             assert bootstrap.main(tmp_path, []) == 0
+        (window,) = windows
+        (runtime,) = runtimes
         assert not window.isVisible()
-        assert window.runtime is not None
+        assert runtime.closed and not runtime.snapshot().owned
         assert "OSError" in capsys.readouterr().err
-        assert "OSError" in window.runtime.snapshot().error
     finally:
-        window.close()
+        for window in windows:
+            close_window(window)
 
 
 def test_invalid_saved_interval_recovers_without_silent_overwrite(

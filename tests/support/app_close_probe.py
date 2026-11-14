@@ -26,6 +26,7 @@ from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.ui import bootstrap
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
+from capsule_vision.web.runtime import WebState
 from tests.support.qt import until
 from tests.support.startup import authenticated_startup
 
@@ -62,20 +63,18 @@ def install() -> None:
     original_close = MainWindow.closeEvent
 
     def load(
-        _data: ApplicationData,
+        data: ApplicationData,
         *,
         engine_factory: EngineFactory = real_engine,
         observe_source: Callable[[Future[None]], None] = lambda _: None,
         diagnostics: RuntimeDiagnostics | None = None,
     ) -> Startup:
-        # Missing test data gives the real stopped UNCONFIGURED shell, no GPU.
+        assert data == ApplicationData.at_entry(root)
         load_for_scenario = (
-            authenticated_startup
-            if scenario in ("success", "timeout", "pending", "switch")
-            else original_load
+            authenticated_startup if scenario != "idle" else original_load
         )
         return load_for_scenario(
-            ApplicationData.at_entry(root),
+            data,
             engine_factory=engine_factory,
             observe_source=observe_source,
             diagnostics=diagnostics,
@@ -161,6 +160,14 @@ def install() -> None:
                 user.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
                 user.GetWindowLongW.restype = wintypes.LONG
                 assert user.GetWindowLongW(int(window.winId()), -16) & 0x00010000
+            runtime = window.communication.web_panel.runtime
+            assert runtime is not None
+            until(lambda: not runtime.snapshot().busy)
+            assert runtime.snapshot().state is (
+                WebState.RUNNING
+                if startup.communication.web.enabled
+                else WebState.STOPPED
+            )
             record(
                 "window_shown",
                 maximized=window.isMaximized(),
@@ -169,19 +176,17 @@ def install() -> None:
                 available=window.screen().availableGeometry().getRect(),
                 dpr=window.devicePixelRatioF(),
                 native_client=native_client,
+                web_running=runtime.snapshot().state is WebState.RUNNING,
             )
-            if scenario != "unused":
+            if scenario != "idle":
                 window.navigate(2)
-            if scenario in ("success", "timeout", "pending", "switch"):
                 simulator = FinsUdpSimulator(port=0)
                 window.communication.protocol.setCurrentIndex(0)
                 window.communication.port.setValue(simulator.port)
-                window.communication.persist_settings()
-                until(lambda: not window.communication.busy)
                 window.communication.timeout.setValue(0.15)
                 window.communication.persist_settings()
                 until(lambda: not window.communication.busy)
-                if scenario in ("success", "switch"):
+                if scenario == "switch":
                     peer = Thread(
                         target=lambda: simulator.serve(stop) if simulator else None,
                         name="AppCloseTestSimulator",

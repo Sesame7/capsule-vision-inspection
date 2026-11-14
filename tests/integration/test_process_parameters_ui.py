@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.application import WAIT
-from tests.support.qt import close_window, ensure_test_fonts, until
+from tests.support.qt import close_window, delete_widget, ensure_test_fonts, until
 from tests.support.recipe_ui import assert_inside, edit
 from tests.support.startup import (
     TEST_PASSWORD,
@@ -37,7 +37,7 @@ from capsule_vision.application.startup import Startup
 from capsule_vision.configuration import load_recipe, save_recipe
 from capsule_vision.configuration.process_parameters import load_process_catalog
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES
+from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
@@ -220,12 +220,47 @@ def test_process_new_duplicate_and_discard_use_existing_recipe_workflow(
         assert load_recipe(original.path) == original.recipe
 
 
-@pytest.mark.parametrize("width,columns", ((1080, 2), (1920, 3)))
-def test_process_card_layout_collapse_localization_and_stability(
-    qapp: QApplication, tmp_path: Path, width: int, columns: int
+def test_process_card_fits_localized_fields_at_both_layout_widths(
+    qapp: QApplication,
 ) -> None:
+    ensure_test_fonts()
+    card = ProcessParametersCard()
+    card.set_editable(True)
+    card.show_values(card.catalog, {"running_speed": "0", "photo_phase": "120"})
+    card.show()
+    card.expand.click()
+    before = card.values()
+    try:
+        for theme in ("dark", "light"):
+            apply_theme(card, theme)
+            card.refresh_theme()
+            for language in LANGUAGES:
+                card.set_language(language)
+                for width, columns in ((1032, 2), (1872, 3)):
+                    card.resize(width, 1200)
+                    qapp.processEvents()
+                    qapp.processEvents()
+                    assert len({group.x() for group in card.groups.values()}) == columns
+                    assert card.values() == before and card.expand.isChecked()
+                    for parameter in card.catalog.parameters:
+                        field = card.fields[parameter.id]
+                        assert (
+                            field.height() >= Style.touch
+                            and field.focusPolicy() == Qt.FocusPolicy.StrongFocus
+                        )
+                        assert parameter.label(language) in field.accessibleName()
+                        assert "D" in field.toolTip()
+                        assert_inside(field, card.groups[parameter.group])
+    finally:
+        card.close()
+        delete_widget(card)
+
+
+def test_recipe_places_process_card_and_reflows_when_expanded(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    languages: tuple[Language, ...] = ("zh", "en", "de", "ti")
     with process_window(tmp_path) as (_, window):
-        window.resize(width, 1920 if width == 1080 else 1080)
         page = window.recipe_page
         card = page.process_parameters
         assert not card.details.isVisible()
@@ -233,40 +268,27 @@ def test_process_card_layout_collapse_localization_and_stability(
             "process_set_count", card.language
         ).format(count=2)
         card.expand.click()
-        QApplication.processEvents()
-        assert len({group.x() for group in card.groups.values()}) == columns
         before = card.values()
-        for language in LANGUAGES:
+        for language in languages:
             window.set_language(language)
-            for theme in ("dark", "light"):
-                window.set_theme(theme)
-                QApplication.processEvents()
+            for width, height, columns in (
+                (1080, 1920, 2),
+                (1920, 1080, 3),
+                (1080, 1920, 2),
+            ):
+                window.resize(width, height)
+                qapp.processEvents()
                 assert len({group.x() for group in card.groups.values()}) == columns
                 assert card.values() == before
                 assert card.expand.isChecked()
+                assert page.archive_section.y() < card.y() < page.model_section.y()
                 assert (
-                    page.archive_section.y() < card.y() < page.model_section.y()
-                    and page.model_section.mapTo(page, QPoint()).y()
-                    < page.inspection_section.y()
+                    page.summary_scroll.geometry().bottom()
+                    < page.inspection_section.geometry().top()
                 )
                 assert page.summary_scroll.horizontalScrollBar().maximum() == 0
-                for parameter in card.catalog.parameters:
-                    field = card.fields[parameter.id]
-                    assert (
-                        field.height() >= 44
-                        and field.focusPolicy() == Qt.FocusPolicy.StrongFocus
-                    )
-                    assert parameter.label(language) in field.accessibleName()
-                    assert "D" in field.toolTip()
-                    assert_inside(field, card.groups[parameter.group])
-        for _ in range(3):
-            window.resize(1920 if width == 1080 else 1080, window.height())
-            QApplication.processEvents()
-            window.resize(width, window.height())
-            QApplication.processEvents()
-            assert len({group.x() for group in card.groups.values()}) == columns
         card.expand.click()
-        QApplication.processEvents()
+        qapp.processEvents()
         assert not card.details.isVisible() and "2" in card.override_count.text()
         assert card.height() <= 70
 

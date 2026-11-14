@@ -20,7 +20,7 @@ from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.ui.production_bridge import QtProductionBridge
 from capsule_vision.ui.vision_page import VisionPage
 from tests.support.application import ControlledEngine, FakeSession
-from tests.support.qt import ensure_test_fonts, until
+from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.recipe import editor
 from tests.support.source_inputs import folders, input_files
 
@@ -47,24 +47,23 @@ def configured_screen(
         app, LatestDisplayFrameStore(ready.configuration.layout.camera_ids), poll_ms=10
     )
     window = MainWindow(bridge, recipe_editor=session)
-    window.resize(1080, 1920)
-    window.show()
-    window.navigate(1)
-    until(
-        lambda: (
-            bool(window.recipe_page.label_checks)
-            and not window.recipe_page.labels_loading
+    try:
+        window.resize(1080, 1920)
+        window.show()
+        window.navigate(1)
+        until(
+            lambda: (
+                bool(window.recipe_page.label_checks)
+                and not window.recipe_page.labels_loading
+            )
         )
-    )
-    yield window, session, runtimes
-    for runtime in runtimes:
-        if not runtime.ready.done():
-            runtime.ready.set_result(None)
-    session.discard()
-    window.close()
-    until(lambda: bridge.closed)
-    assert app.join(0)
-    window.deleteLater()
+        yield window, session, runtimes
+    finally:
+        for runtime in runtimes:
+            if not runtime.ready.done():
+                runtime.ready.set_result(None)
+        session.discard()
+        close_window(window)
 
 
 def edit(line: QLineEdit, value: str) -> None:
@@ -115,20 +114,19 @@ def camera_screen(
         bridge,
         recipe_editor=composition.editor,
     )
-    window.resize(1080, 1920)
-    window.show()
-    window.navigate(4)
-    workspace = window.vision_workspace
-    assert workspace is not None
-    until(lambda: not window.recipe_page.busy)
-    yield window, workspace, engine
-    composition.editor.machine_editor.discard()
-    assert composition.editor.camera_sources is not None
-    composition.editor.camera_sources.discard()
-    window.close()
-    until(lambda: bridge.closed)
-    assert composition.application.join(0)
-    window.deleteLater()
+    try:
+        window.resize(1080, 1920)
+        window.show()
+        window.navigate(4)
+        workspace = window.vision_workspace
+        assert workspace is not None
+        until(lambda: not window.recipe_page.busy)
+        yield window, workspace, engine
+    finally:
+        composition.editor.machine_editor.discard()
+        assert composition.editor.camera_sources is not None
+        composition.editor.camera_sources.discard()
+        close_window(window)
 
 
 def select_production_recipe(window: MainWindow) -> None:

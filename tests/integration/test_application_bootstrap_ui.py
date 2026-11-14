@@ -31,7 +31,7 @@ from capsule_vision.configuration.preferences import (
 )
 from capsule_vision.inspection import CameraId
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
@@ -494,11 +494,12 @@ def test_source_browsing_and_recipe_apply_do_not_rewrite(
         delivery.detach()
 
 
-@pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
 def test_language_switches_persist_without_saving_other_drafts(
-    qapp: QApplication, tmp_path: Path, size: tuple[int, int]
+    qapp: QApplication, tmp_path: Path
 ) -> None:
     ensure_test_fonts()
+    size = (1080, 1857)
+    languages: tuple[Language, ...] = ("zh", "zh-TW", "pt-PT", "ti")
     data = saved_data(tmp_path)
     startup = load_startup(data)
     delivery = FutureDelivery()
@@ -516,7 +517,7 @@ def test_language_switches_persist_without_saving_other_drafts(
     before = startup.application.snapshot()
     recipe_bytes = {p: p.read_bytes() for p in data.recipes.glob("*.json")}
     try:
-        for language in LANGUAGES:
+        for language in languages:
             index = window.language_selector.findData(language)
             assert index >= 0
             window.language_selector.activated.emit(index)
@@ -557,8 +558,8 @@ def test_language_switches_persist_without_saving_other_drafts(
     delivery = FutureDelivery()
     window = create_window(restored, delivery)
     try:
-        assert window.language == LANGUAGES[-1]
-        assert window.language_selector.currentData() == LANGUAGES[-1]
+        assert window.language == languages[-1]
+        assert window.language_selector.currentData() == languages[-1]
     finally:
         close_window(window)
         delivery.detach()

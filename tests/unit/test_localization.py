@@ -644,56 +644,40 @@ OPERATIONAL_REVIEW_BY_LANGUAGE: dict[Language, set[str]] = {
 }
 
 
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_operational_coverage_and_specific_review_fallback(language: Language) -> None:
-    assert len(OPERATIONAL_UI_KEYS) == 75
-    assert OPERATIONAL_UI_KEYS <= PRIORITY_UI_KEYS
-    maintained = (
-        STRINGS.keys()
-        - ENGLISH_FALLBACK_KEYS
-        - TECHNICAL_TOKEN_KEYS
-        - OPTIONAL_NATIVE_KEYS
-    )
-    assert len(maintained) == 737
-    assert OPERATIONAL_UI_KEYS <= maintained
-    if language in ("zh", "en"):
-        return
-    review = OPERATIONAL_REVIEW_BY_LANGUAGE.get(language, set())
-    assert OPERATIONAL_UI_KEYS - EXTRA_STRINGS[language].keys() == review
-    for key in review:
-        assert text(key, language) == STRINGS[key][1]
-
-
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_operational_translations_preserve_protocol_and_outcome_boundaries(
-    language: Language,
-) -> None:
-    for key, tokens in (
-        ("plc_group_hint", ("Basler", "FINS/TCP", "W49", "W149")),
-        ("plc_commit_observation", ("PLC",)),
-        ("comm_local_write", ("PLC",)),
-        ("status_running_tip", ("WR", "0", "1")),
-        ("status_fault_tip", ("FAULT", "1")),
-        ("status_heartbeat_tip", ("16",)),
-        ("plc_merge_count_tip", ("0", "1", "4", "PLC")),
-        ("alarm_word_tip", ("WR", "W0", "W511")),
-        ("comm_modbus_hint", ("Modbus TCP", "255")),
-        ("plc_modbus_base_hint", ("HR", "0", "65532", "FINS")),
-    ):
-        assert all(token in text(key, language) for token in tokens), (language, key)
-    for keys in (
-        ("plc_mode_per_cycle", "plc_mode_single_cycle", "plc_mode_four_cycle"),
-        ("comm_write_not_sent", "comm_write_rejected", "comm_write_unknown"),
-        ("comm_watch_read_failed", "comm_watch_stale"),
-        ("alarm_active", "alarm_inactive", "alarm_waiting", "alarm_unavailable"),
-        ("service_online", "service_waiting", "service_error", "service_partial"),
-        ("ng", "error", "FAULT"),
-        ("batch_input", "export_run", "short_cycles", "pilot_batches"),
-        ("vision_sources_layout_incomplete", "vision_sources_only_saved"),
-        ("vision_preview_start", "vision_preview_stop"),
-    ):
-        assert len({text(key, language) for key in keys}) == len(keys), (language, keys)
-    assert "17" in text("pilot_raw_cycles", language).format(count=17)
+def test_operational_translations_preserve_protocol_and_outcome_boundaries() -> None:
+    for language in LANGUAGES:
+        for key, tokens in (
+            ("plc_group_hint", ("Basler", "FINS/TCP", "W49", "W149")),
+            ("plc_commit_observation", ("PLC",)),
+            ("comm_local_write", ("PLC",)),
+            ("status_running_tip", ("WR", "0", "1")),
+            ("status_fault_tip", ("FAULT", "1")),
+            ("status_heartbeat_tip", ("16",)),
+            ("plc_merge_count_tip", ("0", "1", "4", "PLC")),
+            ("alarm_word_tip", ("WR", "W0", "W511")),
+            ("comm_modbus_hint", ("Modbus TCP", "255")),
+            ("plc_modbus_base_hint", ("HR", "0", "65532", "FINS")),
+        ):
+            assert all(token in text(key, language) for token in tokens), (
+                language,
+                key,
+            )
+        for keys in (
+            ("plc_mode_per_cycle", "plc_mode_single_cycle", "plc_mode_four_cycle"),
+            ("comm_write_not_sent", "comm_write_rejected", "comm_write_unknown"),
+            ("comm_watch_read_failed", "comm_watch_stale"),
+            ("alarm_active", "alarm_inactive", "alarm_waiting", "alarm_unavailable"),
+            ("service_online", "service_waiting", "service_error", "service_partial"),
+            ("ng", "error", "FAULT"),
+            ("batch_input", "export_run", "short_cycles", "pilot_batches"),
+            ("vision_sources_layout_incomplete", "vision_sources_only_saved"),
+            ("vision_preview_start", "vision_preview_stop"),
+        ):
+            assert len({text(key, language) for key in keys}) == len(keys), (
+                language,
+                keys,
+            )
+        assert "17" in text("pilot_raw_cycles", language).format(count=17)
 
 
 def test_operational_regional_spelling_and_meaningful_joiners() -> None:
@@ -1040,13 +1024,7 @@ RECORDS_REVIEW_BY_LANGUAGE: dict[Language, set[str]] = {
 }
 
 
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_records_coverage_completes_maintained_interface_with_exact_exceptions(
-    language: Language,
-) -> None:
-    assert len(RECORDS_WORKFLOW_KEYS) == 159
-    assert RECORDS_WORKFLOW_KEYS <= PRIORITY_UI_KEYS
-    assert not RECORDS_WORKFLOW_KEYS & (OPERATIONAL_UI_KEYS | RECIPE_WORKFLOW_KEYS)
+def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
     maintained = (
         STRINGS.keys()
         - ENGLISH_FALLBACK_KEYS
@@ -1054,77 +1032,70 @@ def test_records_coverage_completes_maintained_interface_with_exact_exceptions(
         - OPTIONAL_NATIVE_KEYS
     )
     assert len(maintained) == 737
-    if language in ("zh", "en"):
-        return
-    review = RECORDS_REVIEW_BY_LANGUAGE.get(language, set())
-    assert RECORDS_WORKFLOW_KEYS - EXTRA_STRINGS[language].keys() == review
-    all_review = (
-        review
-        | OPERATIONAL_REVIEW_BY_LANGUAGE.get(language, set())
-        | RECIPE_REVIEW_BY_LANGUAGE.get(language, set())
+    groups = (
+        (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
+        (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 60),
+        (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 159),
     )
-    assert maintained - EXTRA_STRINGS[language].keys() == all_review
-    for key in review:
-        assert text(key, language) == STRINGS[key][1]
+    covered: set[str] = set()
+    for keys, _, count in groups:
+        assert len(keys) == count
+        assert keys <= PRIORITY_UI_KEYS and keys <= maintained
+        assert not keys & covered
+        covered.update(keys)
+
+    for language, translations in EXTRA_STRINGS.items():
+        exceptions: set[str] = set()
+        for keys, reviewed, _ in groups:
+            missing = keys - translations.keys()
+            assert missing == reviewed.get(language, set()), (language, missing)
+            exceptions.update(missing)
+        assert maintained - translations.keys() == exceptions, language
+        assert (
+            OPTIONAL_NATIVE_KEYS - OPTIONAL_NATIVE_KEYS_BY_LANGUAGE.get(language, set())
+            <= translations.keys()
+        ), language
+        for key in exceptions:
+            assert text(key, language) == STRINGS[key][1], (language, key)
 
 
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_recipe_workflow_coverage_and_specific_review_fallback(
-    language: Language,
-) -> None:
-    assert len(RECIPE_WORKFLOW_KEYS) == 60
-    assert RECIPE_WORKFLOW_KEYS <= PRIORITY_UI_KEYS
-    assert not RECIPE_WORKFLOW_KEYS & OPERATIONAL_UI_KEYS
-    maintained = (
-        STRINGS.keys()
-        - ENGLISH_FALLBACK_KEYS
-        - TECHNICAL_TOKEN_KEYS
-        - OPTIONAL_NATIVE_KEYS
-    )
-    assert len(maintained) == 737 and RECIPE_WORKFLOW_KEYS <= maintained
-    if language in ("zh", "en"):
-        return
-    review = RECIPE_REVIEW_BY_LANGUAGE.get(language, set())
-    assert RECIPE_WORKFLOW_KEYS - EXTRA_STRINGS[language].keys() == review
-    for key in review:
-        assert text(key, language) == STRINGS[key][1]
-
-
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_recipe_terms_keep_preview_preparation_and_application_distinct(
-    language: Language,
-) -> None:
-    for keys in (
-        (
-            "active_recipe",
-            "recipe_preparing_short",
-            "process_applying_short",
-            "process_unverified_short",
-        ),
-        ("model_import", "model_delete", "model_rename"),
-        ("process_plc_loading", "process_plc_values", "process_plc_unavailable"),
-        ("process_apply_required", "process_apply_failed"),
-    ):
-        assert len({text(key, language) for key in keys}) == len(keys)
-    for key in (
-        "process_plc_hold",
-        "process_plc_expand",
-        "process_plc_loading",
-        "process_plc_values",
-        "process_plc_unavailable",
-        "process_view_plc",
-    ):
-        assert "PLC" in text(key, language)
-    if language != "zh":
-        assert "EMPTY" in text("preview_scope_tip", language)
-    hint = text("process_value_hint", language).format(
-        name="QA_{CAM1}_用户", minimum=-20, maximum=150, addresses="D102–D103"
-    )
-    assert all(
-        value in hint for value in ("QA_{CAM1}_用户", "-20", "150", "D102–D103", "-")
-    )
-    for key in ("process_set_count", "process_override_count"):
-        assert "17" in text(key, language).format(count=17)
+def test_recipe_terms_keep_preview_preparation_and_application_distinct() -> None:
+    for language in LANGUAGES:
+        for keys in (
+            (
+                "active_recipe",
+                "recipe_preparing_short",
+                "process_applying_short",
+                "process_unverified_short",
+            ),
+            ("model_import", "model_delete", "model_rename"),
+            ("process_plc_loading", "process_plc_values", "process_plc_unavailable"),
+            ("process_apply_required", "process_apply_failed"),
+        ):
+            assert len({text(key, language) for key in keys}) == len(keys), (
+                language,
+                keys,
+            )
+        for key in (
+            "process_plc_hold",
+            "process_plc_expand",
+            "process_plc_loading",
+            "process_plc_values",
+            "process_plc_unavailable",
+            "process_view_plc",
+        ):
+            assert "PLC" in text(key, language), (language, key)
+        if language != "zh":
+            assert "EMPTY" in text("preview_scope_tip", language)
+        hint = text("process_value_hint", language).format(
+            name="QA_{CAM1}_用户", minimum=-20, maximum=150, addresses="D102–D103"
+        )
+        assert all(
+            value in hint
+            for value in ("QA_{CAM1}_用户", "-20", "150", "D102–D103", "-")
+        )
+        for key in ("process_set_count", "process_override_count"):
+            assert "17" in text(key, language).format(count=17)
 
 
 def test_recipe_regional_terms_and_latin_script_identities() -> None:
@@ -1139,55 +1110,47 @@ def test_recipe_regional_terms_and_latin_script_identities() -> None:
         )
 
 
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_identity_ui_has_complete_native_coverage(language: Language) -> None:
+def test_identity_ui_has_complete_native_coverage() -> None:
     assert IDENTITY_UI_KEYS == {key for key in STRINGS if key.startswith("identity_")}
     assert not IDENTITY_UI_KEYS & (ENGLISH_FALLBACK_KEYS | PRIORITY_UI_KEYS)
-    values = (
-        {key: STRINGS[key][0 if language == "zh" else 1] for key in IDENTITY_UI_KEYS}
-        if language in ("zh", "en")
-        else EXTRA_STRINGS[language]
-    )
-    assert IDENTITY_UI_KEYS <= values.keys()
-    for key in IDENTITY_UI_KEYS:
-        value = values[key]
-        assert value and value == value.strip() and "\ufffd" not in value
-        expected = [
-            (field, spec, conversion)
-            for _, field, spec, conversion in Formatter().parse(STRINGS[key][1])
-            if field is not None
-        ]
-        actual = [
-            (field, spec, conversion)
-            for _, field, spec, conversion in Formatter().parse(value)
-            if field is not None
-        ]
-        assert actual == expected, (language, key)
-        if expected:
-            username = "QA_{CAM01}_用户"
-            assert username in value.format(username=username)
-    for keys in (
-        ("identity_login", "identity_logout", "identity_switch"),
-        ("identity_change", "identity_reset", "identity_change_role"),
-        ("identity_enable", "identity_disable"),
-        ("identity_enabled", "identity_disabled"),
-        (
-            "identity_guest",
-            "identity_operator",
-            "identity_engineer",
-            "identity_administrator",
-        ),
-    ):
-        assert len({values[key] for key in keys}) == len(keys), (language, keys)
-    if language not in ("zh", "en"):
-        for key in (
-            "identity_login",
-            "identity_logout",
-            "identity_manage",
-            "identity_invalid",
-            "identity_storage",
+    for language in LANGUAGES:
+        values = (
+            {
+                key: STRINGS[key][0 if language == "zh" else 1]
+                for key in IDENTITY_UI_KEYS
+            }
+            if language in ("zh", "en")
+            else EXTRA_STRINGS[language]
+        )
+        assert IDENTITY_UI_KEYS <= values.keys()
+        for key in IDENTITY_UI_KEYS:
+            value = values[key]
+            assert value and value == value.strip() and "\ufffd" not in value
+            if "{username}" in STRINGS[key][1]:
+                username = "QA_{CAM01}_用户"
+                assert username in value.format(username=username), (language, key)
+        for keys in (
+            ("identity_login", "identity_logout", "identity_switch"),
+            ("identity_change", "identity_reset", "identity_change_role"),
+            ("identity_enable", "identity_disable"),
+            ("identity_enabled", "identity_disabled"),
+            (
+                "identity_guest",
+                "identity_operator",
+                "identity_engineer",
+                "identity_administrator",
+            ),
         ):
-            assert values[key] != STRINGS[key][1], (language, key)
+            assert len({values[key] for key in keys}) == len(keys), (language, keys)
+        if language not in ("zh", "en"):
+            for key in (
+                "identity_login",
+                "identity_logout",
+                "identity_manage",
+                "identity_invalid",
+                "identity_storage",
+            ):
+                assert values[key] != STRINGS[key][1], (language, key)
 
 
 def test_identity_regional_catalogs_preserve_independent_terms_and_scripts() -> None:
@@ -1543,43 +1506,19 @@ def test_language_identities_and_current_catalog_coverage() -> None:
         assert LANGUAGE_LABELS[language] == exceptions.get(language, language.upper())
     for language, native_name in EXPECTED_LANGUAGE_NAMES.items():
         assert is_language(language) and LANGUAGE_NAMES[language] == native_name
-        if language in ("zh", "en"):
-            continue
-        required = (
-            STRINGS.keys()
-            - ENGLISH_FALLBACK_KEYS
-            - PRIORITY_UI_KEYS
-            - TECHNICAL_TOKEN_KEYS
-            - OPTIONAL_NATIVE_KEYS_BY_LANGUAGE.get(language, set())
-        )
-        if language in PRIORITY_UI_LANGUAGES:
-            required |= PRIORITY_UI_KEYS
-        elif language in ADDITIONAL_SAFETY_LANGUAGES:
-            required |= ADDITIONAL_SAFETY_KEYS
-        required |= OPERATIONAL_UI_KEYS - OPERATIONAL_REVIEW_BY_LANGUAGE.get(
-            language, set()
-        )
-        required |= RECIPE_WORKFLOW_KEYS - RECIPE_REVIEW_BY_LANGUAGE.get(
-            language, set()
-        )
-        required |= RECORDS_WORKFLOW_KEYS - RECORDS_REVIEW_BY_LANGUAGE.get(
-            language, set()
-        )
-        assert required <= EXTRA_STRINGS[language].keys(), language
-        assert not ENGLISH_FALLBACK_KEYS & EXTRA_STRINGS[language].keys(), language
+        if language not in ("zh", "en"):
+            assert not ENGLISH_FALLBACK_KEYS & EXTRA_STRINGS[language].keys(), language
 
 
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_setup_guidance_and_recorded_recipe_recovery_are_distinct(
-    language: Language,
-) -> None:
-    setup = text("recipe_setup_required", language)
-    recovery = text("startup_recipe_identity", language)
-    assert len({setup, recovery, text("configure_first", language)}) == 3
-    assert "app.json" in recovery and "app.json" not in setup
-    if language not in ("zh", "en"):
-        assert "recipe_setup_required" in EXTRA_STRINGS[language]
-        assert setup != text("recipe_setup_required", "en")
+def test_setup_guidance_and_recorded_recipe_recovery_are_distinct() -> None:
+    for language in LANGUAGES:
+        setup = text("recipe_setup_required", language)
+        recovery = text("startup_recipe_identity", language)
+        assert len({setup, recovery, text("configure_first", language)}) == 3
+        assert "app.json" in recovery and "app.json" not in setup
+        if language not in ("zh", "en"):
+            assert "recipe_setup_required" in EXTRA_STRINGS[language]
+            assert setup != text("recipe_setup_required", "en"), language
 
 
 @pytest.mark.parametrize("language", ("lt", "lv", "et", "sl", "sq", "ca"))
@@ -1703,24 +1642,11 @@ def test_display_order_is_separate_from_saved_language_identities() -> None:
     assert len(LANGUAGE_DISPLAY_ORDER) == len(set(LANGUAGE_DISPLAY_ORDER))
 
 
-@pytest.mark.parametrize("language", tuple(EXTRA_STRINGS))
-def test_new_catalogs_preserve_critical_protocol_and_result_distinctions(
-    language: Language,
-) -> None:
-    assert "ACK" in text("plc_next_start", language)
-    assert "EMPTY" in text("preview_scope_tip", language)
-    if "preview_scope_tip" not in EXTRA_STRINGS[language]:
-        assert "Occupancy" in text("preview_scope_tip", language)
-    for key, code in (
-        ("technical_success", "SUCCESS"),
-        ("technical_error", "ERROR"),
-    ):
-        expected = (
-            {"technical_success": "執行成功", "technical_error": "技術異常"}[key]
-            if language == "zh-TW"
-            else code
-        )
-        assert text(key, language) == expected
+def test_ack_and_preview_keep_protocol_terms() -> None:
+    for language, translations in EXTRA_STRINGS.items():
+        assert "ACK" in text("plc_next_start", language), language
+        if "preview_scope_tip" not in translations:
+            assert "Occupancy" in text("preview_scope_tip", language), language
 
 
 def test_localized_operational_text_preserves_codes_and_distinctions() -> None:
@@ -1756,14 +1682,14 @@ def test_localized_operational_text_preserves_codes_and_distinctions() -> None:
         assert expected in text("preview_scope_tip", language)
 
 
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_language_preferences_round_trip(tmp_path: Path, language: Language) -> None:
+def test_language_preferences_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "app.json"
-    expected = ApplicationPreferences("recipe-id", language)
-    save_preferences(path, expected)
-    loaded = read_preferences(path)
-    assert loaded.preferences == expected
-    assert not loaded.invalid_language
+    for language in LANGUAGES:
+        expected = ApplicationPreferences("recipe-id", language)
+        save_preferences(path, expected)
+        loaded = read_preferences(path)
+        assert loaded.preferences == expected, language
+        assert not loaded.invalid_language, language
 
 
 def test_vietnamese_ack_does_not_confirm_physical_product_rejection() -> None:
@@ -1987,15 +1913,6 @@ def test_watch_short_captions_are_explicit_for_every_language() -> None:
     assert text("comm_watch_stop", "pt-PT") == "Parar atualização"
 
 
-def test_optional_ui_text_uses_existing_english_fallback() -> None:
-    for key in ENGLISH_FALLBACK_KEYS:
-        assert key in STRINGS and STRINGS[key][0] and STRINGS[key][1]
-        for language in LANGUAGES:
-            assert text(key, language) == (
-                STRINGS[key][0] if language == "zh" else STRINGS[key][1]
-            )
-
-
 def test_fins_transport_caption_is_neutral_in_every_language() -> None:
     for language in LANGUAGES:
         caption = text("comm_transport_error", language)
@@ -2037,6 +1954,14 @@ def test_record_captions_distinguish_witnessed_transitions_and_audit_outcomes() 
 
 
 def test_technical_tokens_use_fallback_and_preserve_native_overrides() -> None:
+    for key, code, traditional in (
+        ("technical_success", "SUCCESS", "執行成功"),
+        ("technical_error", "ERROR", "技術異常"),
+    ):
+        for language in EXTRA_STRINGS:
+            assert text(key, language) == (
+                traditional if language == "zh-TW" else code
+            ), (language, key)
     for language in EXTRA_STRINGS:
         for key in TECHNICAL_TOKEN_KEYS:
             value = EXTRA_STRINGS[language].get(key)
@@ -2045,12 +1970,7 @@ def test_technical_tokens_use_fallback_and_preserve_native_overrides() -> None:
             else:
                 assert value != STRINGS[key][1], (key, language)
                 assert text(key, language) == value
-    for key, value in (
-        ("technical_success", "執行成功"),
-        ("technical_error", "技術異常"),
-        ("preview_error_short", "異常"),
-    ):
-        assert EXTRA_STRINGS["zh-TW"][key] == text(key, "zh-TW") == value
+    assert EXTRA_STRINGS["zh-TW"]["preview_error_short"] == "異常"
 
 
 def test_technical_fallback_tracks_english_without_changing_native_text(
@@ -2127,30 +2047,31 @@ def test_navigation_has_native_short_captions_and_one_protocol_identifier() -> N
     assert text("nav_records", "pt-PT") == "Registos"
 
 
-@pytest.mark.parametrize("language", tuple(EXTRA_STRINGS))
-def test_optional_translation_falls_back_to_english(language: Language) -> None:
-    for key in STRINGS.keys() - EXTRA_STRINGS[language].keys():
-        assert text(key, language) == STRINGS[key][1], (key, language)
+def test_missing_translations_use_canonical_english() -> None:
+    for key in ENGLISH_FALLBACK_KEYS:
+        assert STRINGS[key][0] and STRINGS[key][1], key
+    for language, translations in EXTRA_STRINGS.items():
+        for key in STRINGS.keys() - translations.keys():
+            assert text(key, language) == STRINGS[key][1], (key, language)
 
 
-@pytest.mark.parametrize("language", tuple(EXTRA_STRINGS))
-def test_optional_translation_can_be_omitted_for_only_one_language(
+def test_missing_translation_does_not_affect_other_languages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = "page_production"
+    korean = text(key, "ko")
+    monkeypatch.delitem(EXTRA_STRINGS["ja"], key)
+    assert text(key, "ja") == STRINGS[key][1]
+    assert text(key, "ko") == korean
+    assert text(key, "zh") == STRINGS[key][0]
+
+
+@pytest.mark.parametrize("language", ("zh", "en", "ja"))
+def test_unknown_key_fails_before_optional_translation_fallback(
     language: Language,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    other_language = "ja" if language == "ko" else "ko"
-    other = text("page_production", other_language)
-    monkeypatch.delitem(EXTRA_STRINGS[language], "page_production")
-    assert text("page_production", language) == STRINGS["page_production"][1]
-    assert text("page_production", other_language) == other
-    assert text("page_production", "zh") == STRINGS["page_production"][0]
-
-
-@pytest.mark.parametrize("language", LANGUAGES)
-def test_unknown_key_fails_before_optional_translation_fallback(
-    language: Language, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    if language not in ("zh", "en"):
+    if language == "ja":
         monkeypatch.setitem(EXTRA_STRINGS[language], "unknown_catalog_key", "unused")
     with pytest.raises(KeyError):
         text("unknown_catalog_key", language)

@@ -1,4 +1,4 @@
-"""Synthetic saved application data for Qt-aware bootstrap tests."""
+"""Synthetic saved application data and normal replay test setup."""
 
 import shutil
 from collections.abc import Callable, Generator
@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import enumerate as threads
+from typing import TYPE_CHECKING
 
 from capsule_vision.application import PreparedConfiguration
 from capsule_vision.application.account_maintenance import initialize_administrator
@@ -35,12 +36,11 @@ from capsule_vision.configuration.preferences import (
 )
 from capsule_vision.diagnostics import RuntimeDiagnostics
 from capsule_vision.inspection import CameraId
-from capsule_vision.ui.bootstrap import create_window
-from capsule_vision.ui.future_delivery import FutureDelivery
-from capsule_vision.ui.main_window import MainWindow
 from tests.support.application import WAIT, ReplayEngine
-from tests.support.qt import close_window
 from tests.support.source_inputs import input_files, replay_files
+
+if TYPE_CHECKING:
+    from capsule_vision.ui.main_window import MainWindow
 
 
 def saved_data(root: Path, *, camera_count: int = 6) -> ApplicationData:
@@ -147,6 +147,10 @@ def normal_replay(
     hold_call: int | None = None,
     fail: str | None = None,
 ) -> Generator[tuple[Startup, MainWindow, list[ReplayEngine]]]:
+    from capsule_vision.ui.bootstrap import create_window
+    from capsule_vision.ui.future_delivery import FutureDelivery
+    from tests.support.qt import close_window
+
     original_threads = {thread.ident for thread in threads()}
     data = saved_data(root)
     replay_files(root / "frames", loop=loop, first_camera_images=first_camera_images)

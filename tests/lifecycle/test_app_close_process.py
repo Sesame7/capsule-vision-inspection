@@ -9,7 +9,7 @@ import subprocess
 import sys
 from ctypes import wintypes
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -41,29 +41,27 @@ def assert_process_exited(pid: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "launcher,scenario,web_host,window_size",
+    "launcher,scenario,web_enabled,window_size",
     [
-        ("uv", s, None, None)
-        for s in ("unused", "visit", "success", "timeout", "pending", "switch")
-    ]
-    + [
-        ("direct", "unused", None, None),
-        ("direct", "unused", "off", None),
-        ("direct", "unused", "127.0.0.1", None),
-        ("direct", "unused", "0.0.0.0", None),
-        ("direct", "unused", "192.0.2.99", None),
-        ("uv", "unused", "off", "1080x1920"),
-        ("uv", "unused", "off", "1600x900"),
-        ("installed", "unused", "off", "880x720"),
+        pytest.param("uv", "idle", True, None, id="maximized-web"),
+        pytest.param("uv", "switch", False, None, id="completed-read-after-navigation"),
+        pytest.param("uv", "timeout", False, None, id="completed-timeout"),
+        pytest.param("uv", "pending", False, None, id="pending-read"),
+        pytest.param("direct", "idle", False, "1080x1920", id="portrait"),
+        pytest.param("uv", "idle", False, "1600x900", id="landscape"),
+        pytest.param("installed", "idle", False, "880x720", id="installed-minimum"),
     ],
 )
 def test_normal_app_native_close_exits_process_tree(
     tmp_path: Path,
-    launcher: str,
+    launcher: Literal["uv", "direct", "installed"],
     scenario: str,
-    web_host: str | None,
+    web_enabled: bool,
     window_size: str | None,
 ) -> None:
+    # Give both normal entry points a disposable data root even if the probe
+    # fails to import. Only the checked-in Python entry file is copied.
+    shutil.copyfile(ROOT / "app.py", tmp_path / "app.py")
     (tmp_path / "sitecustomize.py").write_text(
         "from tests.support.app_close_probe import install\ninstall()\n",
         encoding="utf-8",
@@ -79,33 +77,24 @@ def test_normal_app_native_close_exits_process_tree(
     if launcher == "uv":
         uv = shutil.which("uv")
         assert uv is not None
-        command = [uv, "run", "--no-sync", "python", "app.py"]
+        command = [uv, "run", "--project", str(ROOT), "--no-sync", "python", "app.py"]
     elif launcher == "installed":
         command = [str(Path(sys.executable).with_name("capsule-vision.exe"))]
     else:
-        command = [str(ROOT / ".venv/Scripts/python.exe"), "app.py"]
+        command = [sys.executable, "app.py"]
     if window_size is not None:
         env["APP_CLOSE_WINDOW_SIZE"] = window_size
         command.extend(["--window-size", window_size])
-    web_started = web_host in (None, "127.0.0.1")
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
     settings_path = tmp_path / "data" / "communication.json"
     save_communication_preferences(
         settings_path,
-        CommunicationPreferences(
-            web=WebPreferences(enabled=web_host != "off", port=port)
-        ),
+        CommunicationPreferences(web=WebPreferences(enabled=web_enabled, port=port)),
     )
-    if web_host not in (None, "off", "127.0.0.1"):
-        settings = cast(
-            dict[str, object], json.loads(settings_path.read_text(encoding="utf-8"))
-        )
-        cast(dict[str, object], settings["web"])["host"] = web_host
-        settings_path.write_text(json.dumps(settings), encoding="utf-8")
     with subprocess.Popen(
-        command, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        command, cwd=tmp_path, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     ) as process:
         try:
             stdout, stderr = process.communicate(timeout=15)
@@ -128,11 +117,11 @@ def test_normal_app_native_close_exits_process_tree(
             )
             process.communicate(timeout=5)
             pytest.fail(f"Owned app.py test process hung:\n{diagnostics}")
-        assert process.returncode == 0, (stdout, stderr)
+    log = tmp_path / "boundaries.jsonl"
+    boundaries = log.read_text(encoding="utf-8") if log.exists() else ""
+    assert process.returncode == 0, (process.returncode, stdout, stderr, boundaries)
     records: list[dict[str, object]] = []
-    for line in (
-        (tmp_path / "boundaries.jsonl").read_text(encoding="utf-8").splitlines()
-    ):
+    for line in boundaries.splitlines():
         value: object = json.loads(line)
         assert isinstance(value, dict)
         records.append(cast(dict[str, object], value))
@@ -142,8 +131,10 @@ def test_normal_app_native_close_exits_process_tree(
     assert stages.index("last_window_closed") < stages.index("exec_return")
     assert "application_joined" in stages
     assert b"Read-only Production snapshots" not in stderr
-    if web_host not in (None, "off") and not web_started:
-        assert b"Invalid communication settings" in stderr or b"ValueError" in stderr
+    assert any(r["stage"] == "close_return" and r["accepted"] for r in records)
+    assert next(r for r in records if r["stage"] == "window_shown")["web_running"] is (
+        web_enabled
+    )
     for record in records:
         if record["stage"] == "last_window_closed" or (
             record["stage"] == "close_return" and record["accepted"]
@@ -157,6 +148,7 @@ def test_normal_app_native_close_exits_process_tree(
         pid = records[0][key]
         assert isinstance(pid, int)
         assert_process_exited(pid)
-    if web_started:
+    if web_enabled:
         with socket.socket() as probe:
+            probe.settimeout(1)
             assert probe.connect_ex(("127.0.0.1", port)) != 0

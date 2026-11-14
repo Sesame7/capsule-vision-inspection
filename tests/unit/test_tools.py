@@ -1,13 +1,21 @@
 """Maintained tool behavior without SDK, GPU or reference assets."""
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
-from run_demo import compose, demo_files
+from run_demo import compose, demo_files, demo_images
+from tests.support.application import WAIT
+from tests.support.source_inputs import input_files
 from visualize_inference import decode, image_paths, render, save_png
 
+from capsule_vision.application import ApplicationState
+from capsule_vision.application.composition import compose as compose_application
+from capsule_vision.application.production_application import (
+    SourceProductionApplication,
+)
 from capsule_vision.configuration import (
     load_machine_layout,
     load_recipe,
@@ -138,3 +146,52 @@ def test_demo_seed_rejects_changed_artifact_without_overwriting(tmp_path: Path) 
         demo_files(images, tmp_path)
     assert artifact.read_bytes() == b"Changed input; never repair it"
     assert machine.read_bytes() == original_geometry
+
+
+def test_explicit_composition_failure_releases_created_application(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owners: list[SourceProductionApplication] = []
+
+    def fail(self: SourceProductionApplication, _candidate: object) -> None:
+        owners.append(self)
+        raise RuntimeError("Injected configuration failure")
+
+    monkeypatch.setattr(SourceProductionApplication, "configure", fail)
+    with pytest.raises(RuntimeError, match="Injected configuration failure"):
+        compose_application(*input_files(tmp_path))
+    assert len(owners) == 1 and owners[0].join(0)
+    assert owners[0].snapshot().state is ApplicationState.CLOSED
+
+
+def test_selected_demo_images_are_frozen_and_originals_unchanged(
+    tmp_path: Path,
+) -> None:
+    import cv2
+
+    external = tmp_path / "originals"
+    external.mkdir()
+    for index in range(6):
+        ok, image = cv2.imencode(
+            ".png", np.full((20, 60, 3), index + 1, dtype=np.uint8)
+        )
+        assert ok
+        image.tofile(external / f"{index}.png")
+    hashes = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in external.iterdir()}
+    images = demo_images(external)
+    composition = compose(images, tmp_path / "demo", "normal", 0)
+    try:
+        assert composition.editor.cli_sources
+        frames = composition.store.snapshot().frames
+        assert tuple(f.frame_id.camera_id for f in frames) == tuple(
+            f"CAM{i}" for i in range(1, 7)
+        )
+        for index, frame in enumerate(frames):
+            assert frame.generation == 0 and not frame.image.flags.writeable
+            assert np.all(frame.image == index + 1)
+        images[0][:] = 99
+        assert np.all(frames[0].image == 1)
+        assert {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in hashes} == hashes
+    finally:
+        composition.application.close().result(WAIT)
+        assert composition.application.join(WAIT)

@@ -3,8 +3,8 @@
 from dataclasses import replace
 
 import pytest
-from PySide6.QtCore import QPoint, QRect, QSignalBlocker, Qt, QTimer
-from PySide6.QtGui import QPalette, QScreen
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
+from PySide6.QtGui import QFont, QPalette, QScreen
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.application import FakeSession, production
+from tests.support.qt import delete_widget, ensure_test_fonts, until
 from tests.support.qt import screen as screen
-from tests.support.qt import until
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.application.alarm_monitor import AlarmSnapshot
@@ -40,8 +40,14 @@ from capsule_vision.localization.languages import (
     Language,
 )
 from capsule_vision.ui.main_window import MainWindow
-from capsule_vision.ui.shell import PAGE_CAPTIONS
-from capsule_vision.ui.style import Style, production_icon, shell_icon, theme_colors
+from capsule_vision.ui.shell import PAGE_CAPTIONS, StatusBar
+from capsule_vision.ui.style import (
+    Style,
+    apply_theme,
+    production_icon,
+    shell_icon,
+    theme_colors,
+)
 from capsule_vision.web import ProductionSnapshotService
 from capsule_vision.web.runtime import WebRuntime, WebRuntimeSnapshot, WebState
 
@@ -105,108 +111,113 @@ def test_status_strip_artwork_matches_observed_state(
     )
 
 
-def test_compact_status_roles_reserve_remaining_width_for_global_feedback(
-    screen: tuple[MainWindow, FakeSession],
-) -> None:
-    window, _ = screen
-    before = window.bridge.application.snapshot()
-    bar = window.event_frame
+def test_status_strip_roles_fit_and_only_feedback_stretches(qapp: QApplication) -> None:
+    ensure_test_fonts()
+    host = QWidget()
+    host.resize(1056, 44)
+    bar = StatusBar()
+    font = QFont()
+    font.setFamilies(Style.font_families)
+    host.setFont(font)
+    bar.setParent(host)
     labels = (bar.state, bar.plc, bar.alarm)
     parents: list[QWidget] = []
-    for label in (*labels, window.event_label):
+    for label in (*labels, bar.event_label):
         parent = label.parentWidget()
         assert parent is not None
         parents.append(parent)
     status_groups, event_group = parents[:3], parents[3]
-    previous_window_width = previous_event_width = 0
-    minimum_feedback = 0
     fixed_geometry: dict[Language, tuple[int, ...]] = {}
-    # Presentation-only captions exercise every role without opening a source,
-    # dispatching a report, or creating a Web owner.
-    with QSignalBlocker(window.bridge.timer):
-        for size in ((1080, 1920), (1920, 1080), (1080, 1920)):
-            window.resize(*size)
-            QApplication.processEvents()
-            for theme in ("dark", "light"):
-                window.set_theme(theme)
-                for language in LANGUAGES:
-                    window.set_language(language)
-                    for source, plc, alarm in (
-                        ("source_folder_status", "—", "alarm_off"),
-                        ("UNCONFIGURED", "0", "alarm_waiting"),
-                        ("state_RUNNING", "9999", "alarm_online"),
-                        ("state_FAULT", "65535", "alarm_unavailable"),
-                    ):
-                        failed = plc == "65535"
-                        if failed:
-                            window.bridge.command_failed.emit("stop", TimeoutError())
-                        else:
-                            window.bridge.command_finished.emit("stop")
-                        captions = (
-                            text(source, language),
-                            f"HR 65532 · {plc}",
-                            text(alarm, language),
+    bar.resize(1056, bar.height())
+    apply_theme(host, "dark")
+    host.show()
+    qapp.processEvents()
+    try:
+        for theme in ("dark", "light"):
+            apply_theme(host, theme)
+            qapp.processEvents()
+            for language in LANGUAGES:
+                bar.refresh_icons(language)
+                for source, plc, alarm in (
+                    ("source_folder_status", "—", "alarm_off"),
+                    ("UNCONFIGURED", "0", "alarm_waiting"),
+                    ("state_RUNNING", "9999", "alarm_online"),
+                    ("state_FAULT", "65535", "alarm_unavailable"),
+                ):
+                    captions = (
+                        text(source, language),
+                        f"HR 65532 · {plc}",
+                        text(alarm, language),
+                    )
+                    for label, caption in zip(labels, captions, strict=True):
+                        label.setText(caption)
+                    qapp.processEvents()
+                    geometry = tuple(
+                        value
+                        for group in status_groups
+                        for value in (group.x(), group.width())
+                    )
+                    assert fixed_geometry.setdefault(language, geometry) == geometry, (
+                        language,
+                        theme,
+                        plc,
+                    )
+                    assert event_group.width() >= bar.width() // 4
+                    assert (bar.width(), bar.height()) == (1056, 44)
+                    for label, caption in zip(labels, captions, strict=True):
+                        assert label.accessibleName() == label.text() == caption
+                        assert not label.toolTip()
+                        assert label.fontMetrics().horizontalAdvance(caption) <= (
+                            label.width()
                         )
-                        for label, caption in zip(labels, captions, strict=True):
-                            label.setText(caption)
-                            label.setToolTip("")
-                        QApplication.processEvents()
-                        geometry = tuple(
-                            value
-                            for group in status_groups
-                            for value in (group.x(), group.width())
-                        )
-                        if language not in fixed_geometry:
-                            fixed_geometry[language] = geometry
-                        assert geometry == fixed_geometry[language], (
-                            size,
-                            theme,
-                            language,
-                            plc,
-                        )
-                        minimum_feedback = bar.width() // 4
-                        assert event_group.width() >= minimum_feedback
-                        assert bar.height() == 44
-                        assert window.width() == size[0]
-                        for label, caption in zip(labels, captions, strict=True):
-                            assert label.accessibleName() == caption
-                            assert not label.toolTip()
-                            assert (
-                                label.fontMetrics().horizontalAdvance(label.text())
-                                <= label.width()
-                            )
-                            assert label.text() == caption, (language, caption)
-                        for a, b in zip(parents[:-1], parents[1:], strict=True):
-                            assert a.geometry().right() < b.geometry().left()
-                        if failed:
-                            assert "TimeoutError" in window.event_label.toolTip()
-                            assert (
-                                window.event_label.accessibleName()
-                                == window.event_label.toolTip()
-                            )
-                            assert window.event_icon.isVisible()
-                            assert (
-                                theme_colors(window).warning
-                                in window.event_label.styleSheet()
-                            )
-                        assert window.bridge.application.snapshot() == before
-            # Keep the error icon and message unchanged when comparing resize deltas.
-            if previous_window_width:
-                assert (
-                    window.event_label.width() - previous_event_width
-                    == window.width() - previous_window_width
-                )
-            previous_window_width = window.width()
-            previous_event_width = window.event_label.width()
-    # Unexpectedly long source/state values remain bounded and accessible;
-    # reserving their entire width must not displace actionable feedback.
-    long_caption = "Long source observation " * 20
-    bar.state.setText(long_caption)
+                    for a, b in zip(parents[:-1], parents[1:], strict=True):
+                        assert a.geometry().right() < b.geometry().left()
+        narrow = bar.event_label.width()
+        positions = tuple(group.geometry() for group in status_groups)
+        for width in (1896, 1056):
+            host.resize(width, host.height())
+            bar.resize(width, bar.height())
+            qapp.processEvents()
+            assert bar.event_label.width() - narrow == width - 1056
+            assert tuple(group.geometry() for group in status_groups) == positions
+        long_caption = "Long source observation " * 20
+        bar.state.setText(long_caption)
+        qapp.processEvents()
+        assert bar.state.text().endswith("…")
+        assert bar.state.accessibleName() == long_caption
+        assert not bar.state.toolTip()
+        assert event_group.width() >= bar.width() // 4
+    finally:
+        host.close()
+        delete_widget(host)
+
+
+def test_global_feedback_keeps_error_details_and_strip_geometry(
+    screen: tuple[MainWindow, FakeSession],
+) -> None:
+    window, _ = screen
+    before = window.bridge.application.snapshot()
+    window.set_language("en")
+    window.resize(1080, 1920)
     QApplication.processEvents()
-    assert bar.state.text().endswith("…")
-    assert bar.state.accessibleName() == long_caption
-    assert not bar.state.toolTip()
-    assert event_group.width() >= minimum_feedback
+    bar = window.event_frame
+    groups = tuple(label.parentWidget() for label in (bar.state, bar.plc, bar.alarm))
+    assert all(group is not None for group in groups)
+    geometry = tuple(group.geometry() for group in groups if group is not None)
+    for theme in ("dark", "light"):
+        window.set_theme(theme)
+        window.bridge.command_failed.emit("stop", TimeoutError())
+        QApplication.processEvents()
+        assert "TimeoutError" in window.event_label.toolTip()
+        assert window.event_label.accessibleName() == window.event_label.toolTip()
+        assert window.event_icon.isVisible()
+        assert theme_colors(window).warning in window.event_label.styleSheet()
+        assert (
+            tuple(group.geometry() for group in groups if group is not None) == geometry
+        )
+    window.bridge.command_finished.emit("stop")
+    assert "TimeoutError" not in window.event_label.toolTip()
+    assert window.bridge.application.snapshot() == before
 
 
 @pytest.mark.parametrize("language,size", [("zh", (1080, 1920)), ("en", (1920, 1080))])

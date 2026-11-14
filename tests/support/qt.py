@@ -6,11 +6,11 @@ from threading import Event
 from typing import TYPE_CHECKING
 
 import pytest
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer
 from PySide6.QtGui import QFontDatabase
 
 if TYPE_CHECKING:
-    from PySide6.QtWidgets import QApplication, QPushButton
+    from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
     from capsule_vision.ui.main_window import MainWindow
     from tests.support.application import FakeSession
@@ -88,13 +88,19 @@ def assert_full_caption(button: QPushButton, caption: str) -> None:
 
 def close_window(window: MainWindow) -> None:
     """Settle owners and await Qt deletion before the next test's native work."""
-    destroyed = Event()
-    window.destroyed.connect(destroyed.set)
     window.close()
     until(lambda: window.bridge.closed and window.communication.closed)
     assert window.bridge.application.join(1)
-    window.deleteLater()
-    until(destroyed.is_set)
+    delete_widget(window)
+
+
+def delete_widget(widget: QWidget) -> None:
+    """Deliver this widget's deferred deletion on the test's Qt thread."""
+    destroyed = Event()
+    widget.destroyed.connect(destroyed.set)
+    widget.deleteLater()
+    QCoreApplication.sendPostedEvents(widget, QEvent.Type.DeferredDelete)
+    assert destroyed.is_set()
 
 
 @pytest.fixture
@@ -126,10 +132,12 @@ def screen(
     window = MainWindow(bridge)
     window.resize(1080, 1920)
     window.show()
-    yield window, session
-    if not session.ready.done():
-        session.ready.set_result(None)
-    if session.join_gate is not None:
-        session.join_gate.set()
-    session.cleanup_safe = True
-    close_window(window)
+    try:
+        yield window, session
+    finally:
+        if not session.ready.done():
+            session.ready.set_result(None)
+        if session.join_gate is not None:
+            session.join_gate.set()
+        session.cleanup_safe = True
+        close_window(window)
