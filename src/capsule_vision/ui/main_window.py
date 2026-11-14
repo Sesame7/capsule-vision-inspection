@@ -1529,6 +1529,7 @@ class MainWindow(QMainWindow):
             message = text(production_feedback[0], language)
         elif (
             (snapshot.process_required or snapshot.process_applying)
+            and not snapshot.candidate_requires_preparation
             and self.pages.currentIndex() == 0
             and not (warning or fault or self._closing)
         ):
@@ -1555,15 +1556,29 @@ class MainWindow(QMainWindow):
                 for part in (camera, text("source_error", language), exception_type)
                 if part
             )
-        if self.configuration_issue and not (
+        # Expected first-run setup guidance belongs to Production. Genuine saved
+        # file errors remain global; local Vision/Recipe feedback keeps its owner.
+        configuration_messages = tuple(
+            key
+            for key in self.configuration_messages
+            if key != "camera_setup" or self.pages.currentIndex() == 0
+        )
+        configuration_detail = (
+            self.configuration_issue
+            if configuration_messages == self.configuration_messages
+            else "\n".join(
+                detail
+                for key, detail in self._configuration_notices
+                if key in configuration_messages
+            )
+        )
+        if configuration_detail and not (
             warning or fault or self._closing or production_feedback
         ):
             message = (
-                " · ".join(text(key, language) for key in self.configuration_messages)
-                if self.configuration_messages
-                else (
-                    f"{text('configure_first', language)} · {self.configuration_issue}"
-                )
+                " · ".join(text(key, language) for key in configuration_messages)
+                if configuration_messages
+                else (f"{text('configure_first', language)} · {configuration_detail}")
             )
         self._event_message = message
         archive = self.bridge.archive_snapshot
@@ -1576,8 +1591,8 @@ class MainWindow(QMainWindow):
             message, warning = text("archive_issue", language), True
             self._event_message = message
         detail = (
-            self.configuration_issue
-            if self.configuration_messages and not (warning or fault or self._closing)
+            configuration_detail
+            if configuration_messages and not (warning or fault or self._closing)
             else ""
         )
         if production_feedback and not (warning or fault or self._closing):

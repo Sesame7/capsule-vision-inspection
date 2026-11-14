@@ -981,8 +981,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Recipe definitions unavailable; check data/recipes.",
     ),
     "startup_recipe_identity": (
-        "已应用配方 ID 未设置或不存在；请选择有效配方或修复 app.json。",
-        "Last-applied Recipe missing or unknown; select a valid Recipe or repair app.json.",
+        "已记录的配方 ID 不可用；请选择有效配方或修复 app.json。",
+        "Recorded Recipe ID unavailable; select a valid Recipe or repair app.json.",
     ),
     "startup_machine": (
         "机器布局不可用；请修复 machine.tsv 后重启。",
@@ -1263,8 +1263,8 @@ STRINGS: dict[str, tuple[str, str]] = {
     "pilot_unknown": ("未知 {count}", "UNKNOWN {count}"),
     "pilot_raw_cycles": ("原始检测周期：{count}", "Raw inspection cycles: {count}"),
     "configure_first": (
-        "请在配方页保存并应用有效配方，再开始检测。",
-        "Save and apply a valid Recipe on the Recipe page before starting inspection.",
+        "请完成相机和模型设置，并在生产页选择已保存配方。",
+        "Complete camera and Model setup, then select a saved Recipe on Production.",
     ),
     "software_stop": (
         "停止软件检测，不是硬件急停。",

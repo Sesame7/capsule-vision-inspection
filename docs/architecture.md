@@ -58,13 +58,14 @@ in Qt presentation. `application/editing.py` coordinates Recipe selection, Save,
 Delete, resolution and preparation without importing UI. Qt dispatches explicit
 actions and queued completions; candidate installation and Start remain separate.
 Recipe Save commits the editor definition independently of preparation. A materially
-changed Save matching the Production candidate ID marks that candidate ineligible
+changed Save matching the still-selected Production candidate ID marks that
+candidate ineligible
 for Start before releasing the stopped file-management slot, then refreshes the
 same saved ID on the existing bounded preparation worker. Unchanged and unrelated
 Saves do not prepare. Save success survives preparation failure; the old candidate
 remains diagnostic evidence until a successful preparation replaces it. Production
 selection and automatic refresh resolve saved dependencies, never another editor
-draft. The saved definition, stopped candidate and active session remain distinct;
+draft. A validated saved selection, stopped candidate and active session remain distinct;
 only successful Start promotes a candidate. Internal refresh retains the saving
 session revision and generation/selection fencing but emits no `production.recipe`
 selection audit event; the committed `recipe.save` event remains authoritative.
@@ -86,7 +87,7 @@ without a fallback disk read. Fixed-image launchers capture their own source map
 its absent file path denotes launcher ownership, not missing captured values.
 No filesystem validation is added to Qt dispatch or the Application command lock;
 no watcher or cross-file transaction is introduced. Automatic preparation is limited
-to a changed, successfully saved Recipe matching the existing candidate ID.
+to a changed, successfully saved Recipe matching the still-selected candidate ID.
 Fixed-image engineering/demo launchers retain their explicit source ownership.
 
 Production composition is Qt-independent: `application/startup.py` owns entry-relative
@@ -98,7 +99,17 @@ inspection coordination, report/archive handoff and actual joins. Existing worke
 SDK and connection owners remain authoritative; these modules add no service owner.
 Composition/startup return prepared Application configuration. Its snapshots capture
 the immutable active/candidate prepared values and compact identities under the same
-lock, without IO or copying definitions. Pending means both resolved configurations
+lock, without IO or copying definitions. Application also retains the validated saved
+Recipe selection's ID/name independently of candidate evidence. The existing bounded
+editing worker validates the saved catalog entry before accepting that selection,
+then prepares dependencies. Both acceptance and installation enforce the request's
+session revision, generation and supersession ticket. A valid explicit selection
+awaiting preparation is UNCONFIGURED; failure retains the choice and old evidence,
+but Start cannot use an older or ineligible candidate. Selection itself performs no
+PLC work and does not update startup preferences. Invalid catalog requests leave the
+prior valid selection intact. Close and authorization loss reject late acceptance
+or installation. Ordinary setup feedback stays on Production/the relevant editor.
+Pending means both resolved configurations
 exist and differ; artifact-path binding and the managed flag alone do not imply a
 pending Recipe change. Qt derives names and card layouts from these observations,
 without a configuration registry or a cache of previously observed activation.

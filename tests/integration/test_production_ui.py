@@ -30,6 +30,7 @@ from capsule_vision.application import (
     ProductionApplicationSnapshot,
     ProductionCounters,
 )
+from capsule_vision.application.models import SelectedRecipe
 from capsule_vision.application.source_control import (
     SourceControlSnapshot,
     SourceControlState,
@@ -1276,6 +1277,10 @@ def test_long_recipe_and_batch_keep_pending_activation_visible(
             window.snapshot,
             batch_id="long-batch-id-" * 12,
             candidate_prepared=replacement,
+            selected_recipe=SelectedRecipe(
+                replacement.configuration.recipe_id,
+                replacement.configuration.display_name,
+            ),
         )
     )
     QApplication.processEvents()
@@ -1368,6 +1373,12 @@ def test_recipe_summary_candidate_active_and_unconfigured(
                 else None,
                 active_prepared=active,
                 candidate_prepared=candidate,
+                selected_recipe=SelectedRecipe(
+                    candidate.configuration.recipe_id,
+                    candidate.configuration.display_name,
+                )
+                if candidate
+                else None,
             )
         )
         QApplication.processEvents()
@@ -1429,6 +1440,9 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
         candidate=ConfigurationIdentity.from_prepared(b),
         active_prepared=a,
         candidate_prepared=b,
+        selected_recipe=SelectedRecipe(
+            b.configuration.recipe_id, b.configuration.display_name
+        ),
         batch_id="long-batch-identity-" * 20,
     )
     current_name = "Long Recipe 很长的配方名称 " * 15
@@ -1437,6 +1451,7 @@ def test_summary_long_identities_adapt_to_narrower_and_larger_text(
         candidate_prepared=replace(
             a, configuration=replace(a.configuration, display_name=current_name)
         ),
+        selected_recipe=SelectedRecipe(a.configuration.recipe_id, current_name),
         batch_id="batch-with-a-long-identity-" * 15,
     )
     for size in ((1920, 1080), (1080, 720), (1080, 1920), (1920, 1080)):

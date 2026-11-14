@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from tests.support.recipe import editor
 
+from capsule_vision.application.editing import RecipeSetupRequired
 from capsule_vision.configuration import (
     CheckConfiguration,
     ConfigurationError,
@@ -237,7 +238,7 @@ def test_incomplete_recipe_save_reload_and_strict_preparation(
     session.draft.display_name = "Unsaved"
     session.discard()
     assert not session.dirty and session.draft.model_id == model_id
-    with pytest.raises(ConfigurationError, match="model_id"):
+    with pytest.raises(RecipeSetupRequired, match="Model"):
         session.production_preparation().prepare_saved(session.entry.recipe.recipe_id)
     with pytest.raises(ConfigurationError, match="model_id"):
         session.prepare(session.entry.recipe)

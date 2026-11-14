@@ -46,6 +46,10 @@ from .run_configuration import capture_prepared
 from .vision_dependencies import VisionDependencies, read_sources
 
 
+class RecipeSetupRequired(ConfigurationError):
+    """A valid saved Recipe awaits an absent setup dependency, not file repair."""
+
+
 @dataclass(frozen=True, slots=True)
 class SavedVision:
     machine: MachineLayoutDefinition | None
@@ -482,8 +486,8 @@ class RecipeEditorSession:
             managed_models=self.managed_models,
         )
 
-    def prepare_saved(self, recipe_id: str) -> PreparedConfiguration:
-        """Resolve the current saved identity off dispatch; never read an editor draft."""
+    def read_saved(self, recipe_id: str) -> RecipeEntry:
+        """Validate saved identity independently of production dependencies, off dispatch."""
         entry = next(
             (
                 e
@@ -496,10 +500,36 @@ class RecipeEditorSession:
             raise ConfigurationError(
                 "Saved Recipe is unavailable or ambiguous; refresh"
             )
+        return entry
+
+    def prepare_saved(self, recipe_id: str) -> PreparedConfiguration:
+        """Resolve the current saved identity off dispatch; never read an editor draft."""
+        entry = self.read_saved(recipe_id)
         self.process_catalog = entry.process_catalog
         if self.machine_path is not None:
-            self.machine_editor.load_saved(load_machine_layout(self.machine_path))
+            try:
+                self.machine_editor.load_saved(load_machine_layout(self.machine_path))
+            except ConfigurationIOError as exc:
+                if isinstance(exc.__cause__, FileNotFoundError):
+                    raise RecipeSetupRequired(
+                        "Save camera layout in Vision, then reselect the Recipe"
+                    ) from exc
+                raise
+        if not self.machine_editor.persisted:
+            raise RecipeSetupRequired(
+                "Save camera layout in Vision, then reselect the Recipe"
+            )
+        if entry.recipe.model_id is None:
+            raise RecipeSetupRequired(
+                "Select and save a Model in Recipe, then reselect the Recipe"
+            )
         self.reload_models()
+        if not self.model_issues and not any(
+            model.model_id == entry.recipe.model_id for model in self.registry.models
+        ):
+            raise RecipeSetupRequired(
+                f"Import Model {entry.recipe.model_id!r}, then reselect the Recipe"
+            )
         prepared = self.prepare(entry.recipe)
         if entry not in self.catalog.discover().entries:
             raise ConfigurationError(
@@ -556,7 +586,9 @@ class RecipeEditorSession:
                 else self.camera_sources.saved
             )
             if self.require_saved_sources and sources is None:
-                raise ConfigurationError("Saved camera sources are unavailable")
+                raise RecipeSetupRequired(
+                    "Save camera sources in Vision, then reselect the Recipe"
+                )
             if sources is not None:
                 sources.validate_cameras(
                     prepared.configuration.layout.camera_ids,

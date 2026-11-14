@@ -69,6 +69,14 @@ def prepare_configuration(
 
 
 @dataclass(frozen=True, slots=True)
+class SelectedRecipe:
+    """Session-only identity of a validated saved definition, not a candidate."""
+
+    recipe_id: str
+    display_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConfigurationIdentity:
     recipe_id: str
     model_id: str
@@ -225,6 +233,7 @@ class ProductionApplicationSnapshot:
     unbatched_run_uncertain: bool = False
     process_required: bool = False
     process_applying: bool = False
+    selected_recipe: SelectedRecipe | None = None
 
     @property
     def four_cycle_display(self) -> bool:

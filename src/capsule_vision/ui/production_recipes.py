@@ -1,4 +1,4 @@
-"""Compact saved Recipe selection; the candidate remains Application-owned."""
+"""Compact saved Recipe selection; selection and candidate remain Application-owned."""
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QPaintEvent, QPalette, QStandardItemModel
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from capsule_vision.application import ProductionApplicationSnapshot
+from capsule_vision.application.editing import RecipeSetupRequired
 from capsule_vision.application.identity_models import Role
 from capsule_vision.configuration.catalog import RecipeEntry
 from capsule_vision.localization.catalog import text
@@ -168,7 +169,11 @@ class ProductionRecipes(QWidget):
             self._requested = None
             if error is not None:
                 self.feedback = (
-                    failure_key(error, "recipe_prepare_error", "permission_operator"),
+                    "configure_first"
+                    if isinstance(error, RecipeSetupRequired)
+                    else failure_key(
+                        error, "recipe_prepare_error", "permission_operator"
+                    ),
                     f"{requested_name} [{identity}]\n{error}",
                 )
             else:
@@ -181,10 +186,11 @@ class ProductionRecipes(QWidget):
         self.editing.select_saved(identity, completed)
 
     def present(self, snapshot: ProductionApplicationSnapshot) -> tuple[str, str]:
-        """Reflect the installed candidate, never invoke preparation or retag saved data."""
+        """Reflect the validated selection without implying preparation or activation."""
         candidate = snapshot.candidate_prepared
-        identity = candidate.configuration.recipe_id if candidate else None
-        name = candidate.configuration.display_name if candidate else None
+        selected = snapshot.selected_recipe
+        identity = selected.recipe_id if selected else None
+        name = selected.display_name if selected else None
         presentation = self._catalog_revision, identity, name
         if presentation != self._selection_presentation:
             self._selection_presentation = presentation
@@ -196,40 +202,47 @@ class ProductionRecipes(QWidget):
                     f"{entry.recipe.display_name} [{entry.recipe.recipe_id}]",
                     Qt.ItemDataRole.ToolTipRole,
                 )
-            if candidate is not None:
+            if selected is not None:
                 index = self.recipes.findData(identity)
                 if index < 0:
-                    self.recipes.addItem(candidate.configuration.display_name, identity)
+                    self.recipes.addItem(selected.display_name, identity)
                     index = self.recipes.count() - 1
                     model = self.recipes.model()
                     if isinstance(model, QStandardItemModel):
                         item = model.item(index)
                         item.setEnabled(False)
-                # Catalog refresh cannot relabel an already prepared definition.
+                # Catalog refresh cannot relabel an already selected definition.
                 self.recipes.setItemText(index, name or "")
         self.recipes.setCurrentIndex(
-            self.recipes.findData(identity) if candidate else -1
+            self.recipes.findData(identity) if selected else -1
         )
         details = (
             f"{text('page_recipe', self.language)}: {name}\nID: {identity}"
-            if candidate
+            if selected
             else text("select_saved_recipe", self.language)
         )
         inline = ""
         active = snapshot.active_prepared
         if active is not None and (
-            candidate is None or snapshot.has_pending_configuration
+            active.configuration.recipe_id != identity
+            or snapshot.has_pending_configuration
         ):
             active_text = f"{text('active_recipe', self.language)}: {active.configuration.display_name}"
             inline = active_text
             details += f"\n{active_text} [{active.configuration.recipe_id}]"
-            if candidate is not None:
+            if (
+                candidate is not None
+                and candidate.configuration.recipe_id == identity
+                and not snapshot.candidate_requires_preparation
+            ):
                 details += f"\n{text('pending_recipe', self.language)}: {name}"
         if snapshot.candidate_requires_preparation:
             stale = text("recipe_reprepare", self.language)
             inline = f"{inline} · {stale}" if inline else stale
             details += f"\n{text('recipe_reprepare_hint', self.language)}"
-        if snapshot.process_required or snapshot.process_applying:
+        if (
+            snapshot.process_required or snapshot.process_applying
+        ) and not snapshot.candidate_requires_preparation:
             process = text(
                 "process_applying"
                 if snapshot.process_applying
@@ -253,6 +266,7 @@ class ProductionRecipes(QWidget):
             "recipe_prepare_error",
             "permission_operator",
             "identity_stale",
+            "configure_first",
         ):
             details += f"\n{text(self.feedback[0], self.language)}\n{self.feedback[1]}"
         if self._requested is not None:

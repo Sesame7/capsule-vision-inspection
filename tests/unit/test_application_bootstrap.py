@@ -255,7 +255,12 @@ def test_unavailable_never_falls_back(
     before = {p: p.read_bytes() for p in data.root.rglob("*.json")}
     startup = load_startup(data)
     try:
-        assert startup.issues and startup.prepared is None
+        assert startup.prepared is None
+        if kind in ("manifest_missing", "manifest_invalid", "recipe_unselected"):
+            # An absent manifest, {} or an explicitly empty selection is normal setup.
+            assert not startup.issues
+        else:
+            assert startup.issues
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
         assert {p: p.read_bytes() for p in before} == before
         if kind in ("recipe_unselected", "recipe_missing", "recipe_duplicate"):
@@ -269,6 +274,8 @@ def test_missing_data_does_not_generate_configurations(tmp_path: Path) -> None:
     startup = load_startup(data)
     try:
         assert startup.application.snapshot().state is ApplicationState.UNCONFIGURED
+        assert startup.application.snapshot().selected_recipe is None
+        assert {issue.key for issue in startup.issues} == {"camera_setup"}
         assert startup.machine is startup.prepared is None
         assert (
             startup.editor is not None and not startup.editor.machine_editor.persisted

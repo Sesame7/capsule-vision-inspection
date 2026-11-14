@@ -66,6 +66,11 @@ text or null) and `language`; there is no global/default Model. Startup never
 chooses the first Recipe/Model. A selected Recipe resolves its own exact `model_id`.
 Missing preferences do not block the shell or available configuration editors;
 other required data still governs editor availability and Production readiness.
+An absent last-applied ID is normal first-run setup, not a recovery warning.
+A recorded ID that no longer resolves remains a recovery issue. Missing initial
+MachineLayout/CameraSources require setup; malformed, inaccessible or conflicting
+saved definitions retain their errors. Ordinary setup guidance is scoped to
+Production and the relevant editor rather than unrelated page operations.
 Only explicit language changes or successful Production candidate installation
 write preferences. Vision Save never changes the last-applied Recipe preference.
 Malformed files remain unchanged, and unknown fields are errors. An unsupported
@@ -1409,7 +1414,8 @@ does not reinterpret that result as Production EMPTY or consume historical NG.
 Recipe **Save** persists its definition, including incomplete Model references.
 Invalid Communication settings or incomplete MachineLayout/source definitions do
 not block that persistence. A materially changed Save of the current Production
-candidate's ID automatically prepares the latest saved definition and dependencies
+candidate's ID, while that candidate remains selected, automatically prepares the
+latest saved definition and dependencies
 on the existing bounded worker. Unchanged Saves, unrelated Recipes and unsaved
 drafts never trigger preparation or change Production selection. Save success and
 preparation success are separate outcomes, shown as saved/preparing, saved/ready or
@@ -1424,18 +1430,28 @@ refresh uses the saving session revision and existing generation/selection fenci
 and cannot install after supersession, authorization loss or Close. It preserves
 the Recipe Save audit event without inventing an operator Recipe-selection event.
 
-Production's compact saved-Recipe selector prepares the explicitly selected ID
-using its current saved Recipe, MachineLayout, Model and source definitions, off Qt
-dispatch. Its catalog refreshes on page entry and through Refresh. Refresh lists
+Production's compact saved-Recipe selector accepts a valid saved definition before
+preparing its MachineLayout, Model and source dependencies, off Qt dispatch on the
+existing bounded worker. Application retains this session-only selected identity
+independently of the prepared candidate. Missing dependencies retain the selection
+in UNCONFIGURED, with setup guidance and Start unavailable; invalid dependencies
+remain preparation errors. Neither outcome installs a synthetic candidate or admits
+PLC process writes. A retained older candidate cannot justify Start for the new
+selection, including through Application commands. Completing setup requires explicit
+reselection; saving unrelated configuration or merely opening a page cannot apply it.
+
+The catalog refreshes on page entry and through Refresh. Refresh lists
 incomplete Recipes and reports invalid/ambiguous files without selecting anything
-or replacing the candidate. The selector reflects the installed candidate without
-preparation, including startup restoration and a candidate whose saved file is no
-longer available. Such an unavailable catalog entry cannot be newly selected.
-Refreshing a renamed saved definition does not relabel the prepared candidate.
+or replacing the candidate. Missing, invalid or ambiguous definitions cannot become
+a new selection. The selector reflects the Application-owned selection, including
+successful startup candidate restoration. Refreshing a renamed saved definition
+does not relabel the selected definition or prepared evidence. An unavailable
+catalog entry can remain visible as previous evidence but cannot be newly selected.
 The state and optional active/requested identity share the first header row;
-the selector and Refresh occupy the second. Pending preparation identifies the
-request separately while the selector retains the installed candidate. Failure
-keeps that candidate selected and names the failed request in feedback details.
+the selector and Refresh occupy the second. Pending validation identifies the
+request separately; after validation the selector reflects the accepted choice,
+even if preparation fails. Failure preserves the old candidate and active evidence
+without relabeling either. Selection survives navigation and unrelated editing.
 The selector's full tooltip/accessibility retains preparation-failure details even
 when an earlier Start warning has priority in the bottom strip.
 Recipe editor selection and unsaved drafts remain independent. Reselecting the same ID prepares the latest saved version. While
@@ -1445,6 +1461,8 @@ installation; the previous candidate and active configuration remain intact.
 
 Successful candidate installation updates `app.json`'s `last_applied_recipe_id`;
 preference write failures remain visible and do not undo candidate installation.
+Accepting an unprepared selection never writes this preference or persists a new
+selection field; after restart only the established last-applied preference applies.
 Startup can restore the latest saved version of that ID as a stopped candidate,
 with no automatic fallback or Start. Candidate, active and persisted applied IDs
 remain protected from Recipe deletion.

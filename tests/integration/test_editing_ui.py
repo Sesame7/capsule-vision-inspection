@@ -13,7 +13,7 @@ from tests.support.recipe_ui import Screen, select_production_recipe
 from tests.support.recipe_ui import camera_screen as camera_screen
 from tests.support.recipe_ui import configured_screen as configured_screen
 
-from capsule_vision.application import PreparedConfiguration
+from capsule_vision.application import ApplicationState, PreparedConfiguration
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.configuration import (
     ConfigurationError,
@@ -179,4 +179,8 @@ def test_production_preparation_ignores_editor_selection_but_fences_close(
     until(lambda: bool(closed))
     assert len(errors) == 1 and isinstance(errors[0], ConfigurationError)
     assert not window.editing.busy and not window.recipe_page.labels_loading
-    assert window.bridge.application.snapshot() == before
+    assert window.bridge.application.snapshot() == replace(
+        before,
+        state=ApplicationState.UNCONFIGURED,
+        candidate_requires_preparation=True,
+    )

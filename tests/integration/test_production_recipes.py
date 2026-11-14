@@ -24,7 +24,11 @@ from tests.support.startup import (
     saved_data,
 )
 
-from capsule_vision.application import ApplicationState, PreparedConfiguration
+from capsule_vision.application import (
+    ApplicationState,
+    ApplicationStateError,
+    PreparedConfiguration,
+)
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.identity_models import Role
 from capsule_vision.configuration import RecipeDefinition, load_recipe, save_recipe
@@ -161,7 +165,7 @@ def test_compact_selector_elides_paint_without_changing_identity(
 
     # A compact placeholder is painted without inventing a selection.
     window.bridge.snapshot_changed.emit(
-        replace(before, candidate=None, candidate_prepared=None)
+        replace(before, candidate=None, candidate_prepared=None, selected_recipe=None)
     )
     combo.repaint()
     assert combo.currentIndex() == -1 and combo.currentText() == ""
@@ -215,12 +219,19 @@ def test_save_and_selection_keep_editor_candidate_and_preferences_independent(
         assert selected.active is None and selected.counters == initial.counters
         assert session.entry is entry and session.draft.to_recipe() == draft
         assert session.machine_editor.dirty and session.camera_sources.dirty
-        # An incomplete saved Recipe can be listed, but cannot replace the candidate.
+        # A valid selection survives missing dependencies, without replacing the candidate.
         window.production_recipes.select(
             window.production_recipes.recipes.findData("other")
         )
         until(lambda: not window.editing.busy)
-        assert startup.application.snapshot() == selected
+        incomplete = startup.application.snapshot()
+        assert incomplete.selected_recipe is not None
+        assert incomplete.selected_recipe.recipe_id == "other"
+        assert incomplete.state is ApplicationState.UNCONFIGURED
+        assert incomplete.candidate_prepared is selected.candidate_prepared
+        assert incomplete.candidate_requires_preparation
+        with pytest.raises(ApplicationStateError):
+            startup.application.start()
         assert window.production_recipes.feedback is not None
         assert load_preferences(data.preferences).last_applied_recipe_id == "local"
     finally:
@@ -325,11 +336,12 @@ def test_async_selection_is_bounded_and_stale_results_cannot_install(
     picker.recipes.activated.emit(target)
     try:
         until(entered.is_set)
+        window.bridge.refresh()
         assert workers != [get_ident()]
         assert window.editing.busy and not picker.recipes.isEnabled()
         assert not picker.refresh_button.isEnabled()
         assert not window.buttons["operation"].isEnabled()
-        assert picker.recipes.currentData() == "product-a"
+        assert picker.recipes.currentData() == "product-b"
         assert window.identity_label.isVisible()
         assert (
             text("recipe_preparing_short", window.language)
@@ -351,9 +363,15 @@ def test_async_selection_is_bounded_and_stale_results_cannot_install(
         assert picker.recipes.currentData() == "product-b"
     else:
         assert after.candidate == before.candidate and picker.feedback is not None
-        assert picker.recipes.currentData() == "product-a"
+        assert picker.recipes.currentData() == (
+            "product-a" if completion == "obsolete" else "product-b"
+        )
+        if completion != "obsolete":
+            assert after.state is ApplicationState.UNCONFIGURED
+            with pytest.raises(ApplicationStateError):
+                window.bridge.application.start()
         assert requested_name in picker.feedback[1]
-    assert not window.identity_label.isVisible()
+    assert window.identity_label.isVisible() == (completion in ("failure", "close"))
     window.editing.resume()
 
 
@@ -423,10 +441,22 @@ def test_pending_selection_cannot_outlive_its_actor(
                 owner.set_enabled(author.account_id, False).result(5)
         release.set()
         until(lambda: not window.editing.busy)
+        after = app.snapshot()
+        assert after.state is ApplicationState.UNCONFIGURED
+        assert after.candidate_requires_preparation
+        assert after.selected_recipe is not None
+        assert after.selected_recipe.recipe_id == "other"
         assert (
-            app.snapshot() == initial and data.preferences.read_bytes() == preferences
+            replace(
+                after,
+                state=initial.state,
+                candidate_requires_preparation=False,
+                selected_recipe=initial.selected_recipe,
+            )
+            == initial
         )
-        assert picker.recipes.currentData() == "local" and picker.feedback is not None
+        assert data.preferences.read_bytes() == preferences
+        assert picker.recipes.currentData() == "other" and picker.feedback is not None
         owner.logout()
         window.identity_controls.refresh()
         assert not picker.recipes.isEnabled()

@@ -30,6 +30,7 @@ from capsule_vision.application import (
     PreparedConfiguration,
 )
 from capsule_vision.application.image_archive import ArchiveSnapshot
+from capsule_vision.application.models import SelectedRecipe
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
@@ -1583,7 +1584,14 @@ def test_prepare_failure_preserves_saved_edits_but_not_promoted(
     assert "SHA-256" in window.production_recipes.feedback[1]
     assert (
         window.bridge.application.snapshot()
-        == replace(before, candidate_requires_preparation=True)
+        == replace(
+            before,
+            state=ApplicationState.UNCONFIGURED,
+            candidate_requires_preparation=True,
+            selected_recipe=SelectedRecipe(
+                session.entry.recipe.recipe_id, "Saved before preparation"
+            ),
+        )
         and not runtimes
     )
     assert (
@@ -1655,7 +1663,9 @@ def test_unknown_model_preserved_on_unrelated_edit(configured_screen: Screen) ->
     assert load_recipe(session.entry.path).model_id == "unknown-model"
     assert load_recipe(session.entry.path).display_name == "名称"
     assert window.bridge.application.snapshot() == replace(
-        before, candidate_requires_preparation=True
+        before,
+        candidate_requires_preparation=True,
+        selected_recipe=SelectedRecipe(session.entry.recipe.recipe_id, "名称"),
     )
 
 
@@ -1767,5 +1777,7 @@ def test_dirty_save_switch_survives_automatic_preparation_failure(
     assert load_recipe(original.path).display_name == "Persisted"
     assert page.status.text() != text("recipe_prepare_error", page.language)
     assert window.bridge.application.snapshot() == replace(
-        before, candidate_requires_preparation=True
+        before,
+        candidate_requires_preparation=True,
+        selected_recipe=SelectedRecipe(original.recipe.recipe_id, "Persisted"),
     )

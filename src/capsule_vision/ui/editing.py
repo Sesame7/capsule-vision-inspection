@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from capsule_vision.application import ApplicationState, PreparedConfiguration
 from capsule_vision.application.application import RecipeSelection
 from capsule_vision.application.audit import RevisionConfirmationError
-from capsule_vision.application.editing import RecipeEditorSession
+from capsule_vision.application.editing import RecipeEditorSession, RecipeSetupRequired
 from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import ConfigurationError
 
@@ -205,7 +205,7 @@ class EditingCoordinator(QObject):
                     request, error or RuntimeError("Closing")
                 )
             try:
-                if isinstance(error, IdentityError):
+                if isinstance(error, (IdentityError, RecipeSetupRequired)):
                     raise error
                 if error is not None:
                     raise ConfigurationError(str(error)) from error
@@ -229,6 +229,8 @@ class EditingCoordinator(QObject):
 
         def prepare() -> PreparedConfiguration:
             with self.bridge.application.recipe_preparation(request):
+                entry = preparation.read_saved(recipe_id)
+                self.bridge.application.accept_recipe_selection(request, entry.recipe)
                 return preparation.prepare_saved(recipe_id)
 
         if not self.run_io(prepare, prepared):

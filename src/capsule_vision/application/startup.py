@@ -285,14 +285,14 @@ def _load_startup(
             (e for e in entries if e.recipe.recipe_id == selected_id),
             None,
         )
-        if entry is None:
+        if entry is None and selected_id is not None:
             issues.append(
                 StartupIssue(
                     "startup_recipe_identity",
-                    f"{data.preferences}: last applied Recipe ID {selected_id!r} is absent or unselected; no fallback",
+                    f"{data.preferences}: last applied Recipe ID {selected_id!r} is unavailable; no fallback",
                 )
             )
-        else:
+        elif entry is not None:
             try:
                 editor.load(entry)
             except ConfigurationError as exc:

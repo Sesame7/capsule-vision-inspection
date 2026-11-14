@@ -59,6 +59,7 @@ from .models import (
     PreparedConfiguration,
     ProductionApplicationSnapshot,
     ProductionCounters,
+    SelectedRecipe,
 )
 from .process_application import apply_process, process_target
 from .recipe_dependencies import RecipePreparationRequired
@@ -129,6 +130,7 @@ class ProductionApplication:
         self._export_cancel = Event()
         self._identity = identity
         self._selection: RecipeSelection | None = None
+        self._selected_recipe: SelectedRecipe | None = None
         self._communication_path = communication_path
         self._process_job: _ProcessApplication | None = None
         self._process_pending: _ProcessApplication | None = None
@@ -297,6 +299,44 @@ class ProductionApplication:
             )
             return self._selection
 
+    def accept_recipe_selection(
+        self, request: RecipeSelection, recipe: RecipeDefinition
+    ) -> None:
+        """Retain a catalog-validated definition before preparing its dependencies.
+
+        Called by the existing preparation worker; no IO or PLC admission here.
+        The retained old candidate is evidence only until installation succeeds.
+        """
+        with (
+            self._condition,
+            self._admission(
+                Role.ENGINEER if request.automatic else Role.OPERATOR,
+                request.revision,
+            ),
+        ):
+            self._check_recipe_selection(request)
+            if recipe.recipe_id != request.recipe_id:
+                raise ApplicationStateError(
+                    "Saved Recipe identity does not match request"
+                )
+            if self._state not in (
+                ApplicationState.UNCONFIGURED,
+                ApplicationState.READY,
+            ):
+                raise ApplicationStateError(
+                    f"Command unavailable in {self._state.name}"
+                )
+            self._selected_recipe = SelectedRecipe(
+                recipe.recipe_id, recipe.display_name
+            )
+            self._candidate_requires_preparation = True
+            if not request.automatic:
+                self._state = ApplicationState.UNCONFIGURED
+
+    def _check_recipe_selection(self, request: RecipeSelection) -> None:
+        if self._selection is not request or self._generation != request.generation:
+            raise StaleSessionError("Production selection was superseded")
+
     def observe_saved_recipe(
         self, recipe: RecipeDefinition, revision: int | None
     ) -> RecipeSelection | None:
@@ -311,6 +351,8 @@ class ProductionApplication:
             if (
                 candidate is None
                 or candidate.configuration.recipe_id != recipe.recipe_id
+                or self._selected_recipe is None
+                or self._selected_recipe.recipe_id != recipe.recipe_id
             ):
                 return None
             self._candidate_requires_preparation = True
@@ -332,11 +374,7 @@ class ProductionApplication:
                     Role.ENGINEER if request.automatic else Role.OPERATOR,
                     request.revision,
                 ):
-                    if (
-                        self._selection is not request
-                        or self._generation != request.generation
-                    ):
-                        raise StaleSessionError("Production selection was superseded")
+                    self._check_recipe_selection(request)
                     if (
                         request.recipe_id
                         and candidate.configuration.recipe_id != request.recipe_id
@@ -361,6 +399,9 @@ class ProductionApplication:
     def recipe_selection_failed(
         self, request: RecipeSelection, error: BaseException
     ) -> None:
+        with self._condition:
+            if self._selection is request:
+                self._selection = None
         if self.diagnostics:
             self.diagnostics.record(
                 "recipe.preparation",
@@ -416,6 +457,7 @@ class ProductionApplication:
                 process_required=self._process_required,
                 process_applying=self._process_active is not None
                 or self._process_pending is not None,
+                selected_recipe=self._selected_recipe,
             )
 
     def configure(self, candidate: PreparedConfiguration) -> Future[None]:
@@ -452,6 +494,9 @@ class ProductionApplication:
             self.cancel_process_application()
             self._process_job = None
             self._candidate = candidate
+            self._selected_recipe = SelectedRecipe(
+                candidate.configuration.recipe_id, candidate.configuration.display_name
+            )
             self._process_required = bool(candidate.configuration.process_parameters)
             self._process_settings = None
             if self._issue is not None and self._issue.stage == "process_application":
@@ -971,6 +1016,16 @@ class ProductionApplication:
                     "Saved configuration requires re-preparation; reselect the saved Recipe"
                 )
             if (
+                self._selection is not None
+                or self._selected_recipe is None
+                or self._candidate is None
+                or self._selected_recipe.recipe_id
+                != self._candidate.configuration.recipe_id
+            ):
+                raise ApplicationStateError(
+                    "Selected Recipe requires successful preparation"
+                )
+            if (
                 self._process_required
                 or self._process_active is not None
                 or self._process_pending is not None
@@ -1039,11 +1094,8 @@ class ProductionApplication:
     ) -> Generator[None]:
         """Fence file/SDK metadata work against Start/Prepare/Close, without IO under lock."""
         with self._condition, self._admission(minimum, revision):
-            if selection is not None and (
-                selection is not self._selection
-                or self._generation != selection.generation
-            ):
-                raise StaleSessionError("Production selection was superseded")
+            if selection is not None:
+                self._check_recipe_selection(selection)
             self._require(ApplicationState.UNCONFIGURED, ApplicationState.READY)
             if self._session is not None or self._preparation is not None:
                 raise ApplicationStateError(

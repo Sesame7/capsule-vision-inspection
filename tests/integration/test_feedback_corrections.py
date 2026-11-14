@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -284,7 +285,12 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
         assert feedback is not None and feedback[0] == "recipe_prepare_error"
         assert str(artifact) in feedback[1]
         assert "SHA-256" in feedback[1] and "observed" in feedback[1]
-        assert window.bridge.application.snapshot() == snapshot and not runtimes
+        assert window.bridge.application.snapshot() == replace(
+            snapshot,
+            state=ApplicationState.UNCONFIGURED,
+            candidate_requires_preparation=True,
+        )
+        assert not runtimes
         QApplication.processEvents()
     finally:
         artifact.write_bytes(contents)
