@@ -3,8 +3,9 @@
 from collections.abc import Callable
 
 from capsule_vision.communication.endpoints import FinsUdpEndpoint
-from capsule_vision.communication.fins import FinsPlcError
+from capsule_vision.communication.fins import FinsError, FinsPlcError
 from capsule_vision.communication.modbus_tcp import (
+    ModbusError,
     ModbusExceptionResponse,
     ModbusSettings,
 )
@@ -15,7 +16,6 @@ from capsule_vision.communication.operations import (
 )
 
 from .identity import LocalIdentity, admit_engineering
-from .identity_models import IdentityError
 
 
 def manual_target(request: CommunicationRequest) -> str:
@@ -26,6 +26,15 @@ def manual_target(request: CommunicationRequest) -> str:
     elif isinstance(endpoint, FinsUdpEndpoint):
         route = f" {endpoint.destination}"
     return f"{request.protocol_name} {endpoint.host}:{endpoint.port}{route} {request.area.value} {request.start} × {request.count}"
+
+
+def _write_execution_uncertain(error: BaseException) -> bool:
+    if isinstance(error, (FinsPlcError, ModbusExceptionResponse)):
+        return False
+    return (
+        not isinstance(error, (FinsError, ModbusError))
+        or error.write_may_have_executed is not False
+    )
 
 
 def execute_manual(
@@ -46,13 +55,8 @@ def execute_manual(
         "plc.write",
         manual_target(request),
         revision,
-        after=", ".join(map(str, request.values)),
-        uncertain=lambda exc: (
-            attempted
-            and not isinstance(
-                exc, (IdentityError, FinsPlcError, ModbusExceptionResponse)
-            )
-        ),
+        after=f"[{', '.join(map(str, request.values))}]",
+        uncertain=lambda exc: attempted and _write_execution_uncertain(exc),
     ):
         if guard:
             guard(request)

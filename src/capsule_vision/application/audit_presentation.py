@@ -6,7 +6,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.localization.record_text import readable_value
 
-from .audit import AuditRecord
+from .audit import AUDIT_CHANGE_LIMIT, AuditOperation, AuditRecord
 from .identity_models import Role
 
 ACTION_CAPTIONS = {
@@ -48,6 +48,50 @@ def login_failure_reason(record: AuditRecord, language: Language) -> str:
         "OSError": "identity_storage",
     }.get(record.detail)
     return text(key, language) if key else ""
+
+
+def plc_write_range(target: str) -> tuple[str, int] | None:
+    """Read the register range without disclosing the endpoint or route."""
+    match = re.search(r" (130|177|holding) ([0-9]{1,5}) × ([0-9]{1,4})$", target)
+    if not match:
+        return None
+    area, address, count = match.groups()
+    return {"130": "D", "177": "W", "holding": "HR"}[area] + address, int(count)
+
+
+def plc_requested_values(
+    operation: AuditOperation, language: Language, *, max_displayed: int | None = None
+) -> str:
+    recorded = operation.after
+    if not recorded:
+        return ""
+    framed = recorded.startswith("[") and recorded.endswith("]")
+    clipped = not framed and len(recorded) == AUDIT_CHANGE_LIMIT
+    if framed:
+        recorded = recorded[1:-1]
+    elif clipped:
+        # The old character cap can leave an apparently valid partial last word.
+        recorded = recorded.rpartition(",")[0]
+
+    incomplete = text("identity_audit_incomplete", language)
+    words = recorded.split(", ")
+    if any(
+        not re.fullmatch(r"[0-9]{1,5}", word) or int(word) > 65535 for word in words
+    ):
+        return incomplete
+    register_range = plc_write_range(operation.target)
+    if register_range and len(words) > register_range[1]:
+        return incomplete
+    lines = [", ".join(words[:max_displayed])]
+    if max_displayed is not None and len(words) > max_displayed:
+        lines.append(
+            text("audit_plc_values_omitted", language).format(
+                count=len(words) - max_displayed
+            )
+        )
+    if clipped or (register_range and len(words) < register_range[1]):
+        lines.append(incomplete)
+    return "\n".join(lines)
 
 
 def target_caption(record: AuditRecord, language: Language) -> str:

@@ -2,6 +2,7 @@
 
 from concurrent.futures import Future
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 
@@ -18,11 +19,23 @@ from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_da
 from tests.unit.test_audit_report import fill
 
 from capsule_vision.application import ProductionApplication
-from capsule_vision.application.audit import AuditOperation, AuditQuery
+from capsule_vision.application.audit import (
+    AUDIT_CHANGE_LIMIT,
+    AuditOperation,
+    AuditQuery,
+)
 from capsule_vision.application.audit_report import AuditReportRequest
 from capsule_vision.application.identity_models import AuthenticationError
+from capsule_vision.application.manual_plc import execute_manual, manual_target
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
+from capsule_vision.communication.endpoints import FinsUdpEndpoint
+from capsule_vision.communication.fins import MAX_WRITE_WORDS, FinsAddress
+from capsule_vision.communication.operations import (
+    CommunicationRequest,
+    CommunicationResponse,
+    RequestKind,
+)
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window
@@ -225,6 +238,106 @@ def test_customer_exports_of_actual_saves_omit_internal_configuration(
                 assert text("comm_timeout", language) in output and "2.5" in output
                 for private in (archive, host, f" = {port}", f" = {route}"):
                     assert private not in output
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_manual_write_audit_shows_complete_qt_values_and_bounded_customer_summaries(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    app = startup.application
+    identity = app.identity
+    assert identity
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    endpoint = FinsUdpEndpoint(
+        host="192.0.2.78", port=31876, destination=FinsAddress(17, 184, 63)
+    )
+    values = tuple(range(65535, 65535 - MAX_WRITE_WORDS, -1))
+    at_old_limit = (62345,) * 292 + (17,)
+    new_writes = (values, at_old_limit)
+
+    def acknowledge(req: CommunicationRequest) -> CommunicationResponse:
+        return CommunicationResponse(req, None, 1, datetime.now(UTC))
+
+    try:
+        for words in new_writes:
+            request = CommunicationRequest(
+                RequestKind.WRITE, endpoint, 200, len(words), words
+            )
+            execute_manual(request, acknowledge, None, identity, None)
+
+        # A legacy record ended in a partial word that still looked valid and
+        # had the same token count as its recorded range.
+        legacy_values = (60321,) * 292 + (12489,)
+        legacy_target = manual_target(
+            CommunicationRequest(
+                RequestKind.WRITE, endpoint, 600, len(legacy_values), legacy_values
+            )
+        )
+        legacy = AuditOperation.by(
+            identity.snapshot(),
+            "plc.write",
+            legacy_target,
+            after=", ".join(map(str, legacy_values))[:AUDIT_CHANGE_LIMIT],
+        )
+        assert legacy.after.endswith(", 1248")
+        identity.audit.intent(legacy).result(WAIT)
+        identity.audit.complete(legacy, "success").result(WAIT)
+
+        evidence = identity.audit_page(AuditQuery(action="plc.write")).result(WAIT)
+        assert len(evidence[1].operation.after) == AUDIT_CHANGE_LIMIT
+        database = identity.audit.path.read_bytes()
+        window.show()
+        window.set_language("en")
+        window.navigate(3)
+        window.history_tabs.setCurrentIndex(2)
+        page = window.audit_page
+        record_ids = {row.operation.id for row in evidence}
+        until(lambda: record_ids <= {row.operation.id for row in page.rows})
+        expected_values = {
+            row.operation.id: ", ".join(map(str, words))
+            for row, words in zip(
+                evidence, (legacy_values[:-1], *reversed(new_writes)), strict=True
+            )
+        }
+        for row, entry in enumerate(page.rows):
+            if entry.operation.id not in record_ids:
+                continue
+            page.table.selectRow(row)
+            displayed = page.details.toPlainText()
+            assert text("audit_requested", "en") in displayed
+            assert expected_values[entry.operation.id] in displayed
+            assert (text("identity_audit_incomplete", "en") in displayed) == (
+                entry.operation.id == legacy.id
+            )
+            assert ", 1248" not in displayed
+            target = page.table.item(row, 3)
+            assert target and target.toolTip() == "PLC"
+            assert endpoint.host not in displayed
+            assert str(endpoint.destination) not in displayed
+
+        for language in ("en", "zh"):
+            for output in audit_report_texts(app, tmp_path, language, monkeypatch):
+                visible = " ".join(output.split())
+                assert f"PLC · D200 × {MAX_WRITE_WORDS}" in visible
+                assert text("audit_requested", language) in visible
+                assert ", ".join(map(str, values[:16])) in visible
+                assert f", {values[16]}" not in visible
+                assert ", 1248" not in visible
+                assert text("identity_audit_incomplete", language) in visible
+                omitted = text("audit_plc_values_omitted", language)
+                assert omitted.format(count=MAX_WRITE_WORDS - 16) in visible
+                assert omitted.format(count=len(legacy_values) - 1 - 16) in visible
+                for private in (
+                    endpoint.host,
+                    f":{endpoint.port}",
+                    str(endpoint.destination),
+                ):
+                    assert private not in output
+        assert identity.audit.path.read_bytes() == database
     finally:
         close_window(window)
         delivery.detach()

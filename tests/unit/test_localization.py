@@ -132,6 +132,7 @@ ENGLISH_FALLBACK_KEYS = {
     "audit_all_actions",
     "audit_completed",
     "audit_id",
+    "audit_plc_values_omitted",  # Customer reports offer Chinese and English.
     "audit_remarks",
     "batch_edit_idle",
     "batch_edit_info",

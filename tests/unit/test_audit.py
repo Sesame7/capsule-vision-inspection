@@ -11,11 +11,14 @@ from threading import Event
 
 import pytest
 from tests.support.application import WAIT, FakeSession, close, prepared
+from tests.support.fins_tcp import Fault, Stage, TcpPeer
+from tests.support.modbus import ModbusPeer, frame
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 
 from capsule_vision.application import ProductionApplication
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.audit import (
+    AUDIT_CHANGE_LIMIT,
     AuditAccount,
     AuditOperation,
     AuditQuery,
@@ -32,12 +35,28 @@ from capsule_vision.application.identity_models import (
 from capsule_vision.application.manual_plc import execute_manual
 from capsule_vision.application.passwords import PasswordVerifier, verify_password
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
-from capsule_vision.communication.fins import FinsTimeoutError
+from capsule_vision.communication.fins import (
+    MAX_WRITE_WORDS,
+    FinsError,
+    FinsPlcError,
+    FinsProtocolError,
+    FinsTimeoutError,
+)
+from capsule_vision.communication.fins_tcp import FinsTcpEnvelopeError
+from capsule_vision.communication.modbus_tcp import (
+    MAX_WRITE_REGISTERS,
+    HoldingRegisters,
+    ModbusExceptionResponse,
+    ModbusSettings,
+    ModbusTransportError,
+)
 from capsule_vision.communication.operations import (
     CommunicationRequest,
     CommunicationResponse,
     RequestKind,
+    execute_request,
 )
+from capsule_vision.communication.reporting import ReportingWriteProtectedError
 
 
 def hold_insert(
@@ -198,6 +217,275 @@ def test_unavailable_intent_blocks_mutations_but_allows_login_run_stop(
         close(app)
 
 
+@pytest.mark.parametrize(
+    "stage,fault,error,may_execute,outcome",
+    [
+        ("handshake", "reject", FinsTcpEnvelopeError, False, "failed"),
+        ("sequence", "plc", FinsPlcError, None, "failed"),
+        ("sequence", "drop_after", FinsTimeoutError, True, "uncertain"),
+        ("sequence", "sid", FinsProtocolError, True, "uncertain"),
+        ("sequence", None, None, None, "success"),
+    ],
+    ids=["unsent", "plc-rejected", "lost-ack", "malformed-ack", "matching-ack"],
+)
+def test_manual_fins_audit_uses_transport_evidence(
+    tmp_path: Path,
+    stage: Stage,
+    fault: Fault | None,
+    error: type[FinsError] | None,
+    may_execute: bool | None,
+    outcome: str,
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    identity = startup.application.identity
+    assert identity
+    try:
+        with TcpPeer() as peer:
+            request = CommunicationRequest(
+                RequestKind.WRITE, FinsTcpEndpoint(port=peer.port), 100, 2, (65535, 17)
+            )
+            if fault is not None:
+                peer.fail_next(stage, fault)
+            if error is None:
+                response = execute_manual(
+                    request, execute_request, None, identity, None
+                )
+                assert response.request == request and response.values is None
+            else:
+                with pytest.raises(error) as caught:
+                    execute_manual(request, execute_request, None, identity, None)
+                assert caught.value.write_may_have_executed is may_execute
+            assert peer.connections == 1
+            assert len(peer.packets) == (0 if stage == "handshake" else 1)
+            if fault == "drop_after" or error is None:
+                assert peer.words(100, 2, area=0x82) == request.values
+        (record,) = identity.audit_page(AuditQuery(action="plc.write")).result(WAIT)
+        assert record.outcome == outcome
+        assert record.detail == (error.__name__ if error is not None else "")
+        assert record.operation.after == "[65535, 17]"
+    finally:
+        close(startup.application)
+
+
+@pytest.mark.parametrize("stage", ["connect", "deadline", "send"])
+def test_manual_modbus_audit_distinguishes_unsent_and_possible_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    identity = startup.application.identity
+    assert identity
+    sent: list[bytes] = []
+
+    class FailedSocket:
+        def __init__(self, *_args: object) -> None:
+            self.timeouts = 0
+
+        def connect(self, address: tuple[str, int]) -> None:
+            if stage == "connect":
+                raise OSError("Test connection failure")
+
+        def settimeout(self, timeout: float) -> None:
+            self.timeouts += 1
+            if stage == "deadline" and self.timeouts == 2:
+                raise OSError("Test write deadline setup failure")
+
+        def fileno(self) -> int:
+            return 1
+
+        def sendall(self, data: bytes) -> None:
+            sent.append(data)
+            raise OSError("Test send failure")
+
+        def close(self) -> None:
+            pass
+
+    request = CommunicationRequest(
+        RequestKind.WRITE,
+        ModbusSettings(),
+        100,
+        1,
+        (17,),
+        HoldingRegisters.HOLDING,
+    )
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                "capsule_vision.communication.modbus_tcp.socket.socket",
+                FailedSocket,
+            )
+            with pytest.raises(ModbusTransportError) as caught:
+                execute_manual(request, execute_request, None, identity, None)
+        assert caught.value.write_may_have_executed is (stage == "send")
+        assert len(sent) == (1 if stage == "send" else 0)
+        (record,) = identity.audit_page(AuditQuery(action="plc.write")).result(WAIT)
+        assert record.outcome == ("uncertain" if stage == "send" else "failed")
+    finally:
+        close(startup.application)
+
+
+def test_manual_modbus_audit_keeps_valid_exception_response_as_rejection(
+    tmp_path: Path,
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    identity = startup.application.identity
+    assert identity
+    try:
+        with ModbusPeer(lambda _: (frame(b"\x86\x02"),)) as peer:
+            request = CommunicationRequest(
+                RequestKind.WRITE,
+                ModbusSettings(port=peer.port),
+                100,
+                1,
+                (17,),
+                HoldingRegisters.HOLDING,
+            )
+            with pytest.raises(ModbusExceptionResponse) as caught:
+                execute_manual(request, execute_request, None, identity, None)
+            assert caught.value.code == 2
+            assert len(peer.requests) == peer.accepted == 1
+        (record,) = identity.audit_page(AuditQuery(action="plc.write")).result(WAIT)
+        assert (record.outcome, record.detail) == ("failed", "ModbusExceptionResponse")
+    finally:
+        close(startup.application)
+
+
+def test_manual_audit_commits_complete_ordered_values_before_transport(
+    tmp_path: Path,
+) -> None:
+    data = saved_data(tmp_path)
+    startup = authenticated_startup(data)
+    identity = startup.application.identity
+    assert identity
+
+    def check_intent(request: CommunicationRequest) -> CommunicationResponse:
+        with closing(sqlite3.connect(data.audit)) as db:
+            row = db.execute(
+                "SELECT new_value, completions.outcome FROM operations "
+                "LEFT JOIN completions USING (id) WHERE action = 'plc.write' "
+                "ORDER BY operations.rowid DESC LIMIT 1"
+            ).fetchone()
+        assert row == (f"[{', '.join(map(str, request.values))}]", None)
+        return execute_request(request)
+
+    try:
+        with TcpPeer() as fins, ModbusPeer() as modbus:
+            fins_request = CommunicationRequest(
+                RequestKind.WRITE,
+                FinsTcpEndpoint(port=fins.port),
+                100,
+                MAX_WRITE_WORDS,
+                tuple(range(65535, 65535 - MAX_WRITE_WORDS, -1)),
+            )
+            modbus_request = CommunicationRequest(
+                RequestKind.WRITE,
+                ModbusSettings(port=modbus.port),
+                123,
+                1,
+                (0,),
+                HoldingRegisters.HOLDING,
+            )
+            modbus_multiple = replace(
+                modbus_request,
+                count=MAX_WRITE_REGISTERS,
+                values=tuple(range(MAX_WRITE_REGISTERS - 1, -1, -1)),
+            )
+            requests = (fins_request, modbus_request, modbus_multiple)
+            for request in requests:
+                execute_manual(request, check_intent, None, identity, None)
+            assert fins.words(100, MAX_WRITE_WORDS, area=0x82) == fins_request.values
+            assert len(fins.packets) == 1
+            assert [packet[7] for packet in modbus.requests] == [6, 16]
+            assert (
+                tuple(
+                    modbus.words[address]
+                    for address in range(
+                        modbus_multiple.start,
+                        modbus_multiple.start + MAX_WRITE_REGISTERS,
+                    )
+                )
+                == modbus_multiple.values
+            )
+        records = identity.audit_page(AuditQuery(action="plc.write")).result(WAIT)
+        assert len(records) == len(requests)
+        for record, request in zip(reversed(records), requests, strict=True):
+            assert record.outcome == "success"
+            assert record.operation.after == f"[{', '.join(map(str, request.values))}]"
+        evidence = records[-1].operation.after
+        assert len(evidence) == 6979
+        assert (
+            len(
+                AuditOperation.by(
+                    identity.snapshot(), "fixture", "", after=evidence
+                ).after
+            )
+            == AUDIT_CHANGE_LIMIT
+        )
+        with pytest.raises(ValueError, match="evidence exceeds"):
+            AuditOperation.by(
+                identity.snapshot(), "plc.write", "", after=evidence + "0"
+            )
+        with pytest.raises(ValueError, match="count must be"):
+            execute_manual(
+                replace(
+                    fins_request,
+                    count=MAX_WRITE_WORDS + 1,
+                    values=(*fins_request.values, 0),
+                ),
+                lambda _: pytest.fail("Over-limit PLC request"),
+                None,
+                identity,
+                None,
+            )
+        assert (
+            identity.audit_page(AuditQuery(action="plc.write")).result(WAIT) == records
+        )
+    finally:
+        close(startup.application)
+
+
+def test_manual_write_audit_distinguishes_guard_admission_and_unmatched_response(
+    tmp_path: Path,
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    identity = startup.application.identity
+    assert identity
+    request = CommunicationRequest(RequestKind.WRITE, FinsTcpEndpoint(), 100, 1, (123,))
+    revision = identity.snapshot().revision
+
+    def protected(_: CommunicationRequest) -> None:
+        raise ReportingWriteProtectedError("Test reporting reservation")
+
+    def forbidden(_: CommunicationRequest) -> CommunicationResponse:
+        pytest.fail("Blocked PLC request reached transport")
+
+    def unmatched(req: CommunicationRequest) -> CommunicationResponse:
+        return CommunicationResponse(
+            replace(req, start=101), None, 1, datetime.now(UTC)
+        )
+
+    try:
+        with pytest.raises(ReportingWriteProtectedError):
+            execute_manual(request, forbidden, protected, identity, revision)
+        with pytest.raises(RuntimeError, match="matching write acknowledgement"):
+            execute_manual(request, unmatched, None, identity, revision)
+        identity.logout()
+        with pytest.raises(AuthorizationError):
+            execute_manual(request, forbidden, None, identity, None)
+        with pytest.raises(StaleSessionError):
+            execute_manual(request, forbidden, None, identity, revision)
+        identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        records = identity.audit_page(AuditQuery(action="plc.write")).result(WAIT)
+        assert [(r.outcome, r.operation.after) for r in records] == [
+            ("stale", ""),
+            ("denied", ""),
+            ("uncertain", "[123]"),
+            ("failed", "[123]"),
+        ]
+        assert records[-1].detail == "ReportingWriteProtectedError"
+    finally:
+        close(startup.application)
+
+
 def test_manual_command_records_original_actor_after_logout_and_fences_queued_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -220,7 +508,7 @@ def test_manual_command_records_original_actor_after_logout_and_fences_queued_re
         (write,) = identity.audit_page(
             AuditQuery(action="plc.write", actor=actor.account.account_id)
         ).result(WAIT)
-        assert write.outcome == "success" and write.operation.after == "99"
+        assert write.outcome == "success" and write.operation.after == "[99]"
         holding = identity.audit.intent(AuditOperation.by(actor, "hold", "fixture"))
         assert entered.wait(WAIT)
         queued = identity.audit_page(AuditQuery())

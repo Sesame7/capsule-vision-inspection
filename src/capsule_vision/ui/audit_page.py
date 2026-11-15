@@ -18,6 +18,7 @@ from capsule_vision.application.audit_presentation import (
 )
 from capsule_vision.application.audit_presentation import (
     login_failure_reason,
+    plc_requested_values,
     unsuccessful_login,
 )
 from capsule_vision.application.audit_presentation import (
@@ -264,8 +265,13 @@ class AuditPage(HistoryEventTable):
             )
             return
         op = record.operation
+        plc_write = op.action == "plc.write"
         before = _change_caption(op.action, op.before, self.language)
-        after = _change_caption(op.action, op.after, self.language)
+        after = (
+            plc_requested_values(op, self.language)
+            if plc_write
+            else _change_caption(op.action, op.after, self.language)
+        )
         if op.action == "production.recipe" and op.after == op.target:
             after = ""
         if before == after:
@@ -286,7 +292,10 @@ class AuditPage(HistoryEventTable):
             self.language,
             (
                 ("audit_before", before),
-                ("audit_after" if success else "audit_requested", after),
+                (
+                    "audit_after" if success and not plc_write else "audit_requested",
+                    after,
+                ),
                 ("reasons", reason),
             ),
         )

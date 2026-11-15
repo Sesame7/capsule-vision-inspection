@@ -15,6 +15,8 @@ from threading import Event, Lock, Thread
 from typing import cast
 from uuid import uuid4
 
+from capsule_vision.communication.fins import MAX_WRITE_WORDS
+from capsule_vision.communication.modbus_tcp import MAX_WRITE_REGISTERS
 from capsule_vision.diagnostics import RuntimeDiagnostics
 
 from .identity_models import (
@@ -23,6 +25,10 @@ from .identity_models import (
     SessionSnapshot,
     StaleSessionError,
 )
+
+AUDIT_CHANGE_LIMIT = 2048
+# Bracketed unsigned words: the two brackets replace the last ", " separator.
+_PLC_WRITE_EVIDENCE_LIMIT = max(MAX_WRITE_WORDS, MAX_WRITE_REGISTERS) * len("65535, ")
 
 
 class AuditUnavailable(RuntimeError):
@@ -122,13 +128,18 @@ class AuditOperation:
         after: str = "",
     ) -> AuditOperation:
         account = actor.account
+        if action == "plc.write":
+            if len(after) > _PLC_WRITE_EVIDENCE_LIMIT:
+                raise ValueError("Manual PLC write evidence exceeds the request limit")
+        else:
+            after = after[:AUDIT_CHANGE_LIMIT]
         return cls(
             account.account_id if account else "guest",
             account.username if account else "Guest",
             action,
             target[:512],
-            before[:2048],
-            after[:2048],
+            before[:AUDIT_CHANGE_LIMIT],
+            after,
         )
 
 

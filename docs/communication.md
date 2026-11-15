@@ -585,11 +585,13 @@ diagnostics; a single-word read uses READ with count 1. Register groups and curr
 read/write panel observations are session-local. Manual writes also pass through
 the [Audit Trail](architecture.md#audit-trail). Before sending, the diagnostic
 worker obtains a durable intent for the initiating actor, endpoint, register
-range and requested words, rechecks authorization and checks the current
-reporting/status reservation. A matching protocol acknowledgment completes the audited
-write. A PLC rejection records failure. A lost or malformed acknowledgment
-leaves execution uncertain and never triggers a retry. Reads, watches and
-automatic reporting transactions remain outside this trail.
+range and every requested word in order, rechecks authorization and checks the
+current reporting/status reservation. Transport evidence that a request was
+unsent and a validated PLC rejection both record failure. A possible send without
+a valid matching response records an uncertain outcome. Success records a
+validated matching acknowledgement without a readback or evidence of physical
+machine action. The diagnostic worker attempts an admitted write once. Reads,
+watches and automatic reporting transactions remain outside this trail.
 TCP node negotiation remains with the serial network owner. Late responses cannot
 replace a newer request's presentation.
 

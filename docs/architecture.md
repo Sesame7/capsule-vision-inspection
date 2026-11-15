@@ -283,6 +283,8 @@ and executes the existing command. Successful publication and failed or uncertai
 execution append separate terminal evidence. Repeating the same fact for the same
 operation is idempotent. A crash between the intent and completion leaves the
 operation unresolved. An audit finalization error leaves the business result intact.
+Manual PLC write intent retains the validated request values in order through
+the protocol limits of 997 FINS words and 123 Modbus registers.
 
 Audit schema version 2 additionally retains complete configuration revision evidence
 for Recipe JSON (stable Recipe ID), MachineLayout (`machine.tsv`), CameraSources
@@ -1187,11 +1189,13 @@ Batch scope and signal category without another report or Batch selector.
   with the action and result available for other changes. Reports omit credentials,
   internal IDs and hashes, network endpoints and routes, camera serials and file
   paths. Approved business names retain their recorded spelling. A manual PLC
-  write can retain its recorded register range and requested values. Local
-  Engineer review retains engineering details subject to the unsuccessful login
-  rule. PDF uses landscape A4 and repeats column headings. Excel keeps typed
-  local timestamps, literal text cells and a frozen table header. Neither format
-  changes Audit evidence.
+  write shows its recorded register range and up to the first 16 requested values
+  with an explicit count of any additional recorded values omitted. The local
+  Engineer review shows the full recorded request and retains engineering details
+  subject to the unsuccessful login rule. Both views flag incomplete historical
+  write evidence and omit any potentially cut final value. PDF uses landscape A4
+  and repeats column headings. Excel keeps typed local timestamps, literal text
+  cells and a frozen table header. Neither format changes Audit evidence.
 
 - **Alarm Records report:** every retained event matching the shared local-date
   bounds, exact stored Batch UUID (or no associated Batch) and signal category,

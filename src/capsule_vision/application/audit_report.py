@@ -22,6 +22,8 @@ from .audit_presentation import (
     OUTCOME_CAPTIONS,
     change_caption,
     login_failure_reason,
+    plc_requested_values,
+    plc_write_range,
     target_caption,
     unsuccessful_login,
 )
@@ -240,12 +242,9 @@ def _target(entry: AuditRecord, language: Language) -> str:
     if op.action == "production.start" and entry.outcome == "success":
         return text("records_run", language)
     if op.action == "plc.write":
-        # Publish the range without the protocol endpoint or routing prefix.
-        match = re.search(r" (130|177|holding) ([0-9]{1,5}) × ([0-9]{1,4})$", op.target)
-        if match:
-            area, address, count = match.groups()
-            prefix = {"130": "D", "177": "W", "holding": "HR"}[area]
-            return f"PLC · {prefix}{address} × {count}"
+        if register_range := plc_write_range(op.target):
+            address, count = register_range
+            return f"PLC · {address} × {count}"
         return "PLC"
     if op.action in ("batch.select", "batch.end", "batch.information"):
         label = {
@@ -452,10 +451,6 @@ def _changes(action: str, value: str, language: Language) -> str:
             and parts[2] in ("enabled", "first setup")
         ):
             return change_caption(action, value, language)
-    if action == "plc.write" and re.fullmatch(
-        r"[0-9]{1,5}(?:, [0-9]{1,5})*(?:, ?)?", value
-    ):
-        return value
     if action == "recipe.process_value":
         match = re.fullmatch(
             r"[a-zA-Z0-9_.-]+: (D[0-9]{1,5}–D[0-9]{1,5} = -?[0-9]{1,10})", value
@@ -491,8 +486,13 @@ def details(entry: AuditRecord, language: Language) -> str:
         reason = login_failure_reason(entry, language)
         return f"{text('reasons', language)}: {reason}" if reason else ""
     op = entry.operation
+    plc_write = op.action == "plc.write"
     before = _changes(op.action, op.before, language)
-    after = _changes(op.action, op.after, language)
+    after = (
+        plc_requested_values(op, language, max_displayed=16)
+        if plc_write
+        else _changes(op.action, op.after, language)
+    )
     if op.action == "batch.information" and all(
         line.partition(" = ")[2] in ("", "—") for line in op.before.splitlines()
     ):
@@ -505,7 +505,12 @@ def details(entry: AuditRecord, language: Language) -> str:
         f"{text(caption, language)}: {value}"
         for caption, value in (
             ("audit_before", before),
-            ("audit_after" if entry.outcome == "success" else "audit_requested", after),
+            (
+                "audit_after"
+                if entry.outcome == "success" and not plc_write
+                else "audit_requested",
+                after,
+            ),
         )
         if value
     ]

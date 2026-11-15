@@ -18,6 +18,7 @@ from .modbus_tcp import (
     MAX_READ_REGISTERS,
     MAX_WRITE_REGISTERS,
     HoldingRegisters,
+    ModbusError,
     ModbusSettings,
     ModbusTcpClient,
     validate_register_range,
@@ -130,7 +131,7 @@ def execute_request(request: CommunicationRequest) -> CommunicationResponse:
                     values = client.read_words(
                         request.start, request.count, area=request.area
                     )
-    except FinsError as exc:
+    except (FinsError, ModbusError) as exc:
         if request.kind is RequestKind.WRITE and not entered:
             exc.write_may_have_executed = False
         raise

@@ -33,6 +33,8 @@ class HoldingRegisters(Enum):
 class ModbusError(Exception):
     """Communication failure, never a Production judgment."""
 
+    write_may_have_executed: bool | None = None
+
 
 class ModbusProtocolError(ModbusError):
     """Invalid MBAP identity, framing or response payload."""
@@ -186,8 +188,10 @@ class ModbusTcpClient:
                 raise ModbusTransportError("Modbus TCP client is closed")
             self._transaction = (self._transaction + 1) & 0xFFFF
             deadline = monotonic() + self.settings.timeout
+            sending = False
             try:
                 self._remaining(deadline)
+                sending = True  # A failing sendall may already have sent bytes.
                 self._socket.sendall(
                     struct.pack(
                         "!HHHB",
@@ -236,10 +240,15 @@ class ModbusTcpClient:
                         "Write outcome may be uncertain; no retry or readback attempted."
                     )
                 detail = "; write outcome may be uncertain" if function_is_write else ""
+                error: ModbusTransportError
                 if isinstance(exc, TimeoutError):
-                    raise ModbusTimeoutError(f"Modbus TCP timed out{detail}") from exc
-                if isinstance(exc, OSError):
-                    raise ModbusTransportError(f"Modbus TCP: {exc}{detail}") from exc
-                raise
+                    error = ModbusTimeoutError(f"Modbus TCP timed out{detail}")
+                elif isinstance(exc, OSError):
+                    error = ModbusTransportError(f"Modbus TCP: {exc}{detail}")
+                else:
+                    raise
+                if function_is_write:
+                    error.write_may_have_executed = sending
+                raise error from exc
         finally:
             self._operation.release()
