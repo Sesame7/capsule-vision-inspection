@@ -1488,8 +1488,11 @@ preference write failures remain visible and do not undo candidate installation.
 Accepting an unprepared selection never writes this preference or persists a new
 selection field; after restart only the established last-applied preference applies.
 Startup can restore the latest saved version of that ID as a stopped candidate,
-with no automatic fallback or Start. Recipe Save invalidation is in memory and
-does not bind a version to the preference across restarts. Startup restoration
+with no automatic fallback or Start. The final dependency checks and saved-content
+capture must succeed before startup publishes the candidate. A failure in these
+steps leaves Production UNCONFIGURED with its startup issue, saved ID and available
+editing context for explicit reselection. Recipe Save invalidation is in memory
+and does not bind a version to the preference across restarts. Startup restoration
 does not apply PLC overrides. Candidate, active and persisted applied IDs remain
 protected from Recipe deletion.
 

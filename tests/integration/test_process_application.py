@@ -211,6 +211,30 @@ def test_no_overrides_requires_no_saved_target_and_no_connection(
         finish(app)
 
 
+def test_initial_candidate_without_identity_requires_explicit_process_application(
+    tmp_path: Path, peer: TcpPeer
+) -> None:
+    candidate = saved_candidate(editor(tmp_path), {"running_speed": "25"})
+    app = ProductionApplication(
+        lambda _prepared, _generation: FakeSession(),
+        initial_candidate=candidate,
+        communication_path=saved_target(tmp_path, peer.port),
+    )
+    try:
+        restored = app.snapshot()
+        assert restored.candidate_prepared is candidate
+        assert restored.process_required and not restored.process_applying
+        with pytest.raises(ApplicationStateError, match="readback"):
+            app.start()
+        assert not peer.connections and not peer.packets
+
+        app.configure(candidate).result(WAIT)
+        assert not app.snapshot().process_required
+        assert peer.words(102, 2, 0x82) == (25, 0)
+    finally:
+        finish(app)
+
+
 @pytest.mark.parametrize("supersede", ("empty", "replacement", "close", "cancel"))
 def test_pending_application_cannot_mark_a_later_candidate_ready(
     tmp_path: Path, peer: TcpPeer, supersede: str

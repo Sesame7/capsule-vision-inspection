@@ -312,7 +312,7 @@ def _load_startup(
                     editor.machine.layout.camera_ids, complete=sources.mode == "basler"
                 )
                 sources.validate_mapping()
-            prepared = prepare_configuration(
+            candidate = prepare_configuration(
                 resolve_configuration(
                     editor.machine,
                     entry.recipe,
@@ -321,10 +321,10 @@ def _load_startup(
                 ),
                 base_directory=data.models,
             )
-            prepared = replace(
-                prepared,
+            candidate = replace(
+                candidate,
                 model_path=ManagedModels(data.models).model_path(
-                    prepared.configuration.model
+                    candidate.configuration.model
                 ),
                 managed_model=True,
                 recipe_dependencies=RecipeDependencies(
@@ -334,11 +334,11 @@ def _load_startup(
                     data.machine, editor.machine, data.sources, sources
                 ),
             )
-            assert prepared.vision_dependencies is not None
-            prepared.vision_dependencies.validate_current()
-            assert prepared.recipe_dependencies is not None
-            prepared.recipe_dependencies.validate_current()
-            prepared = capture_prepared(prepared)
+            assert candidate.vision_dependencies is not None
+            candidate.vision_dependencies.validate_current()
+            assert candidate.recipe_dependencies is not None
+            candidate.recipe_dependencies.validate_current()
+            prepared = capture_prepared(candidate)
         except ModelArtifactError as exc:
             issues.append(StartupIssue("startup_artifact", str(exc)))
         except ConfigurationError as exc:

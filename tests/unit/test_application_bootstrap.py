@@ -7,6 +7,7 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import Never
 
 import pytest
 from tests.support.application import WAIT
@@ -15,9 +16,17 @@ from tests.support.startup import authenticated_startup, close, saved_data
 from capsule_vision.application import (
     ApplicationState,
     ApplicationStateError,
+    PreparedConfiguration,
     ProductionCounters,
+    StartBlocker,
 )
-from capsule_vision.application.startup import ApplicationData, load_startup
+from capsule_vision.application.recipe_dependencies import RecipePreparationRequired
+from capsule_vision.application.startup import (
+    ApplicationData,
+    StartupIssue,
+    load_startup,
+)
+from capsule_vision.application.vision_dependencies import VisionPreparationRequired
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
@@ -667,6 +676,75 @@ def test_permission_failures_keep_shell_and_original_context(
         assert not repaired.issues
     finally:
         close(repaired)
+
+
+@pytest.mark.parametrize(
+    "stage, error_type",
+    [
+        ("VisionDependencies.validate_current", VisionPreparationRequired),
+        ("RecipeDependencies.validate_current", RecipePreparationRequired),
+        ("capture_prepared", ConfigurationIOError),
+    ],
+    ids=("vision", "recipe", "saved-content"),
+)
+def test_failed_final_startup_checks_keep_candidate_unpublished(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    error_type: type[ConfigurationError],
+) -> None:
+    data = saved_data(tmp_path)
+    preferences = data.preferences.read_bytes()
+    detail = f"test failure during {stage}"
+
+    def fail_check(_value: object) -> Never:
+        raise error_type(detail)
+
+    def forbidden_engine(_candidate: PreparedConfiguration) -> Never:
+        pytest.fail("Startup and recovery selection must leave inspection stopped")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(f"capsule_vision.application.startup.{stage}", fail_check)
+        startup = authenticated_startup(data, engine_factory=forbidden_engine)
+    try:
+        app, editor = startup.application, startup.editor
+        assert startup.issues == (StartupIssue("startup_configuration", detail),)
+        assert startup.prepared is None
+        snapshot = app.snapshot()
+        assert snapshot.state is ApplicationState.UNCONFIGURED
+        assert snapshot.candidate is snapshot.candidate_prepared is None
+        assert snapshot.active is snapshot.run_id is None
+        assert not snapshot.runtime_owned
+        assert snapshot.start_blocker is StartBlocker.SETUP
+        with pytest.raises(ApplicationStateError, match="UNCONFIGURED"):
+            app.start()
+
+        assert startup.preferences is not None
+        recipe_id = startup.preferences.last_applied_recipe_id
+        assert recipe_id == "local"
+        assert editor is not None and editor.entry is not None
+        assert editor.entry.recipe.recipe_id == recipe_id
+        assert editor.machine_editor.persisted
+        assert editor.camera_sources is not None and editor.camera_sources.persisted
+
+        request = app.begin_recipe_selection(recipe_id)
+        with app.recipe_preparation(request):
+            app.accept_recipe_selection(request, editor.read_saved(recipe_id).recipe)
+            candidate = editor.prepare_saved(recipe_id)
+        app.install_recipe_selection(request, candidate).result(WAIT)
+        recovered = app.snapshot()
+        assert recovered.state is ApplicationState.READY
+        assert recovered.candidate_prepared is candidate
+        assert recovered.start_blocker is None
+        assert recovered.active is recovered.run_id is None
+        assert {item.artifact for item in candidate.saved_content} == {
+            "recipe",
+            "machine",
+            "sources",
+        }
+        assert data.preferences.read_bytes() == preferences
+    finally:
+        close(startup)
 
 
 @pytest.mark.parametrize("invalid", [False, True])

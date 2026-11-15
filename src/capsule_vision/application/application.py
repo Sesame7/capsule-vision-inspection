@@ -199,11 +199,8 @@ class ProductionApplication:
             else None
         )
         if initial_candidate is not None:
+            # Restoration leaves process overrides unverified until explicit admission.
             self._install_candidate(initial_candidate)
-            # Guest restoration is observation only; an authorized re-selection
-            # admits writes. Explicit identity-free compositions remain trusted.
-            if identity is None:
-                self._queue_process(None)
         if history is not None:
             history.initial_selection.add_done_callback(self._restored)
         self._thread.start()
@@ -1558,7 +1555,7 @@ class ProductionApplication:
                 )
                 starting = self._start_requested
                 self._start_requested = False
-                prepared = self._candidate or self._active
+                prepared = self._candidate
                 generation = self._generation
                 startup = self._startup if starting else None
                 start_operation = self._start_operation if starting else None
