@@ -165,6 +165,7 @@ class EditingCoordinator(QObject):
             completed(exc, "recipe_prepare_error")
             return
         self._prepare_saved(request, recipe_id, completed)
+        self.bridge.refresh()
 
     def _prepare_saved(
         self,

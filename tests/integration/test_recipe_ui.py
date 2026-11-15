@@ -31,8 +31,10 @@ from tests.support.recipe_ui import configured_screen as configured_screen
 
 from capsule_vision.application import (
     ApplicationState,
+    ApplicationStateError,
     ModelPreparationState,
     PreparedConfiguration,
+    StartBlocker,
 )
 from capsule_vision.application.image_archive import ArchiveSnapshot
 from capsule_vision.application.models import SelectedRecipe
@@ -204,7 +206,9 @@ def test_recipe_choice_buttons_keyboard_persistence_and_separate_disclosure(
         str(tmp_path / "archive"), True, True, True, True
     )
     assert window.bridge.application.snapshot() == replace(
-        before, candidate_requires_preparation=True
+        before,
+        candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
     )
     select_production_recipe(window)
     until(lambda: not page.busy)
@@ -395,7 +399,13 @@ def test_model_cache_preparation_is_queued_identity_bound_and_draft_independent(
         )
         assert not page.buttons["cache_prepare"].isEnabled()
         assert not window.buttons["operation"].isEnabled()
-        assert not session.dirty and not runtimes and app.snapshot() == before
+        assert window.buttons["operation"].toolTip() == text("preparing", language)
+        assert app.snapshot() == replace(
+            before, start_blocker=StartBlocker.MODEL_PREPARATION
+        )
+        with pytest.raises(ApplicationStateError, match="owns resources"):
+            app.start()
+        assert not session.dirty and not runtimes
         # GUI dispatch stays live while native initialization would be blocked.
         dispatch = Event()
         QTimer.singleShot(0, dispatch.set)
@@ -1593,7 +1603,9 @@ def test_prepare_failure_preserves_saved_edits_but_not_promoted(
     until(lambda: not page.busy)
     assert page.status.text() == text("saved", page.language)
     assert window.bridge.application.snapshot() == replace(
-        before, candidate_requires_preparation=True
+        before,
+        candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
     )
     window.production_recipes.select(
         window.production_recipes.recipes.findData("product-a")
@@ -1607,6 +1619,7 @@ def test_prepare_failure_preserves_saved_edits_but_not_promoted(
             before,
             state=ApplicationState.UNCONFIGURED,
             candidate_requires_preparation=True,
+            start_blocker=StartBlocker.SETUP,
             selected_recipe=SelectedRecipe(
                 session.entry.recipe.recipe_id, "Saved before preparation"
             ),
@@ -1678,6 +1691,7 @@ def test_unknown_model_preserved_on_unrelated_edit(configured_screen: Screen) ->
     assert window.bridge.application.snapshot() == replace(
         before,
         candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
     )
 
 
@@ -1731,7 +1745,9 @@ def test_single_model_and_unrelated_edit_preserve_model_semantics(
     assert load_recipe(session.entry.path) == replace(baseline, product_code="new-code")
     assert page.status.text() == text("saved", page.language)
     assert window.bridge.application.snapshot() == replace(
-        before, candidate_requires_preparation=True
+        before,
+        candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
     )
 
 
@@ -1788,4 +1804,5 @@ def test_dirty_save_switch_leaves_production_selection_unchanged(
     assert window.bridge.application.snapshot() == replace(
         before,
         candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
     )

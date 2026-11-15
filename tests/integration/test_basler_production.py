@@ -37,6 +37,7 @@ from capsule_vision.application import (
     ApplicationState,
     ApplicationStateError,
     ProductionCounters,
+    StartBlocker,
     _basler_sdk,
     production_application,
     production_session,
@@ -1523,6 +1524,7 @@ def test_start_connects_basler_and_reuses_it_without_startup_results(
     monkeypatch.setattr(application_module, "uuid4", run_id)
     try:
         assert app.source_snapshot().state is ConnectionState.DISCONNECTED
+        assert app.snapshot().start_blocker is None
         assert not passive.prepared and not engines
         for _ in range(2):
             app.start().result(WAIT)
@@ -2263,27 +2265,37 @@ def test_disconnect_marks_unready_before_waiting_for_native_cleanup(
     startup = authenticated_startup(data)
     app = startup.application
     assert isinstance(app, SourceConnectionCommands)
-    app.connect_source()
-    passive.release_cleanup.clear()
-    caller = Thread(target=app.disconnect_source, name="TestDisconnectCaller")
-    caller.start()
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
     try:
-        assert passive.cleanup_entered.wait(WAIT)
-        assert app.source_snapshot().state is ConnectionState.DISCONNECTING
-        with pytest.raises(ApplicationStateError):
-            app.start()
-        assert app.source_snapshot().thread_alive
-        passive.release_cleanup.set()
-        caller.join(WAIT)
-        assert (
-            not caller.is_alive()
-            and app.source_snapshot().state is ConnectionState.DISCONNECTED
-        )
+        window.show()
+        app.connect_source()
+        passive.release_cleanup.clear()
+        caller = Thread(target=app.disconnect_source, name="TestDisconnectCaller")
+        caller.start()
+        try:
+            assert passive.cleanup_entered.wait(WAIT)
+            assert app.source_snapshot().state is ConnectionState.DISCONNECTING
+            assert app.snapshot().start_blocker is StartBlocker.SOURCE_DISCONNECTING
+            window.bridge.refresh()
+            start = window.buttons["operation"]
+            assert start.isVisible() and not start.isEnabled()
+            assert start.toolTip() == text("source_disconnecting", window.language)
+            with pytest.raises(
+                ApplicationStateError, match="Source connection is busy"
+            ):
+                app.start()
+            assert app.source_snapshot().thread_alive
+        finally:
+            passive.release_cleanup.set()
+            caller.join(WAIT)
+        assert not caller.is_alive()
+        assert app.source_snapshot().state is ConnectionState.DISCONNECTED
+        window.bridge.refresh()
+        assert app.snapshot().start_blocker is None and start.isEnabled()
     finally:
-        passive.release_cleanup.set()
-        caller.join(WAIT)
-        app.close().result(WAIT)
-        assert app.join(WAIT)
+        close_window(window)
+        delivery.detach()
 
 
 def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
@@ -2865,7 +2877,9 @@ def test_vision_reentry_bilingual_metadata_without_discovery(
             if ending == "source_loss":
                 assert "Injected source loss" in window.event_label.toolTip()
             assert (data.sources.read_bytes(), data.machine.read_bytes()) == saved
-            assert app.snapshot() == before and not engine.calls
+            blocker = StartBlocker.SOURCE_RECOVERY if ending == "source_loss" else None
+            assert app.snapshot() == replace(before, start_blocker=blocker)
+            assert not engine.calls
             assert app.snapshot().counters == ProductionCounters()
     except Exception as exc:
         exc.add_note(f"Vision metadata: ending={ending}, language={window.language}")

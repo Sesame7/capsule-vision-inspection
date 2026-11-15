@@ -32,7 +32,11 @@ from tests.support.application import WAIT
 from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
 from tests.support.startup import authenticated_startup, provision_account, saved_data
 
-from capsule_vision.application import ApplicationState, ProductionCounters
+from capsule_vision.application import (
+    ApplicationState,
+    ProductionCounters,
+    StartBlocker,
+)
 from capsule_vision.application.identity_models import Role
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
 from capsule_vision.communication import (
@@ -98,6 +102,7 @@ def test_global_reporting_state_and_communication_details(
     controller = window.bridge.reporting
     assert controller is not None
     before = startup.application.snapshot()
+    expected = before
     original = controller.reporting_selection()
     selected = (
         replace(
@@ -201,12 +206,15 @@ def test_global_reporting_state_and_communication_details(
         assert panel.status_indicator.size().toTuple() == (8, 8)
         assert not hasattr(panel, "summary")
         assert controller.reporting_snapshot() == observation
-        assert startup.application.snapshot() == before
+        assert startup.application.snapshot() == expected
 
     try:
         colors = theme_colors(panel)
         check("service_off", None, colors.secondary)
         controller.set_reporting_selection(replace(selected, enabled=True))
+        if not modbus:
+            # These two FINS configurations use grouped reporting on Folder Replay.
+            expected = replace(before, start_blocker=StartBlocker.REPORTING_SOURCE)
         check("service_next_start", None, colors.warning)
         check("service_next_start", report, colors.warning)
         check(
@@ -228,6 +236,7 @@ def test_global_reporting_state_and_communication_details(
             colors.ok,
         )
         controller.set_reporting_selection(replace(selected, enabled=False))
+        expected = before
         check("web_running", live, colors.ok)
         check("web_running", replace(live, accepting=False), colors.warning)
         error = ReportingIssue("TimeoutError", "uncertain sequence ACK")
@@ -1264,7 +1273,9 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     assert saved.diagnostic.port == 19602 and saved.diagnostic.destination.node == 7
     assert saved.web == WebPreferences(False, "127.0.0.1", 8766, 2000)
     assert {p: p.read_bytes() for p in files} == files
-    assert startup.application.snapshot() == baseline
+    assert startup.application.snapshot() == replace(
+        baseline, start_blocker=StartBlocker.REPORTING_SOURCE
+    )
 
     def forbidden(*args: object, **kwargs: object) -> None:
         raise AssertionError("Settings restoration must not create a PLC client")

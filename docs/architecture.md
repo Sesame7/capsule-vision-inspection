@@ -712,6 +712,15 @@ cleanup is safe. Stop/Start or a Recipe change retains the selected Batch's tota
 products; enabled PLC group reporting's separate conditional channel-position totals are
 described above.
 
+The Application snapshot exposes the primary current Start blocker. It uses
+in-memory observations of the lifecycle, Operator access, selected Recipe and
+candidate, preparation, pending Batch changes, PLC process verification, source
+ownership and reporting settings. An eligible Basler source can Start while
+disconnected. Group reporting requires Basler when enabled. Disabled reporting
+permits ordinary inspection. Start still takes the existing session admission and
+rechecks eligibility. The lifecycle worker settles initial Batch restoration and
+performs saved dependency and resource preflight before activation.
+
 Recipe process overrides remain immutable definition metadata in Configuration
 and Run evidence. Configuration resolves one explicit DM starting address per
 parameter and validates flat ID/value overrides. A stopped candidate with overrides
@@ -1341,9 +1350,12 @@ full accessible text; the event/error group receives all remaining horizontal
 space. The event tooltip and accessible description retain actionable details,
 including unresolved configuration, service and archive issues alongside
 higher-priority feedback. Routine preparation does not hide these issues.
-Start guidance names the applicable source, Recipe, process, Batch, draft or
-permission blocker. Command feedback keeps its owning operation and ignores
-superseded results. A matching recovery clears the corresponding error.
+Start availability and its localized tooltip and accessibility guidance use the
+Application's current blocker. The existing Production feedback strip can show
+the reason while stopped, with operational errors retaining priority. Qt also
+guards Start during unsaved Vision edits, active editing work and window Close.
+Command feedback keeps its owning operation and ignores superseded results.
+A matching recovery clears the corresponding error.
 Only the event group stretches when the window grows; status changes do not
 move the persistent groups.
 
@@ -1400,6 +1412,8 @@ minimum width of 1080 logical pixels does not change Qt's window minimum or
 the image canvas coordinate system.
 
 Folder Replay keeps Start/Resume, Pause/Step and Stop in fixed player positions.
+Start remains visible in the operation slot in UNCONFIGURED and READY, including
+while eligibility is blocked.
 Basler shows only Start and Stop in a stable right-anchored pair, retaining the
 separate applicable Fault Reset slot. Connecting uses the localized connection
 caption before the existing warm-up presentation.

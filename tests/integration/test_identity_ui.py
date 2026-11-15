@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, current_thread, main_thread
@@ -1084,7 +1085,7 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
         ).role
         is Role.OPERATOR
     )
-    assert window.bridge.application.snapshot() == before
+    assert window.bridge.application.snapshot() == replace(before, start_blocker=None)
 
 
 def test_queued_success_after_logout_or_external_role_change_is_not_installed(

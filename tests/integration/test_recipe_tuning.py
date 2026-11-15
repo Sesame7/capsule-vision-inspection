@@ -19,7 +19,7 @@ from tests.support.qt import until
 from tests.support.recipe_ui import Screen, assert_inside, edit
 from tests.support.recipe_ui import configured_screen as configured_screen
 
-from capsule_vision.application import ConfiguredProductionPipeline
+from capsule_vision.application import ConfiguredProductionPipeline, StartBlocker
 from capsule_vision.application.basler_connection import (
     CameraSnapshot,
     ConnectedCamera,
@@ -617,7 +617,11 @@ def test_cached_judgment_and_isolation_and_save(
     until(lambda: not window.recipe_page.busy)
     assert session.entry and load_recipe(session.entry.path).capsule == expected
     after = window.bridge.application.snapshot()
-    assert after == replace(before, candidate_requires_preparation=True)
+    assert after == replace(
+        before,
+        candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
+    )
     assert after.candidate_prepared is before.candidate_prepared
     assert not runtimes and window.bridge.application.snapshot().active is before.active
 
@@ -738,7 +742,11 @@ def test_manual_hue_wrap_sampling_and_save_discard_reuse_evidence(
     assert preview.camera == camera and preview.canvas.selection == (0, 0)
     assert not preview.busy and not runtimes
     after = window.bridge.application.snapshot()
-    assert after == replace(before, candidate_requires_preparation=True)
+    assert after == replace(
+        before,
+        candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
+    )
     assert after.candidate_prepared is before.candidate_prepared
 
 
@@ -847,7 +855,11 @@ def test_length_sample_uses_cached_valid_axes_and_changes_only_target(
     window.recipe_page.show_draft()
     assert preview.spins["target_length"].value() == expected and not session.dirty
     after = window.bridge.application.snapshot()
-    assert after == replace(before, candidate_requires_preparation=True)
+    assert after == replace(
+        before,
+        candidate_requires_preparation=True,
+        start_blocker=StartBlocker.RECIPE_STALE,
+    )
     assert after.candidate_prepared is before.candidate_prepared
     assert not runtimes
 

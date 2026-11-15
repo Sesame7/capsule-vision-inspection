@@ -4,7 +4,11 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 
-from capsule_vision.application import ApplicationState, ProductionApplicationSnapshot
+from capsule_vision.application import (
+    ApplicationState,
+    ProductionApplicationSnapshot,
+    StartBlocker,
+)
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection.production import (
@@ -14,6 +18,40 @@ from capsule_vision.inspection.production import (
     ProductJudgment,
     TechnicalStatus,
 )
+
+_START_HINTS = {
+    StartBlocker.CLOSING: "state_closing",
+    StartBlocker.PERMISSION: "permission_operator",
+    StartBlocker.RECIPE_PREPARING: "preparing",
+    StartBlocker.RECIPE_REQUIRED: "recipe_reprepare_hint",
+    StartBlocker.RECIPE_STALE: "recipe_reprepare_hint",
+    StartBlocker.BATCH_PENDING: "batch_pending",
+    StartBlocker.PROCESS_APPLYING: "process_applying",
+    StartBlocker.PROCESS_UNVERIFIED: "process_apply_required",
+    StartBlocker.FILE_MANAGEMENT: "identity_working",
+    StartBlocker.MODEL_PREPARATION: "preparing",
+    StartBlocker.SOURCE_CONNECTING: "source_connecting",
+    StartBlocker.SOURCE_DISCONNECTING: "source_disconnecting",
+    StartBlocker.SOURCE_RECOVERY: "source_connection_error",
+    StartBlocker.REPORTING_SOURCE: "plc_group_hint",
+    StartBlocker.REPORTING_CONFIGURATION: "startup_communication",
+}
+
+
+def start_hint(
+    snapshot: ProductionApplicationSnapshot, setup_guidance_key: str
+) -> str | None:
+    blocker = snapshot.start_blocker
+    if blocker is StartBlocker.SETUP:
+        return setup_guidance_key
+    if blocker is StartBlocker.LIFECYCLE:
+        return {
+            ApplicationState.STARTING: "state_STARTING",
+            ApplicationState.STOPPING: "state_STOPPING",
+            ApplicationState.FAULT: "fault_note",
+            ApplicationState.CLOSED: "CLOSED",
+        }.get(snapshot.state)
+    return _START_HINTS[blocker] if blocker is not None else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +65,7 @@ class Controls:
 def controls(snapshot: ProductionApplicationSnapshot) -> Controls:
     state = snapshot.state
     return Controls(
-        state is ApplicationState.READY and not snapshot.candidate_requires_preparation,
+        state is ApplicationState.READY and snapshot.start_blocker is None,
         state in (ApplicationState.STARTING, ApplicationState.RUNNING),
         state is ApplicationState.FAULT and not snapshot.runtime_owned,
         state is ApplicationState.READY,

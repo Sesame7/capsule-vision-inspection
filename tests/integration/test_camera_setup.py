@@ -25,6 +25,7 @@ from capsule_vision.application import (
     ApplicationState,
     ApplicationStateError,
     ProductionCounters,
+    StartBlocker,
 )
 from capsule_vision.application.basler import BaslerDevice
 from capsule_vision.application.basler_connection import (
@@ -576,8 +577,12 @@ def test_source_dirty_navigation(
 ) -> None:
     window, workspace, _ = camera_screen
     assert workspace.sources is not None
+    app = window.bridge.application
+    before = app.snapshot()
+    assert before.start_blocker is None
     workspace.loop.setChecked(False)
     assert workspace.sources.dirty
+    assert app.snapshot() == before
     assert not window.buttons["operation"].isEnabled()
     assert window.buttons["operation"].accessibleDescription() == text(
         "start_vision_dirty", window.language
@@ -1207,7 +1212,11 @@ def test_vision_discard_preserves_partial_persistence_and_respects_locks(
     assert source.definition == load_camera_sources(source.path) and not source.dirty
     assert (
         window.bridge.application.snapshot()
-        == replace(snapshot, candidate_requires_preparation=True)
+        == replace(
+            snapshot,
+            candidate_requires_preparation=True,
+            start_blocker=StartBlocker.RECIPE_STALE,
+        )
         and not engine.calls
     )
 

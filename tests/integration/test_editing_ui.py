@@ -13,7 +13,12 @@ from tests.support.recipe_ui import Screen, select_production_recipe
 from tests.support.recipe_ui import camera_screen as camera_screen
 from tests.support.recipe_ui import configured_screen as configured_screen
 
-from capsule_vision.application import ApplicationState, PreparedConfiguration
+from capsule_vision.application import (
+    ApplicationState,
+    ApplicationStateError,
+    PreparedConfiguration,
+    StartBlocker,
+)
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.configuration import (
     ConfigurationError,
@@ -21,6 +26,7 @@ from capsule_vision.configuration import (
     load_machine_layout,
 )
 from capsule_vision.inference import BoundingRect
+from capsule_vision.localization.catalog import text
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.ui.vision_page import VisionPage
@@ -112,11 +118,17 @@ def test_setup_future_delivery_waits_for_actual_thread_exit_and_ignores_old_toke
         until(reached_exit.is_set)
         QApplication.processEvents()
         assert editing.busy and not callbacks
+        assert editing.bridge.application.snapshot().start_blocker is None
+        assert not window.buttons["operation"].isEnabled()
+        assert window.buttons["operation"].toolTip() == text(
+            "identity_working", window.language
+        )
         assert not editing.run_io(lambda: "duplicate", completed)
     finally:
         release_exit.set()
     until(lambda: not editing.busy)
     assert callbacks == [("first", None, owner)]
+    assert window.buttons["operation"].isEnabled()
     reached_exit.clear()
     release_exit.clear()
     assert editing.run_io(lambda: "second", completed)
@@ -162,6 +174,15 @@ def test_production_preparation_ignores_editor_selection_but_fences_close(
     window.editing.select_saved(session.entry.recipe.recipe_id, completed)
     try:
         until(entered.is_set)
+        app = window.bridge.application
+        window.bridge.refresh()
+        assert app.snapshot().start_blocker is StartBlocker.RECIPE_PREPARING
+        assert not window.buttons["operation"].isEnabled()
+        assert window.buttons["operation"].toolTip() == text(
+            "preparing", window.language
+        )
+        with pytest.raises(ApplicationStateError, match="successful preparation"):
+            app.start()
         session.entry = replace(session.entry)
     finally:
         release.set()
@@ -187,4 +208,5 @@ def test_production_preparation_ignores_editor_selection_but_fences_close(
         before,
         state=ApplicationState.UNCONFIGURED,
         candidate_requires_preparation=True,
+        start_blocker=StartBlocker.SETUP,
     )

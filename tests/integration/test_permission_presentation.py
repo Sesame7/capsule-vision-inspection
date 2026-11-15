@@ -18,7 +18,7 @@ from tests.support.startup import (
     saved_data,
 )
 
-from capsule_vision.application import ApplicationState
+from capsule_vision.application import ApplicationState, StartBlocker
 from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
@@ -261,7 +261,10 @@ def test_browsing_saved_recipes_preserves_dirty_engineering_state(
         and session.draft is draft
         and draft.to_recipe() == definition
     )
-    assert window.bridge.application.snapshot() == before
+    blocker = StartBlocker.PERMISSION if role is Role.GUEST else None
+    assert window.bridge.application.snapshot() == replace(
+        before, start_blocker=blocker
+    )
     assert all(
         path.read_bytes() == value
         for path, value in files.items()

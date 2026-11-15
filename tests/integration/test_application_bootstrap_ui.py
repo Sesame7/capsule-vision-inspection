@@ -13,7 +13,9 @@ from tests.support.startup import authenticated_startup, close, saved_data
 from capsule_vision.application import (
     ApplicationError,
     ApplicationState,
+    ProductionApplicationSnapshot,
     ProductionCounters,
+    StartBlocker,
 )
 from capsule_vision.application.folder_replay import FolderSourceError
 from capsule_vision.application.startup import ApplicationData, load_startup
@@ -192,7 +194,13 @@ def test_unchanged_apply_still_notifies_and_persists_preferences(
         select_saved(window)
         until(lambda: bool(applied) and not window.editing.busy)
         assert startup.application.snapshot() == before
-        assert not snapshots
+        assert len(snapshots) >= 2 and snapshots[-1] == before
+        for pending in snapshots[:-1]:
+            assert isinstance(pending, ProductionApplicationSnapshot)
+            assert pending.start_blocker is StartBlocker.RECIPE_PREPARING
+            assert pending.candidate == before.candidate
+            assert pending.selected_recipe == before.selected_recipe
+            assert pending.active == before.active
         assert len(applied) == 1
         assert applied[0] is startup.application.snapshot().candidate_prepared
         assert writes == [original_preferences]

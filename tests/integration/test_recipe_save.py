@@ -22,6 +22,7 @@ from capsule_vision.application import (
     ApplicationState,
     ApplicationStateError,
     PreparedConfiguration,
+    StartBlocker,
 )
 from capsule_vision.application.application import RecipeSelection
 from capsule_vision.application.audit import AuditQuery
@@ -58,9 +59,12 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     try:
+        window.show()
         app.start().result(WAIT)
         app.stop().result(WAIT)
         before = app.snapshot()
+        operation = window.buttons["operation"]
+        start_geometry = operation.geometry()
         assert before.active_prepared is before.candidate_prepared
         assert engines == [before.active_prepared]
         preferences = data.preferences.read_bytes()
@@ -79,7 +83,11 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         window.recipe_page.save()
         until(lambda: not window.editing.busy)
         saved = app.snapshot()
-        assert saved == replace(before, candidate_requires_preparation=True)
+        assert saved == replace(
+            before,
+            candidate_requires_preparation=True,
+            start_blocker=StartBlocker.RECIPE_STALE,
+        )
         assert saved.candidate_prepared is before.candidate_prepared
         assert saved.active_prepared is before.active_prepared
         assert not calls and applied.count() == 0
@@ -105,8 +113,9 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         assert (
             hint in picker.recipes.toolTip() and hint in picker.recipes.accessibleName()
         )
-        assert hint in window.buttons["operation"].toolTip()
-        assert not window.buttons["operation"].isEnabled()
+        assert hint in operation.toolTip()
+        assert operation.isVisible() and not operation.isEnabled()
+        assert operation.geometry() == start_geometry
         assert window.state_label.text() == text("report_stopped", window.language)
         assert window.event_frame.state.text() == window.state_label.text()
         assert window.event_label.accessibleName() == hint
@@ -123,6 +132,7 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         assert ready.active_prepared is before.active_prepared
         assert (
             not ready.candidate_requires_preparation
+            and ready.start_blocker is None
             and window.buttons["operation"].isEnabled()
         )
         assert picker.recipes.currentText() == "Latest saved"
@@ -159,7 +169,11 @@ def test_logout_after_committed_save_preserves_publication_and_stale_candidate(
         until(lambda: not window.editing.busy)
         assert not session.dirty
         assert load_recipe(session.entry.path).display_name == "Committed before logout"
-        assert app.snapshot() == replace(initial, candidate_requires_preparation=True)
+        assert app.snapshot() == replace(
+            initial,
+            candidate_requires_preparation=True,
+            start_blocker=StartBlocker.PERMISSION,
+        )
         assert applied.count() == 0
         owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
         window.identity_controls.refresh()
@@ -237,7 +251,11 @@ def test_coordinator_invalidates_after_publication_before_releasing_admission(
             load_recipe(session.entry.path).display_name
             == "Saved before reauthentication"
         )
-        assert app.snapshot() == replace(before, candidate_requires_preparation=True)
+        assert app.snapshot() == replace(
+            before,
+            candidate_requires_preparation=True,
+            start_blocker=StartBlocker.FILE_MANAGEMENT,
+        )
         assert window.editing.busy and not session.dirty and not outcomes
         owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
         assert app.session_revision != revision
@@ -281,7 +299,11 @@ def test_failed_reselection_keeps_saved_definition_and_blocks_start(
     window.recipe_page.save()
     until(lambda: not window.editing.busy)
     try:
-        assert app.snapshot() == replace(before, candidate_requires_preparation=True)
+        assert app.snapshot() == replace(
+            before,
+            candidate_requires_preparation=True,
+            start_blocker=StartBlocker.RECIPE_STALE,
+        )
         assert not session.dirty
         assert load_recipe(session.entry.path).display_name == "Saved independently"
         assert window.recipe_page.status.text() == text("saved", window.language)
@@ -346,7 +368,14 @@ def test_close_waits_for_committed_recipe_save(
         window.close()
         assert window.editing.closing and window.editing.busy
         assert window.isVisible() and not window.bridge.closed and not outcomes
-        assert app.snapshot() == replace(before, candidate_requires_preparation=True)
+        assert app.snapshot() == replace(
+            before,
+            candidate_requires_preparation=True,
+            start_blocker=StartBlocker.FILE_MANAGEMENT,
+        )
+        assert window.buttons["operation"].toolTip() == text(
+            "state_closing", window.language
+        )
     finally:
         release.set()
     until(lambda: window.bridge.closed)

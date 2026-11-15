@@ -23,6 +23,7 @@ from capsule_vision.application import (
     ApplicationError,
     ApplicationState,
     ApplicationStateError,
+    StartBlocker,
 )
 from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.composition import compose
@@ -41,6 +42,7 @@ from capsule_vision.communication.operations import (
     RequestKind,
 )
 from capsule_vision.communication.reporting import (
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
     ReportStage,
@@ -106,6 +108,36 @@ def normal_window(
         close_window(window)
         delivery.detach()
         assert not any(t.name.startswith("FirstStationReporting-") for t in threads())
+
+
+@pytest.mark.parametrize("mode", [ReportingMode.SINGLE_CYCLE, ReportingMode.FOUR_CYCLE])
+def test_group_reporting_blocks_folder_start_while_enabled(
+    qapp: QApplication, tmp_path: Path, mode: ReportingMode
+) -> None:
+    engine = Engine()
+    with normal_window(tmp_path, engine) as (startup, window, panel):
+        app = startup.application
+        start = window.buttons["operation"]
+        settings = replace(panel.controller.reporting_selection().settings, mode=mode)
+        panel.controller.set_reporting_selection(ReportingSelection(True, settings))
+        window.bridge.refresh()
+        before = app.snapshot()
+        assert before.start_blocker is StartBlocker.REPORTING_SOURCE
+        assert start.isVisible() and not start.isEnabled()
+        assert start.toolTip() == text("plc_group_hint", window.language)
+        with pytest.raises(ApplicationStateError, match="requires Basler"):
+            app.start()
+        assert app.snapshot() == before and not engine.calls
+
+        panel.controller.set_reporting_selection(ReportingSelection(False, settings))
+        window.bridge.refresh()
+        assert app.snapshot().start_blocker is None
+        assert start.isEnabled()
+        start.click()
+        until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+        assert panel.controller.reporting_snapshot() is None
+        engine.release.set()
+        app.stop().result(WAIT)
 
 
 def test_normal_defaults_disabled_no_reporting_and_relaunch_resets(

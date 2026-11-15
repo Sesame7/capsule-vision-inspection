@@ -18,6 +18,7 @@ from capsule_vision.application import (
     ApplicationError,
     ApplicationState,
     ProductionCounters,
+    StartBlocker,
 )
 from capsule_vision.application.editing import VisionSaveResult
 from capsule_vision.application.folder_replay import FolderSourceError
@@ -291,6 +292,7 @@ def test_recipe_summaries_keep_full_diagnostics_and_failure_semantics(
             snapshot,
             state=ApplicationState.UNCONFIGURED,
             candidate_requires_preparation=True,
+            start_blocker=StartBlocker.SETUP,
         )
         assert not runtimes
         QApplication.processEvents()

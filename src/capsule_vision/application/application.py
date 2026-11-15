@@ -60,6 +60,7 @@ from .models import (
     ProductionApplicationSnapshot,
     ProductionCounters,
     SelectedRecipe,
+    StartBlocker,
 )
 from .process_application import apply_process, process_target
 from .recipe_dependencies import RecipePreparationRequired
@@ -67,6 +68,20 @@ from .report_scope import DefectScope, HistoryQuery, ReportRequest
 from .run_configuration import RunConfiguration, capture_run
 from .session import ProductionCycle, RuntimeSession, lifecycle_error
 from .vision_dependencies import VisionPreparationRequired
+
+_START_ERRORS = {
+    StartBlocker.BATCH_PENDING: "Batch change awaiting storage confirmation",
+    StartBlocker.RECIPE_STALE: (
+        "Saved configuration requires re-preparation; reselect the saved Recipe"
+    ),
+    StartBlocker.RECIPE_REQUIRED: "Selected Recipe requires successful preparation",
+    StartBlocker.RECIPE_PREPARING: "Selected Recipe requires successful preparation",
+    StartBlocker.PROCESS_APPLYING: "PLC process application and readback are still pending",
+    StartBlocker.PROCESS_UNVERIFIED: (
+        "PLC process values require successful application and readback; reselect the saved Recipe"
+    ),
+    StartBlocker.MODEL_PREPARATION: "Model preparation still owns resources",
+}
 
 
 def _promise[T](future: Future[T]) -> Future[T]:
@@ -437,6 +452,7 @@ class ProductionApplication:
                 process_applying=self._process_active is not None
                 or self._process_pending is not None,
                 selected_recipe=self._selected_recipe,
+                start_blocker=self._observe_start(),
             )
 
     def configure(self, candidate: PreparedConfiguration) -> Future[None]:
@@ -952,12 +968,60 @@ class ProductionApplication:
         if self._closing or self._model_management or self._state not in states:
             raise ApplicationStateError(f"Command unavailable in {self._state.name}")
 
+    def _start_blocker(self) -> StartBlocker | None:
+        """Business checks shared by Start observation and admission under the lock."""
+        if self._closing:
+            return StartBlocker.CLOSING
+        if self._state not in (ApplicationState.READY, ApplicationState.UNCONFIGURED):
+            return StartBlocker.LIFECYCLE
+        if self._selection is not None:
+            return StartBlocker.RECIPE_PREPARING
+        if self._model_management:
+            return StartBlocker.FILE_MANAGEMENT
+        if self._state is ApplicationState.UNCONFIGURED:
+            return StartBlocker.SETUP
+        if self._batch_pending:
+            return StartBlocker.BATCH_PENDING
+        if self._candidate_requires_preparation:
+            return StartBlocker.RECIPE_STALE
+        if (
+            self._selected_recipe is None
+            or self._candidate is None
+            or self._selected_recipe.recipe_id
+            != self._candidate.configuration.recipe_id
+        ):
+            return StartBlocker.RECIPE_REQUIRED
+        if self._process_active is not None or self._process_pending is not None:
+            return StartBlocker.PROCESS_APPLYING
+        if self._process_required:
+            return StartBlocker.PROCESS_UNVERIFIED
+        if self._preparation is not None:
+            return StartBlocker.MODEL_PREPARATION
+        return None
+
+    def _observe_start(self) -> StartBlocker | None:
+        blocker = self._start_blocker()
+        if (
+            blocker not in (StartBlocker.CLOSING, StartBlocker.LIFECYCLE)
+            and self.identity is not None
+            and not self.identity.snapshot().permits(Role.OPERATOR)
+        ):
+            return StartBlocker.PERMISSION
+        return blocker
+
+    def _require_start(self) -> None:
+        if (blocker := self._start_blocker()) is not None:
+            raise ApplicationStateError(
+                _START_ERRORS.get(blocker, f"Command unavailable in {self._state.name}")
+            )
+
     def start(self) -> Future[None]:
         with (
             self._condition,
             self._admission(Role.OPERATOR, action="production.start") as actor,
         ):
             try:
+                self._require_start()
                 return self._admit_start(actor)
             except Exception as exc:
                 self._rejected_start(actor, exc)
@@ -984,43 +1048,15 @@ class ProductionApplication:
             )
 
     def _admit_start(self, actor: SessionSnapshot | None) -> Future[None]:
+        """Accept a checked Start while the lifecycle and admission locks are held."""
         with self._condition:
-            self._require(ApplicationState.READY)
-            if self._batch_pending:
-                raise ApplicationStateError(
-                    "Batch change awaiting storage confirmation"
-                )
-            if self._candidate_requires_preparation:
-                raise ApplicationStateError(
-                    "Saved configuration requires re-preparation; reselect the saved Recipe"
-                )
-            if (
-                self._selection is not None
-                or self._selected_recipe is None
-                or self._candidate is None
-                or self._selected_recipe.recipe_id
-                != self._candidate.configuration.recipe_id
-            ):
-                raise ApplicationStateError(
-                    "Selected Recipe requires successful preparation"
-                )
-            if (
-                self._process_required
-                or self._process_active is not None
-                or self._process_pending is not None
-            ):
-                raise ApplicationStateError(
-                    "PLC process values require successful application and readback; reselect the saved Recipe"
-                )
-            if self._preparation is not None:
-                raise ApplicationStateError("Model preparation still owns resources")
+            assert self._candidate is not None
             self._generation += 1
             self._state = ApplicationState.STARTING
             self._latest = None
             self._issue = None
             self._startup = _promise(Future())
-            prepared = self._candidate or self._active
-            recipe = prepared.configuration.recipe_id if prepared else ""
+            recipe = self._candidate.configuration.recipe_id
             if self.diagnostics:
                 self.run_diagnostics = RunDiagnostics(
                     self.diagnostics, self._generation, recipe

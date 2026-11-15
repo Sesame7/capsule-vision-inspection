@@ -17,7 +17,7 @@ from tests.support.startup import (
 )
 from tests.unit.test_batch_reporting import wait
 
-from capsule_vision.application import ApplicationState
+from capsule_vision.application import ApplicationState, StartBlocker
 from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.manual_plc import execute_manual
@@ -268,6 +268,7 @@ def test_start_rejects_conflict_until_old_status_owner_retires(tmp_path: Path) -
                 report, lambda: None, status=replace(status, enabled=False)
             )
             before = app.snapshot()
+            assert before.start_blocker is StartBlocker.REPORTING_CONFIGURATION
             with pytest.raises(ValueError, match="overlap"):
                 app.start()
             assert app.snapshot().generation == before.generation

@@ -8,7 +8,7 @@ from threading import Event
 import pytest
 from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT, ReplayEngine
-from tests.support.qt import until
+from tests.support.qt import close_window, until
 from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
@@ -17,7 +17,11 @@ from tests.support.startup import (
     saved_data,
 )
 
-from capsule_vision.application import ApplicationState, ApplicationStateError
+from capsule_vision.application import (
+    ApplicationState,
+    ApplicationStateError,
+    StartBlocker,
+)
 from capsule_vision.application.identity_models import (
     AuthorizationError,
     Role,
@@ -30,6 +34,9 @@ from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.application.startup import load_startup
 from capsule_vision.communication.reporting import ReportingMode
 from capsule_vision.configuration import load_camera_sources, save_camera_sources
+from capsule_vision.localization.catalog import text
+from capsule_vision.ui.bootstrap import create_window
+from capsule_vision.ui.future_delivery import FutureDelivery
 
 
 @pytest.mark.parametrize("role", list(Role))
@@ -134,7 +141,7 @@ def test_production_role_boundaries(
 
 @pytest.mark.parametrize("reporting_enabled", [False, True])
 def test_guest_cannot_start_or_step_prepared_folder_replay(
-    tmp_path: Path, reporting_enabled: bool
+    qapp: QApplication, tmp_path: Path, reporting_enabled: bool
 ) -> None:
     data = saved_data(tmp_path)
     startup = authenticated_startup(
@@ -143,6 +150,8 @@ def test_guest_cannot_start_or_step_prepared_folder_replay(
     app, candidate = startup.application, startup.prepared
     assert isinstance(app, SourceProductionApplication) and candidate is not None
     assert app.identity is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
     try:
         selection = app.reporting_selection()
         app.set_reporting_selection(
@@ -155,13 +164,22 @@ def test_guest_cannot_start_or_step_prepared_folder_replay(
         app.identity.logout()
         before = app.snapshot()
         assert before.state is ApplicationState.READY and not app.basler_available
+        assert before.start_blocker is StartBlocker.PERMISSION
+        window.show()
+        window.bridge.refresh()
+        start = window.buttons["operation"]
+        assert start.isVisible() and not start.isEnabled()
+        assert start.accessibleDescription() == text(
+            "permission_operator", window.language
+        )
         for command in (app.start, app.step_source):
             with pytest.raises(AuthorizationError):
                 command()
             assert app.snapshot() == before
             assert app.control_snapshot() is None and app.reporting_snapshot() is None
     finally:
-        close(startup)
+        close_window(window)
+        delivery.detach()
 
 
 def test_admitted_replay_and_step_survive_logout_without_new_guest_admission(

@@ -16,7 +16,11 @@ from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_four_cycle_presentation import completed
 from tests.unit.test_history import finish
 
-from capsule_vision.application import ApplicationStateError, ProductionApplication
+from capsule_vision.application import (
+    ApplicationStateError,
+    ProductionApplication,
+    StartBlocker,
+)
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.audit import (
     AuditOperation,
@@ -498,7 +502,10 @@ def test_batch_setup_rechecks_session_before_atomic_selection_and_information(
             "New", expected=expected, information=BatchInformation("Capsules")
         )
         assert entered.wait(WAIT)
-        with pytest.raises(ApplicationStateError):
+        assert app.snapshot().start_blocker is StartBlocker.BATCH_PENDING
+        with pytest.raises(
+            ApplicationStateError, match="awaiting storage confirmation"
+        ):
             app.start()
         with pytest.raises(ApplicationStateError):
             app.end_batch()

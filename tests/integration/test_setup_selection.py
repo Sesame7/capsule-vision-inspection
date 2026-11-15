@@ -16,7 +16,11 @@ from tests.support.startup import (
     saved_data,
 )
 
-from capsule_vision.application import ApplicationState, ApplicationStateError
+from capsule_vision.application import (
+    ApplicationState,
+    ApplicationStateError,
+    StartBlocker,
+)
 from capsule_vision.application.identity_models import (
     AuthorizationError,
     Role,
@@ -55,6 +59,11 @@ def test_valid_saved_selection_survives_incomplete_setup(
         assert not any(i.key == "startup_recipe_identity" for i in startup.issues)
         picker = window.production_recipes
         assert picker.recipes.currentIndex() == -1
+        start = window.buttons["operation"]
+        assert startup.application.snapshot().start_blocker is StartBlocker.SETUP
+        assert start.isVisible() and not start.isEnabled()
+        assert start.toolTip() == text("configure_first", window.language)
+        before = start.geometry()
         if missing == "machine":
             assert window.configuration_placeholder.text() == text(
                 "configure_first", window.language
@@ -64,11 +73,13 @@ def test_valid_saved_selection_survives_incomplete_setup(
         assert picker.recipes.currentData() == "local"
         snapshot = startup.application.snapshot()
         assert snapshot.state is ApplicationState.UNCONFIGURED
+        assert snapshot.start_blocker is StartBlocker.SETUP
         assert snapshot.candidate is None and snapshot.active is None
         assert not snapshot.process_required and not snapshot.process_applying
         assert picker.feedback is not None
         assert picker.feedback[0] == "recipe_setup_required"
         assert not window.buttons["operation"].isEnabled()
+        assert start.geometry() == before
         for language in ("bg", "bn", "zh-TW", "en"):
             window.language_selector.activated.emit(
                 window.language_selector.findData(language)
@@ -270,7 +281,9 @@ def test_selection_acceptance_cannot_outlive_its_admission(
             app.identity.logout()
             with pytest.raises((StaleSessionError, AuthorizationError)):
                 app.accept_recipe_selection(request, recipe)
-            assert app.snapshot() == before
+            assert app.snapshot() == replace(
+                before, start_blocker=StartBlocker.PERMISSION
+            )
         else:
             app.close().result(5)
             with pytest.raises(ApplicationStateError):

@@ -9,7 +9,7 @@ from tests.integration.test_process_preview import saved_target
 from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import until
 
-from capsule_vision.application import ApplicationStateError
+from capsule_vision.application import ApplicationStateError, StartBlocker
 from capsule_vision.application.audit import AuditQuery
 from capsule_vision.configuration import load_recipe
 from capsule_vision.localization.catalog import text
@@ -35,6 +35,7 @@ def test_selected_save_has_no_plc_io_and_reselection_blocks_start_until_verified
             saved = app.snapshot()
             assert saved.candidate_prepared is before.candidate_prepared
             assert saved.candidate_requires_preparation and not saved.process_applying
+            assert saved.start_blocker is StartBlocker.RECIPE_STALE
             assert not plc.connections and not plc.packets
             assert not plc.entered.is_set()
             assert window.recipe_page.status.text() == text("saved", window.language)
@@ -54,6 +55,7 @@ def test_selected_save_has_no_plc_io_and_reselection_blocks_start_until_verified
             window.bridge.refresh()
             qapp.processEvents()
             assert window.editing.busy and app.snapshot().process_required
+            assert app.snapshot().start_blocker is StartBlocker.PROCESS_APPLYING
             assert not window.buttons["operation"].isEnabled()
             assert window.buttons["operation"].accessibleDescription() == text(
                 "process_applying", window.language
@@ -70,6 +72,7 @@ def test_selected_save_has_no_plc_io_and_reselection_blocks_start_until_verified
             window.bridge.refresh()
             qapp.processEvents()
             assert not app.snapshot().process_required
+            assert app.snapshot().start_blocker is None
             assert window.buttons["operation"].isEnabled()
             assert plc.words(102, 2, 0x82) == (73, 0)
             selections = identity.audit_page(AuditQuery(action="production.recipe"))
@@ -110,6 +113,10 @@ def test_failure_preserves_save_then_same_id_selection_recovers(
         window.bridge.refresh()
         qapp.processEvents()
         assert app.snapshot().process_required
+        assert app.snapshot().start_blocker is StartBlocker.PROCESS_UNVERIFIED
+        assert window.buttons["operation"].toolTip() == text(
+            "process_apply_required", window.language
+        )
         assert picker.feedback and picker.feedback[0] == "process_apply_failed"
         assert "Machine running" in picker.recipes.toolTip()
         assert "Machine running" not in window.recipe_page.status.toolTip()

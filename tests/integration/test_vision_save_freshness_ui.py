@@ -12,7 +12,7 @@ from tests.support.qt import close_window, until
 from tests.support.recipe_ui import select_production_recipe
 from tests.support.startup import authenticated_startup, saved_data
 
-from capsule_vision.application import ApplicationState
+from capsule_vision.application import ApplicationState, StartBlocker
 from capsule_vision.application.basler_connection import SourceConnectionSnapshot
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.startup import ApplicationData
@@ -221,6 +221,7 @@ def test_external_start_preflight_failure_and_reselection_clear_recovery_feedbac
     source = load_camera_sources(data.sources)
     save_camera_sources(data.sources, replace(source, target_fps=source.target_fps + 1))
     failed = QSignalSpy(window.bridge.command_failed)
+    assert window.bridge.application.snapshot().start_blocker is None
     assert window.buttons["operation"].isEnabled()
     window.buttons["operation"].click()
     until(
@@ -228,6 +229,7 @@ def test_external_start_preflight_failure_and_reselection_clear_recovery_feedbac
     )
     assert window.snapshot.state is ApplicationState.READY
     assert window.snapshot.last_issue is not None
+    assert window.snapshot.start_blocker is StartBlocker.RECIPE_STALE
     assert not window.buttons["operation"].isEnabled()
     previous = window.snapshot.candidate_prepared
 

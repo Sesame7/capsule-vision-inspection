@@ -48,6 +48,28 @@ class ApplicationState(Enum):
     CLOSED = auto()
 
 
+class StartBlocker(Enum):
+    """Primary reason a Start attempt is currently unavailable."""
+
+    CLOSING = auto()
+    LIFECYCLE = auto()
+    PERMISSION = auto()
+    SETUP = auto()
+    RECIPE_PREPARING = auto()
+    RECIPE_REQUIRED = auto()
+    RECIPE_STALE = auto()
+    BATCH_PENDING = auto()
+    PROCESS_APPLYING = auto()
+    PROCESS_UNVERIFIED = auto()
+    FILE_MANAGEMENT = auto()
+    MODEL_PREPARATION = auto()
+    SOURCE_CONNECTING = auto()
+    SOURCE_DISCONNECTING = auto()
+    SOURCE_RECOVERY = auto()
+    REPORTING_SOURCE = auto()
+    REPORTING_CONFIGURATION = auto()
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedConfiguration:
     configuration: ResolvedInspectionConfiguration
@@ -234,6 +256,7 @@ class ProductionApplicationSnapshot:
     process_required: bool = False
     process_applying: bool = False
     selected_recipe: SelectedRecipe | None = None
+    start_blocker: StartBlocker | None = None
 
     @property
     def four_cycle_display(self) -> bool:

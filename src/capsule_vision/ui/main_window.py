@@ -86,6 +86,7 @@ from .production_presentation import (
     controls,
     grid_columns,
     production_actions,
+    start_hint,
 )
 from .production_recipes import ProductionRecipes
 from .recipe_page import ModelLabelReader, RecipePage
@@ -102,6 +103,15 @@ from .style import (
     theme_colors,
 )
 from .vision_page import VisionPage
+
+_START_WAIT_HINTS = (
+    "preparing",
+    "process_applying",
+    "identity_working",
+    "batch_pending",
+    "source_connecting",
+    "source_disconnecting",
+)
 
 
 class PlayerButton(QPushButton):
@@ -898,8 +908,9 @@ class MainWindow(QMainWindow):
         action = self._actions()[key]
         current = self.bridge.application.snapshot()
         if (
-            action != self._current_actions()[key]
+            action != self._current_actions(current)[key]
             or current.generation != self.snapshot.generation
+            or (action == "start" and self._start_hint(current) is not None)
         ):
             # Never reinterpret a stale displayed action as a new Start/session.
             self.bridge.refresh()
@@ -927,14 +938,33 @@ class MainWindow(QMainWindow):
             else None,
         )
 
-    def _current_actions(self) -> dict[str, str | None]:
+    def _current_actions(
+        self, snapshot: ProductionApplicationSnapshot
+    ) -> dict[str, str | None]:
         replay = self.bridge.control_snapshot()
         return production_actions(
-            self.bridge.application.snapshot(),
+            snapshot,
             (replay.state if replay else SourceControlState.STOPPED)
             if self.bridge.controls_enabled
             else None,
         )
+
+    def _start_hint(self, snapshot: ProductionApplicationSnapshot) -> str | None:
+        if self._closing or self.editing.closing:
+            return "state_closing"
+        if (
+            hint := start_hint(snapshot, self.production_recipes.setup_guidance_key)
+        ) is not None:
+            return hint
+        if snapshot.state is not ApplicationState.READY:
+            return None
+        session = self.editing.session
+        if session is not None and (
+            session.machine_editor.dirty
+            or (session.camera_sources is not None and session.camera_sources.dirty)
+        ):
+            return "start_vision_dirty"
+        return "identity_working" if self.editing.busy else None
 
     def _render_operations(self) -> None:
         actions = self._actions()
@@ -945,55 +975,18 @@ class MainWindow(QMainWindow):
             and replay.state in (SourceControlState.PAUSED, SourceControlState.STEPPING)
         )
         app = self.bridge.application
-        session = self.editing.session
-        vision_dirty = bool(
-            session
-            and (
-                session.machine_editor.dirty
-                or session.camera_sources
-                and session.camera_sources.dirty
-            )
-        )
-        model_preparation = app.preparation_snapshot().owns_resources
-        editing_busy = self.editing.busy or model_preparation
-        draft_locked = vision_dirty or editing_busy
         basler = isinstance(app, SourceProductionApplication) and app.basler_available
         operator = permits(app, Role.OPERATOR)
-        source_state = (
-            app.source_snapshot().state
-            if isinstance(app, SourceProductionApplication) and basler
-            else None
-        )
-        source_ready = (
-            self.snapshot.state is not ApplicationState.READY
-            or not basler
-            or source_state in (ConnectionState.DISCONNECTED, ConnectionState.CONNECTED)
-        )
-        setup_guidance_key = self.production_recipes.setup_guidance_key
-        feedback = self.production_recipes.feedback
-        editing_key = (
-            "preparing"
-            if model_preparation or (feedback and feedback[0] == "preparing")
-            else "identity_working"
-        )
+        guidance = self._start_hint(self.snapshot)
         identity = (
             basler,
-            self.snapshot.batch_pending,
-            source_state,
-            source_ready,
             operator,
             tuple(actions.items()),
             middle_step,
             self.language,
             self.theme,
             self._closing,
-            vision_dirty,
-            editing_busy,
-            editing_key,
-            setup_guidance_key,
-            self.snapshot.candidate_requires_preparation,
-            self.snapshot.process_required,
-            self.snapshot.process_applying,
+            guidance,
             tuple(self.buttons[key].font().key() for key in actions),
         )
         if identity == self._operation_presentation:
@@ -1004,15 +997,8 @@ class MainWindow(QMainWindow):
             button = self.buttons[key]
             enabled = action is not None and not self._closing
             if action == "start":
-                enabled = (
-                    enabled
-                    and source_ready
-                    and not (draft_locked or self.snapshot.batch_pending)
-                    and not (
-                        self.snapshot.process_required or self.snapshot.process_applying
-                    )
-                )
-            permitted = operator or action in (None, "stop")
+                enabled = enabled and guidance is None
+            permitted = operator or action in (None, "start", "stop")
             button.setEnabled(bool(enabled and permitted))
             label = text(
                 "replay_continue"
@@ -1030,34 +1016,8 @@ class MainWindow(QMainWindow):
             tip = (
                 text("permission_operator", self.language)
                 if not permitted
-                else text(
-                    "source_connecting"
-                    if source_state is ConnectionState.CONNECTING
-                    else "source_disconnecting"
-                    if source_state is ConnectionState.DISCONNECTING
-                    else "source_fault",
-                    self.language,
-                )
-                if action == "start" and not source_ready
-                else text(setup_guidance_key, self.language)
-                if key == "operation"
-                and self.snapshot.state is ApplicationState.UNCONFIGURED
-                else text("process_applying", self.language)
-                if key == "operation" and self.snapshot.process_applying
-                else text("batch_pending", self.language)
-                if action == "start" and self.snapshot.batch_pending
-                else text("start_vision_dirty", self.language)
-                if action == "start" and vision_dirty
-                else text(editing_key, self.language)
-                if key == "operation"
-                and self.snapshot.state is ApplicationState.READY
-                and editing_busy
-                else text("recipe_reprepare_hint", self.language)
-                if key == "operation"
-                and self.snapshot.state is ApplicationState.READY
-                and self.snapshot.candidate_requires_preparation
-                else text("process_apply_required", self.language)
-                if action == "start" and self.snapshot.process_required
+                else text(guidance, self.language)
+                if key == "operation" and action != "replay_continue" and guidance
                 else text("pause_unsupported", self.language)
                 if key == "pause" and not self.bridge.controls_enabled
                 else text("software_stop", self.language)
@@ -1124,9 +1084,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _source_ready_changed(self, _source: object) -> None:
-        if self.snapshot.state is ApplicationState.READY:
-            self._render_operations()
-        elif self.snapshot.state is ApplicationState.STARTING:
+        if self.snapshot.state is ApplicationState.STARTING:
             self._render()
 
     @Slot(object)
@@ -1581,25 +1539,15 @@ class MainWindow(QMainWindow):
             message = text(key, language)
             warning = key not in ("preparing", "process_applying")
         elif (
-            (snapshot.process_required or snapshot.process_applying)
-            and not snapshot.candidate_requires_preparation
-            and page == 0
+            page == 0
+            and snapshot.state
+            in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
             and not (warning or fault or self._closing)
+            and (hint := self._start_hint(snapshot))
+            not in (None, "permission_operator")
         ):
-            message = text(
-                "process_applying"
-                if snapshot.process_applying
-                else "process_apply_required",
-                language,
-            )
-            warning = not snapshot.process_applying
-        elif (
-            snapshot.candidate_requires_preparation
-            and page == 0
-            and not (warning or fault or self._closing)
-        ):
-            message = text("recipe_reprepare_hint", language)
-            warning = True
+            message = text(hint, language)
+            warning = hint not in _START_WAIT_HINTS
         if self._source_issue and event_key == "command_error":
             camera, exception_type = self._source_issue
             source_message = " · ".join(
@@ -1710,9 +1658,8 @@ class MainWindow(QMainWindow):
         self.event_icon.setToolTip("")
         self.event_icon.setAccessibleName(message)
         if message:
-            in_progress = self._closing or message in (
-                text("preparing", language),
-                text("process_applying", language),
+            in_progress = self._closing or any(
+                message == text(hint, language) for hint in _START_WAIT_HINTS
             )
             icon = (
                 production_icon("FAULT", colors.fault)

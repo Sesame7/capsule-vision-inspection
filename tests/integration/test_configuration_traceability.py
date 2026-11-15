@@ -20,7 +20,7 @@ from tests.support.startup import (
     provision_account,
 )
 
-from capsule_vision.application import ApplicationState
+from capsule_vision.application import ApplicationState, StartBlocker
 from capsule_vision.application.audit import (
     AuditOperation,
     AuditQuery,
@@ -180,7 +180,9 @@ def test_save_reselect_replay_and_restart_keep_exact_run_revisions(
             window.recipe_page.save()
             until(lambda: not window.editing.busy)
             assert app.snapshot() == replace(
-                before_save, candidate_requires_preparation=True
+                before_save,
+                candidate_requires_preparation=True,
+                start_blocker=StartBlocker.RECIPE_STALE,
             )
             assert plc.packets == packets and plc.connections == connections
             assert (

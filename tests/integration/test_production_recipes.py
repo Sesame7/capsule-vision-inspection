@@ -32,6 +32,7 @@ from capsule_vision.application import (
     ApplicationState,
     ApplicationStateError,
     PreparedConfiguration,
+    StartBlocker,
 )
 from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.editing import RecipeEditorSession
@@ -136,12 +137,17 @@ def test_restart_after_save_restores_latest_recipe_read_only(
                 not snapshot.candidate_requires_preparation
                 and snapshot.process_required
             )
+            assert snapshot.start_blocker is StartBlocker.PERMISSION
             assert snapshot.active is None and not snapshot.runtime_owned
             assert data.preferences.read_bytes() == preferences
             assert not plc.connections and not plc.packets
             owner = restored.application.identity
             assert owner
             owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+            assert (
+                restored.application.snapshot().start_blocker
+                is StartBlocker.PROCESS_UNVERIFIED
+            )
             assert not owner.audit_page(AuditQuery(action="production.recipe")).result(
                 WAIT
             )
@@ -267,7 +273,11 @@ def test_save_and_selection_keep_editor_candidate_and_preferences_independent(
         assert not session.dirty
         assert load_recipe(session.entry.path).display_name == "Saved latest"
         saved = startup.application.snapshot()
-        assert saved == replace(initial, candidate_requires_preparation=True)
+        assert saved == replace(
+            initial,
+            candidate_requires_preparation=True,
+            start_blocker=StartBlocker.RECIPE_STALE,
+        )
         assert data.preferences.read_bytes() == preferences
         assert load_preferences(data.preferences).last_applied_recipe_id == "local"
         session.draft.display_name = "Keep unsaved"
@@ -519,6 +529,9 @@ def test_pending_selection_cannot_outlive_its_actor(
         after = app.snapshot()
         assert after.state is ApplicationState.UNCONFIGURED
         assert after.candidate_requires_preparation
+        assert after.start_blocker is (
+            StartBlocker.PERMISSION if transition == "logout" else StartBlocker.SETUP
+        )
         assert after.selected_recipe is not None
         assert after.selected_recipe.recipe_id == "other"
         assert (
@@ -527,6 +540,7 @@ def test_pending_selection_cannot_outlive_its_actor(
                 state=initial.state,
                 candidate_requires_preparation=False,
                 selected_recipe=initial.selected_recipe,
+                start_blocker=initial.start_blocker,
             )
             == initial
         )

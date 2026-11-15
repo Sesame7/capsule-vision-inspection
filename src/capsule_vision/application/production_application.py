@@ -60,6 +60,7 @@ from .models import (
     ApplicationStateError,
     PreparedConfiguration,
     ProductionApplicationSnapshot,
+    StartBlocker,
 )
 from .production_session import SourceRuntimeSession
 from .run_configuration import RunConfiguration, capture_run
@@ -356,11 +357,51 @@ class SourceProductionApplication(ProductionApplication):
         with self._condition:
             return self._start_replay(single_step=False)
 
+    def _observe_start(self) -> StartBlocker | None:
+        if (blocker := super()._observe_start()) is not None:
+            return blocker
+        try:
+            return self._source_reporting_blocker(self.basler_available)
+        except ValueError:
+            return StartBlocker.REPORTING_CONFIGURATION
+
+    def _source_reporting_blocker(self, basler: bool) -> StartBlocker | None:
+        """Check current source observations and saved reporting reservations."""
+        selection = self.reporting_selection()
+        if selection.enabled and selection.settings.mode is not ReportingMode.PER_CYCLE:
+            selection.settings.validate_group()
+            if not basler:
+                return StartBlocker.REPORTING_SOURCE
+        if basler:
+            state = self.connection.snapshot().state
+            if state is ConnectionState.CONNECTING:
+                return StartBlocker.SOURCE_CONNECTING
+            if state is ConnectionState.DISCONNECTING:
+                return StartBlocker.SOURCE_DISCONNECTING
+            if state not in (ConnectionState.DISCONNECTED, ConnectionState.CONNECTED):
+                return StartBlocker.SOURCE_RECOVERY
+        if selection.enabled and self._alarms is not None:
+            for status in self._alarms.protected_settings():
+                status.validate_reporting(selection.settings)
+        return None
+
     def _start_replay(self, *, single_step: bool) -> Future[None]:
         with self._admission(Role.OPERATOR, action="production.start") as actor:
             try:
-                self._require(ApplicationState.READY)
-                startup = self._admit_replay(single_step=single_step, actor=actor)
+                self._require_start()
+                basler = self.basler_available
+                blocker = self._source_reporting_blocker(basler)
+                if blocker is StartBlocker.REPORTING_SOURCE:
+                    raise ApplicationStateError(
+                        "PLC group reporting requires Basler Production"
+                    )
+                if blocker is not None:
+                    raise ApplicationStateError(
+                        "Source connection is busy or requires explicit recovery in Vision"
+                    )
+                startup = self._admit_replay(
+                    single_step=single_step, actor=actor, basler=basler
+                )
             except Exception as exc:
                 self._rejected_start(actor, exc)
                 raise
@@ -370,27 +411,13 @@ class SourceProductionApplication(ProductionApplication):
         return startup
 
     def _admit_replay(
-        self, *, single_step: bool, actor: SessionSnapshot | None
+        self, *, single_step: bool, actor: SessionSnapshot | None, basler: bool
     ) -> Future[None]:
-        selection = self.reporting_selection()
-        if selection.enabled and selection.settings.mode is not ReportingMode.PER_CYCLE:
-            selection.settings.validate_group()
-            if not self.basler_available:
-                raise ApplicationStateError(
-                    "PLC group reporting requires Basler Production"
-                )
-        if self.basler_available:
+        if basler:
             if single_step:
                 raise ApplicationStateError("Start Basler before requesting Pause/Step")
             with self._replay_lock:
-                if self.connection.snapshot().state not in (
-                    ConnectionState.DISCONNECTED,
-                    ConnectionState.CONNECTED,
-                ):
-                    raise ApplicationStateError(
-                        "Source connection is busy or requires explicit recovery in Vision"
-                    )
-                control = BaslerAdmissionControl(self.snapshot().generation + 1)
+                control = BaslerAdmissionControl(self._generation + 1)
                 startup = self._start_reporting_session(actor)
                 self._basler_control = control
             startup.add_done_callback(
@@ -404,7 +431,7 @@ class SourceProductionApplication(ProductionApplication):
                 raise ApplicationStateError("Folder replay controls are not enabled")
             return self._start_reporting_session(actor)
         with self._replay_lock:
-            generation = self.snapshot().generation + 1
+            generation = self._generation + 1
             control = FolderReplayControl(generation, single_step=single_step)
             step = control.step() if single_step else None
             startup = self._start_reporting_session(actor)
@@ -420,12 +447,8 @@ class SourceProductionApplication(ProductionApplication):
 
     def _start_reporting_session(self, actor: SessionSnapshot | None) -> Future[None]:
         with self._condition:
-            selected = self.reporting_selection()
-            if selected.enabled and self._alarms is not None:
-                for status in self._alarms.protected_settings():
-                    status.validate_reporting(selected.settings)
             startup = self._admit_start(actor)
-            prepared = self._candidate or self._active
+            prepared = self._candidate
             assert prepared is not None
             with self._reporting_lock:
                 self._session_reporting_words = (
