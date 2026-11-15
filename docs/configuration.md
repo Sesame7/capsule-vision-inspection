@@ -1,8 +1,11 @@
 # Local configuration
 
-Normal [app.py](../app.py) uses `data/` beside the entry file. It restores a stopped
-candidate, never an active session, Batch, counters or current result. Historical
-records remain separately browsable without restoring application state. No first-file
+Normal [app.py](../app.py) uses `data/` beside the entry file. It can restore a
+stopped Recipe candidate from the saved last-applied Recipe ID. Through
+[History](architecture.md#production-history), it independently restores any
+persisted selected Batch and its cumulative totals. Startup leaves inspection
+stopped and the current result empty. A successful Start activates a new Run and
+inspection session. Historical records remain separately browsable. No first-file
 fallback, automatic repair of saved geometry or fake inference is used for recovery.
 
 ## Files and paths

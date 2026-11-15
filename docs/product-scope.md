@@ -163,7 +163,20 @@ for an explicitly approved change. The product requirements are:
 - Keep the existing model-management actions visible; the card has adequate room. **Prepare TensorRT cache** remains an explicit useful engineering action.
 - Saving a Recipe definition is separate from selecting/preparing/starting it in Production.
 - MachineLayout, camera source assignment and ROI belong to **equipment-level Vision configuration**, not ordinary product Recipe switching. Retain the existing 30/36 channel source, capture, preview, ROI editing, and save workflows.
-- A possible future small set of PLC *product process parameters* in Recipe is **deferred** pending the actual signal/address/activation contract. PLC transport/IP/base addresses remain equipment-level Communication settings; do not build a general PLC parameter framework now.
+- Preserve the implemented [Recipe process-parameter overrides](configuration.md#process-parameters).
+  Explicit Production selection by an Operator or higher prepares the saved Recipe
+  and admits [PLC application and readback](communication.md#process-parameter-application)
+  when overrides are present. Recipe Save and normal startup restoration perform no
+  process I/O. For a candidate with overrides, Start eligibility requires successful
+  application, matching register readback and audit confirmation. Pending, failed
+  or uncertain application blocks Start. A restored candidate with overrides
+  requires authorized reselection. The
+  [Application lifecycle contract](architecture.md#application-and-shutdown)
+  governs Start admission and preflight, including rechecking the saved Status target.
+- PLC transport, IP addresses and reporting base addresses remain equipment-level
+  Communication settings. Generalized PLC parameter functionality remains out of
+  scope. Equipment acceptance still requires checking known-value DINT word order,
+  Running timing and independent PLC connection capacity.
 
 ## 5. Communication and Web
 
@@ -280,10 +293,15 @@ for an explicitly approved change. The product requirements are:
 
 - Contract-first layering and current lifecycle/resource ownership; safety of actual PLC writes and attribution; existing data-loss/uncertainty signaling; reliable shutdown; hardware-bound frame and result identity.
 - Existing validated per-Cycle transport, live 4-Cycle production semantics pending deliberate changes, Recipe/model/ROI behavior, Folder demo, necessary engineer controls, UI language and theme support.
-- Protection of operational accounts, model binaries, configuration, image archives, and local data. Lack of legacy History migration does **not** authorize indiscriminate asset cleanup.
+- Protect existing local configuration, accounts, History, Audit, models,
+  archives and other assets from silent discard, including those using obsolete
+  formats.
 
 ### Product exclusions
 
+- The software is in pre-deployment. Compatibility with obsolete experimental
+  development schemas is outside product scope. Removal of obsolete compatibility
+  paths requires separate authorization.
 - A new architectural framework; cross-IPC reporting synchronization; machine mechanical controls; arbitrary per-Recipe PLC address editors; guaranteed image indexing; broad History migration; advanced Web authentication/control; alarm acknowledgment/notification systems; speculative performance optimizations.
 
 ## 10. Open decisions and audit boundaries
