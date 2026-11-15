@@ -17,6 +17,10 @@ from capsule_vision.application.audit_presentation import (
     change_caption as _change_caption,
 )
 from capsule_vision.application.audit_presentation import (
+    login_failure_reason,
+    unsuccessful_login,
+)
+from capsule_vision.application.audit_presentation import (
     target_caption as _target_caption,
 )
 from capsule_vision.application.history import ProductionHistory
@@ -253,6 +257,12 @@ class AuditPage(HistoryEventTable):
             self.clear_details()
             return
         record = self.rows[row]
+        if unsuccessful_login(record):
+            self.show_details(
+                self.language,
+                (("reasons", login_failure_reason(record, self.language)),),
+            )
+            return
         op = record.operation
         before = _change_caption(op.action, op.before, self.language)
         after = _change_caption(op.action, op.after, self.language)

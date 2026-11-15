@@ -32,8 +32,28 @@ OUTCOME_CAPTIONS = {
 }
 
 
+def unsuccessful_login(record: AuditRecord) -> bool:
+    return record.operation.action == "session.login" and record.outcome != "success"
+
+
+def login_failure_reason(record: AuditRecord, language: Language) -> str:
+    if record.outcome == "cancelled":
+        return ""
+    key = {
+        "AuthenticationError": "identity_invalid",
+        "StaleSessionError": "identity_stale",
+        "SecurityStorageError": "identity_storage",
+        "OperationalError": "identity_storage",
+        "DatabaseError": "identity_storage",
+        "OSError": "identity_storage",
+    }.get(record.detail)
+    return text(key, language) if key else ""
+
+
 def target_caption(record: AuditRecord, language: Language) -> str:
     op = record.operation
+    if unsuccessful_login(record):
+        return text("records_user", language)
     action, target = op.action, readable_value(op.target)
     categories = {
         "security.storage": "security.storage",
@@ -67,14 +87,8 @@ def target_caption(record: AuditRecord, language: Language) -> str:
         ):
             return readable_value(record.detail) or text("records_user", language)
         # Only the recorded actor/target match establishes a self operation.
-        if (
-            op.actor_id
-            and op.target == op.actor_id
-            and (action != "session.login" or record.outcome == "success")
-        ):
+        if op.actor_id and op.target == op.actor_id:
             return readable_value(op.username) or text("records_user", language)
-        if action == "session.login" and record.outcome != "success" and target:
-            return target  # The authentication owner recorded the attempted username.
         if action == "account.create":
             username, sep, role = op.after.rpartition(" · ")
             if sep and role in ("enabled", "first setup"):

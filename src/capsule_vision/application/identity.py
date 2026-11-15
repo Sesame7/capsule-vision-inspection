@@ -311,8 +311,9 @@ class LocalIdentity:
                         )
                         return self._publish_login(account, "session.login")
                 except Exception as exc:
+                    # The attempted username can contain other credential input.
                     self.audit.record(
-                        AuditOperation.by(initiator, "session.login", username),
+                        AuditOperation.by(initiator, "session.login", ""),
                         "cancelled" if cancelled.is_set() else error_outcome(exc),
                         type(exc).__name__,
                     )

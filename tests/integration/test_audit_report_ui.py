@@ -1,11 +1,15 @@
 """Audit uses the existing compact, context-only Records export dialog."""
 
 from concurrent.futures import Future
+from contextlib import closing
 from pathlib import Path
 from threading import Event
 
 import pytest
+from openpyxl import load_workbook
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QComboBox
+from reportlab.pdfgen.canvas import Canvas
 from tests.integration.test_audit_ui import select_account
 from tests.integration.test_history_report import choose_file
 from tests.support.application import WAIT
@@ -13,7 +17,10 @@ from tests.support.qt import close_window, until
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 from tests.unit.test_audit_report import fill
 
+from capsule_vision.application import ProductionApplication
+from capsule_vision.application.audit import AuditOperation, AuditQuery
 from capsule_vision.application.audit_report import AuditReportRequest
+from capsule_vision.application.identity_models import AuthenticationError
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
 from capsule_vision.localization.catalog import text
@@ -21,6 +28,206 @@ from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.report_dialog import ReportDialog
+
+
+def audit_report_texts(
+    app: ProductionApplication,
+    directory: Path,
+    language: Language,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[str, str]:
+    drawn: list[str] = []
+    draw = Canvas.drawString
+
+    def capture(canvas: Canvas, x: float, y: float, value: str) -> None:
+        drawn.append(value)
+        draw(canvas, x, y, value)
+
+    request = AuditReportRequest()
+    pdf, excel = (
+        directory / f"audit-{language}.pdf",
+        directory / f"audit-{language}.xlsx",
+    )
+    with monkeypatch.context() as capture_pdf:
+        capture_pdf.setattr(Canvas, "drawString", capture)
+        app.export_report(request, pdf, language).result(WAIT)
+    assert pdf.read_bytes().startswith(b"%PDF") and drawn
+    app.export_report(request, excel, language).result(WAIT)
+    with closing(load_workbook(excel)) as book:
+        cells = "\n".join(
+            str(value)
+            for row in book.worksheets[0].values
+            for value in row
+            if value is not None
+        )
+    return "\n".join(drawn), cells
+
+
+def test_misplaced_login_credential_and_historical_payloads_are_private(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    app, identity = startup.application, startup.application.identity
+    assert identity
+    actor = identity.snapshot()
+    assert actor.account
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        with pytest.raises(AuthenticationError):
+            identity.login(TEST_PASSWORD, "different synthetic password").result(WAIT)
+        assert identity.snapshot() == actor
+        query = AuditQuery(action="session.login")
+        failed, success = identity.audit_page(query).result(WAIT)
+        assert failed.outcome == "failed" and failed.detail == "AuthenticationError"
+        assert failed.operation.actor_id == actor.account.account_id
+        assert failed.operation.username == actor.account.username
+        assert (
+            failed.operation.target,
+            failed.operation.before,
+            failed.operation.after,
+        ) == ("", "", "")
+        assert success.operation.target == actor.account.account_id
+        assert success.outcome == "success"
+        historical = "Historical credential input"
+        for outcome in ("failed", "cancelled", "stale"):
+            op = AuditOperation.by(
+                actor, "session.login", historical, historical, historical
+            )
+            identity.audit.intent(op).result(WAIT)
+            identity.audit.complete(
+                op, outcome, "An earlier message: " + historical
+            ).result(WAIT)
+        evidence = identity.audit_page(query).result(WAIT)
+        database = identity.audit.path.read_bytes()
+        assert TEST_PASSWORD.encode() not in database
+        assert historical.encode() in database
+
+        window.show()
+        window.set_language("en")
+        window.navigate(3)
+        window.history_tabs.setCurrentIndex(2)
+        page = window.audit_page
+        expected = {row.operation.id for row in evidence}
+        until(lambda: expected <= {row.operation.id for row in page.rows})
+        for index, row in enumerate(page.rows):
+            if row.operation.action != "session.login":
+                continue
+            page.table.selectRow(index)
+            target = page.table.item(index, 3)
+            assert target
+            if row.outcome == "success":
+                assert target.text() == "TestAdmin"
+            else:
+                assert target.text() == text("records_user", "en")
+            presented = [
+                page.details.toPlainText(),
+                page.details.toolTip(),
+                page.details.accessibleDescription(),
+            ]
+            for column in range(page.table.columnCount()):
+                cell = page.table.item(index, column)
+                assert cell
+                presented.extend(
+                    (
+                        cell.text(),
+                        cell.toolTip(),
+                        str(cell.data(Qt.ItemDataRole.AccessibleTextRole)),
+                        str(cell.data(Qt.ItemDataRole.AccessibleDescriptionRole)),
+                    )
+                )
+            assert all(
+                secret not in "\n".join(presented)
+                for secret in (historical, TEST_PASSWORD)
+            )
+        for output in audit_report_texts(app, tmp_path, "en", monkeypatch):
+            assert "TestAdmin" in output and "Login" in output
+            assert text("identity_invalid", "en") in output
+            assert historical not in output and TEST_PASSWORD not in output
+        assert identity.audit_page(query).result(WAIT) == evidence
+        assert identity.audit.path.read_bytes() == database
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+def test_customer_exports_of_actual_saves_omit_internal_configuration(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path))
+    app, editor = startup.application, startup.editor
+    identity = app.identity
+    assert identity and editor and editor.entry
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    archive = "C:/EngineeringFixture/PrivateArchiveSentinel"
+    host, port, route = "192.0.2.44", 31789, 113
+    name = "Customer Capsule / 样品"
+    try:
+        window.show()
+        window.set_language("en")
+        window.navigate(1)
+        until(lambda: not window.editing.busy and not window.recipe_page.labels_loading)
+        editor.draft.display_name = name
+        editor.draft.image_archive.root_directory = archive
+        editor.draft.image_archive.save_ng = True
+        window.recipe_page.save()
+        until(lambda: not window.editing.busy)
+        assert editor.entry.recipe.display_name == name
+        assert editor.entry.recipe.image_archive.root_directory == archive
+
+        communication = window.communication
+        communication.protocol.setCurrentIndex(0)
+        communication.host.setText(host)
+        communication.port.setValue(port)
+        communication.destination[0].setValue(route)
+        communication.timeout.setValue(2.5)
+        communication.persist_settings()
+        until(lambda: not communication.busy)
+
+        for kind, resource, path, private in (
+            ("recipe", editor.entry.recipe.recipe_id, editor.entry.path, archive),
+            ("communication", "communication.json", startup.data.communication, host),
+        ):
+            (revision,) = identity.audit.revisions(kind, resource).result(WAIT)
+            assert revision.confirmed and private in revision.record.operation.after
+            if kind == "communication":
+                assert f"diagnostic.port = {port}" in revision.record.operation.after
+                assert (
+                    f"diagnostic.destination.network = {route}"
+                    in revision.record.operation.after
+                )
+            content = identity.audit.revision_content(
+                revision.record.operation.id
+            ).result(WAIT)
+            assert content == path.read_bytes() and private.encode() in content
+
+        window.navigate(3)
+        window.history_tabs.setCurrentIndex(2)
+        page = window.audit_page
+        until(
+            lambda: (
+                {"recipe.save", "communication.save"}
+                <= {r.operation.action for r in page.rows}
+            )
+        )
+        for action, private in (("recipe.save", archive), ("communication.save", host)):
+            row = next(
+                i for i, r in enumerate(page.rows) if r.operation.action == action
+            )
+            page.table.selectRow(row)
+            assert private in page.details.toPlainText()
+
+        for language in ("en", "zh"):
+            for output in audit_report_texts(app, tmp_path, language, monkeypatch):
+                assert name in output
+                assert text("archive_ng", language) in output
+                assert text("comm_timeout", language) in output and "2.5" in output
+                for private in (archive, host, f" = {port}", f" = {route}"):
+                    assert private not in output
+    finally:
+        close_window(window)
+        delivery.detach()
 
 
 def test_audit_context_dialog_scope_export_and_empty_feedback(

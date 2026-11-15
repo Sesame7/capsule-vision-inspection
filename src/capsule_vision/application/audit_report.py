@@ -21,7 +21,9 @@ from .audit_presentation import (
     ACTION_CAPTIONS,
     OUTCOME_CAPTIONS,
     change_caption,
+    login_failure_reason,
     target_caption,
+    unsuccessful_login,
 )
 from .identity_models import Role
 from .records_query import RecordsScope, associated_audit
@@ -180,21 +182,23 @@ def field_groups(
     db: sqlite3.Connection, language: Language
 ) -> tuple[list[tuple[str, Value]], list[tuple[str, Value]]]:
     m = db.execute("SELECT * FROM meta").fetchone()
+    label = m["filter_label"]
     left: list[tuple[str, Value]] = [
         (
             text(
                 "customer_audit_batch" if m["scoped_segment"] else "batch_input",
                 language,
             ),
-            m["filter_label"]
-            or text(
+            (_business_text(label) or "—")
+            if label is not None
+            else text(
                 "records_no_batch" if m["unbatched"] else "records_all_batches",
                 language,
             ),
         ),
         (
             text("customer_audit_account", language),
-            m["account"]
+            _business_text(m["account"]) or "—"
             if m["account"] is not None
             else text("records_all_accounts", language),
         ),
@@ -213,242 +217,306 @@ def field_groups(
     return left, right
 
 
+_PRIVATE_TEXT = re.compile(
+    r"""\\|(?:^|[\s("'=])(?:[a-z]:/|/\S|\.{1,2}/)|"""
+    r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b|"
+    r"\b(?=[a-z0-9._-]*[a-z])[a-z0-9._-]+:[0-9]{1,5}\b|"
+    r"\b(?:password|passwd|credential|verifier|secret|salt|digest|token)\s*[:=]",
+    re.IGNORECASE | re.ASCII,
+)
+
+
+def _business_text(value: str) -> str:
+    # Apply this only to fields explicitly recorded as business names or text.
+    return (
+        readable_value(value)
+        if value.isprintable() and not _PRIVATE_TEXT.search(value)
+        else ""
+    )
+
+
 def _target(entry: AuditRecord, language: Language) -> str:
     op = entry.operation
     if op.action == "production.start" and entry.outcome == "success":
         return text("records_run", language)
     if op.action == "plc.write":
-        # manual_target records area/start/count after its transport description.
-        match = re.search(r" (130|177|holding) (\d+) × (\d+)$", op.target)
+        # Publish the range without the protocol endpoint or routing prefix.
+        match = re.search(r" (130|177|holding) ([0-9]{1,5}) × ([0-9]{1,4})$", op.target)
         if match:
             area, address, count = match.groups()
             prefix = {"130": "D", "177": "W", "holding": "HR"}[area]
             return f"PLC · {prefix}{address} × {count}"
+        return "PLC"
+    if op.action in ("batch.select", "batch.end", "batch.information"):
+        label = {
+            "batch.select": op.after,
+            "batch.end": op.before,
+            "batch.information": op.target
+            if entry.outcome not in ("denied", "stale")
+            else "",
+        }[op.action]
+        return _business_text(label) or text("batch_id", language)
     if (
         op.action in ("account.role", "account.enabled", "account.reset_password")
         and entry.outcome == "success"
-        and entry.detail
     ):
-        # The account owner records the committed target username on completion.
-        return entry.detail
-    return target_caption(entry, language)
+        # The account owner supplies the committed target username.
+        return _business_text(entry.detail) or text("records_user", language)
+    if op.action == "model.stage":
+        return text("model", language)
+    return _business_text(target_caption(entry, language)) or "—"
 
 
-def _changes(action: str, value: str, language: Language) -> str:
-    if action == "model.cache":
-        return ""  # Native-device selection is not a customer business change.
-    if action == "communication.web_power" and value in ("True", "False"):
-        return text(
-            "identity_enabled" if value == "True" else "identity_disabled", language
+_RECIPE_FIELDS = {
+    "display_name",
+    "product_code",
+    "defaults.vimo.enabled",
+    "defaults.vimo.required",
+    "defaults.vimo.disabled_labels[]",
+    "capsule.size.enabled",
+    "capsule.size.target_length",
+    "capsule.size.length_tolerance",
+    "capsule.color.enabled",
+    "capsule.color.target_hue",
+    "capsule.color.hue_tolerance",
+    "image_archive.save_ok",
+    "image_archive.save_ng",
+    "image_archive.save_error",
+    "image_archive.save_empty",
+}
+_CONFIGURATION_FIELDS = {
+    "recipe.save": _RECIPE_FIELDS,
+    "recipe.delete": _RECIPE_FIELDS,
+    "vision.layout": {
+        "layout.cameras[].camera_id",
+        "layout.cameras[].slots[].slot",
+        "layout.cameras[].slots[].channel_id",
+        *(
+            f"layout.cameras[].slots[].rect.{key}"
+            for key in ("x", "y", "width", "height")
+        ),
+    },
+    "vision.sources": {
+        "cameras[].camera_id",
+        "loop",
+        "target_fps",
+        "mode",
+    },
+    "communication.save": {
+        "diagnostic.timeout",
+        "diagnostic.type",
+        "reporting.enabled",
+        "reporting.settings.mode",
+        "reporting.settings.endpoint.type",
+        "web.enabled",
+        "web.interval_ms",
+        "status.enabled",
+    },
+}
+_CONFIGURATION_LABELS = {
+    "display_name": "display_name",
+    "product_code": "product_code",
+    "disabled_labels": "customer_audit_excluded",
+    "enabled": "identity_status",
+    "required": "customer_audit_required",
+    "size": "size",
+    "color": "color",
+    "target_length": "target_length",
+    "length_tolerance": "length_tolerance",
+    "target_hue": "target_color",
+    "hue_tolerance": "color_tolerance",
+    "image_archive": "image_archive",
+    "save_ok": "archive_ok",
+    "save_ng": "archive_ng",
+    "save_error": "archive_error",
+    "save_empty": "archive_empty",
+    "cameras": "nav_cameras",
+    "camera_id": "history_camera",
+    "slots": "customer_audit_slot",
+    "channel_id": "channel",
+    "slot": "customer_audit_slot",
+    "rect": "roi_workspace",
+    "x": "roi_x",
+    "y": "roi_y",
+    "width": "roi_w",
+    "height": "roi_h",
+    "loop": "source_loop",
+    "target_fps": "vision_fps",
+    "reporting": "short_reporting",
+    "diagnostic": "comm_diagnostics",
+    "status": "status_service",
+    "timeout": "comm_timeout",
+    "type": "comm_protocol",
+    "interval_ms": "web_refresh",
+}
+_BATCH_FIELDS = {
+    "product": "batch_product",
+    "specification": "batch_specification",
+    "notes": "batch_notes",
+}
+_SWITCH = {"True": "identity_enabled", "False": "identity_disabled"}
+_SOURCE_MODES = {"folder": "source_folder_status", "basler": "vision_basler_mode"}
+_REPORTING_MODES = {
+    "per_cycle": "plc_mode_per_cycle",
+    "four_cycle": "plc_mode_four_cycle",
+    "single_cycle": "plc_mode_single_cycle",
+}
+_PROTOCOLS = {
+    "FinsUdpEndpoint": "FINS/UDP",
+    "FinsTcpEndpoint": "FINS/TCP",
+    "ModbusSettings": "Modbus/TCP",
+}
+
+
+def _configuration_value(path: str, value: str, language: Language) -> str:
+    if value == "—":
+        return value
+    field = path.rsplit(".", 1)[-1]
+    if field in ("display_name", "product_code", "disabled_labels[]"):
+        return _business_text(value)
+    if field == "camera_id":
+        return value if re.fullmatch(r"CAM[1-6]", value) else ""
+    if field == "type":
+        return _PROTOCOLS.get(value, "")
+    if field in ("enabled", "required", "loop") or field.startswith("save_"):
+        key = _SWITCH.get(value)
+        return text(key, language) if key else ""
+    if field == "mode":
+        options = (
+            _REPORTING_MODES if path == "reporting.settings.mode" else _SOURCE_MODES
         )
-    if action not in (
-        "recipe.save",
-        "vision.layout",
-        "vision.sources",
-        "communication.save",
-    ):
-        return change_caption(action, value, language)
-    # These are the existing typed definitions' recorded leaf differences. Never
-    # turn a saved technical ID into a business name, or expose raw field paths.
-    fields = {
-        "display_name": "display_name",
-        "product_code": "product_code",
-        "vimo": "ViMo",
-        "disabled_labels": "customer_audit_excluded",
-        "enabled": "identity_status",
-        "required": "customer_audit_required",
-        "size": "size",
-        "color": "color",
-        "target_length": "target_length",
-        "length_tolerance": "length_tolerance",
-        "target_hue": "target_color",
-        "hue_tolerance": "color_tolerance",
-        "image_archive": "image_archive",
-        "root_directory": "archive_directory",
-        "save_ok": "archive_ok",
-        "save_ng": "archive_ng",
-        "save_error": "archive_error",
-        "save_empty": "archive_empty",
-        "cameras": "nav_cameras",
-        "camera_id": "history_camera",
-        "slots": "customer_audit_slot",
-        "channel_id": "channel",
-        "slot": "customer_audit_slot",
-        "rect": "roi_workspace",
-        "x": "roi_x",
-        "y": "roi_y",
-        "width": "roi_w",
-        "height": "roi_h",
-        "folder": "source_folder",
-        "basler_serial": "source_serial",
-        "loop": "source_loop",
-        "target_fps": "vision_fps",
-        "mode": "comm_source",
-        "reporting": "short_reporting",
-        "diagnostic": "comm_diagnostics",
-        "web": "Web",
-        "alarm": "alarm_monitor",
-        "status": "status_service",
-        "word_address": "status_alarm_address",
-        "heartbeat_address": "status_heartbeat",
-        "fault_address": "status_fault",
-        "station": "alarm_station",
-        "host": "comm_host",
-        "port": "comm_port",
-        "timeout": "comm_timeout",
-        "destination": "comm_destination",
-        "source": "comm_source",
-        "network": "comm_network",
-        "node": "comm_node",
-        "unit": "comm_unit",
-        "unit_id": "comm_unit",
-        "base_address": "comm_address",
-        "type": "comm_protocol",
-        "interval_ms": "web_refresh",
-        "max_pending": "customer_audit_capacity",
-    }
+        key = options.get(value)
+        return text(key, language) if key else ""
+    pattern = (
+        r"[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?"
+        if field in ("target_fps", "timeout")
+        else r"[0-9]+"
+    )
+    return value if re.fullmatch(pattern, value) else ""
+
+
+def _configuration_changes(action: str, value: str, language: Language) -> str:
+    allowed = _CONFIGURATION_FIELDS[action]
     lines: list[str] = []
     for line in value.splitlines():
         path, sep, recorded = line.partition(" = ")
-        if not sep or not readable_value(recorded):
+        # Match the whole recorded field path before rendering any part of it.
+        normalized = re.sub(r"\[[0-9]{1,3}\]", "[]", path)
+        if not sep or "[]" in path or normalized not in allowed:
+            continue
+        rendered = _configuration_value(normalized, recorded, language)
+        if not rendered:
             continue
         labels: list[str] = []
         for part in path.split("."):
-            match = re.fullmatch(r"([a-z_]+)(?:\[(\d+)\])?", part)
-            if not match:
-                break
-            key, index = match.groups()
-            if key in ("defaults", "capsule", "layout", "settings", "endpoint"):
-                continue
-            if key not in fields:
-                break
-            caption = (
-                fields[key] if key in ("vimo", "web") else text(fields[key], language)
-            )
-            if key == "mode" and action == "communication.save":
-                caption = text("plc_mode", language)
-            # Tuple ordinals are recorded indexes, not inferred channel identities.
-            labels.append(caption + (f" [{index}]" if index is not None else ""))
-        else:
-            if labels:
-                names = {
-                    "True": "identity_enabled",
-                    "False": "identity_disabled",
-                    "folder": "source_folder_status",
-                    "basler": "vision_basler_mode",
-                    "per_cycle": "plc_mode_per_cycle",
-                    "four_cycle": "plc_mode_four_cycle",
-                    "single_cycle": "plc_mode_single_cycle",
-                }
-                protocols = {
-                    "FinsUdpEndpoint": "FINS/UDP",
-                    "FinsTcpEndpoint": "FINS/TCP",
-                    "ModbusSettings": "Modbus/TCP",
-                }
-                if path.endswith((".enabled", ".required")) or path.split(".")[-1] in (
-                    "loop",
-                    "save_ok",
-                    "save_ng",
-                    "save_error",
-                    "save_empty",
-                ):
-                    recorded = (
-                        text(names[recorded], language)
-                        if recorded in names
-                        else recorded
-                    )
-                elif path.endswith("mode"):
-                    recorded = (
-                        text(names[recorded], language)
-                        if recorded in names
-                        else recorded
-                    )
-                elif path.endswith(".type"):
-                    recorded = protocols.get(recorded, text("unavailable", language))
-                lines.append(" · ".join(labels) + " = " + recorded)
+            field, indexed, index = part.partition("[")
+            if field in ("vimo", "web"):
+                caption = "ViMo" if field == "vimo" else "Web"
+            elif field == "mode":
+                caption = text(
+                    "plc_mode" if action == "communication.save" else "comm_source",
+                    language,
+                )
+            else:
+                key = _CONFIGURATION_LABELS.get(field)
+                if key is None:  # Definition wrappers have no customer caption.
+                    continue
+                caption = text(key, language)
+            labels.append(f"{caption} [{index[:-1]}]" if indexed else caption)
+        lines.append(" · ".join(labels) + " = " + rendered)
     return "\n".join(lines)
 
 
+def _changes(action: str, value: str, language: Language) -> str:
+    if action in _CONFIGURATION_FIELDS:
+        return _configuration_changes(action, value, language)
+    if action == "batch.information":
+        lines: list[str] = []
+        for line in value.splitlines():
+            name, sep, recorded = line.partition(" = ")
+            if sep and name in _BATCH_FIELDS and (safe := _business_text(recorded)):
+                lines.append(f"{text(_BATCH_FIELDS[name], language)} · {safe}")
+        return "\n".join(lines)
+    if action in ("batch.select", "batch.end", "model.rename"):
+        return _business_text(value)
+    if action in ("account.enabled", "communication.web_power"):
+        key = _SWITCH.get(value)
+        return text(key, language) if key else ""
+    if action == "account.role" and value.upper() in Role.__members__:
+        return text("identity_" + value.lower(), language)
+    if action == "account.create":
+        parts = value.rsplit(" · ", 2)
+        if (
+            len(parts) == 3
+            and parts[1] in Role.__members__
+            and parts[2] in ("enabled", "first setup")
+        ):
+            return change_caption(action, value, language)
+    if action == "plc.write" and re.fullmatch(
+        r"[0-9]{1,5}(?:, [0-9]{1,5})*(?:, ?)?", value
+    ):
+        return value
+    if action == "recipe.process_value":
+        match = re.fullmatch(
+            r"[a-zA-Z0-9_.-]+: (D[0-9]{1,5}–D[0-9]{1,5} = -?[0-9]{1,10})", value
+        )
+        return match[1] if match else ""
+    if action == "production.clear_statistics" and re.fullmatch(
+        r"cycles=[0-9]+, groups=[0-9]+", value
+    ):
+        return value
+    return ""
+
+
+_FAILURE_CAPTIONS = {
+    "AuthorizationError": "audit_denied",
+    "StaleSessionError": "identity_stale",
+    "ValueError": "records_config_error",
+    "OSError": "records_config_io",
+    "AuditUnavailable": "audit_required",
+    "AuthenticationError": "identity_invalid",
+    "SecurityStorageError": "identity_storage",
+    "AccountConflictError": "identity_conflict",
+    "PasswordReuseError": "identity_rotate",
+    "CancelledError": "audit_cancelled",
+    "ApplicationStateError": "read_only",
+    "PermissionError": "audit_denied",
+    "ReportingWriteProtectedError": "plc_reporting_write_protected",
+}
+
+
 def details(entry: AuditRecord, language: Language) -> str:
-    """Customer fields only; never include credential actions' stored value payloads."""
+    """The customer projection publishes only known fields and failure captions."""
+    if unsuccessful_login(entry):
+        reason = login_failure_reason(entry, language)
+        return f"{text('reasons', language)}: {reason}" if reason else ""
     op = entry.operation
-    secret = "password" in op.action or op.action in (
-        "session.login",
-        "session.auto_login",
-        "session.logout",
-        "account.setup",
-        "account.recovery",
-    )
-    before = "" if secret else _changes(op.action, op.before, language)
-    after = "" if secret else _changes(op.action, op.after, language)
+    before = _changes(op.action, op.before, language)
+    after = _changes(op.action, op.after, language)
     if op.action == "batch.information" and all(
         line.partition(" = ")[2] in ("", "—") for line in op.before.splitlines()
     ):
         before = ""
-    if op.action in ("production.recipe", "production.start"):
-        before = after = ""  # Saved Recipe IDs are not customer changes or names.
     if before == after or (
         (not before or not after) and (before or after) == _target(entry, language)
     ):
         before = after = ""
-    lines: list[str] = []
-    for caption, value in (
-        ("audit_before", before),
-        ("audit_after" if entry.outcome == "success" else "audit_requested", after),
-    ):
-        safe = "\n".join(line for line in value.splitlines() if readable_value(line))
-        if safe:
-            lines.append(f"{text(caption, language)}: {safe}")
-    if entry.outcome != "success" and entry.detail.strip() not in (
-        "",
-        entry.outcome,
-        op.target,
-        before,
-        after,
-    ):
-        value = record_reason(entry.detail.strip(), language)
-        errors = {
-            "AuthorizationError": "audit_denied",
-            "StaleSessionError": "identity_stale",
-            "ValueError": "records_config_error",
-            "OSError": "records_config_io",
-            "AuditUnavailable": "audit_required",
-            "AuthenticationError": "identity_invalid",
-            "SecurityStorageError": "identity_storage",
-            "AccountConflictError": "identity_conflict",
-            "PasswordReuseError": "identity_rotate",
-            "CancelledError": "audit_cancelled",
-            "ApplicationStateError": "read_only",
-            "PermissionError": "audit_denied",
-            "ReportingWriteProtectedError": "plc_reporting_write_protected",
-        }
-        if value in errors:
-            value = text(errors[value], language)
-        elif re.fullmatch(r"[A-Za-z_][\w.]*?(Error|Exception|Unavailable)", value):
-            value = text("operation_error", language)
-        elif (
-            (parts := value.split(" · "))
-            and len(parts) == 2
-            and re.fullmatch(r"[A-Za-z_][\w.]*?(Error|Exception|Unavailable)", parts[1])
-        ):
-            value = text(
-                {
-                    "startup": "startup_error",
-                    "runtime": "runtime_error",
-                    "shutdown": "shutdown_error",
-                }.get(parts[0], "operation_error"),
-                language,
-            )
-        if (
-            readable_value(value)
-            and not re.search(
-                r"(?:password|credential|verifier|pbkdf|salt|digest)\s*[:=]",
-                value,
-                re.I,
-            )
-            and not re.match(r"Requested revision \d+; current revision \d+", value)
-        ):
-            lines.append(f"{text('reasons', language)}: {value}")
+    lines = [
+        f"{text(caption, language)}: {value}"
+        for caption, value in (
+            ("audit_before", before),
+            ("audit_after" if entry.outcome == "success" else "audit_requested", after),
+        )
+        if value
+    ]
+    detail = entry.detail.strip()
+    if entry.outcome != "success" and detail not in ("", entry.outcome, op.target):
+        # record_reason leaves unknown input unchanged. Only its known
+        # translations and the explicit classifications above reach the report.
+        reason = record_reason(detail, language)
+        if reason == detail:
+            reason = text(_FAILURE_CAPTIONS.get(detail, "operation_error"), language)
+        lines.append(f"{text('reasons', language)}: {reason}")
     return "\n".join(lines)
 
 
@@ -472,7 +540,7 @@ def table(db: sqlite3.Connection, language: Language) -> Table:
             )
             yield (
                 datetime.fromisoformat(op.utc).astimezone().replace(tzinfo=None),
-                op.username or "—",
+                _business_text(op.username) or "—",
                 action,
                 _target(entry, language),
                 outcome,

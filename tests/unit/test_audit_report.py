@@ -456,6 +456,58 @@ def test_report_localizes_configuration_changes_and_retains_recorded_names() -> 
     assert details(unknown, "en") == "Reasons: Operation incomplete"
 
 
+@pytest.mark.parametrize(
+    ("action", "recorded", "retained"),
+    [
+        (
+            "vision.sources",
+            "cameras[0].camera_id = CAM1\ncameras[0].basler_serial = SerialSentinel\n"
+            "cameras[0].folder = C:/PathSentinel\nmode = basler",
+            ("CAM1", "Industrial cameras"),
+        ),
+        (
+            "recipe.delete",
+            "display_name = Customer capsule / blue\n"
+            "recipe_id = IdentifierSentinel\nimage_archive.root_directory = C:/PathSentinel",
+            ("Customer capsule / blue",),
+        ),
+        (
+            "communication.save",
+            "diagnostic.timeout = 2.5\ndiagnostic.timeout = CredentialSentinel\n"
+            "reporting.settings.mode = four_cycle\nweb.host = AddressSentinel\n"
+            "web.display_name = FieldSentinel\ndiagnostic.destination.node = RouteSentinel",
+            ("2.5", "Four-cycle"),
+        ),
+        (
+            "batch.information",
+            "product = Customer capsule\nnotes = password: CredentialSentinel\n"
+            "specification = Uses C:/PathSentinel\nfuture = FieldSentinel",
+            ("Customer capsule",),
+        ),
+        ("future.action", "display_name = UnknownActionSentinel", ()),
+        ("model.publish", "Customer capsule · ModuleSentinel · " + "a" * 64, ()),
+        (
+            "recipe.process_value",
+            "IdentifierSentinel: D101–D102 = -42",
+            ("D101–D102 = -42",),
+        ),
+    ],
+)
+def test_customer_details_require_approved_actions_fields_and_values(
+    action: str, recorded: str, retained: tuple[str, ...]
+) -> None:
+    entry = AuditRecord(
+        1,
+        operation(action, "different-target", 0, after=recorded),
+        "failed",
+        "",
+        "Transport error at HostSentinel:9600",
+    )
+    shown = details(entry, "en")
+    assert "Reasons: Operation incomplete" in shown and "Sentinel" not in shown
+    assert all(value in shown for value in retained)
+
+
 def test_unbatched_scope_and_missing_batch_never_broaden_to_all_records(
     tmp_path: Path,
     owners: tuple[ProductionApplication, LocalIdentity, ProductionHistory],

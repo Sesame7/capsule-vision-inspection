@@ -323,6 +323,10 @@ synthetic record provenance.
 Authentication (including `session.auto_login`), logout, actual Start/Stop, Batch
 changes, unbatched statistics clearing, saved Recipe selection and important
 security or persistence failures submit observations without waiting.
+Unsuccessful manual authentication records the initiating actor, outcome and
+failure classification with an empty target. Local Audit review and customer
+reports show a generic target and safe failure captions for these operations,
+including historical records. Historical evidence remains in the database.
 The audit writer exposes a separate storage issue and count of unconfirmed writes
 for its lifetime. An abrupt process exit can lose queued best-effort observations.
 Inspection, automatic reporting and Stop continue through audit loss. Close drains
@@ -1177,14 +1181,17 @@ Batch scope and signal category without another report or Batch selector.
   records; it does not claim complete Batch operational coverage. Missing legacy
   associations remain excluded. An empty scope gives short feedback without
   publishing a file. Columns are Time, Account, Action, Target and Result, followed
-  only when relevant by recorded before/after values (before/requested for an
-  unsuccessful operation) and additional failure reasons. Known fields, actions
-  and outcomes use concise localized captions; recorded business names remain
-  unchanged. Opaque targets use an accurate object category. Credential payloads,
-  internal IDs/hashes and transport descriptions are omitted. A manual PLC write
-  can retain its recorded register range and requested values. PDF uses landscape
-  A4 and repeats column headings; Excel keeps typed local timestamps, literal text
-  cells and a frozen table header. Neither format changes Audit evidence.
+  only when relevant by approved before/after values (before/requested for an
+  unsuccessful operation) and safe failure captions. Each action has its own
+  disclosure rules. Configuration changes show approved fields and value types,
+  with the action and result available for other changes. Reports omit credentials,
+  internal IDs and hashes, network endpoints and routes, camera serials and file
+  paths. Approved business names retain their recorded spelling. A manual PLC
+  write can retain its recorded register range and requested values. Local
+  Engineer review retains engineering details subject to the unsuccessful login
+  rule. PDF uses landscape A4 and repeats column headings. Excel keeps typed
+  local timestamps, literal text cells and a frozen table header. Neither format
+  changes Audit evidence.
 
 - **Alarm Records report:** every retained event matching the shared local-date
   bounds, exact stored Batch UUID (or no associated Batch) and signal category,

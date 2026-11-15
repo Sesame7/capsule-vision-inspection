@@ -256,9 +256,13 @@ remain OS-level trust boundaries.
 
 Normal account management records the acting account, target account ID, changed
 role or enabled state, and the outcome. Password operations identify the action
-without storing passwords or verifier material. Engineering saves record bounded
-field differences. The [Audit Trail contract](architecture.md#audit-trail) defines
-intent, completion, authorization and observable write loss. Audit records have
+without storing passwords or verifier material. Unsuccessful manual login
+records the initiating actor and failure classification with the outcome and
+an empty target. Local Audit review and customer reports conceal historical
+unsuccessful login inputs while preserving the stored records. Engineering
+saves record bounded field differences. The
+[Audit Trail contract](architecture.md#audit-trail) defines intent, completion,
+authorization and observable write loss. Audit records have
 no automatic expiry or application deletion API. Online first setup, temporary
 password rotation and account mutations require durable audit intent. Offline
 setup and recovery use the distinct OS-trusted actor `offline-maintenance` and

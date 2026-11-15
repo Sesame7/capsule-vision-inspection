@@ -380,9 +380,9 @@ def test_cancelled_login_and_supersession_record_the_original_actor(
     try:
         actor = identity.snapshot()
         assert actor.account
-        cancelled = identity.login("Uncommitted", TEST_PASSWORD)
+        cancelled = identity.login(TEST_PASSWORD, "synthetic cancellation password")
         assert entered.wait(WAIT) and identity.cancel_login(cancelled)
-        old = identity.login("Superseded", TEST_PASSWORD)
+        old = identity.login(TEST_PASSWORD, "synthetic supersession password")
         current = identity.login("TestAdmin", TEST_PASSWORD)
         release.set()
         for attempt in (cancelled, old):
@@ -392,9 +392,10 @@ def test_cancelled_login_and_supersession_record_the_original_actor(
         entries = identity.audit_page(AuditQuery(action="session.login")).result(WAIT)
         assert [(e.operation.target, e.outcome) for e in entries[:3]] == [
             (actor.account.account_id, "success"),
-            ("Superseded", "stale"),
-            ("Uncommitted", "cancelled"),
+            ("", "stale"),
+            ("", "cancelled"),
         ]
+        assert [e.detail for e in entries[1:3]] == ["StaleSessionError"] * 2
         assert all(
             e.operation.actor_id == actor.account.account_id for e in entries[:3]
         )
