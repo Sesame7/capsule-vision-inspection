@@ -110,13 +110,14 @@ def test_two_runs_exact_revisions_frozen_values_and_restart(
             editor.draft.capsule,
             color=replace(editor.draft.capsule.color, target_hue=hue),
         )
-        saved = editor.save()
-        assert saved
-        request = app.observe_saved_recipe(
-            saved.recipe, app.identity.snapshot().revision
-        )
-        assert request is not None and request.operation is None
-        prepared = editor.prepare_saved(saved.recipe.recipe_id)
+        with app.model_management():
+            saved = editor.save()
+            assert saved
+            app.observe_saved_recipe(saved.recipe.recipe_id)
+        request = app.begin_recipe_selection(saved.recipe.recipe_id)
+        with app.recipe_preparation(request):
+            app.accept_recipe_selection(request, saved.recipe)
+            prepared = editor.prepare_saved(saved.recipe.recipe_id)
         app.install_recipe_selection(request, prepared).result(WAIT)
         publication = communication_publication(
             startup.data.communication,
@@ -150,7 +151,9 @@ def test_two_runs_exact_revisions_frozen_values_and_restart(
         assert effective["inspection"]["process_parameters"] == [["running_speed", hue]]
         assert not effective["reporting"]["enabled"]
     assert len(set(revisions)) == 2
-    assert not owner.page(AuditQuery(action="production.recipe")).result(WAIT)
+    selections = owner.page(AuditQuery(action="production.recipe")).result(WAIT)
+    assert len(selections) == 2
+    assert all(row.outcome == "success" for row in selections)
     editor.entry.path.unlink()
     startup.data.machine.write_bytes(b"later invalid file")
     startup.data.sources.unlink()
@@ -445,11 +448,13 @@ def test_failed_warmup_and_model_preparation_preserve_prior_run(
     with pytest.raises(ApplicationError):
         app.start().result(WAIT)
     editor.draft.model_id = "missing-model"
-    saved = editor.save()
-    assert saved
-    request = app.observe_saved_recipe(saved.recipe, app.identity.snapshot().revision)
-    assert request
-    with pytest.raises(ConfigurationError) as failed:
+    with app.model_management():
+        saved = editor.save()
+        assert saved
+        app.observe_saved_recipe(saved.recipe.recipe_id)
+    request = app.begin_recipe_selection(saved.recipe.recipe_id)
+    with app.recipe_preparation(request), pytest.raises(ConfigurationError) as failed:
+        app.accept_recipe_selection(request, saved.recipe)
         editor.prepare_saved(saved.recipe.recipe_id)
     app.recipe_selection_failed(request, failed.value)
     assert app.snapshot().candidate_requires_preparation

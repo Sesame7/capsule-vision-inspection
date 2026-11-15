@@ -400,6 +400,7 @@ class StatusBar(QFrame):
                     "source_folder_status",
                     "UNCONFIGURED",
                     "READY",
+                    "report_stopped",
                     "state_STARTING",
                     "state_RUNNING",
                     "state_STOPPING",

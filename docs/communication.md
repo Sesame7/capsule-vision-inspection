@@ -490,9 +490,11 @@ Synthetic loopback tests do not establish those hardware properties.
 
 ### Process parameter application
 
-Preparing a selected saved Recipe with explicit overrides automatically admits one
-application for Operator or higher, independently of continuous Status enablement.
-Guest restoration does not write. No overrides means no connection or Running read.
+Successful preparation after explicit Production selection of a saved Recipe with
+overrides admits one application for Operator or higher, independently of continuous
+Status enablement. Reselecting the same ID prepares the current saved definition.
+Recipe Save and startup restoration admit no process reads or writes. No overrides
+means no connection or Running read.
 The Application lifecycle worker uses strict saved Status settings and a private
 FINS/TCP connection, with the existing per-exchange deadlines and no retries.
 It validates the entire address/value plan before connecting, reads the configured

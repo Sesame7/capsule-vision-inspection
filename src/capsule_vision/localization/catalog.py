@@ -604,8 +604,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Re-prepare",
     ),
     "recipe_reprepare_hint": (
-        "已保存的配方或视觉配置需重新准备；请在生产页重新选择该配方。",
-        "Saved Recipe or Vision requires preparation; reselect this Recipe in Production.",
+        "请在检测页重新选择此配方，准备就绪后才能启动。",
+        "Reselect this Recipe on Inspect to prepare it for Start.",
     ),
     "plc_modbus_base_required": ("必填", "Required"),
     "plc_modbus_base_hint": (

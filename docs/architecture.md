@@ -57,26 +57,22 @@ rounding/bounds live in Configuration, while gestures and image transforms remai
 in Qt presentation. `application/editing.py` coordinates Recipe selection, Save,
 Delete, resolution and preparation without importing UI. Qt dispatches explicit
 actions and queued completions; candidate installation and Start remain separate.
-Recipe Save commits the editor definition independently of preparation. A materially
-changed Save matching the still-selected Production candidate ID marks that
-candidate ineligible
-for Start before releasing the stopped file-management slot, then refreshes the
-same saved ID on the existing bounded preparation worker. Unchanged and unrelated
-Saves do not prepare. Save success survives preparation failure; the old candidate
-remains diagnostic evidence until a successful preparation replaces it. Production
-selection and automatic refresh resolve saved dependencies, never another editor
-draft. A validated saved selection, stopped candidate and active session remain distinct;
-only successful Start promotes a candidate. Internal refresh retains the saving
-session revision and generation/selection fencing but emits no `production.recipe`
-selection audit event; the committed `recipe.save` event remains authoritative.
+Recipe Save publishes the definition and audit evidence without scheduling
+preparation or PLC process application. Publication of a materially changed
+Recipe matching both the selected and candidate IDs makes the candidate ineligible
+for Start before releasing the stopped file-management slot, even if audit
+confirmation fails after publication. Unchanged or unrelated Saves preserve
+candidate eligibility. Save retains the selected identity, old candidate evidence
+and active configuration. An explicit Production selection, including the same
+ID, prepares the current saved dependencies on the existing bounded worker.
+Preparation uses saved definitions; only successful Start promotes a candidate.
 
 Prepared candidates retain immutable saved Recipe and Vision definitions and paths.
 Vision has one Save action with independent MachineLayout/CameraSources outcomes;
 it never enters Production preparation or emits a candidate-installation event.
 Successful Save/reload observations mark a differing candidate as requiring
 re-preparation without replacing its Recipe identity or an active session. Identical
-parsed definitions leave a current candidate valid. Production selects saved Recipes,
-including explicit re-selection of the same ID after a failed refresh.
+parsed definitions leave a current candidate valid.
 The existing Application lifecycle worker verifies persisted Recipe and Vision
 dependencies again before invoking the session factory. Changed or unreadable
 definitions reject Start before engine/session side effects and retain the previous
@@ -86,8 +82,7 @@ Snapshot presence is authoritative: missing captured CameraSources reject Start
 without a fallback disk read. Fixed-image launchers capture their own source mapping;
 its absent file path denotes launcher ownership, not missing captured values.
 No filesystem validation is added to Qt dispatch or the Application command lock;
-no watcher or cross-file transaction is introduced. Automatic preparation is limited
-to a changed, successfully saved Recipe matching the still-selected candidate ID.
+no watcher or cross-file transaction is introduced.
 Fixed-image engineering/demo launchers retain their explicit source ownership.
 
 Production composition is Qt-independent: `application/startup.py` owns entry-relative
@@ -307,11 +302,10 @@ confirms the revision; failed/stale attempts are not confirmed, and missing
 completion remains unresolved. If confirmation fails after publication, the file
 and durable pending evidence remain intact and Save explicitly reports incomplete
 audit confirmation. There is no automatic rollback, retry or inferred recovery.
-An affected prepared candidate remains ineligible until it is prepared from the
-published definitions. Confirmed Recipe Saves retain automatic same-ID preparation;
-Vision files retain independent outcomes; Communication retains its existing
-publication/next-Start admission boundary. A confirmed revision is publication
-evidence, not evidence of Production activation or Run usage.
+An affected candidate remains ineligible until explicit selection prepares it
+from the published definitions. Vision files retain independent outcomes;
+Communication retains its existing publication/next-Start admission boundary.
+A confirmed revision is evidence of publication, not Production activation or Run usage.
 
 `AuditTrail.revisions` provides bounded, revision-fenced Engineer review by artifact
 identity; `revision_content` retrieves the exact bytes and verifies their hash before
@@ -727,11 +721,11 @@ attempt and one latest pending candidate. It owns its private bounded FINS/TCP
 connection; Qt dispatch, the Status service and the reporting owner do not execute
 or lend a client to this operation. Start warm-up does not apply parameters.
 
-An Operator-or-higher saved Recipe selection/configuration, or Engineer's successful
-changed selected Save and automatic preparation, admits application at the captured
-session revision. Startup restoration is read-only and leaves overridden candidates
-ineligible until authorized re-selection. Empty overrides require neither a target
-nor PLC I/O. Save success is independent of later preparation/application failure.
+An Operator-or-higher explicit saved Recipe selection/configuration admits
+application at the captured session revision. Startup restoration is read-only and
+leaves overridden candidates ineligible until authorized re-selection. Empty
+overrides require neither a target nor PLC I/O. Recipe Save admits no process
+application.
 The candidate stays available as diagnostic evidence on failure; there is no
 fallback, retry or rollback. Supersession, saved dependency invalidation, cancellation
 and Close fence subsequent operations and eligibility. Already admitted I/O finishes
@@ -743,7 +737,8 @@ re-selection, without writing during Start.
 
 Audit records the prepared Recipe identity and captured Recipe hash for an application
 attempt; each parameter has linked address/value intent and verified/failed/uncertain
-completion. No automatic `production.recipe` selection event is fabricated.
+completion. Recipe Save records its own event; explicit selection records
+`production.recipe`.
 Configured Run overrides are not rewritten as proof of PLC application.
 See [process definitions](configuration.md#process-parameters) and
 [application wire semantics](communication.md#process-parameter-application).

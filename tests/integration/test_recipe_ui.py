@@ -21,7 +21,12 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 from tests.support.qt import assert_full_caption, until
-from tests.support.recipe_ui import Screen, assert_inside, edit
+from tests.support.recipe_ui import (
+    Screen,
+    assert_inside,
+    edit,
+    select_production_recipe,
+)
 from tests.support.recipe_ui import configured_screen as configured_screen
 
 from capsule_vision.application import (
@@ -198,6 +203,11 @@ def test_recipe_choice_buttons_keyboard_persistence_and_separate_disclosure(
     assert saved.image_archive == ImageArchiveSettings(
         str(tmp_path / "archive"), True, True, True, True
     )
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_requires_preparation=True
+    )
+    select_production_recipe(window)
+    until(lambda: not page.busy)
     refreshed = window.bridge.application.snapshot()
     assert refreshed.candidate_prepared is not None
     assert refreshed.candidate_prepared.configuration.capsule == saved.capsule
@@ -1191,7 +1201,7 @@ def test_inline_labels_recheck_runtime_lock_and_metadata_close_is_observed(
     assert not page.labels_loading and session.draft.to_recipe() == before
 
 
-def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> None:
+def test_save_reselect_start_and_running_view_only(configured_screen: Screen) -> None:
     window, session, runtimes = configured_screen
     page, app = window.recipe_page, window.bridge.application
     assert session.entry is not None
@@ -1202,9 +1212,10 @@ def test_save_apply_start_and_running_view_only(configured_screen: Screen) -> No
     assert load_recipe(session.entry.path).display_name == "Updated"
     assert app.snapshot().active is None
     assert "next successful Start" in text("roi_applied", "en")
-    assert page.status.text() == " · ".join(
-        text(key, page.language) for key in ("saved", "READY")
-    )
+    assert page.status.text() == text("saved", page.language)
+    assert not window.buttons["operation"].isEnabled()
+    select_production_recipe(window)
+    until(lambda: not page.busy)
     candidate = app.snapshot().candidate_prepared
     assert candidate is not None and candidate.configuration.display_name == "Updated"
     model_identity = page.model.toolTip()
@@ -1580,8 +1591,9 @@ def test_prepare_failure_preserves_saved_edits_but_not_promoted(
     edit(page.metadata["display_name"], "Saved before preparation")
     page.save()
     until(lambda: not page.busy)
-    assert page.status.text() == " · ".join(
-        text(key, page.language) for key in ("saved", "recipe_prepare_error")
+    assert page.status.text() == text("saved", page.language)
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_requires_preparation=True
     )
     window.production_recipes.select(
         window.production_recipes.recipes.findData("product-a")
@@ -1660,19 +1672,12 @@ def test_unknown_model_preserved_on_unrelated_edit(configured_screen: Screen) ->
     assert session.draft.model_id == "unknown-model"
     page.save()
     until(lambda: not page.busy)
-    assert (
-        page.status.text()
-        == " · ".join(
-            text(key, page.language) for key in ("saved", "recipe_prepare_error")
-        )
-        and not session.dirty
-    )
+    assert page.status.text() == text("saved", page.language) and not session.dirty
     assert load_recipe(session.entry.path).model_id == "unknown-model"
     assert load_recipe(session.entry.path).display_name == "名称"
     assert window.bridge.application.snapshot() == replace(
         before,
         candidate_requires_preparation=True,
-        selected_recipe=SelectedRecipe(session.entry.recipe.recipe_id, "名称"),
     )
 
 
@@ -1724,13 +1729,10 @@ def test_single_model_and_unrelated_edit_preserve_model_semantics(
     page.save()
     until(lambda: not page.busy)
     assert load_recipe(session.entry.path) == replace(baseline, product_code="new-code")
-    if not explicit:
-        assert page.status.text() == " · ".join(
-            text(key, page.language) for key in ("saved", "recipe_prepare_error")
-        )
-        assert window.bridge.application.snapshot() == replace(
-            before, candidate_requires_preparation=True
-        )
+    assert page.status.text() == text("saved", page.language)
+    assert window.bridge.application.snapshot() == replace(
+        before, candidate_requires_preparation=True
+    )
 
 
 def test_save_failure_keeps_draft_file_and_application(
@@ -1755,7 +1757,7 @@ def test_save_failure_keeps_draft_file_and_application(
     assert window.bridge.application.snapshot() == before
 
 
-def test_dirty_save_switch_survives_automatic_preparation_failure(
+def test_dirty_save_switch_leaves_production_selection_unchanged(
     configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window, session, _ = configured_screen
@@ -1764,13 +1766,13 @@ def test_dirty_save_switch_survives_automatic_preparation_failure(
     page = window.recipe_page
     before = window.bridge.application.snapshot()
 
-    def fail(_session: object, _recipe_id: str) -> PreparedConfiguration:
-        raise ConfigurationIOError("model temporarily unavailable")
+    def forbidden(_session: object, _recipe_id: str) -> PreparedConfiguration:
+        pytest.fail("Dirty Save must not prepare")
 
     def save(callback: Callable[[DirtyDecision], None]) -> None:
         callback("save")
 
-    monkeypatch.setattr(type(session), "prepare_saved", fail)
+    monkeypatch.setattr(type(session), "prepare_saved", forbidden)
     monkeypatch.setattr(page, "confirm_dirty", save)
     edit(page.metadata["display_name"], "Persisted")
     target = next(
@@ -1786,5 +1788,4 @@ def test_dirty_save_switch_survives_automatic_preparation_failure(
     assert window.bridge.application.snapshot() == replace(
         before,
         candidate_requires_preparation=True,
-        selected_recipe=SelectedRecipe(original.recipe.recipe_id, "Persisted"),
     )

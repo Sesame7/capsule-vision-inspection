@@ -954,7 +954,8 @@ class MainWindow(QMainWindow):
                 and session.camera_sources.dirty
             )
         )
-        editing_busy = self.editing.busy or app.preparation_snapshot().owns_resources
+        model_preparation = app.preparation_snapshot().owns_resources
+        editing_busy = self.editing.busy or model_preparation
         draft_locked = vision_dirty or editing_busy
         basler = isinstance(app, SourceProductionApplication) and app.basler_available
         operator = permits(app, Role.OPERATOR)
@@ -969,6 +970,12 @@ class MainWindow(QMainWindow):
             or source_state in (ConnectionState.DISCONNECTED, ConnectionState.CONNECTED)
         )
         setup_guidance_key = self.production_recipes.setup_guidance_key
+        feedback = self.production_recipes.feedback
+        editing_key = (
+            "preparing"
+            if model_preparation or (feedback and feedback[0] == "preparing")
+            else "identity_working"
+        )
         identity = (
             basler,
             self.snapshot.batch_pending,
@@ -982,6 +989,7 @@ class MainWindow(QMainWindow):
             self._closing,
             vision_dirty,
             editing_busy,
+            editing_key,
             setup_guidance_key,
             self.snapshot.candidate_requires_preparation,
             self.snapshot.process_required,
@@ -1040,7 +1048,7 @@ class MainWindow(QMainWindow):
                 if action == "start" and self.snapshot.batch_pending
                 else text("start_vision_dirty", self.language)
                 if action == "start" and vision_dirty
-                else text("preparing", self.language)
+                else text(editing_key, self.language)
                 if key == "operation"
                 and self.snapshot.state is ApplicationState.READY
                 and editing_busy
@@ -1413,6 +1421,8 @@ class MainWindow(QMainWindow):
             text("batch" if operator else "permission_operator", language)
         )
         state = "closing" if self._closing else snapshot.state.name
+        if state == "READY" and snapshot.candidate_requires_preparation:
+            state = "report_stopped"
         if (
             not self._closing
             and snapshot.state is ApplicationState.STARTING
@@ -1569,7 +1579,7 @@ class MainWindow(QMainWindow):
         if production_feedback and not (warning or fault or self._closing):
             key, detail = production_feedback
             message = text(key, language)
-            warning = key not in ("preparing", "process_applying", "READY")
+            warning = key not in ("preparing", "process_applying")
         elif (
             (snapshot.process_required or snapshot.process_applying)
             and not snapshot.candidate_requires_preparation
@@ -1588,7 +1598,7 @@ class MainWindow(QMainWindow):
             and page == 0
             and not (warning or fault or self._closing)
         ):
-            message = text("recipe_reprepare", language)
+            message = text("recipe_reprepare_hint", language)
             warning = True
         if self._source_issue and event_key == "command_error":
             camera, exception_type = self._source_issue
@@ -1790,14 +1800,22 @@ class MainWindow(QMainWindow):
             self._render_status()
             return
         state_text = self.state_label.text()
+        state = self.snapshot.state
+        requires_preparation = (
+            state is ApplicationState.READY
+            and self.snapshot.candidate_requires_preparation
+        )
         state_color = (
             colors.fault
-            if self.snapshot.state is ApplicationState.FAULT
+            if state is ApplicationState.FAULT
             else colors.ok
-            if self.snapshot.state in (ApplicationState.READY, ApplicationState.RUNNING)
+            if state in (ApplicationState.READY, ApplicationState.RUNNING)
+            and not requires_preparation
             else colors.secondary
         )
-        state_icon = production_icon(self.snapshot.state.name, state_color)
+        state_icon = production_icon(
+            "unknown" if requires_preparation else state.name, state_color
+        )
         session = self.editing.session
         sources = (
             session.camera_sources.saved if session and session.camera_sources else None
@@ -2028,6 +2046,7 @@ class MainWindow(QMainWindow):
                 "UNCONFIGURED",
                 "CLOSED",
                 "READY",
+                "report_stopped",
                 "state_STARTING",
                 "source_connecting",
                 "state_RUNNING",

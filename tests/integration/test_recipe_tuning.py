@@ -616,12 +616,9 @@ def test_cached_judgment_and_isolation_and_save(
     window.recipe_page.save()
     until(lambda: not window.recipe_page.busy)
     assert session.entry and load_recipe(session.entry.path).capsule == expected
-    candidate = window.bridge.application.snapshot().candidate_prepared
-    assert candidate is not None
-    assert candidate.configuration.capsule == expected
-    assert window.bridge.application.snapshot() == replace(
-        before, candidate_prepared=candidate
-    )
+    after = window.bridge.application.snapshot()
+    assert after == replace(before, candidate_requires_preparation=True)
+    assert after.candidate_prepared is before.candidate_prepared
     assert not runtimes and window.bridge.application.snapshot().active is before.active
 
 
@@ -740,12 +737,9 @@ def test_manual_hue_wrap_sampling_and_save_discard_reuse_evidence(
     assert preview.frame is frame and preview.measurements is evidence
     assert preview.camera == camera and preview.canvas.selection == (0, 0)
     assert not preview.busy and not runtimes
-    candidate = window.bridge.application.snapshot().candidate_prepared
-    assert candidate is not None
-    assert candidate.configuration.capsule == session.entry.recipe.capsule
-    assert window.bridge.application.snapshot() == replace(
-        before, candidate_prepared=candidate
-    )
+    after = window.bridge.application.snapshot()
+    assert after == replace(before, candidate_requires_preparation=True)
+    assert after.candidate_prepared is before.candidate_prepared
 
 
 def test_manual_hue_permissions_disabled_color_and_close(
@@ -852,14 +846,9 @@ def test_length_sample_uses_cached_valid_axes_and_changes_only_target(
     session.discard()
     window.recipe_page.show_draft()
     assert preview.spins["target_length"].value() == expected and not session.dirty
-    candidate = window.bridge.application.snapshot().candidate_prepared
-    assert (
-        candidate is not None
-        and candidate.configuration.capsule == session.entry.recipe.capsule
-    )
-    assert window.bridge.application.snapshot() == replace(
-        before, candidate_prepared=candidate
-    )
+    after = window.bridge.application.snapshot()
+    assert after == replace(before, candidate_requires_preparation=True)
+    assert after.candidate_prepared is before.candidate_prepared
     assert not runtimes
 
 

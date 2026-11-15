@@ -76,7 +76,7 @@ def confirmed(
     return revision.record.operation.id
 
 
-def test_save_refresh_replay_and_restart_keep_exact_run_revisions(
+def test_save_reselect_replay_and_restart_keep_exact_run_revisions(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def no_network(*_args: object, **_kwargs: object) -> None:
@@ -169,6 +169,9 @@ def test_save_refresh_replay_and_restart_keep_exact_run_revisions(
 
         for hue in (12, 95):
             window.navigate(1)
+            before_save = app.snapshot()
+            packets = plc.packets
+            connections = plc.connections
             editor.draft.process_parameters = {"running_speed": str(hue)}
             editor.draft.capsule = replace(
                 editor.draft.capsule,
@@ -176,15 +179,41 @@ def test_save_refresh_replay_and_restart_keep_exact_run_revisions(
             )
             window.recipe_page.save()
             until(lambda: not window.editing.busy)
-            candidate = app.snapshot().candidate_prepared
-            assert candidate and candidate is not initial
-            assert candidate.configuration.recipe_id == recipe_id
-            assert candidate.configuration.capsule.color.target_hue == hue
-            assert not app.snapshot().candidate_requires_preparation
+            assert app.snapshot() == replace(
+                before_save, candidate_requires_preparation=True
+            )
+            assert plc.packets == packets and plc.connections == connections
+            assert (
+                delivered(audit.page(AuditQuery(action="production.recipe")))
+                == selections
+            )
             recipe_revision = confirmed(
                 audit, "recipe", recipe_id, recipe_path, account.account_id
             )
             window.navigate(0)
+            picker.recipes.activated.emit(picker.recipes.currentIndex())
+            until(lambda: not window.editing.busy)
+            candidate = app.snapshot().candidate_prepared
+            assert candidate and candidate is not before_save.candidate_prepared
+            assert candidate.configuration.recipe_id == recipe_id
+            assert candidate.configuration.capsule.color.target_hue == hue
+            assert not app.snapshot().candidate_requires_preparation
+            assert (
+                not app.snapshot().process_required
+                and not app.snapshot().process_applying
+            )
+            assert plc.connections == connections + 1
+            assert len(plc.packets) == len(packets) + 3
+            assert plc.words(102, 2, 0x82) == (hue, 0)
+            (selection, *previous) = delivered(
+                audit.page(AuditQuery(action="production.recipe"))
+            )
+            assert (
+                selection.outcome == "success"
+                and selection.operation.target == recipe_id
+            )
+            assert tuple(previous) == selections
+            selections = (selection, *previous)
             previous_completed = app.snapshot().counters.cycles_completed
             window.bridge.start()
             until(lambda: app.snapshot().state is ApplicationState.RUNNING)

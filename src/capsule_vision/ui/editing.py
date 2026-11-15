@@ -14,14 +14,12 @@ from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import ConfigurationError
 
 from .future_delivery import FutureDelivery
-from .permissions import failure_key
 from .production_bridge import QtProductionBridge
 
 
 class EditingCoordinator(QObject):
     changed = Signal()
     applied = Signal(object)
-    recipe_refresh_changed = Signal()
 
     def __init__(
         self,
@@ -40,7 +38,6 @@ class EditingCoordinator(QObject):
                 raise ValueError("Recipe editor belongs to another identity owner")
             session.identity = bridge.application.identity
         self.closing = False
-        self.recipe_refresh: tuple[str, str, str | None] | None = None
         self._thread: Thread | None = None
         self._completion: tuple[object, object] | None = None
         self._completed: Callable[[object, BaseException | None], None] | None = None
@@ -131,43 +128,24 @@ class EditingCoordinator(QObject):
         if session is None:
             return False
 
-        def save() -> RecipeSelection | None:
-            saved_revision = self.bridge.application.authorize_engineering(revision)
+        app = self.bridge.application
+
+        def save() -> bool:
+            saved_revision = app.authorize_engineering(revision)
             try:
                 saved = session.save(saved_revision)
-            except RevisionConfirmationError:
+            except RevisionConfirmationError as exc:
                 # The file is published even though Save cannot claim confirmation.
-                self.bridge.application.observe_saved_recipe(
-                    session.draft.to_recipe(session.process_catalog), saved_revision
-                )
+                app.observe_saved_recipe(exc.operation.target)
                 raise
-            return (
-                self.bridge.application.observe_saved_recipe(
-                    saved.recipe, saved_revision
-                )
-                if saved is not None
-                else None
-            )
+            if saved is not None:
+                app.observe_saved_recipe(saved.recipe.recipe_id)
+            return True
 
         def saved(value: object, error: BaseException | None) -> None:
-            # Save has its own committed outcome, even if preparation cannot run.
-            if isinstance(error, RevisionConfirmationError):
-                self.bridge.refresh()
-            completed(None, error)
-            if error is not None or not isinstance(value, RecipeSelection):
-                return
-            self.recipe_refresh = (value.recipe_id, "preparing", None)
-            self.recipe_refresh_changed.emit()
-
-            def refreshed(failure: BaseException | None, key: str) -> None:
-                self.recipe_refresh = (
-                    value.recipe_id,
-                    failure_key(failure, key) if failure is not None else "READY",
-                    str(failure) if failure is not None else None,
-                )
-                self.recipe_refresh_changed.emit()
-
-            self._prepare_saved(value, value.recipe_id, refreshed)
+            self.bridge.refresh()
+            # Close drains this job without changing a completed publication's outcome.
+            completed(None, None if value is True else error)
 
         return self.run_model_io(save, saved, revision=revision)
 
@@ -186,8 +164,6 @@ class EditingCoordinator(QObject):
         except RuntimeError as exc:
             completed(exc, "recipe_prepare_error")
             return
-        self.recipe_refresh = None
-        self.recipe_refresh_changed.emit()
         self._prepare_saved(request, recipe_id, completed)
 
     def _prepare_saved(

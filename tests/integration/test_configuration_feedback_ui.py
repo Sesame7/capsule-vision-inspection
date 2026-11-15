@@ -68,19 +68,13 @@ def test_recipe_save_feedback_is_independent_of_communication(
         assert load_recipe(startup.data.recipes / "local.json").display_name == (
             "Saved independently"
         )
-        assert page.status.text() == " · ".join(
-            text(key, language) for key in ("saved", "READY")
-        )
+        assert page.status.text() == text("saved", language)
         assert not page.status.toolTip()
         assert startup.data.communication.read_bytes() == before
         snapshot = startup.application.snapshot()
         assert snapshot.candidate_prepared is not None
-        assert snapshot.candidate_prepared is not candidate and snapshot.active is None
-        assert (
-            snapshot.candidate_prepared.configuration.display_name
-            == "Saved independently"
-        )
-        assert not snapshot.candidate_requires_preparation
+        assert snapshot.candidate_prepared is candidate and snapshot.active is None
+        assert snapshot.candidate_requires_preparation
         assert snapshot.counters == ProductionCounters()
         assert snapshot.state is ApplicationState.READY
         if startup.communication_error:

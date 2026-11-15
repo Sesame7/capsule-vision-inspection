@@ -72,7 +72,8 @@ MachineLayout/CameraSources require setup; malformed, inaccessible or conflictin
 saved definitions retain their errors. Ordinary setup guidance is scoped to
 Production and the relevant editor rather than unrelated page operations.
 Only explicit language changes or successful Production candidate installation
-write preferences. Vision Save never changes the last-applied Recipe preference.
+write preferences. Recipe and Vision Saves never change the last-applied Recipe
+preference.
 Malformed files remain unchanged, and unknown fields are errors. An unsupported
 language retains the existing visible, in-memory `zh` fallback with writes blocked
 until repair; it is never silently persisted.
@@ -277,8 +278,9 @@ Audit confirmation fails, Save reports **configuration published; audit confirma
 incomplete**, preserving the file and unresolved evidence. Reload is a read of the
 actual file, not confirmation of the earlier operation. No rollback, repeat write,
 revision restore or Production activation is implied. Independent Vision saves
-can have different outcomes. Saved Recipe candidate refresh remains separate from
-publication and is initiated only after a confirmed successful changed Save.
+can have different outcomes. If the published Recipe change affects the selected
+candidate, Start remains unavailable until explicit reselection and preparation,
+including when audit confirmation is incomplete.
 Old Audit schemas are not migrated or replaced automatically. Preserve operational
 databases; an obsolete disposable database requires a separate, verified maintenance
 decision before reset. Configuration file formats and the account schema are
@@ -886,8 +888,8 @@ and persistence identity, so a missing or unresolved Model reference can remain
 saved. Production preparation rejects it without replacing the current candidate
 or active session. Referenced artifacts must still pass path/SHA/module validation.
 Persistence and preparation have independent outcomes; preparation failure keeps
-the saved definition available for completion. The selected-Recipe refresh and
-activation rules are defined under [editing and persistence](#editing-and-persistence).
+the saved definition available for completion. Selection, preparation and
+activation are defined under [editing and persistence](#editing-and-persistence).
 `camera_overrides` and `channel_overrides` are unknown fields and are rejected,
 including empty arrays. They are never ignored or migrated.
 Renaming changes only `display_name`, never the ID/path. Save writes the unchanged
@@ -958,9 +960,10 @@ Omitted IDs mean no override; an omitted or empty object means none. Explicit ze
 is retained. Unknown IDs, booleans, fractions, nulls and values outside the resolved
 device catalog's range are rejected. Save stores no address, group, unit, enable
 flag or activation mode. These are raw values, with no scaling or unit conversion.
-Loading and editing retain immutable configuration values. Preparing the selected
-saved Recipe admits the separate [process application](communication.md#process-parameter-application)
-for Operator or higher; a changed selected Save triggers the same preparation.
+Loading and editing retain immutable configuration values. Explicit Production
+selection prepares the saved Recipe and admits the separate
+[process application](communication.md#process-parameter-application)
+for Operator or higher. Saving a Recipe does not initiate either operation.
 Startup candidate restoration is read-only, including with Operator auto login.
 Omission never restores a PLC default.
 
@@ -1434,24 +1437,19 @@ frame are still image evidence: enabled Size/Color can report missing-body/unusa
 color NG with unavailable numeric measurements. Tune has no Occupancy fusion and
 does not reinterpret that result as Production EMPTY or consume historical NG.
 
-Recipe **Save** persists its definition, including incomplete Model references.
-Invalid Communication settings or incomplete MachineLayout/source definitions do
-not block that persistence. A materially changed Save of the current Production
-candidate's ID, while that candidate remains selected, automatically prepares the
-latest saved definition and dependencies
-on the existing bounded worker. Unchanged Saves, unrelated Recipes and unsaved
-drafts never trigger preparation or change Production selection. Save success and
-preparation success are separate outcomes, shown as saved/preparing, saved/ready or
-saved/preparation-failed using the existing feedback surfaces. Dirty navigation/close
-still offers Save, Discard or Cancel; failed preparation cannot undo a successful Save.
+Recipe **Save** persists its definition and audit evidence, including definitions
+with incomplete Model references. Invalid Communication settings or incomplete
+MachineLayout/source definitions do not block that persistence. Save reports its
+publication outcome and does not prepare the Recipe or apply PLC process values.
+Dirty navigation/close still offers Save, Discard or Cancel.
 
-The previous candidate becomes ineligible for Start as soon as the changed selected
-definition is committed, before releasing the stopped editing slot. Preparation
-failure preserves its identity/evidence and leaves Start unavailable. Only successful
-preparation replaces it; only successful Start changes the active session. Automatic
-refresh uses the saving session revision and existing generation/selection fencing,
-and cannot install after supersession, authorization loss or Close. It preserves
-the Recipe Save audit event without inventing an operator Recipe-selection event.
+Publishing a materially changed definition matching both the selected and candidate
+IDs makes that candidate ineligible for Start before the stopped editing slot is
+released. This applies even if audit confirmation fails after publication.
+An unpublished change, unchanged Save or unrelated Recipe Save does not invalidate
+the candidate. Production retains the selected identity and old candidate evidence,
+shows that reselection is required, and disables Start. Only successful preparation
+replaces the candidate; only successful Start changes the active configuration.
 
 Production's compact saved-Recipe selector accepts a valid saved definition before
 preparing its MachineLayout, Model and source dependencies, off Qt dispatch on the
@@ -1487,8 +1485,10 @@ preference write failures remain visible and do not undo candidate installation.
 Accepting an unprepared selection never writes this preference or persists a new
 selection field; after restart only the established last-applied preference applies.
 Startup can restore the latest saved version of that ID as a stopped candidate,
-with no automatic fallback or Start. Candidate, active and persisted applied IDs
-remain protected from Recipe deletion.
+with no automatic fallback or Start. Recipe Save invalidation is in memory and
+does not bind a version to the preference across restarts. Startup restoration
+does not apply PLC overrides. Candidate, active and persisted applied IDs remain
+protected from Recipe deletion.
 
 Vision is save-only. MachineLayout and CameraSources retain independent validation
 and atomic persistence; a partial save is not a cross-file rollback. Save never

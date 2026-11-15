@@ -166,8 +166,8 @@ def test_setup_completion_requires_reselection_before_process_application(
             # Neither saving the selected incomplete Recipe nor the old candidate
             # is an implicit selection or permission to write process values.
             save_recipe(target, other)
-            assert app.observe_saved_recipe(other, app.session_revision) is None
-            assert app.observe_saved_recipe(original, app.session_revision) is None
+            app.observe_saved_recipe(other.recipe_id)
+            app.observe_saved_recipe(original.recipe_id)
             if missing != "model":
                 absent.write_bytes(content)
             QApplication.processEvents()

@@ -112,7 +112,7 @@ def test_save_only_marks_candidate_stale_and_same_id_selection_recovers(
         text("recipe_reprepare_hint", "en")
         in window.production_recipes.recipes.toolTip()
     )
-    assert window.event_label.accessibleName() == text("recipe_reprepare", "en")
+    assert window.event_label.accessibleName() == text("recipe_reprepare_hint", "en")
     select_production_recipe(window)
     until(lambda: not window.editing.busy)
     recovered = app.snapshot()

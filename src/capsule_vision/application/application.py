@@ -89,7 +89,6 @@ class RecipeSelection:
     generation: int
     operation: AuditOperation | None = None
     recipe_id: str = ""
-    automatic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,10 +308,7 @@ class ProductionApplication:
         """
         with (
             self._condition,
-            self._admission(
-                Role.ENGINEER if request.automatic else Role.OPERATOR,
-                request.revision,
-            ),
+            self._admission(Role.OPERATOR, request.revision),
         ):
             self._check_recipe_selection(request)
             if recipe.recipe_id != request.recipe_id:
@@ -330,50 +326,33 @@ class ProductionApplication:
                 recipe.recipe_id, recipe.display_name
             )
             self._candidate_requires_preparation = True
-            if not request.automatic:
-                self._state = ApplicationState.UNCONFIGURED
+            self._state = ApplicationState.UNCONFIGURED
 
     def _check_recipe_selection(self, request: RecipeSelection) -> None:
         if self._selection is not request or self._generation != request.generation:
             raise StaleSessionError("Production selection was superseded")
 
-    def observe_saved_recipe(
-        self, recipe: RecipeDefinition, revision: int | None
-    ) -> RecipeSelection | None:
-        """Observe a committed changed Save while its stopped file slot is owned.
-
-        Invalidate before releasing that slot, even if authorization was lost.
-        Reading and installation still require the saving session's admission.
-        This is internal refresh evidence, not an operator selection audit event.
-        """
+    def observe_saved_recipe(self, recipe_id: str) -> None:
+        """Invalidate evidence for a changed Recipe published under the stopped file slot."""
         with self._condition:
             candidate = self._candidate
             if (
                 candidate is None
-                or candidate.configuration.recipe_id != recipe.recipe_id
+                or candidate.configuration.recipe_id != recipe_id
                 or self._selected_recipe is None
-                or self._selected_recipe.recipe_id != recipe.recipe_id
+                or self._selected_recipe.recipe_id != recipe_id
             ):
-                return None
+                return
             self._candidate_requires_preparation = True
             self.cancel_process_application()
             self._selection = None
-            if self._closing or self._state is not ApplicationState.READY:
-                return None
-            self._selection = RecipeSelection(
-                revision, self._generation, recipe_id=recipe.recipe_id, automatic=True
-            )
-            return self._selection
 
     def install_recipe_selection(
         self, request: RecipeSelection, candidate: PreparedConfiguration
     ) -> Future[None]:
         with self._condition:
             try:
-                with self._admission(
-                    Role.ENGINEER if request.automatic else Role.OPERATOR,
-                    request.revision,
-                ):
+                with self._admission(Role.OPERATOR, request.revision):
                     self._check_recipe_selection(request)
                     if (
                         request.recipe_id
@@ -1075,11 +1054,7 @@ class ProductionApplication:
 
     @contextmanager
     def recipe_preparation(self, request: RecipeSelection) -> Generator[None]:
-        with self._model_files(
-            Role.ENGINEER if request.automatic else Role.OPERATOR,
-            request.revision,
-            selection=request,
-        ):
+        with self._model_files(Role.OPERATOR, request.revision, selection=request):
             yield
 
     @contextmanager

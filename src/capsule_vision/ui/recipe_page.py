@@ -508,8 +508,6 @@ class RecipePage(QWidget):
         self.buttons["recipe_discard"].clicked.connect(self.request_discard)
         primary.clicked.connect(lambda: self.save())
         editing.changed.connect(self.refresh_state)
-        editing.recipe_refresh_changed.connect(self.refresh_state)
-        editing.applied.connect(self._configuration_applied)
         bridge.snapshot_changed.connect(self.refresh_state)
         bridge.source_connection_changed.connect(self.refresh_state)
         bridge.model_preparation_changed.connect(self.refresh_state)
@@ -631,11 +629,6 @@ class RecipePage(QWidget):
         else:
             self._browse_entry = None
             self.show_draft()
-
-    @Slot(object)
-    def _configuration_applied(self, _prepared: object) -> None:
-        self._error = ""
-        self.refresh_state()
 
     @Slot(object, str)
     def _operation_failed(self, error: object, key: str) -> None:
@@ -1087,7 +1080,7 @@ class RecipePage(QWidget):
                 )
         self.model_controls.refresh()
         state = (
-            "preparing"
+            "identity_working"
             if self.busy
             else "no_catalog"
             if session is None
@@ -1108,19 +1101,6 @@ class RecipePage(QWidget):
             text(key, language) for key in self.configuration_messages
         )
         feedback = text(self._feedback, language) if self._feedback else ""
-        refresh = self.editing.recipe_refresh
-        refresh_details = ""
-        if (
-            refresh is not None
-            and session is not None
-            and session.entry is not None
-            and refresh[0] == session.entry.recipe.recipe_id
-            and self._feedback == "saved"
-        ):
-            feedback = f"{feedback} · {text(refresh[1], language)}"
-            refresh_details = str(refresh[2]) if refresh[2] else ""
-            if state == "preparing":
-                self.identity.setText("")  # The combined Save feedback already says it.
         self.status.setText(
             (text(self._error_key, language) if self._error else "")
             or (
@@ -1140,7 +1120,6 @@ class RecipePage(QWidget):
                     self.configuration_details,
                     self._catalog_error,
                     self._labels_error,
-                    refresh_details,
                 )
                 if part
             )
@@ -1592,7 +1571,7 @@ class RecipePage(QWidget):
                 self._error = ""
                 self._feedback = "saved"
             self.refresh_state()
-            if error is None and after is not None:
+            if error is None and after is not None and not self.closing:
                 after()
 
         try:

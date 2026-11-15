@@ -1,4 +1,4 @@
-"""Saved Recipe evidence and stopped refresh admission, without Qt or hardware."""
+"""Saved Recipe evidence, invalidation and Start admission without Qt or hardware."""
 
 import json
 from dataclasses import replace
@@ -118,7 +118,7 @@ def test_parsed_recipe_equality_and_failed_start_recovery(tmp_path: Path) -> Non
         close(app)
 
 
-def test_save_observation_blocks_start_before_release_and_supersedes_refresh(
+def test_save_observation_invalidates_before_release_and_fences_older_selection(
     tmp_path: Path,
 ) -> None:
     session = editor(tmp_path)
@@ -127,36 +127,35 @@ def test_save_observation_blocks_start_before_release_and_supersedes_refresh(
         lambda _p, _g: FakeSession(), initial_candidate=candidate
     )
     try:
-        assert session.save() is None  # Unchanged Save supplies no refresh evidence.
-        session.draft.display_name = "First saved"
+        assert session.save() is None  # Unchanged Save supplies no change evidence.
+        assert not app.snapshot().candidate_requires_preparation
+        first = app.begin_recipe_selection("product-a")
+        session.draft.display_name = "Latest saved"
         with app.model_management():
             saved = session.save()
             assert saved is not None
-            first = app.observe_saved_recipe(saved.recipe, None)
-            assert first is not None and first.operation is None and first.automatic
+            app.observe_saved_recipe(saved.recipe.recipe_id)
+            assert app.snapshot().candidate_requires_preparation
+            assert app.snapshot().candidate_prepared is candidate
             with pytest.raises(ApplicationStateError):
                 app.start()
         with pytest.raises(ApplicationStateError, match="re-preparation"):
             app.start()
-        session.draft.display_name = "Latest saved"
-        saved = session.save()
-        assert saved is not None
-        second = app.observe_saved_recipe(saved.recipe, None)
-        assert second is not None
         with pytest.raises(StaleSessionError):
             with app.recipe_preparation(first):
                 pytest.fail("Superseded read admitted")
         with pytest.raises(StaleSessionError):
             app.install_recipe_selection(first, candidate)
+        second = app.begin_recipe_selection("product-a")
         with app.recipe_preparation(second):
+            app.accept_recipe_selection(second, saved.recipe)
             refreshed = session.prepare_saved("product-a")
         app.install_recipe_selection(second, refreshed)
+        assert refreshed.configuration.display_name == "Latest saved"
         assert not app.snapshot().candidate_requires_preparation
         assert app.snapshot().candidate_prepared is refreshed
-        assert (
-            app.observe_saved_recipe(replace(saved.recipe, recipe_id="other"), None)
-            is None
-        )
+        app.observe_saved_recipe("other")
+        assert not app.snapshot().candidate_requires_preparation
         assert app.snapshot().candidate_prepared is refreshed
         app.close().result(WAIT)
         with pytest.raises(ApplicationStateError):

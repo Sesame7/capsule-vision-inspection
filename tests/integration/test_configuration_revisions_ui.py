@@ -14,7 +14,9 @@ from tests.support.application import WAIT
 from tests.support.qt import close_window, until
 from tests.support.startup import authenticated_startup
 
+from capsule_vision.application import ApplicationStateError, PreparedConfiguration
 from capsule_vision.application.audit import AuditQuery
+from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
@@ -145,7 +147,9 @@ def test_communication_failed_save_does_not_claim_confirmed_revision(
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 def test_recipe_published_unconfirmed_is_visible_and_blocks_old_candidate(
-    settings_window: tuple[Startup, MainWindow], language: Language
+    settings_window: tuple[Startup, MainWindow],
+    language: Language,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     startup, window = settings_window
     owner, editor = startup.application.identity, startup.editor
@@ -153,12 +157,20 @@ def test_recipe_published_unconfirmed_is_visible_and_blocks_old_candidate(
     window.set_language(language)
     window.navigate(1)
     until(lambda: not window.editing.busy and not window.recipe_page.labels_loading)
+
+    def forbidden(
+        _session: RecipeEditorSession, _identity: str
+    ) -> PreparedConfiguration:
+        pytest.fail("Unconfirmed publication must not prepare")
+
     try:
         before = startup.application.snapshot()
         refuse(startup.data.audit, "completions", "recipe.save")
         editor.draft.display_name = "Published without confirmation"
-        window.recipe_page.save()
-        until(lambda: not window.editing.busy)
+        with monkeypatch.context() as save_only:
+            save_only.setattr(RecipeEditorSession, "prepare_saved", forbidden)
+            window.recipe_page.save()
+            until(lambda: not window.editing.busy)
         assert (
             load_recipe(editor.entry.path).display_name
             == "Published without confirmation"
@@ -171,12 +183,27 @@ def test_recipe_published_unconfirmed_is_visible_and_blocks_old_candidate(
         snapshot = startup.application.snapshot()
         assert snapshot.candidate_prepared is before.candidate_prepared
         assert snapshot.candidate_requires_preparation and snapshot.active is None
+        assert snapshot.selected_recipe == before.selected_recipe
         assert not window.buttons["operation"].isEnabled()
+        with pytest.raises(ApplicationStateError, match="re-preparation"):
+            startup.application.start()
         (row,) = owner.audit.revisions("recipe", editor.entry.recipe.recipe_id).result(
             WAIT
         )
         assert not row.confirmed and row.record.outcome == "unresolved"
         assert not owner.audit.page(AuditQuery(action="production.recipe")).result(WAIT)
+
+        window.navigate(0)
+        picker = window.production_recipes
+        picker.recipes.activated.emit(picker.recipes.currentIndex())
+        until(lambda: not window.editing.busy)
+        prepared = startup.application.snapshot()
+        assert not prepared.candidate_requires_preparation
+        assert prepared.candidate_prepared is not snapshot.candidate_prepared
+        assert (
+            text("configuration_confirmation_incomplete", language)
+            == window.recipe_page.status.text()
+        )
     finally:
         editor.discard()
 

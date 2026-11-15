@@ -85,35 +85,8 @@ class ProductionRecipes(QWidget):
         self.recipes.activated.connect(self.select)
         self.refresh_button.clicked.connect(self.reload)
         editing.changed.connect(self.refresh_state)
-        editing.recipe_refresh_changed.connect(self._recipe_refreshed)
         editing.bridge.snapshot_changed.connect(self.refresh_state)
         editing.bridge.model_preparation_changed.connect(self.refresh_state)
-
-    def _recipe_refreshed(self) -> None:
-        refresh = self.editing.recipe_refresh
-        if refresh is None:
-            return
-        identity, state, error = refresh
-        snapshot = self.editing.bridge.application.snapshot()
-        candidate = snapshot.candidate_prepared
-        # A newer explicit selection owns its own feedback and identity.
-        if candidate is None or candidate.configuration.recipe_id != identity:
-            if self._requested is not None and self._requested[0] == identity:
-                self._requested = None
-                self.feedback = None
-                self.feedback_changed.emit()
-            return
-        name = candidate.configuration.display_name
-        self._requested = (identity, name) if state == "preparing" else None
-        self.feedback = (
-            self._catalog_feedback
-            if state == "READY"
-            else (state, f"{name} [{identity}]\n{error}" if error else "")
-        )
-        self.editing.bridge.refresh()
-        self.present(snapshot)
-        self.refresh_state()
-        self.feedback_changed.emit()
 
     def sizeHint(self) -> QSize:
         return QSize(self.maximumWidth(), Style.touch)
@@ -144,13 +117,6 @@ class ProductionRecipes(QWidget):
             self.feedback = self._catalog_feedback
         self._catalog_revision += 1
         snapshot = self.editing.bridge.application.snapshot()
-        refresh = self.editing.recipe_refresh
-        if (
-            refresh is not None
-            and refresh[2] is not None
-            and snapshot.candidate_requires_preparation
-        ):
-            self._recipe_refreshed()
         self.present(snapshot)
         self.refresh_state()
         self.feedback_changed.emit()

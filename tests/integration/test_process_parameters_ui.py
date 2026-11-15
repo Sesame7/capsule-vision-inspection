@@ -136,14 +136,26 @@ def test_process_save_preserves_raw_errors_and_missing_target_blocks_application
         until(lambda: not page.busy)
         expected = (("feeder_speed", 0), ("running_speed", -12))
         assert session.entry.recipe.process_parameters == expected and not session.dirty
-        assert startup.application.snapshot().candidate_prepared is not candidate
+        snapshot = startup.application.snapshot()
+        assert snapshot.candidate_prepared is candidate
+        assert snapshot.candidate_requires_preparation and snapshot.last_issue is None
+        assert (
+            snapshot.process_required and not calls
+        )  # Restored overrides remain unverified.
+        assert page.status.text() == text("saved", page.language)
+        window.navigate(0)
+        picker = window.production_recipes
+        picker.recipes.activated.emit(picker.recipes.currentIndex())
+        until(lambda: not page.busy)
         snapshot = startup.application.snapshot()
         assert snapshot.candidate_prepared is not None
+        assert snapshot.candidate_prepared is not candidate
         assert snapshot.candidate_prepared.configuration.process_parameters == expected
         assert snapshot.active is None and snapshot.counters == ProductionCounters()
         assert not snapshot.runtime_owned and not calls
         assert snapshot.process_required and snapshot.last_issue
-        assert page.status.text() == "已保存 · 工艺参数应用失败"
+        assert picker.feedback and picker.feedback[0] == "process_apply_failed"
+        assert page.status.text() == text("saved", page.language)
         assert not startup.data.communication.exists()
 
 

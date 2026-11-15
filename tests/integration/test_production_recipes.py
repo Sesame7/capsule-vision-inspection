@@ -14,12 +14,16 @@ from PySide6.QtWidgets import (
     QStyleOptionComboBox,
     QStylePainter,
 )
+from tests.integration.test_process_preview import saved_target
+from tests.support.application import WAIT
+from tests.support.fins_tcp import TcpPeer
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import Screen, assert_inside
 from tests.support.recipe_ui import configured_screen as configured_screen
 from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
+    close,
     provision_account,
     saved_data,
 )
@@ -29,8 +33,10 @@ from capsule_vision.application import (
     ApplicationStateError,
     PreparedConfiguration,
 )
+from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.identity_models import Role
+from capsule_vision.application.startup import load_startup
 from capsule_vision.configuration import RecipeDefinition, load_recipe, save_recipe
 from capsule_vision.configuration.preferences import load_preferences
 from capsule_vision.localization.catalog import text
@@ -85,6 +91,68 @@ def test_startup_restores_latest_saved_same_id_without_start(
     finally:
         close_window(window)
         delivery.detach()
+
+
+def test_restart_after_save_restores_latest_recipe_read_only(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    data = saved_data(tmp_path)
+    preferences = data.preferences.read_bytes()
+    with TcpPeer() as plc:
+        saved_target(data.root, plc.port)
+        startup = authenticated_startup(data)
+        app, session = startup.application, startup.editor
+        assert session is not None
+        delivery = FutureDelivery()
+        window = create_window(startup, delivery)
+        try:
+            session.draft.display_name = "Saved before restart"
+            session.draft.process_parameters = {"running_speed": "73"}
+            window.recipe_page.save()
+            until(lambda: not window.editing.busy)
+            assert app.snapshot().candidate_requires_preparation
+            assert data.preferences.read_bytes() == preferences
+        finally:
+            close_window(window)
+            delivery.detach()
+        assert not plc.connections and not plc.packets
+
+        restored = load_startup(data)
+        try:
+            snapshot = restored.application.snapshot()
+            candidate = snapshot.candidate_prepared
+            assert (
+                candidate
+                and candidate.configuration.display_name == "Saved before restart"
+            )
+            assert candidate.configuration.process_parameters == (
+                ("running_speed", 73),
+            )
+            assert (
+                snapshot.selected_recipe
+                and snapshot.selected_recipe.recipe_id == "local"
+            )
+            assert (
+                not snapshot.candidate_requires_preparation
+                and snapshot.process_required
+            )
+            assert snapshot.active is None and not snapshot.runtime_owned
+            assert data.preferences.read_bytes() == preferences
+            assert not plc.connections and not plc.packets
+            owner = restored.application.identity
+            assert owner
+            owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+            assert not owner.audit_page(AuditQuery(action="production.recipe")).result(
+                WAIT
+            )
+            assert not owner.audit_page(
+                AuditQuery(action="recipe.process_apply")
+            ).result(WAIT)
+            with pytest.raises(ApplicationStateError, match="readback"):
+                restored.application.start()
+            assert not plc.connections and not plc.packets
+        finally:
+            close(restored)
 
 
 @pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
@@ -188,6 +256,7 @@ def test_save_and_selection_keep_editor_candidate_and_preferences_independent(
         assert session is not None and session.entry is not None
         initial = startup.application.snapshot()
         assert initial.candidate_prepared is not None
+        preferences = data.preferences.read_bytes()
         # Save requires neither valid setup drafts nor a registered model.
         session.machine_editor.remove_camera_six()
         assert session.camera_sources is not None
@@ -197,10 +266,9 @@ def test_save_and_selection_keep_editor_candidate_and_preferences_independent(
         until(lambda: not window.editing.busy)
         assert not session.dirty
         assert load_recipe(session.entry.path).display_name == "Saved latest"
-        refreshed = startup.application.snapshot()
-        assert refreshed.candidate_prepared is not None
-        assert refreshed.candidate_prepared.configuration.display_name == "Saved latest"
-        assert refreshed.active is None and not refreshed.candidate_requires_preparation
+        saved = startup.application.snapshot()
+        assert saved == replace(initial, candidate_requires_preparation=True)
+        assert data.preferences.read_bytes() == preferences
         assert load_preferences(data.preferences).last_applied_recipe_id == "local"
         session.draft.display_name = "Keep unsaved"
         draft = session.draft.to_recipe()
