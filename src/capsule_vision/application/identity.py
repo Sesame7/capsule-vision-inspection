@@ -139,7 +139,9 @@ class LocalIdentity:
         evidence: RevisionEvidence | None = None,
     ) -> Generator[None]:
         """Worker-only. Never wait for audit IO while holding the identity lock."""
-        with self.admission(role, revision, action=action, target=target) as actor:
+        with self.admission(
+            role, revision, action=action, target=target or None
+        ) as actor:
             op = AuditOperation.by(actor, action, target, before, after)
         self.audit.intent(op, evidence).result()
         try:
@@ -168,9 +170,10 @@ class LocalIdentity:
         revision: int | None = None,
         *,
         action: str = "security.admission",
-        target: str = "",
+        target: str | None = None,
     ) -> Generator[SessionSnapshot]:
         """Linearize a command with logout, login and committed account changes."""
+        target = minimum.name if target is None else target
         with self._lock:
             if not self._accepting or (
                 revision is not None and self._session.revision != revision
@@ -179,9 +182,7 @@ class LocalIdentity:
                     # A revision alone cannot identify a superseded caller. The
                     # present user did not initiate that request.
                     self.audit.record(
-                        AuditOperation(
-                            "system", "System", action, target or minimum.name
-                        ),
+                        AuditOperation("system", "System", action, target),
                         "stale",
                         f"Requested revision {revision}; current revision {self._session.revision}",
                     )
@@ -189,9 +190,7 @@ class LocalIdentity:
             if not self._session.permits(minimum):
                 if action:
                     self.audit.record(
-                        AuditOperation.by(
-                            self._session, action, target or minimum.name
-                        ),
+                        AuditOperation.by(self._session, action, target),
                         "denied",
                     )
                 if self._session.rotation_required:
@@ -618,9 +617,12 @@ class LocalIdentity:
                 if not confirmed:
                     raise AuthorizationError("Confirm granting Administrator access")
             except IdentityError as exc:
-                self.audit.record(
-                    AuditOperation.by(self._session, action, target), error_outcome(exc)
+                operation_at_admission = (
+                    AuditOperation("system", "System", action, target[:512])
+                    if isinstance(exc, StaleSessionError)
+                    else AuditOperation.by(self._session, action, target)
                 )
+                self.audit.record(operation_at_admission, error_outcome(exc))
                 raise
             initiator = self._session
 

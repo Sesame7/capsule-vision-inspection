@@ -3,6 +3,7 @@
 import sqlite3
 import subprocess
 import sys
+from concurrent.futures import CancelledError
 from contextlib import closing
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -10,12 +11,22 @@ from pathlib import Path
 from threading import Event
 
 import pytest
-from tests.support.application import WAIT, FakeSession, close, prepared
+from tests.support.application import FIXTURES, WAIT, FakeSession, close, prepared
+from tests.support.diagnostics import observations
 from tests.support.fins_tcp import Fault, Stage, TcpPeer
 from tests.support.modbus import ModbusPeer, frame
-from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    provision_account,
+    saved_data,
+)
 
-from capsule_vision.application import ProductionApplication
+from capsule_vision.application import (
+    ApplicationError,
+    ApplicationStateError,
+    ProductionApplication,
+)
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.audit import (
     AUDIT_CHANGE_LIMIT,
@@ -57,6 +68,8 @@ from capsule_vision.communication.operations import (
     execute_request,
 )
 from capsule_vision.communication.reporting import ReportingWriteProtectedError
+from capsule_vision.configuration import load_recipe
+from capsule_vision.diagnostics import RuntimeDiagnostics
 
 
 def hold_insert(
@@ -614,6 +627,75 @@ def test_actual_commits_differences_actor_and_independent_finalization_failure(
         assert secret.encode() not in raw
 
 
+def test_account_mutation_stale_at_admission_and_after_same_role_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "security.sqlite3"
+    initialize_administrator(path, "Original", TEST_PASSWORD)
+    identity = LocalIdentity(path)
+    verifying, release = Event(), Event()
+
+    def held_verification(secret: str, verifier: PasswordVerifier) -> bool:
+        verifying.set()
+        assert release.wait(WAIT)
+        return verify_password(secret, verifier)
+
+    try:
+        identity.login("Original", TEST_PASSWORD).result(WAIT)
+        successor = provision_account(
+            identity, "Successor", Role.ADMINISTRATOR, TEST_PASSWORD
+        )
+        worker = identity.create_account("Worker", Role.OPERATOR, TEST_PASSWORD).result(
+            WAIT
+        )
+        original = identity.snapshot()
+        assert original.account and original.account.role is Role.ADMINISTRATOR
+        monkeypatch.setattr(
+            "capsule_vision.application.identity.verify_password", held_verification
+        )
+        switch = identity.login(successor.username, TEST_PASSWORD)
+        assert verifying.wait(WAIT)
+        admitted = identity.set_role(
+            worker.account_id, Role.ENGINEER, revision=original.revision
+        )
+        release.set()
+        current = switch.result(WAIT)
+        assert current.account and current.account.role is Role.ADMINISTRATOR
+        assert current.account.account_id == successor.account_id
+        assert current.revision != original.revision
+        with pytest.raises(StaleSessionError):
+            admitted.result(WAIT)
+        with pytest.raises(StaleSessionError):
+            identity.set_role(
+                worker.account_id, Role.ENGINEER, revision=original.revision
+            )
+        initial_rejection, queued_rejection = identity.audit_page(
+            AuditQuery(action="account.role")
+        ).result(WAIT)
+        for row in (initial_rejection, queued_rejection):
+            assert row.outcome == "stale" and row.operation.target == worker.account_id
+        assert (
+            initial_rejection.operation.actor_id,
+            initial_rejection.operation.username,
+        ) == ("system", "System")
+        assert (
+            queued_rejection.operation.actor_id,
+            queued_rejection.operation.username,
+        ) == (original.account.account_id, original.account.username)
+        assert (
+            next(
+                a.role
+                for a in identity.list_accounts().result(WAIT)
+                if a.account_id == worker.account_id
+            )
+            is Role.OPERATOR
+        )
+    finally:
+        release.set()
+        identity.request_stop()
+        assert identity.join(WAIT)
+
+
 def test_stale_after_durable_intent_cannot_execute_as_next_user(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -719,6 +801,184 @@ def test_critical_file_intent_precedes_publication_and_vision_files_settle_indep
         assert not identity.audit_page(AuditQuery(action="vision.layout")).result(WAIT)
     finally:
         close(startup.application)
+
+
+@pytest.mark.parametrize("retained", [True, False], ids=["retained", "no-selection"])
+def test_rejected_start_targets_explicit_selection(
+    tmp_path: Path, retained: bool
+) -> None:
+    path = tmp_path / "security.sqlite3"
+    initialize_administrator(path, "Admin", TEST_PASSWORD)
+    identity = LocalIdentity(path)
+    logs = tmp_path / "logs"
+    writer = RuntimeDiagnostics(logs, "standard")
+    candidate = prepared(tmp_path) if retained else None
+    app = ProductionApplication(
+        lambda _p, _g: FakeSession(),
+        identity=identity,
+        initial_candidate=candidate,
+        diagnostics=writer,
+    )
+    selected = load_recipe(FIXTURES / "product-b.json") if retained else None
+    recipe_id = selected.recipe_id if selected is not None else None
+    try:
+        actor = identity.login("Admin", TEST_PASSWORD).result(WAIT)
+        assert actor.account
+        activated_run = None
+        if candidate is not None and selected is not None:
+            app.start().result(WAIT)
+            activated_run = app.snapshot().run_id
+            assert activated_run
+            app.stop().result(WAIT)
+            request = app.begin_recipe_selection(selected.recipe_id)
+            app.accept_recipe_selection(request, selected)
+            app.recipe_selection_failed(request, ValueError("Preparation failed"))
+        before = app.snapshot()
+        assert before.candidate_prepared is candidate
+        assert before.active_prepared is candidate
+        assert (
+            before.selected_recipe.recipe_id if before.selected_recipe else None
+        ) == (recipe_id)
+        assert before.run_id is None
+        with pytest.raises(ApplicationStateError):
+            app.start()
+        identity.logout()
+        with pytest.raises(AuthorizationError):
+            app.start()
+        identity.login("Admin", TEST_PASSWORD).result(WAIT)
+        denied, rejected, *activated = identity.audit_page(
+            AuditQuery(action="production.start")
+        ).result(WAIT)
+        assert (denied.outcome, denied.operation.actor_id, denied.operation.target) == (
+            "denied",
+            "guest",
+            recipe_id or "",
+        )
+        assert (
+            rejected.outcome,
+            rejected.operation.actor_id,
+            rejected.operation.target,
+            rejected.operation.after,
+        ) == ("failed", actor.account.account_id, recipe_id or "", "")
+        if candidate is not None:
+            (record,) = activated
+            assert (
+                record.outcome,
+                record.operation.actor_id,
+                record.operation.target,
+                record.operation.after,
+            ) == (
+                "success",
+                actor.account.account_id,
+                activated_run,
+                candidate.configuration.recipe_id,
+            )
+        else:
+            assert not activated
+        assert app.snapshot().generation == before.generation
+        assert app.snapshot().run_id is None
+    finally:
+        close(app)
+        writer.close()
+    (diagnostic,) = [
+        row
+        for row in observations(logs, "production.start")
+        if row["outcome"] == "rejected"
+    ]
+    assert diagnostic["recipe_id"] == recipe_id and diagnostic.get("run_id") is None
+
+
+@pytest.mark.parametrize(
+    "ending,problem,outcome,detail",
+    [
+        ("stop", "", "cancelled", ""),
+        ("close", "", "cancelled", ""),
+        ("stop", "startup", "failed", "ApplicationStateError"),
+        ("stop", "cleanup", "failed", "ApplicationError"),
+        ("stop", "terminal", "failed", "RuntimeError"),
+        (None, "exited", "failed", "ApplicationStateError"),
+        (None, "unrelated cancellation", "failed", "CancelledError"),
+    ],
+    ids=[
+        "clean-stop",
+        "clean-close",
+        "startup-failure-with-stop",
+        "unsafe-cleanup",
+        "terminal-failure-with-stop",
+        "unexpected-exit",
+        "unattributed-cancellation",
+    ],
+)
+def test_start_audit_waits_for_cleanup_and_checks_actual_outcome(
+    tmp_path: Path, ending: str | None, problem: str, outcome: str, detail: str
+) -> None:
+    path = tmp_path / "security.sqlite3"
+    initialize_administrator(path, "Admin", TEST_PASSWORD)
+    identity = LocalIdentity(path)
+    candidate = prepared(tmp_path)
+    session = FakeSession(automatic_start=False)
+    release = session.join_gate = Event()
+    app = ProductionApplication(
+        lambda _p, _g: session, identity=identity, initial_candidate=candidate
+    )
+    try:
+        actor = identity.login("Admin", TEST_PASSWORD).result(WAIT)
+        assert actor.account
+        start = app.start()
+        assert session.start_entered.wait(WAIT)
+        settled = None
+        if ending is not None:
+            settled = app.stop() if ending == "stop" else app.close()
+        if problem == "startup":
+            session.ready.set_exception(ApplicationStateError("Startup test failure"))
+        elif problem == "unrelated cancellation":
+            session.ready.set_exception(CancelledError("Unrelated Future cancelled"))
+        else:
+            if problem == "exited":
+                session.finished.set_result(None)
+            session.ready.set_result(None)
+        assert session.join_entered.wait(WAIT)
+        if problem == "cleanup":
+            session.cleanup_safe = False
+        if problem == "terminal":
+            session.failure = RuntimeError("Genuine failure during shutdown")
+        assert not start.done()
+        assert not identity.audit_page(AuditQuery(action="production.start")).result(
+            WAIT
+        )
+        release.set()
+        with pytest.raises(
+            ApplicationError, match="Startup did not activate candidate"
+        ):
+            start.result(WAIT)
+        if settled is not None:
+            if problem == "cleanup":
+                with pytest.raises(ApplicationError, match="Stop failed"):
+                    settled.result(WAIT)
+            else:
+                settled.result(WAIT)
+        assert app.snapshot().active is None and app.snapshot().run_id is None
+    finally:
+        release.set()
+        if not session.ready.done():
+            session.ready.set_result(None)
+        session.cleanup_safe = True
+        close(app)
+    with closing(sqlite3.connect(identity.audit.path)) as db:
+        rows = db.execute(
+            "SELECT actor_id, username, target, new_value, outcome, detail "
+            "FROM operations JOIN completions USING(id) WHERE action = 'production.start'"
+        ).fetchall()
+    assert rows == [
+        (
+            actor.account.account_id,
+            actor.account.username,
+            candidate.configuration.recipe_id,
+            "",
+            outcome,
+            detail,
+        )
+    ]
 
 
 def test_production_commit_actor_and_stop_during_close(tmp_path: Path) -> None:

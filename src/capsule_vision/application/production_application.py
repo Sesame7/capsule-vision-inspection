@@ -64,7 +64,7 @@ from .models import (
 )
 from .production_session import SourceRuntimeSession
 from .run_configuration import RunConfiguration, capture_run
-from .session import RuntimeSession
+from .session import RuntimeSession, startup_interrupted
 
 
 class SourceProductionApplication(ProductionApplication):
@@ -283,7 +283,9 @@ class SourceProductionApplication(ProductionApplication):
         """Lifecycle-worker preflight using the factory's validated captured sources."""
         with self._condition:
             if self._stop_requested or self._closing:
-                raise ApplicationStateError("Stopped before source connection")
+                raise ApplicationStateError(
+                    "Stopped before source connection", startup_cancelled=True
+                )
             self._require(ApplicationState.STARTING)
             state = self.connection.snapshot().state
             if state is ConnectionState.CONNECTED:
@@ -305,7 +307,8 @@ class SourceProductionApplication(ProductionApplication):
         with self._condition:
             if self._stop_requested or self._closing:
                 raise ApplicationStateError(
-                    "Stopped before source session construction"
+                    "Stopped before source session construction",
+                    startup_cancelled=True,
                 )
 
     def _settle_startup(self) -> None:
@@ -318,6 +321,15 @@ class SourceProductionApplication(ProductionApplication):
                 )
             self.connection.wait_disconnected()
             self._cancelled_start_connection = False
+
+    def _startup_settlement_error(
+        self, session: RuntimeSession
+    ) -> BaseException | None:
+        error = super()._startup_settlement_error(session)
+        if error is not None or not isinstance(session, SourceRuntimeSession):
+            return error
+        error = session.settled_source_error
+        return None if startup_interrupted(error) else error
 
     def connect_source(self) -> None:
         with self._condition:
@@ -386,7 +398,7 @@ class SourceProductionApplication(ProductionApplication):
         return None
 
     def _start_replay(self, *, single_step: bool) -> Future[None]:
-        with self._admission(Role.OPERATOR, action="production.start") as actor:
+        with self._start_admission() as actor:
             try:
                 self._require_start()
                 basler = self.basler_available

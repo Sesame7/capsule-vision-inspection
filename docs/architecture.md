@@ -283,6 +283,9 @@ and executes the existing command. Successful publication and failed or uncertai
 execution append separate terminal evidence. Repeating the same fact for the same
 operation is idempotent. A crash between the intent and completion leaves the
 operation unresolved. An audit finalization error leaves the business result intact.
+An account mutation rejected as stale at initial admission records System when
+only a superseded revision is available. Work admitted before a session change
+keeps its captured actor and follows the existing transaction admission checks.
 Manual PLC write intent retains the validated request values in order through
 the protocol limits of 997 FINS words and 123 Modbus registers.
 
@@ -325,6 +328,12 @@ synthetic record provenance.
 Authentication (including `session.auto_login`), logout, actual Start/Stop, Batch
 changes, unbatched statistics clearing, saved Recipe selection and important
 security or persistence failures submit observations without waiting.
+Rejected Start observations use the selected Recipe ID when present. An admitted
+Start keeps its captured actor and Recipe until activation, when its success
+records the Run ID and Recipe ID. A pre-activation Stop or Close produces a
+cancelled outcome when the startup owner observes the interruption and cleanup
+settles safely. A startup or cleanup failure still records failure when a stop
+was requested concurrently.
 Unsuccessful manual authentication records the initiating actor, outcome and
 failure classification with an empty target. Local Audit review and customer
 reports show a generic target and safe failure captions for these operations,
@@ -353,8 +362,9 @@ service as well as the tab. Batch-scoped review alternates bounded reads on the
 Audit and History owners without either worker waiting for the other. It includes
 successful Batch selection/end with a matching UUID, metadata edits with their
 recorded immutable unique Batch label, and successful Start or observed Stop with
-an established Run identity. Failed Start targets are not Run evidence. Admission
-denials and unrelated account/configuration actions are not attributed by time.
+an established Run identity. Rejected, failed and cancelled Start observations
+have no Run or Batch association. Admission denials and unrelated
+account/configuration actions are not attributed by time.
 Unbatched review can use a persisted unbatched Run, an explicitly unbatched Cycle
 for that Run, or a successful unbatched-statistics clear. Missing associations stay
 excluded. Metadata targets at the audit truncation limit cannot establish a Batch

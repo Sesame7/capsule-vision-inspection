@@ -134,6 +134,7 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             else None
         )
         self._reporting_overload: RuntimeError | None = None
+        self._source_stop_error: BaseException | None = None
         self.source_done: Future[None] = Future()
         self.source_done.set_running_or_notify_cancel()
         self._inspection_ready: Future[None] = Future()
@@ -304,6 +305,15 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         return joined
 
     @property
+    def settled_source_error(self) -> BaseException | None:
+        """Source evidence read after join for a Start that did not activate."""
+        if self.source_done.done():
+            error = self.source_done.exception()
+            if error is not None:
+                return error
+        return self._source_stop_error
+
+    @property
     def cleanup_safe(self) -> bool:
         return (
             super().cleanup_safe
@@ -406,14 +416,14 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         except BaseException as exc:
             if not self._inspection_ready.done():
                 self._inspection_ready.set_exception(exc)
-            if not (
-                (
-                    self._source_stop.is_set()
-                    or self._application.snapshot().state
-                    in (ApplicationState.STOPPING, ApplicationState.CLOSED)
-                )
-                and isinstance(exc, (ApplicationStateError, CoordinatorStoppedError))
-            ):
+            if (
+                self._source_stop.is_set()
+                or self._application.snapshot().state
+                in (ApplicationState.STOPPING, ApplicationState.CLOSED)
+            ) and isinstance(exc, (ApplicationStateError, CoordinatorStoppedError)):
+                # Preserve startup evidence without changing the source Future.
+                self._source_stop_error = exc
+            else:
                 self.source_done.set_exception(exc)
                 if self.diagnostics:
                     self.diagnostics.record(
@@ -433,7 +443,9 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         finally:
             if not self._inspection_ready.done():
                 self._inspection_ready.set_exception(
-                    ApplicationStateError("Inspection startup stopped")
+                    ApplicationStateError(
+                        "Inspection startup stopped", startup_cancelled=True
+                    )
                 )
             if not self.source_done.done():
                 with self._lock:

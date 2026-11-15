@@ -21,6 +21,7 @@ from capsule_vision.inspection.production import (
 )
 from capsule_vision.runtime import (
     CoordinatedCycleResult,
+    CoordinatorStoppedError,
     InferenceEngine,
     InferenceWorker,
     RuntimeCoordinator,
@@ -29,6 +30,13 @@ from capsule_vision.runtime.early_inspection import EarlyInspectionCoordinator
 
 from .models import ApplicationError, ApplicationStateError, PreparedConfiguration
 from .pipeline import ConfiguredProductionPipeline
+
+
+def startup_interrupted(error: BaseException | None) -> bool:
+    """Recognize a startup owner's explicit observation of a stop."""
+    return isinstance(error, CoordinatorStoppedError) or (
+        isinstance(error, ApplicationStateError) and error.startup_cancelled
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +143,9 @@ class ProductionRuntimeSession:
                     for _ in range(warmup_iterations):
                         if self._stop.is_set():
                             cancelled = True
-                            raise ApplicationStateError("Stopped during warm-up")
+                            raise ApplicationStateError(
+                                "Stopped during warm-up", startup_cancelled=True
+                            )
                         result = engine.infer(image)
                         if result.image_shape != image.shape:
                             raise ValueError("Warm-up result shape mismatch")

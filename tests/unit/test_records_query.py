@@ -216,6 +216,7 @@ def test_unbatched_audit_requires_run_cycle_or_explicit_operation_evidence(
                     ("production.stop", "legacy", "success"),
                     ("production.clear_statistics", "unbatched", "success"),
                     ("production.start", "run", "failed"),
+                    ("production.start", "run", "cancelled"),
                     ("production.stop", "missing", "success"),
                     ("session.logout", "run", "success"),
                     ("production.clear_statistics", "unbatched", "denied"),
@@ -270,6 +271,9 @@ def test_audit_bounded_join_pagination_and_non_associations(
         )
         identity.audit.record(
             AuditOperation("x", "A", "production.start", "actual-run"), "failed"
+        )
+        identity.audit.record(
+            AuditOperation("x", "A", "production.start", "actual-run"), "cancelled"
         )
         identity.audit.record(
             AuditOperation("x", "A", "production.stop", "missing-run"), "success"

@@ -521,7 +521,9 @@ def test_idle_repeated_stop_and_one_lifecycle(start_first: bool) -> None:
     stop(coordinator, engine)
     coordinator.request_stop()
     assert coordinator.join(0)
-    with pytest.raises(CoordinatorStateError):
+    with pytest.raises(
+        CoordinatorStateError if start_first else CoordinatorStoppedError
+    ):
         coordinator.start()
     assert coordinator.snapshot.state is CoordinatorState.STOPPED
 

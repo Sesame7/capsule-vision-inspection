@@ -36,6 +36,7 @@ from capsule_vision.application import (
     ApplicationError,
     ApplicationState,
     ApplicationStateError,
+    ConfigurationIdentity,
     ProductionCounters,
     StartBlocker,
     _basler_sdk,
@@ -44,6 +45,7 @@ from capsule_vision.application import (
 )
 from capsule_vision.application import application as application_module
 from capsule_vision.application import composition as local_production
+from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.basler import (
     AcquisitionMetadata,
     CameraCleanup,
@@ -57,6 +59,7 @@ from capsule_vision.application.basler_connection import (
     SourceConnectionCommands,
 )
 from capsule_vision.application.basler_control import BaslerControlSnapshot
+from capsule_vision.application.batch_review import StartAccount
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity_models import (
     AuthorizationError,
@@ -71,6 +74,7 @@ from capsule_vision.application.image_archive import (
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
+from capsule_vision.application.run_configuration import RunConfiguration
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.communication import FinsUdpEndpoint
 from capsule_vision.communication.reporting import (
@@ -1586,6 +1590,12 @@ def test_stop_or_close_cancels_automatic_connection_and_waits_for_owner(
         assert not passive.armed.is_set() and not engines
         assert app.snapshot().active is None
         assert app.snapshot().counters == ProductionCounters()
+        if ending == "stop":
+            assert app.identity
+            (entry,) = app.identity.audit_page(
+                AuditQuery(action="production.start")
+            ).result(WAIT)
+            assert entry.outcome == "cancelled"
     finally:
         passive.release_prepare.set()
         passive.release_cleanup.set()
@@ -1614,6 +1624,11 @@ def test_canceled_connection_unsafe_cleanup_retains_owner_until_explicit_recover
             stopped.result(WAIT)
         with pytest.raises(ApplicationError):
             started.result(WAIT)
+        assert app.identity
+        (entry,) = app.identity.audit_page(
+            AuditQuery(action="production.start")
+        ).result(WAIT)
+        assert entry.outcome == "failed"
         source = app.source_snapshot()
         assert source.state is ConnectionState.FAULT
         assert source.thread_alive and not source.cleanup_safe
@@ -2164,6 +2179,71 @@ def test_source_loss_during_inspection_stops_session_without_reconnect(
         assert app.join(WAIT)
 
 
+@pytest.mark.parametrize("source_error", [RuntimeError, ApplicationStateError])
+def test_source_fault_before_activation_remains_a_start_failure_during_stop(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    source_error: type[Exception],
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    engine = Engine()
+    engine.release_warm.set()
+    run_entered, release_run, fail_source = Event(), Event(), Event()
+    available = passive.available
+
+    def checked_available(serial: str, timeout_ms: int) -> bool:
+        if fail_source.is_set():
+            raise source_error("Injected source loss before activation")
+        return available(serial, timeout_ms)
+
+    monkeypatch.setattr(passive, "available", checked_available)
+    app = authenticated_startup(data, engine_factory=lambda _: engine).application
+    assert isinstance(app, SourceProductionApplication)
+    try:
+        assert app.history and app.identity
+        start_run = app.history.start_run
+
+        def held_start_run(
+            batch: str | None,
+            run: str,
+            recipe: ConfigurationIdentity,
+            reporting: ReportingSettings | None,
+            account: StartAccount | None = None,
+            *,
+            configuration: RunConfiguration | None = None,
+        ) -> Future[None]:
+            run_entered.set()
+            assert release_run.wait(WAIT)
+            return start_run(
+                batch, run, recipe, reporting, account, configuration=configuration
+            )
+
+        monkeypatch.setattr(app.history, "start_run", held_start_run)
+        started = app.start()
+        assert run_entered.wait(WAIT)
+        fail_source.set()
+        until(lambda: app.source_snapshot().state is ConnectionState.FAULT)
+        stopped = app.stop()
+        release_run.set()
+        with pytest.raises(
+            ApplicationError, match="Startup did not activate candidate"
+        ):
+            started.result(WAIT)
+        stopped.result(WAIT)
+        (entry,) = app.identity.audit_page(
+            AuditQuery(action="production.start")
+        ).result(WAIT)
+        assert (entry.outcome, entry.detail) == ("failed", source_error.__name__)
+        assert app.snapshot().active is None and app.snapshot().run_id is None
+    finally:
+        release_run.set()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
+
+
 @pytest.mark.parametrize("ending", ["stop", "close"])
 def test_stop_or_close_during_native_warmup_settles_source_and_discards_arrivals(
     qapp: QApplication, tmp_path: Path, passive: PassiveBackend, ending: str
@@ -2208,7 +2288,7 @@ def test_stop_or_close_during_native_warmup_settles_source_and_discards_arrivals
     assert all(r.get("run_id") is None for r in rows)
     assert [r["outcome"] for r in rows if r["event"] == "production.start"] == [
         "admitted",
-        "failed",
+        "cancelled",
     ]
 
 

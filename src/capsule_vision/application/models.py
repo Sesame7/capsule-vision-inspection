@@ -33,6 +33,10 @@ class ApplicationError(RuntimeError):
 class ApplicationStateError(ApplicationError):
     """Command is invalid in the current application state."""
 
+    def __init__(self, *args: object, startup_cancelled: bool = False) -> None:
+        super().__init__(*args)
+        self.startup_cancelled = startup_cancelled
+
 
 class ApplicationCapacityError(ApplicationError):
     """Bounded outstanding-cycle capacity reached."""

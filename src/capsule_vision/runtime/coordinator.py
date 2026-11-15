@@ -202,6 +202,10 @@ class RuntimeCoordinator:
     def start(self) -> Future[None]:
         error: BaseException | None = None
         with self._condition:
+            if self._state is CoordinatorState.STOPPED and not self._owner_started:
+                raise CoordinatorStoppedError(
+                    "Coordinator has one lifecycle; cannot restart"
+                )
             if self._state is not CoordinatorState.NEW:
                 raise CoordinatorStateError(
                     "Coordinator has one lifecycle; cannot restart"

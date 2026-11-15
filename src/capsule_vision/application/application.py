@@ -66,7 +66,12 @@ from .process_application import apply_process, process_target
 from .recipe_dependencies import RecipePreparationRequired
 from .report_scope import DefectScope, HistoryQuery, ReportRequest
 from .run_configuration import RunConfiguration, capture_run
-from .session import ProductionCycle, RuntimeSession, lifecycle_error
+from .session import (
+    ProductionCycle,
+    RuntimeSession,
+    lifecycle_error,
+    startup_interrupted,
+)
 from .vision_dependencies import VisionPreparationRequired
 
 _START_ERRORS = {
@@ -274,7 +279,7 @@ class ProductionApplication:
         revision: int | None = None,
         *,
         action: str = "security.admission",
-        target: str = "",
+        target: str | None = None,
     ) -> AbstractContextManager[SessionSnapshot | None]:
         if self._closing:
             raise ApplicationStateError(f"Command unavailable in {self._state.name}")
@@ -294,7 +299,7 @@ class ProductionApplication:
         with (
             self._condition,
             self._admission(
-                Role.OPERATOR, action="production.recipe", target=recipe_id
+                Role.OPERATOR, action="production.recipe", target=recipe_id or None
             ) as actor,
         ):
             self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
@@ -1011,10 +1016,7 @@ class ProductionApplication:
             )
 
     def start(self) -> Future[None]:
-        with (
-            self._condition,
-            self._admission(Role.OPERATOR, action="production.start") as actor,
-        ):
+        with self._condition, self._start_admission() as actor:
             try:
                 self._require_start()
                 return self._admit_start(actor)
@@ -1022,22 +1024,25 @@ class ProductionApplication:
                 self._rejected_start(actor, exc)
                 raise
 
+    def _start_admission(self) -> AbstractContextManager[SessionSnapshot | None]:
+        return self._admission(
+            Role.OPERATOR,
+            action="production.start",
+            target=self._selected_recipe.recipe_id if self._selected_recipe else "",
+        )
+
     def _rejected_start(self, actor: SessionSnapshot | None, error: Exception) -> None:
-        recipe = self._candidate or self._active
+        recipe_id = self._selected_recipe.recipe_id if self._selected_recipe else None
         if self.diagnostics:
             self.diagnostics.record(
                 "production.start",
                 outcome="rejected",
-                recipe_id=recipe.configuration.recipe_id if recipe else None,
+                recipe_id=recipe_id,
                 error_type=type(error).__name__,
             )
         if actor and self.identity:
             self.identity.audit.record(
-                AuditOperation.by(
-                    actor,
-                    "production.start",
-                    recipe.configuration.recipe_id if recipe else "",
-                ),
+                AuditOperation.by(actor, "production.start", recipe_id or ""),
                 error_outcome(error),
                 type(error).__name__,
             )
@@ -1509,6 +1514,12 @@ class ProductionApplication:
     def _settle_startup(self) -> None:
         """Settle canceled pre-session work on the lifecycle owner before Stop completes."""
 
+    def _startup_settlement_error(
+        self, session: RuntimeSession
+    ) -> BaseException | None:
+        error = session.failure
+        return None if startup_interrupted(error) else error
+
     def _records_unbatched_runs(self) -> bool:
         return False
 
@@ -1572,6 +1583,8 @@ class ProductionApplication:
                 self._prepare_model(preparation)
                 continue
             startup_error: BaseException | None = None
+            startup_stop_requested = False
+            startup_cancelled = False
             if starting:
                 try:
                     assert prepared is not None
@@ -1623,7 +1636,9 @@ class ProductionApplication:
                     )
                     if stopped:
                         session.request_stop()
-                        raise ApplicationStateError("Stopped before runtime startup")
+                        raise ApplicationStateError(
+                            "Stopped before runtime startup", startup_cancelled=True
+                        )
                     session.start().result()
                     run_id = uuid4().hex
                     durable_run = None
@@ -1654,7 +1669,12 @@ class ProductionApplication:
                             durable_run = run_id
                     with self._condition:
                         self._durable_run = durable_run
-                        if self._stop_requested or session.finished.done():
+                        if self._stop_requested:
+                            raise ApplicationStateError(
+                                "Startup stopped before activation",
+                                startup_cancelled=True,
+                            )
+                        if session.finished.done():
                             raise ApplicationStateError(
                                 "Startup stopped before activation"
                             )
@@ -1686,14 +1706,12 @@ class ProductionApplication:
                     startup.set_result(None)
                 except BaseException as exc:
                     startup_error = exc
-                    if self.run_diagnostics:
-                        self.run_diagnostics.record(
-                            "production.start",
-                            outcome="failed",
-                            error_type=type(exc).__name__,
-                            stop_requested=self._stop_requested,
-                        )
                     with self._condition:
+                        startup_stop_requested = self._stop_requested
+                        startup_cancelled = (
+                            self._state is ApplicationState.STOPPING
+                            and startup_interrupted(exc)
+                        )
                         if isinstance(
                             exc, (VisionPreparationRequired, RecipePreparationRequired)
                         ):
@@ -1706,6 +1724,8 @@ class ProductionApplication:
                 self._condition.wait_for(lambda: self._stop_requested or self._closing)
                 session = self._session
             cleanup_error: BaseException | None = None
+            # Keep the Future's startup cause even if settling changes the Audit outcome.
+            startup_audit_error = None if startup_cancelled else startup_error
             resource_error = False
             resources_checked = False
             session_settled = session is None
@@ -1731,10 +1751,12 @@ class ProductionApplication:
                         )
                     # Startup errors can be recoverable. Failures after activation
                     # include terminal worker/engine-close faults and are not ignored.
-                    if startup_error is None and session.failure is not None:
-                        cleanup_error = lifecycle_error(
-                            "Runtime failed", session.failure
-                        )
+                    if startup_cancelled:
+                        startup_audit_error = self._startup_settlement_error(session)
+                    elif startup_error is None:
+                        failure = session.failure
+                        if failure is not None:
+                            cleanup_error = lifecycle_error("Runtime failed", failure)
                     session_settled = True
             except BaseException as exc:
                 cleanup_error = exc
@@ -1761,6 +1783,8 @@ class ProductionApplication:
                                 faulty or self.history.run_uncertain(run)
                             )
                     except Exception as exc:
+                        if startup_cancelled and startup_audit_error is None:
+                            startup_audit_error = exc
                         with self._condition:
                             self._batch_uncertain = True
                             self._issue = ApplicationIssue(
@@ -1798,7 +1822,23 @@ class ProductionApplication:
                         else ApplicationState.UNCONFIGURED
                     )
                 self._stop_requested = False
+                if startup_audit_error is None:
+                    startup_audit_error = cleanup_error
+                start_outcome = (
+                    "cancelled"
+                    if startup_cancelled and startup_audit_error is None
+                    else "failed"
+                )
                 if self.run_diagnostics:
+                    if startup_error is not None:
+                        self.run_diagnostics.record(
+                            "production.start",
+                            outcome=start_outcome,
+                            error_type=type(startup_audit_error).__name__
+                            if startup_audit_error is not None
+                            else None,
+                            stop_requested=startup_stop_requested,
+                        )
                     self.run_diagnostics.record(
                         "production.stop",
                         outcome="failed" if cleanup_error else "settled",
@@ -1830,11 +1870,15 @@ class ProductionApplication:
                     )
             if startup is not None and not startup.done():
                 if start_operation and self.identity:
-                    cause = startup_error or cleanup_error
                     self.identity.audit.record(
                         start_operation,
-                        error_outcome(cause) if cause else "cancelled",
-                        type(cause).__name__ if cause else "Stopped",
+                        error_outcome(startup_audit_error)
+                        if startup_audit_error is not None
+                        and not isinstance(startup_audit_error, CancelledError)
+                        else start_outcome,
+                        type(startup_audit_error).__name__
+                        if startup_audit_error is not None
+                        else "",
                     )
                 startup.set_exception(
                     lifecycle_error(

@@ -364,9 +364,14 @@ class BaslerConnection:
                 with self._lock:
                     changes_binding = command.attach or self._binding is command.binding
                     if command.attach:
-                        if self._binding is not None or command.binding.stop.is_set():
+                        if self._binding is not None:
                             raise ApplicationStateError(
                                 "Inspection binding is unavailable"
+                            )
+                        if command.binding.stop.is_set():
+                            raise ApplicationStateError(
+                                "Inspection binding is unavailable",
+                                startup_cancelled=True,
                             )
                         if not clean():
                             raise ApplicationStateError(
@@ -441,7 +446,9 @@ class BaslerConnection:
         def armed(_event: ContinuousArmedAcquisition) -> None:
             with self._lock:
                 if self._stop.is_set():
-                    raise ApplicationStateError("Connection stopped before ARMED")
+                    raise ApplicationStateError(
+                        "Connection stopped before ARMED", startup_cancelled=True
+                    )
                 self._state = ConnectionState.CONNECTED
             if source.diagnostics:
                 source.diagnostics.record(
@@ -489,7 +496,10 @@ class BaslerConnection:
                 binding.failed(error)
             if not self._ready.done():
                 self._ready.set_exception(
-                    error or ApplicationStateError("Connection cancelled")
+                    error
+                    or ApplicationStateError(
+                        "Connection cancelled", startup_cancelled=True
+                    )
                 )
             while True:
                 try:
