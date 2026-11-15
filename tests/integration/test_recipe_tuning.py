@@ -375,10 +375,10 @@ def test_blank_preview_uses_only_authoritative_connected_dimensions(
                 False,
             )
 
-        def connect_source(self) -> None:
+        def connect_source(self, *, revision: int | None = None) -> None:
             pytest.fail("Preview must not connect")
 
-        def disconnect_source(self) -> None:
+        def disconnect_source(self, *, revision: int | None = None) -> None:
             pytest.fail("Preview must not disconnect")
 
         def capture_image(

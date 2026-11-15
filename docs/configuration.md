@@ -372,6 +372,12 @@ reporting requires Engineer or higher. Guest can view existing observations. All
 roles can Stop and Close. Identity changes leave admitted Runs and commands
 running and invalidate pending interactive Recipe selections.
 
+Vision Connect and Disconnect capture the initiating session revision at
+dispatch. The Application checks that revision and Operator access before
+admitting the source operation. Queued requests become stale when the revision
+changes, including when switching between users with the same role. An admitted
+command settles through the existing source owner after a session change.
+
 Engineer or Administrator can save or delete Recipes, save MachineLayout and
 CameraSources, inspect and publish Model imports, rename or delete Models, and
 prepare their caches. Reading saved definitions and viewing existing status is

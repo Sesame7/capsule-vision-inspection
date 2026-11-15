@@ -1036,6 +1036,189 @@ def test_cancelled_capture_observers_can_read_identity_during_admitted_command(
         assert app.join(WAIT)
 
 
+@pytest.mark.parametrize("connect", [True, False], ids=["connect", "disconnect"])
+@pytest.mark.parametrize("change", ["same-role", "logout", "revoked"])
+def test_queued_vision_connection_command_rejects_stale_session(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    connect: bool,
+    change: str,
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    startup = authenticated_startup(data)
+    app, owner = startup.application, startup.application.identity
+    assert isinstance(app, SourceProductionApplication) and owner is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    queued, release = Event(), Event()
+    command = app.connect_source if connect else app.disconnect_source
+
+    def wait_before_admission(*, revision: int | None = None) -> None:
+        queued.set()
+        assert release.wait(WAIT)
+        command(revision=revision)
+
+    try:
+        original = provision_account(owner, "Original", Role.OPERATOR, TEST_PASSWORD)
+        successor = (
+            None
+            if change == "logout"
+            else provision_account(owner, "Successor", Role.OPERATOR, TEST_PASSWORD)
+        )
+        initiating = owner.login(original.username, TEST_PASSWORD).result(WAIT)
+        if not connect:
+            app.connect_source()
+        before = app.source_snapshot()
+        native_calls, cleanup_calls = tuple(passive.owner_ids), passive.cleanup_calls
+        monkeypatch.setattr(
+            app,
+            "connect_source" if connect else "disconnect_source",
+            wait_before_admission,
+        )
+        window.show()
+        window.identity_controls.refresh()
+        window.navigate(4)
+        vision = window.vision_workspace
+        assert vision is not None
+        button = vision.connect_source if connect else vision.disconnect_source
+        until(lambda: not window.editing.busy)
+        assert button.isEnabled()
+        button.click()
+        assert queued.wait(WAIT)
+        assert window.editing.busy
+
+        if successor is None:
+            current = owner.logout()
+            assert current.role is Role.GUEST
+        else:
+            if change == "revoked":
+                owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+                disabled = owner.set_enabled(original.account_id, False).result(WAIT)
+                assert not disabled.enabled
+            current = owner.login(successor.username, TEST_PASSWORD).result(WAIT)
+            assert current.role is initiating.role is Role.OPERATOR
+            assert (
+                current.account and current.account.account_id == successor.account_id
+            )
+        assert current.revision != initiating.revision
+        window.identity_controls.refresh()
+        release.set()
+        until(lambda: not window.editing.busy)
+
+        assert app.source_snapshot() == before
+        assert tuple(passive.owner_ids) == native_calls
+        assert passive.cleanup_calls == cleanup_calls
+        assert vision.feedback and vision.feedback[0] == "identity_stale"
+    finally:
+        release.set()
+        close_window(window)
+        delivery.detach()
+    assert app.source_snapshot().state is ConnectionState.DISCONNECTED
+    assert not app.source_snapshot().thread_alive
+    assert passive.cleanup_calls == (0 if connect else 1)
+
+
+@pytest.mark.parametrize("connect", [True, False], ids=["connect", "disconnect"])
+def test_admitted_vision_connection_command_finishes_after_same_role_switch(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend, connect: bool
+) -> None:
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    startup = authenticated_startup(data)
+    app, owner = startup.application, startup.application.identity
+    assert isinstance(app, SourceProductionApplication) and owner is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    entered = passive.prepare_entered if connect else passive.cleanup_entered
+    release = passive.release_prepare if connect else passive.release_cleanup
+    try:
+        original = provision_account(owner, "Original", Role.OPERATOR, TEST_PASSWORD)
+        successor = provision_account(owner, "Successor", Role.OPERATOR, TEST_PASSWORD)
+        initiating = owner.login(original.username, TEST_PASSWORD).result(WAIT)
+        if not connect:
+            app.connect_source()
+        release.clear()
+        window.show()
+        window.identity_controls.refresh()
+        window.navigate(4)
+        vision = window.vision_workspace
+        assert vision is not None
+        button = vision.connect_source if connect else vision.disconnect_source
+        until(lambda: not window.editing.busy)
+        assert button.isEnabled()
+        button.click()
+        assert entered.wait(WAIT)
+        pending = (
+            ConnectionState.CONNECTING if connect else ConnectionState.DISCONNECTING
+        )
+        assert app.source_snapshot().state is pending
+
+        current = owner.login(successor.username, TEST_PASSWORD).result(WAIT)
+        assert current.role is initiating.role is Role.OPERATOR
+        assert current.account and current.account.account_id == successor.account_id
+        assert current.revision != initiating.revision
+        assert app.source_snapshot().state is pending
+        window.identity_controls.refresh()
+        release.set()
+        until(lambda: not window.editing.busy)
+
+        finished = app.source_snapshot()
+        target = ConnectionState.CONNECTED if connect else ConnectionState.DISCONNECTED
+        assert finished.state is target
+        assert finished.thread_alive is connect
+        assert passive.cleanup_calls == (0 if connect else 1)
+        assert vision.feedback is None
+        owner.logout()
+    finally:
+        release.set()
+        close_window(window)
+        delivery.detach()
+    assert app.source_snapshot().state is ConnectionState.DISCONNECTED
+    assert not app.source_snapshot().thread_alive and passive.closed
+    assert passive.cleanup_calls == 1
+    assert len(set(passive.owner_ids)) == 1
+
+
+def test_identity_free_engineering_vision_can_connect_and_disconnect(
+    qapp: QApplication, tmp_path: Path, passive: PassiveBackend
+) -> None:
+    from capsule_vision.ui.main_window import MainWindow
+
+    data = saved_data(tmp_path)
+    save_basler(data.sources)
+    composition = local_production.compose(
+        data.models / "general" / "model.json",
+        data.machine,
+        data.recipes / "local.json",
+        sources_file=data.sources,
+    )
+    app = composition.application
+    window = MainWindow(
+        QtProductionBridge(app, composition.store), recipe_editor=composition.editor
+    )
+    try:
+        assert app.identity is None and app.session_revision is None
+        window.show()
+        window.navigate(4)
+        vision = window.vision_workspace
+        assert vision is not None
+        until(lambda: not window.editing.busy)
+        assert vision.connect_source.isEnabled()
+        vision.connect_source.click()
+        until(lambda: not window.editing.busy)
+        assert app.source_snapshot().state is ConnectionState.CONNECTED
+        assert passive.armed.is_set() and vision.disconnect_source.isEnabled()
+        vision.disconnect_source.click()
+        until(lambda: not window.editing.busy)
+        assert app.source_snapshot().state is ConnectionState.DISCONNECTED
+        assert not app.source_snapshot().thread_alive and passive.closed
+    finally:
+        close_window(window)
+
+
 def test_operator_can_use_connected_source_while_engineering_settings_are_read_only(
     qapp: QApplication, tmp_path: Path, passive: PassiveBackend
 ) -> None:

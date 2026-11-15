@@ -331,9 +331,9 @@ class SourceProductionApplication(ProductionApplication):
         error = session.settled_source_error
         return None if startup_interrupted(error) else error
 
-    def connect_source(self) -> None:
+    def connect_source(self, *, revision: int | None = None) -> None:
         with self._condition:
-            with self._admission(Role.OPERATOR):
+            with self._admission(Role.OPERATOR, revision):
                 self._require(ApplicationState.READY, ApplicationState.UNCONFIGURED)
             draft = self._source_draft
             if draft is None or draft.dirty or draft.saved.mode != "basler":
@@ -354,9 +354,9 @@ class SourceProductionApplication(ProductionApplication):
             self._source_cameras = cameras
         self.connection.wait_connected()
 
-    def disconnect_source(self) -> None:
+    def disconnect_source(self, *, revision: int | None = None) -> None:
         with self._condition:
-            with self._admission(Role.OPERATOR):
+            with self._admission(Role.OPERATOR, revision):
                 self._require(
                     ApplicationState.READY,
                     ApplicationState.UNCONFIGURED,

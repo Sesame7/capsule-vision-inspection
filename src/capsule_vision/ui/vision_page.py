@@ -827,9 +827,12 @@ class VisionPage(QWidget):
         )
 
     def connection_operation(self, *, connect: bool) -> None:
+        connection = self.connection
+        identity = self.editing.bridge.application.identity
+        actor = identity.snapshot() if identity is not None else None
         if (
-            self.connection is None
-            or not permits(self.editing.bridge.application, Role.OPERATOR)
+            connection is None
+            or (actor is not None and not actor.permits(Role.OPERATOR))
             or not self._allowed()
             or self._preparing
         ):
@@ -849,12 +852,9 @@ class VisionPage(QWidget):
                 self._error = ""
             self.refresh()
 
-        self._run_io(
-            self.connection.connect_source
-            if connect
-            else self.connection.disconnect_source,
-            completed,
-        )
+        command = connection.connect_source if connect else connection.disconnect_source
+        revision = actor.revision if actor is not None else None
+        self._run_io(lambda: command(revision=revision), completed)
 
     def _camera_selected(self, _index: int, checked: bool) -> None:
         if checked:
