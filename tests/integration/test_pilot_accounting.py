@@ -92,6 +92,9 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
 
         try:
             app.set_reporting_selection(ReportingSelection(True, settings))
+            initial = app.snapshot()
+            assert initial.reporting_mode is ReportingMode.PER_CYCLE
+            assert not initial.pilot_counting
             app.connect_source()
             app.start().result(3)
             expose(3, pilot=True)
@@ -119,7 +122,12 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             assert app.snapshot().pilot_counters == counts
             app.stop().result(3)
             observe(events[0])  # Stopped owner cannot publish again.
-            assert app.snapshot().pilot_counters == counts
+            stopped = app.snapshot()
+            assert (
+                stopped.pilot_counting
+                and stopped.reporting_mode is ReportingMode.FOUR_CYCLE
+            )
+            assert stopped.pilot_counters == counts
             assert app.history is not None
             records = app.history.query().result(3).records
             assert len(records) == 7 and all(
@@ -150,13 +158,16 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             fail_warmup = True
             with pytest.raises(ApplicationError):
                 app.start().result(3)
+            failed = app.snapshot()
             assert (
-                app.snapshot().pilot_counting
-                and app.snapshot().pilot_counters == counts
+                failed.pilot_counting
+                and failed.reporting_mode is ReportingMode.FOUR_CYCLE
+                and failed.pilot_counters == counts
             )
             fail_warmup = False
             app.start().result(3)
             until(lambda: not app.snapshot().pilot_counting)
+            assert app.snapshot().reporting_mode is ReportingMode.PER_CYCLE
             expose(1, pilot=False)
             observe(events[0])
             assert app.snapshot().pilot_counters == counts
@@ -185,10 +196,13 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             assert app.snapshot().counters.cycles_completed == 12
 
             app.start_batch("New operator batch").result(5)
-            assert app.snapshot().pilot_counters == PilotCounters()
-            assert app.snapshot().counters == ProductionCounters()
-            assert app.snapshot().group_progress is None
-            assert app.snapshot().batch_duration_ms is None
+            empty_batch = app.snapshot()
+            assert empty_batch.pilot_counting
+            assert empty_batch.reporting_mode is ReportingMode.FOUR_CYCLE
+            assert empty_batch.pilot_counters == PilotCounters()
+            assert empty_batch.counters == ProductionCounters()
+            assert empty_batch.group_progress is None
+            assert empty_batch.batch_duration_ms is None
             assert all(
                 matching_camera(frame, app.snapshot()) is None
                 for frame in startup.frames.snapshot().frames
@@ -203,6 +217,14 @@ def test_retention_reset_stale_completion_and_separate_mode_units(
             assert app.snapshot().counters.cycles_completed == 1
             assert app.snapshot().pilot_counters == PilotCounters()
             app.stop().result(3)
+            assert app.snapshot().reporting_mode is ReportingMode.PER_CYCLE
+            app.start_batch(label).result(5)
+            resumed = app.snapshot()
+            assert (
+                resumed.pilot_counting
+                and resumed.reporting_mode is ReportingMode.FOUR_CYCLE
+            )
+            assert resumed.pilot_counters.batches_completed == 2
         finally:
             close(startup)
 

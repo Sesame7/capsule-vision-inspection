@@ -159,7 +159,6 @@ class ProductionApplication:
         self._restoring = history is not None
         self._batch_uncertain = self._detail_expired = False
         self._pilot_counters = PilotCounters()
-        self._pilot_counting = False
         self._counting_mode = ReportingMode.PER_CYCLE
         self._batch_duration_ms: float | None = None
         self._preparation_factory = preparation_factory
@@ -438,7 +437,7 @@ class ProductionApplication:
                 self._candidate,
                 self._candidate_requires_preparation,
                 pilot_counters=self._pilot_counters,
-                pilot_counting=self._pilot_counting,
+                pilot_counting=self._counting_mode.group_size is not None,
                 reporting_mode=self._counting_mode,
                 batch_duration_ms=self._batch_duration_ms,
                 batch_uuid=self._batch_segment if self._batch is not None else None,
@@ -632,7 +631,6 @@ class ProductionApplication:
         self._pilot_counters = selection.groups if selection else PilotCounters()
         if selection and selection.reporting_mode is not None:
             self._counting_mode = selection.reporting_mode
-            self._pilot_counting = self._counting_mode.group_size is not None
         self._batch_duration_ms = selection.duration_ms if selection else None
         self._batch_uncertain = selection.uncertain if selection else False
         self._detail_expired = selection.detail_expired if selection else False

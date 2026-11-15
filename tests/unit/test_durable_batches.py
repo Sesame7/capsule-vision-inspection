@@ -152,6 +152,7 @@ def test_group_membership_dedup_and_expiry_are_independent_of_summaries(
         assert db.execute("SELECT count(*) FROM group_members").fetchone() == (4,)
     now += 30 * 86400 + 1
     history = ProductionHistory(path, clock=lambda: now)
+    app = ProductionApplication(lambda _p, _g: FakeSession(), history=history)
     try:
         restored = history.initial_selection.result(WAIT)
         assert restored and restored.detail_expired and not restored.uncertain
@@ -160,12 +161,19 @@ def test_group_membership_dedup_and_expiry_are_independent_of_summaries(
             and restored.groups == PilotCounters().completed(fact)
         )
         assert not history.query().result(WAIT).records
+        snapshot = app.snapshot()
+        assert snapshot.batch_uuid == restored.uuid
+        assert snapshot.reporting_mode is ReportingMode.FOUR_CYCLE
+        assert snapshot.pilot_counting and snapshot.four_cycle_display
+        assert (
+            snapshot.counters == expected and snapshot.pilot_counters == restored.groups
+        )
         # A late duplicate from a closed Run cannot rebuild expired details or count again.
         history.offer_group("r1", fact)
         history.offer(context, mixed_result(11))
         assert history.select_batch("Batch").result(WAIT) == restored
     finally:
-        finish(history)
+        close(app)
     with closing(sqlite3.connect(path)) as db:
         for table in ("cycles", "plc_groups", "group_members", "open_run_facts"):
             assert db.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,)

@@ -1508,17 +1508,19 @@ writes and ACK. Unavailable timing is `--`; per-Cycle timing remains available i
 camera diagnostics. Qt and Web use the same group definitions. Qt captions follow
 the shared localization coverage and its explicit translation-review fallbacks.
 
-The last successfully activated session determines the displayed counting unit,
-including after Stop; editing future reporting settings or a failed Start cannot
-relabel retained facts. A successful per-cycle/reporting-disabled/Folder Start uses
-the original occurrence counters. Both cumulative stores survive Stop/Start and
-Recipe changes and remain separate across mode changes. Selecting a Batch loads
-its summaries and last eligible group duration and clears current result overlays
-and group progress. Retained pixels do not carry the cleared judgments.
+The effective mode defaults to per-cycle. A successful Start uses the admitted
+reporting mode, with occurrence counting for per-cycle, reporting-disabled and
+Folder sessions. Stop, a failed Start and edits to future reporting settings
+retain the effective mode. Selecting or restoring a Batch adopts its recorded
+mode when available and retains the current mode otherwise. Both cumulative stores
+survive Stop/Start and Recipe changes and remain separate across mode changes.
+Selecting a Batch loads its summaries and last eligible group duration and clears
+current result overlays and group progress. Retained pixels do not carry the
+cleared judgments.
 Confirmed unbatched clearing resets both counter sets, recent result indications
-and group duration in memory. It preserves the last successful Start's counting
-mode and any persistence warning. It appends a routine Audit Trail action when
-available and leaves historical records and PLC registers intact.
+and group duration in memory. It preserves the effective counting mode and any
+persistence warning. It appends a routine Audit Trail action when available and
+leaves historical records and PLC registers intact.
 
 The History Cycle table shows Time, `#`, Group, Batch, Recipe and Result. Group
 shows the first CycleId and the Cycle's stored slot (for example, `2265 · 2/4`

@@ -462,19 +462,14 @@ class SourceProductionApplication(ProductionApplication):
                 self._session_reporting = (
                     selection.settings if selection.enabled else None
                 )
-                pilot = (
-                    selection.enabled
-                    and selection.settings.mode is not ReportingMode.PER_CYCLE
-                )
 
             def activated(future: Future[None]) -> None:
                 if future.exception() is None:
                     with self._condition:
                         if generation == self._generation:
-                            self._pilot_counting = pilot
                             self._counting_mode = (
                                 selection.settings.mode
-                                if pilot
+                                if selection.enabled
                                 else ReportingMode.PER_CYCLE
                             )
 
