@@ -83,6 +83,7 @@ from .permissions import failure_key, permits
 from .production_bridge import QtProductionBridge
 from .production_presentation import (
     Indicator,
+    StartInteractionBlocker,
     controls,
     grid_columns,
     production_actions,
@@ -177,7 +178,7 @@ class MainWindow(QMainWindow):
         configuration_notices: tuple[tuple[str, str], ...] = (),
     ) -> None:
         super().__init__()
-        snapshot = bridge.application.snapshot()
+        snapshot = bridge.snapshot
         prepared = (
             snapshot.active_prepared
             if snapshot.state is ApplicationState.RUNNING
@@ -204,6 +205,7 @@ class MainWindow(QMainWindow):
         self._reporting_issue: tuple[str, str] | None = None
         self._web_issue: tuple[str, str] | None = None
         self._operation_presentation: tuple[object, ...] | None = None
+        self._displayed_actions: dict[str, str | None] = {}
         self.configuration_issue = configuration_issue
         self.configuration_messages = configuration_messages
         self._configuration_notices = configuration_notices
@@ -905,16 +907,22 @@ class MainWindow(QMainWindow):
         key = ("operation", "pause", "stop", "secondary")[index]
         if self._closing or not self.buttons[key].isEnabled():
             return
-        action = self._actions()[key]
+        action = self._displayed_actions.get(key)
         current = self.bridge.application.snapshot()
         if (
             action != self._current_actions(current)[key]
             or current.generation != self.snapshot.generation
-            or (action == "start" and self._start_hint(current) is not None)
+            or (
+                action == "start"
+                and (
+                    current.start_blocker is not None
+                    or self._start_interaction_blocker() is not None
+                )
+            )
         ):
             # Never reinterpret a stale displayed action as a new Start/session.
             self.bridge.refresh()
-            self._snapshot_changed(current)
+            self._render_operations()
             return
         if action == "start":
             self.bridge.start()
@@ -949,22 +957,16 @@ class MainWindow(QMainWindow):
             else None,
         )
 
-    def _start_hint(self, snapshot: ProductionApplicationSnapshot) -> str | None:
+    def _start_interaction_blocker(self) -> StartInteractionBlocker | None:
         if self._closing or self.editing.closing:
-            return "state_closing"
-        if (
-            hint := start_hint(snapshot, self.production_recipes.setup_guidance_key)
-        ) is not None:
-            return hint
-        if snapshot.state is not ApplicationState.READY:
-            return None
+            return StartInteractionBlocker.CLOSING
         session = self.editing.session
         if session is not None and (
             session.machine_editor.dirty
             or (session.camera_sources is not None and session.camera_sources.dirty)
         ):
-            return "start_vision_dirty"
-        return "identity_working" if self.editing.busy else None
+            return StartInteractionBlocker.VISION_DRAFT
+        return StartInteractionBlocker.EDITING if self.editing.busy else None
 
     def _render_operations(self) -> None:
         actions = self._actions()
@@ -977,27 +979,35 @@ class MainWindow(QMainWindow):
         app = self.bridge.application
         basler = isinstance(app, SourceProductionApplication) and app.basler_available
         operator = permits(app, Role.OPERATOR)
-        guidance = self._start_hint(self.snapshot)
+        interaction = self._start_interaction_blocker()
+        can_start = controls(self.snapshot).start and interaction is None
+        guidance = start_hint(
+            self.snapshot, self.production_recipes.setup_guidance_key, interaction
+        )
         identity = (
             basler,
             operator,
-            tuple(actions.items()),
             middle_step,
             self.language,
             self.theme,
             self._closing,
+            can_start,
             guidance,
             tuple(self.buttons[key].font().key() for key in actions),
         )
-        if identity == self._operation_presentation:
+        if (
+            identity == self._operation_presentation
+            and actions == self._displayed_actions
+        ):
             return
         self._operation_presentation = identity
+        self._displayed_actions = actions
         self.buttons["pause"].setVisible(not basler)
         for key, action in actions.items():
             button = self.buttons[key]
             enabled = action is not None and not self._closing
             if action == "start":
-                enabled = enabled and guidance is None
+                enabled = enabled and can_start
             permitted = operator or action in (None, "start", "stop")
             button.setEnabled(bool(enabled and permitted))
             label = text(
@@ -1543,7 +1553,13 @@ class MainWindow(QMainWindow):
             and snapshot.state
             in (ApplicationState.READY, ApplicationState.UNCONFIGURED)
             and not (warning or fault or self._closing)
-            and (hint := self._start_hint(snapshot))
+            and (
+                hint := start_hint(
+                    snapshot,
+                    self.production_recipes.setup_guidance_key,
+                    self._start_interaction_blocker(),
+                )
+            )
             not in (None, "permission_operator")
         ):
             message = text(hint, language)

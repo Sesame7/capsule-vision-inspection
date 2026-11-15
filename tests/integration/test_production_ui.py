@@ -29,6 +29,7 @@ from capsule_vision.application import (
     ConfigurationIdentity,
     ProductionApplicationSnapshot,
     ProductionCounters,
+    StartBlocker,
 )
 from capsule_vision.application.models import SelectedRecipe
 from capsule_vision.application.source_control import (
@@ -693,26 +694,30 @@ def test_demo_uses_real_application_runtime_and_exits(
 
 
 @pytest.mark.parametrize(
-    "state, action, enabled",
+    "state, blocker, action, enabled",
     [
-        (ApplicationState.UNCONFIGURED, "start", False),
-        (ApplicationState.READY, "start", True),
-        (ApplicationState.STARTING, "stop", True),
-        (ApplicationState.RUNNING, "stop", True),
-        (ApplicationState.STOPPING, "STOPPING", False),
-        (ApplicationState.FAULT, "reset", True),
-        (ApplicationState.CLOSED, "CLOSED", False),
+        (ApplicationState.UNCONFIGURED, StartBlocker.SETUP, "start", False),
+        (ApplicationState.READY, None, "start", True),
+        (ApplicationState.READY, StartBlocker.RECIPE_STALE, "start", False),
+        (ApplicationState.STARTING, StartBlocker.LIFECYCLE, "stop", True),
+        (ApplicationState.RUNNING, StartBlocker.LIFECYCLE, "stop", True),
+        (ApplicationState.STOPPING, StartBlocker.LIFECYCLE, "STOPPING", False),
+        (ApplicationState.FAULT, StartBlocker.LIFECYCLE, "reset", True),
+        (ApplicationState.CLOSED, StartBlocker.LIFECYCLE, "CLOSED", False),
     ],
 )
 def test_fixed_player_controls_follow_application_state(
     screen: tuple[MainWindow, FakeSession],
     state: ApplicationState,
+    blocker: StartBlocker | None,
     action: str,
     enabled: bool,
 ) -> None:
     window, _ = screen
     window.bridge.snapshot_changed.emit(
-        replace(window.snapshot, state=state, runtime_owned=False)
+        replace(
+            window.snapshot, state=state, runtime_owned=False, start_blocker=blocker
+        )
     )
     target = (
         "secondary"
@@ -755,19 +760,96 @@ def test_fixed_player_controls_follow_application_state(
 )
 def test_stale_operation_does_not_turn_stop_or_reset_into_start(
     screen: tuple[MainWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
     displayed_state: ApplicationState,
 ) -> None:
     window, session = screen
-    # Backend is already READY, but the last displayed operation is Stop/Reset.
-    window.bridge.snapshot_changed.emit(
-        replace(window.snapshot, state=displayed_state, runtime_owned=False)
+    bridge = window.bridge
+    ready = bridge.application.snapshot()
+    displayed = replace(
+        ready,
+        state=displayed_state,
+        runtime_owned=False,
+        start_blocker=StartBlocker.LIFECYCLE,
     )
-    window.buttons[
+    with monkeypatch.context() as sampled:
+        sampled.setattr(bridge.application, "snapshot", lambda: displayed)
+        bridge.refresh()
+    # The next observation is READY while the displayed button still offers Stop/Reset.
+    button = window.buttons[
         "stop" if displayed_state is ApplicationState.RUNNING else "secondary"
-    ].click()
-    assert window.bridge.application.snapshot().state is ApplicationState.READY
+    ]
+    assert button.isEnabled()
+    button.click()
+    assert bridge.application.snapshot() == window.snapshot == ready
     assert not session.start_entered.is_set()
-    assert window.buttons["operation"].text() == text("replay_start", window.language)
+    assert window.buttons["operation"].isEnabled()
+
+
+@pytest.mark.parametrize(
+    "generation_delta, blocker",
+    [(0, StartBlocker.PROCESS_APPLYING), (1, None)],
+    ids=["eligibility", "generation"],
+)
+def test_rejected_start_keeps_newer_bridge_delivery(
+    screen: tuple[MainWindow, FakeSession],
+    monkeypatch: pytest.MonkeyPatch,
+    generation_delta: int,
+    blocker: StartBlocker | None,
+) -> None:
+    window, _ = screen
+    bridge = window.bridge
+    displayed = window.snapshot
+    click_sample = replace(
+        displayed,
+        generation=displayed.generation + generation_delta,
+        start_blocker=blocker,
+    )
+    latest = replace(
+        click_sample,
+        generation=click_sample.generation + generation_delta,
+        start_blocker=None,
+        batch_id="Current Batch",
+    )
+    observations = iter((click_sample, latest))
+    deliveries: list[ProductionApplicationSnapshot] = []
+    starts: list[bool] = []
+    bridge.snapshot_changed.connect(deliveries.append)
+    start = window.buttons["operation"]
+    geometry = start.geometry()
+    assert start.isVisible() and start.isEnabled()
+
+    with monkeypatch.context() as sampled:
+        sampled.setattr(
+            bridge.application, "snapshot", lambda: next(observations, latest)
+        )
+        sampled.setattr(bridge, "start", lambda: starts.append(True))
+        start.click()
+        assert not starts
+        assert deliveries == [latest]
+        assert window.snapshot is bridge.snapshot is latest
+        bridge.refresh()
+        assert deliveries == [latest] and window.snapshot is latest
+        assert start.isEnabled() and start.geometry() == geometry
+
+
+def test_start_eligibility_does_not_depend_on_hint(
+    screen: tuple[MainWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, session = screen
+
+    def displayed_hint(*_args: object, **_kwargs: object) -> str:
+        return "start_vision_dirty"
+
+    monkeypatch.setattr("capsule_vision.ui.main_window.start_hint", displayed_hint)
+    assert window.bridge.application.snapshot().start_blocker is None
+    window.set_language("en")
+    start = window.buttons["operation"]
+    assert start.toolTip() == text("start_vision_dirty", "en")
+    assert start.isEnabled()
+    session.ready.set_result(None)
+    start.click()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
 
 
 def test_initial_reference_pixels_are_not_production_frames(

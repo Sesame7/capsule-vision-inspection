@@ -14,6 +14,7 @@ from capsule_vision.application import (
     ApplicationState,
     ProductionApplicationSnapshot,
     ProductionCounters,
+    StartBlocker,
 )
 from capsule_vision.display import LatestDisplayFrameStore, matching_camera
 from capsule_vision.inference import BoundingRect
@@ -38,8 +39,24 @@ from capsule_vision.ui.production_presentation import (
 def snapshot(
     state: ApplicationState = ApplicationState.READY,
 ) -> ProductionApplicationSnapshot:
+    blocker = (
+        None
+        if state is ApplicationState.READY
+        else StartBlocker.SETUP
+        if state is ApplicationState.UNCONFIGURED
+        else StartBlocker.LIFECYCLE
+    )
     return ProductionApplicationSnapshot(
-        state, 1, None, None, None, ProductionCounters(), None, False, None
+        state,
+        1,
+        None,
+        None,
+        None,
+        ProductionCounters(),
+        None,
+        False,
+        None,
+        start_blocker=blocker,
     )
 
 

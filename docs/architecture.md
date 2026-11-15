@@ -721,6 +721,12 @@ permits ordinary inspection. Start still takes the existing session admission an
 rechecks eligibility. The lifecycle worker settles initial Batch restoration and
 performs saved dependency and resource preflight before activation.
 
+`QtProductionBridge` supplies the initial and refreshed Production snapshots.
+Before dispatch, the player checks the displayed action and generation against
+current observations. It rejects stale clicks and refreshes through the bridge.
+Start availability uses the Application blocker and Qt's editing, unsaved Vision
+draft and Close guards. Localized hints describe those reasons.
+
 Recipe process overrides remain immutable definition metadata in Configuration
 and Run evidence. Configuration resolves one explicit DM starting address per
 parameter and validates flat ID/value overrides. A stopped candidate with overrides

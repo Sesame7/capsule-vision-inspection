@@ -105,6 +105,15 @@ class QtProductionBridge(QObject):
         self.timer.start()
 
     @property
+    def snapshot(self) -> ProductionApplicationSnapshot:
+        """The last delivered observation, or the initial value before delivery."""
+        return (
+            self._snapshot
+            if self._snapshot is not None
+            else self.application.snapshot()
+        )
+
+    @property
     def controls_enabled(self) -> bool:
         return (
             self.source_control is not None

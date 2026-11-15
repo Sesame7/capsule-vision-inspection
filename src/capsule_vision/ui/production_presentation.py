@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, auto
 
 from capsule_vision.application import (
     ApplicationState,
@@ -38,9 +38,28 @@ _START_HINTS = {
 }
 
 
+class StartInteractionBlocker(Enum):
+    """Qt-local guards on the Start interaction."""
+
+    CLOSING = auto()
+    VISION_DRAFT = auto()
+    EDITING = auto()
+
+
+_INTERACTION_HINTS = {
+    StartInteractionBlocker.CLOSING: "state_closing",
+    StartInteractionBlocker.VISION_DRAFT: "start_vision_dirty",
+    StartInteractionBlocker.EDITING: "identity_working",
+}
+
+
 def start_hint(
-    snapshot: ProductionApplicationSnapshot, setup_guidance_key: str
+    snapshot: ProductionApplicationSnapshot,
+    setup_guidance_key: str,
+    interaction: StartInteractionBlocker | None = None,
 ) -> str | None:
+    if interaction is StartInteractionBlocker.CLOSING:
+        return _INTERACTION_HINTS[interaction]
     blocker = snapshot.start_blocker
     if blocker is StartBlocker.SETUP:
         return setup_guidance_key
@@ -51,7 +70,11 @@ def start_hint(
             ApplicationState.FAULT: "fault_note",
             ApplicationState.CLOSED: "CLOSED",
         }.get(snapshot.state)
-    return _START_HINTS[blocker] if blocker is not None else None
+    if blocker is not None:
+        return _START_HINTS[blocker]
+    if interaction is not None and snapshot.state is ApplicationState.READY:
+        return _INTERACTION_HINTS[interaction]
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +88,7 @@ class Controls:
 def controls(snapshot: ProductionApplicationSnapshot) -> Controls:
     state = snapshot.state
     return Controls(
-        state is ApplicationState.READY and snapshot.start_blocker is None,
+        snapshot.start_blocker is None,
         state in (ApplicationState.STARTING, ApplicationState.RUNNING),
         state is ApplicationState.FAULT and not snapshot.runtime_owned,
         state is ApplicationState.READY,
@@ -77,10 +100,11 @@ def production_actions(
 ) -> dict[str, str | None]:
     """Fixed player positions; None replay means pause/step are unsupported."""
     available = controls(snapshot)
-    running = snapshot.state is ApplicationState.RUNNING
+    state = snapshot.state
+    running = state is ApplicationState.RUNNING
     return {
         "operation": "start"
-        if available.start
+        if state in (ApplicationState.UNCONFIGURED, ApplicationState.READY)
         else "replay_continue"
         if running and replay is SourceControlState.PAUSED
         else None,
