@@ -18,7 +18,8 @@ from reportlab.pdfgen.canvas import Canvas
 from tests.unit.test_report_matrix import matrix_snapshot
 
 from capsule_vision.application import report_identification
-from capsule_vision.application.report_content import ReportData, Table
+from capsule_vision.application.audit_presentation import ChangeComparison
+from capsule_vision.application.report_content import AuditReportRow, ReportData, Table
 from capsule_vision.application.report_pdf import write_pdf
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
@@ -252,13 +253,12 @@ def test_event_change_details_stay_together_or_split_without_losing_lines(
             ("Event",),
             (1,),
             (
-                (
-                    f"Event {i}",
+                AuditReportRow(
+                    (f"Event {i}",),
                     "\n".join(f"Change {i}.{n}" for n in range(detail_count)),
                 )
                 for i in range(count)
             ),
-            detail_rows=True,
         )
 
     def record(c: Canvas, x: float, y: float, value: str) -> None:
@@ -303,3 +303,48 @@ def test_event_change_details_stay_together_or_split_without_losing_lines(
                 y for p, y, value in marks if p == number and value.startswith("Change")
             )
             assert 14 * mm + 26 < bottom < 14 * mm + 26 + 22
+
+
+def test_audit_comparison_repeats_aligned_columns_across_page_breaks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marks: dict[str, list[tuple[int, float, float]]] = {}
+    draw = Canvas.drawString
+    before = "\n".join(f"Original {i}" for i in range(53))
+    after = "\n".join(f"Requested {i}" for i in range(52))
+    comparison = ChangeComparison(
+        ("Field", "Before", "Requested value"), (("Long value", before, after),)
+    )
+
+    def tables(_data: ReportData) -> Iterator[Table]:
+        yield Table(
+            "Events",
+            ("Event",),
+            (1,),
+            (AuditReportRow(("Audit event",), "Reasons: Timeout", comparison),),
+        )
+
+    def record(c: Canvas, x: float, y: float, value: str) -> None:
+        marks.setdefault(value, []).append((c.getPageNumber(), x, y))
+        draw(c, x, y, value)
+
+    monkeypatch.setattr(ReportData, "tables", tables)
+    monkeypatch.setattr(Canvas, "drawString", record)
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute("""CREATE TABLE meta AS SELECT 'audit' AS scope,'' AS basis,
+            1000000000 AS observed,NULL AS since,NULL AS until,NULL AS filter_label,
+            0 AS unbatched,0 AS scoped_segment,NULL AS account""")
+        write_pdf(db, tmp_path / "comparison.pdf", "en", Event())
+    before_x = marks["Before"][0][1]
+    after_x = marks["Requested value"][0][1]
+    assert marks["Field"][0][1] < before_x < after_x
+    pages = {p for p, _, _ in marks["Field"]}
+    assert len(pages) >= 3
+    assert {p for p, _, _ in marks["Before"]} == pages
+    assert {p for p, _, _ in marks["Requested value"]} == pages
+    for i in range(53):
+        [(page, x, y)] = marks[f"Original {i}"]
+        assert x == before_x and y > 14 * mm + 26
+        if i < 52:
+            assert marks[f"Requested {i}"] == [(page, after_x, y)]
+    assert len(marks["Audit event"]) == len(marks["Reasons: Timeout"]) == 1

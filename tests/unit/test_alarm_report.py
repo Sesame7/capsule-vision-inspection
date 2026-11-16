@@ -128,7 +128,11 @@ def rows(
 ) -> tuple[tuple[str, ...], list[tuple[object, ...]]]:
     with closing(sqlite3.connect(path)) as db:
         table = next(ReportData(db, language, Event()).tables())
-        return table.headers, list(table.rows)
+        events: list[tuple[object, ...]] = []
+        for row in table.rows:
+            assert isinstance(row, tuple)
+            events.append(row)
+        return table.headers, events
 
 
 def test_scope_snapshot_all_pages_order_and_exact_batch(

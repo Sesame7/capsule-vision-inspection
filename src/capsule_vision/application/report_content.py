@@ -13,6 +13,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 from . import alarm_report, audit_report
+from .audit_presentation import ChangeComparison
 from .batch_records import run_totals
 from .defect_records import Category, Hit, customer_hits
 from .models import PilotCounters, ProductionCounters
@@ -21,15 +22,21 @@ type Value = str | int | float | datetime | None
 type Row = tuple[Value, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class AuditReportRow:
+    values: Row
+    detail: str = ""
+    comparison: ChangeComparison | None = None
+
+
 @dataclass(frozen=True)
 class Table:
     title: str
     headers: tuple[str, ...]
     widths: tuple[int, ...]
-    rows: Iterable[Row]
+    rows: Iterable[Row | AuditReportRow]
     numeric_columns: tuple[int, ...] = ()
     emphasize_first: bool = False
-    detail_rows: bool = False
 
 
 class ReportData:

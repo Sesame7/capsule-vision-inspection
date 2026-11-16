@@ -20,7 +20,7 @@ from reportlab.pdfgen.canvas import Canvas
 from capsule_vision.localization.languages import Language
 
 from .defect_records import Category
-from .report_content import ReportData, Table, Value
+from .report_content import AuditReportRow, ReportData, Table, Value
 from .report_identification import ExportIdentification
 
 _FONT = "CapsuleReportCJK"
@@ -100,6 +100,10 @@ def _wrap(value: Value, width: float, size: float) -> list[str]:
             line += char
         lines.append(line)
     return lines
+
+
+def _band_height(cells: list[list[str]]) -> float:
+    return max(map(len, cells)) * _LINE + _ROW_PAD
 
 
 class _Pages:
@@ -308,8 +312,7 @@ class _Pages:
         emphasize: bool = False,
         separator: bool = True,
     ) -> None:
-        n = max(map(len, cells))
-        h = n * _LINE + _ROW_PAD
+        h = _band_height(cells)
         c = self.canvas
         if head:
             c.setFillColorRGB(0.94, 0.95, 0.96)
@@ -339,15 +342,15 @@ class _Pages:
             weights = sum(table.widths)
             widths = [self.body * w / weights for w in table.widths]
 
-        def cells(row: tuple[Value, ...]) -> list[list[str]]:
+        def cells(row: tuple[Value, ...], sizes: list[float]) -> list[list[str]]:
             return [
-                _wrap(v, w - 2 * _PAD, _SIZE) for v, w in zip(row, widths, strict=True)
+                _wrap(v, w - 2 * _PAD, _SIZE) for v, w in zip(row, sizes, strict=True)
             ]
 
-        headers = cells(table.headers)
+        headers = cells(table.headers, widths)
         # Recorded labels are unbounded text. A repeated heading must leave room
         # for at least one data line; otherwise pagination cannot make progress.
-        header_height = 21 + max(map(len, headers)) * _LINE + _ROW_PAD
+        header_height = 21 + _band_height(headers)
         row_space = self.top - _BOTTOM - header_height
         if row_space < _LINE + _ROW_PAD:
             raise ValueError("Report table heading is too tall for an A4 page")
@@ -360,16 +363,35 @@ class _Pages:
             self.band(headers, widths, head=True, numeric=table.numeric_columns)
 
         count = 0
+        comparison_widths = [self.body * weight for weight in (0.24, 0.38, 0.38)]
         for row in table.rows:
             self.data.check()
             count += 1
-            blocks = [(cells(row[:-1] if table.detail_rows else row), widths)]
-            if table.detail_rows and row[-1]:
-                blocks.append(
-                    ([_wrap(row[-1], self.body - 2 * _PAD, _SIZE)], [self.body])
+            values = row.values if isinstance(row, AuditReportRow) else row
+            blocks = [(cells(values, widths), widths, False)]
+            comparison_headers: list[list[str]] = []
+            comparison_height = 0.0
+            if isinstance(row, AuditReportRow) and row.comparison is not None:
+                comparison_headers = cells(row.comparison.headers, comparison_widths)
+                comparison_height = _band_height(comparison_headers)
+                if row_space < comparison_height + _LINE + _ROW_PAD:
+                    raise ValueError(
+                        "Audit comparison heading is too tall for an A4 page"
+                    )
+                blocks.extend(
+                    (cells(change, comparison_widths), comparison_widths, True)
+                    for change in row.comparison.rows
                 )
-            height = sum(
-                max(map(len, values)) * _LINE + _ROW_PAD for values, _ in blocks
+            if isinstance(row, AuditReportRow) and row.detail:
+                blocks.append(
+                    (
+                        [_wrap(row.detail, self.body - 2 * _PAD, _SIZE)],
+                        [self.body],
+                        False,
+                    )
+                )
+            height = comparison_height + sum(
+                _band_height(lines) for lines, _, _ in blocks
             )
             if count == 1:
                 # Keep the first event with its heading. An event larger than a
@@ -381,22 +403,41 @@ class _Pages:
             if self.y - height < _BOTTOM and height <= row_space:
                 self.page()
                 heading()
-            for block, (values, block_widths) in enumerate(blocks):
-                while any(values):
-                    fit = int((self.y - _BOTTOM - _ROW_PAD) // _LINE)
+            heading_pending = True
+            for block, (lines, block_widths, is_comparison) in enumerate(blocks):
+                if is_comparison:
+                    row_height = _band_height(lines)
+                    reserved = comparison_height if heading_pending else 0.0
+                    if (
+                        row_height <= row_space - comparison_height
+                        and self.y - _BOTTOM < reserved + row_height
+                    ):
+                        self.page()
+                        heading()
+                        heading_pending = True
+                while any(lines):
+                    reserved = (
+                        comparison_height if is_comparison and heading_pending else 0.0
+                    )
+                    fit = int((self.y - _BOTTOM - _ROW_PAD - reserved) // _LINE)
                     if fit < 1:
                         self.page()
                         heading()
-                        fit = int((self.y - _BOTTOM - _ROW_PAD) // _LINE)
+                        heading_pending = True
+                        reserved = comparison_height if is_comparison else 0.0
+                        fit = int((self.y - _BOTTOM - _ROW_PAD - reserved) // _LINE)
+                    if is_comparison and heading_pending:
+                        self.band(comparison_headers, comparison_widths, head=True)
+                        heading_pending = False
                     self.band(
-                        [v[:fit] for v in values],
+                        [v[:fit] for v in lines],
                         block_widths,
-                        numeric=table.numeric_columns if len(block_widths) > 1 else (),
+                        numeric=table.numeric_columns if block == 0 else (),
                         emphasize=table.emphasize_first and count == 1,
                         separator=block == len(blocks) - 1
-                        and all(len(v) <= fit for v in values),
+                        and all(len(v) <= fit for v in lines),
                     )
-                    values = [v[fit:] for v in values]
+                    lines = [v[fit:] for v in lines]
         if not count:
             if self.y - header_height - _LINE - _ROW_PAD < _BOTTOM:
                 self.page()

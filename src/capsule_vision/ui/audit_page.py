@@ -17,6 +17,8 @@ from capsule_vision.application.audit_presentation import (
     change_caption as _change_caption,
 )
 from capsule_vision.application.audit_presentation import (
+    incomplete_changes,
+    local_change_comparison,
     login_failure_reason,
     plc_requested_values,
     unsuccessful_login,
@@ -266,6 +268,8 @@ class AuditPage(HistoryEventTable):
             return
         op = record.operation
         plc_write = op.action == "plc.write"
+        comparison = local_change_comparison(record, self.language)
+        incomplete = incomplete_changes(op)
         before = _change_caption(op.action, op.before, self.language)
         after = (
             plc_requested_values(op, self.language)
@@ -274,10 +278,12 @@ class AuditPage(HistoryEventTable):
         )
         if op.action == "production.recipe" and op.after == op.target:
             after = ""
-        if before == after:
-            before = after = ""
-        elif not before or not after:
-            if (before or after) == _target_caption(record, self.language):
+        if not incomplete:
+            if before == after:
+                before = after = ""
+            elif (not before or not after) and (before or after) == _target_caption(
+                record, self.language
+            ):
                 before = after = ""
         success = record.outcome == "success"
         reason = ""
@@ -291,13 +297,20 @@ class AuditPage(HistoryEventTable):
         self.show_details(
             self.language,
             (
-                ("audit_before", before),
+                ("audit_before", before if comparison is None else ""),
                 (
                     "audit_after" if success and not plc_write else "audit_requested",
-                    after,
+                    after if comparison is None else "",
                 ),
                 ("reasons", reason),
+                (
+                    "",
+                    text("identity_audit_incomplete", self.language)
+                    if incomplete
+                    else "",
+                ),
             ),
+            comparison=comparison,
         )
 
     def dispose(self) -> None:

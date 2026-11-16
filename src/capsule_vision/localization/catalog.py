@@ -452,6 +452,12 @@ STRINGS: dict[str, tuple[str, str]] = {
     "audit_before": ("变更前", "Before"),
     "audit_after": ("变更后", "After"),
     "audit_requested": ("请求值", "Requested value"),
+    "audit_field": ("字段", "Field"),
+    "audit_empty_value": ("（空值）", "(empty value)"),
+    "audit_approved_values": (
+        "仅显示允许披露的记录值。",
+        "Only approved recorded values are shown.",
+    ),
     "audit_plc_values_omitted": (
         "另有 {count} 个已记录的值未显示",
         "{count} additional recorded values omitted",

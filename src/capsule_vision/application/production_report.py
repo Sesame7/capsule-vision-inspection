@@ -31,11 +31,12 @@ from .audit_report import AuditReportRequest
 from .audit_report import capture as capture_audit
 from .history import ProductionHistory
 from .identity import LocalIdentity
-from .report_content import ReportData, Value
+from .report_content import AuditReportRow, ReportData, Value
 from .report_scope import ReportRequest
 
 _EXCEL_ROWS = 1_048_576
 _WRAPPED = Alignment(wrap_text=True, vertical="center")
+_WRAPPED_TOP = Alignment(wrap_text=True, vertical="top")
 
 
 def _check_cancel(cancel: Event) -> None:
@@ -223,6 +224,7 @@ def write_workbook(
         *,
         run_number: bool = False,
         numeric: tuple[int, ...] = (),
+        top_aligned: bool = False,
     ) -> None:
         nonlocal number
         data.check()
@@ -231,6 +233,9 @@ def write_workbook(
             raise ValueError("Report exceeds the Excel worksheet row limit")
         layout.row_dimensions[number].height = height
         cells = [_cell(sheet, v, style) for v in values]
+        if top_aligned:
+            for cell in cells:
+                cell.alignment = _WRAPPED_TOP
         if run_number:
             cells[0].alignment = Alignment(horizontal="center", vertical="center")
         for column in numeric:
@@ -337,18 +342,38 @@ def write_workbook(
             count = 0
             for values in table.rows:
                 count += 1
-                if table.detail_rows:
+                if isinstance(values, AuditReportRow):
                     row(
-                        values[:-1],
+                        values.values,
                         height=20
                         * max(
                             lines(v, w - 2)
-                            for v, w in zip(values[:-1], widths, strict=True)
+                            for v, w in zip(values.values, widths, strict=True)
                         ),
                     )
-                    if values[-1]:
+                    comparison = values.comparison
+                    if comparison is not None:
+                        sizes = (widths[0], sum(widths[1:3]), sum(widths[3:]))
+                        for index, change in enumerate(
+                            (comparison.headers, *comparison.rows)
+                        ):
+                            field, before, after = change
+                            row(
+                                (field, before, None, after, None),
+                                "Heading" if index == 0 else "Normal",
+                                height=20
+                                * max(
+                                    lines(v, w - 2)
+                                    for v, w in zip(change, sizes, strict=True)
+                                ),
+                                top_aligned=index > 0,
+                            )
+                            merged("B", "C")
+                            merged("D", "E")
+                    if values.detail:
                         row(
-                            [values[-1]], height=18 * lines(values[-1], sum(widths) - 2)
+                            [values.detail],
+                            height=18 * lines(values.detail, sum(widths) - 2),
                         )
                         merged("A", last)
                 elif matrix:

@@ -233,11 +233,14 @@ def test_customer_exports_of_actual_saves_omit_internal_configuration(
 
         for language in ("en", "zh"):
             for output in audit_report_texts(app, tmp_path, language, monkeypatch):
-                assert name in output
-                assert text("archive_ng", language) in output
-                assert text("comm_timeout", language) in output and "2.5" in output
+                # Long column labels can wrap onto another PDF line.
+                compact = "".join(output.split())
+                assert "".join(name.split()) in compact
+                assert "".join(text("archive_ng", language).split()) in compact
+                assert "".join(text("comm_timeout", language).split()) in compact
+                assert "2.5" in compact
                 for private in (archive, host, f" = {port}", f" = {route}"):
-                    assert private not in output
+                    assert "".join(private.split()) not in compact
     finally:
         close_window(window)
         delivery.detach()

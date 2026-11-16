@@ -10,6 +10,7 @@ from threading import Event
 
 import pytest
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 from reportlab.pdfgen.canvas import Canvas
 from tests.support.application import WAIT, FakeSession, close
 from tests.support.startup import TEST_PASSWORD, provision_account
@@ -18,11 +19,13 @@ from tests.unit.test_durable_batches import RECIPE
 from capsule_vision.application import ProductionApplication, production_report
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.audit import (
+    AUDIT_CHANGE_LIMIT,
     AuditAccount,
     AuditOperation,
     AuditQuery,
     AuditRecord,
 )
+from capsule_vision.application.audit_presentation import local_change_comparison
 from capsule_vision.application.audit_report import (
     AuditReportRequest,
     NoAuditRecords,
@@ -37,7 +40,8 @@ from capsule_vision.application.identity_models import (
     StaleSessionError,
 )
 from capsule_vision.application.records_query import RecordsScope
-from capsule_vision.application.report_content import ReportData
+from capsule_vision.application.report_content import AuditReportRow, ReportData
+from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 STAMP = 1_800_000_000
@@ -154,10 +158,13 @@ def test_complete_filtered_snapshot_and_no_temporal_batch_attribution(
         data = ReportData(db, "en", Event())
         rows = list(next(data.tables()).rows)
         assert len(rows) == 147
-        assert rows[-1][0] == datetime.fromtimestamp(STAMP)
-        assert "Before: Product name · Previous" in str(rows)
-        assert "Requested value: Product name · Product 000" in str(rows)
-        assert "Could not read or write the configuration file" in str(rows)
+        last = rows[-1]
+        assert isinstance(last, AuditReportRow)
+        assert last.values[0] == datetime.fromtimestamp(STAMP)
+        assert last.comparison is not None
+        assert last.comparison.headers == ("Field", "Before", "Requested value")
+        assert last.comparison.rows == (("Product name", "Previous", "Product 000"),)
+        assert last.detail == "Reasons: Could not read or write the configuration file"
         assert batch not in str(rows) and "actual-run" not in str(rows)
     assert evidence(identity.audit.path) == original
     narrow = tmp_path / "narrow.db"
@@ -234,6 +241,11 @@ def test_actual_reports_include_all_rows_and_paginate(
     assert len(pages) > 1 and drawn.count("Former Operator") == len(expected) + 1
     if language == "en":
         assert "From" in drawn and "Before" in drawn
+    assert text("audit_field", language) in drawn
+    assert (
+        text("audit_after", language) in drawn
+        and text("audit_requested", language) in drawn
+    )
     assert not any(
         "batch.information" in s or "observed-" in s or "actual-run" in s for s in drawn
     )
@@ -250,6 +262,33 @@ def test_actual_reports_include_all_rows_and_paginate(
         assert sheet.page_setup.orientation == "landscape"
         assert sheet.freeze_panes == "A8"
         assert len(book.worksheets) == 1 and sheet.max_column == 5
+        last_event = next(
+            r
+            for r in range(8, sheet.max_row + 1)
+            if sheet.cell(r, 1).value == datetime.fromtimestamp(STAMP)
+        )
+        heading, change, failure = last_event + 1, last_event + 2, last_event + 3
+        assert tuple(sheet.cell(heading, c).value for c in (1, 2, 4)) == (
+            text("audit_field", language),
+            text("audit_before", language),
+            text("audit_requested", language),
+        )
+        assert tuple(sheet.cell(change, c).value for c in (1, 2, 4)) == (
+            text("batch_product", language),
+            "Previous",
+            "Product 000",
+        )
+        assert all(sheet.cell(change, c).data_type == "s" for c in (1, 2, 4))
+        top = Alignment(wrap_text=True, vertical="top")
+        assert all(sheet.cell(change, c).alignment == top for c in (1, 2, 4))
+        assert {
+            f"B{change}:C{change}",
+            f"D{change}:E{change}",
+            f"A{failure}:E{failure}",
+        } <= {str(region) for region in sheet.merged_cells.ranges}
+        assert sheet.cell(failure, 1).value == (
+            f"{text('reasons', language)}: {text('records_config_io', language)}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -402,9 +441,9 @@ def test_customer_changes_keep_failures_but_never_credentials_or_opaque_ids() ->
         "",
         "TimeoutError",
     )
-    assert "Requested value" in details(entry, "en") and "Timeout" in details(
-        entry, "en"
-    )
+    comparison, detail = details(entry, "en")
+    assert comparison is not None
+    assert comparison.headers[-1] == "Requested value" and "Timeout" in detail
     secret = AuditRecord(
         2,
         operation(
@@ -418,8 +457,9 @@ def test_customer_changes_keep_failures_but_never_credentials_or_opaque_ids() ->
         "",
         "AuthorizationError",
     )
-    value = details(secret, "en")
-    assert "secret" not in value and "hidden" not in value and "Denied" in value
+    comparison, detail = details(secret, "en")
+    assert comparison is None
+    assert "secret" not in detail and "hidden" not in detail and "Denied" in detail
 
 
 def test_report_localizes_configuration_changes_and_retains_recorded_names() -> None:
@@ -437,9 +477,14 @@ def test_report_localizes_configuration_changes_and_retains_recorded_names() -> 
         "ConfigurationIOError",
     )
     for language in ("zh", "en"):
-        value = details(entry, language)
-        assert "Salt coating" in value and "=Unchanged formula-like name" in value
-        assert "120" in value and "130" in value and "压痕" in value and "破损" in value
+        comparison, detail = details(entry, language)
+        assert comparison is not None
+        assert [change[1:] for change in comparison.rows] == [
+            ("Salt coating", "=Unchanged formula-like name"),
+            ("120", "130"),
+            ("压痕", "破损"),
+        ]
+        value = str(comparison) + detail
         assert not any(
             raw in value
             for raw in (
@@ -453,7 +498,7 @@ def test_report_localizes_configuration_changes_and_retains_recorded_names() -> 
     unknown = AuditRecord(
         2, operation("model.cache", "a" * 64, 1), "failed", "", "VendorNativeException"
     )
-    assert details(unknown, "en") == "Reasons: Operation incomplete"
+    assert details(unknown, "en") == (None, "Reasons: Operation incomplete")
 
 
 @pytest.mark.parametrize(
@@ -503,9 +548,127 @@ def test_customer_details_require_approved_actions_fields_and_values(
         "",
         "Transport error at HostSentinel:9600",
     )
-    shown = details(entry, "en")
+    comparison, shown = details(entry, "en")
+    assert comparison is None
     assert "Reasons: Operation incomplete" in shown and "Sentinel" not in shown
     assert all(value in shown for value in retained)
+
+
+@pytest.mark.parametrize("outcome", ["success", "failed", "stale", "unresolved"])
+def test_role_compares_recorded_values_under_the_correct_heading(outcome: str) -> None:
+    entry = AuditRecord(
+        1,
+        operation("account.role", "different-target", 0, "OPERATOR", "ENGINEER"),
+        outcome,
+        "",
+        "StaleSessionError" if outcome == "stale" else "",
+    )
+    for language in ("zh", "en"):
+        comparison, reason = details(entry, language)
+        assert comparison is not None and comparison == local_change_comparison(
+            entry, language
+        )
+        assert comparison.headers == (
+            text("audit_field", language),
+            text("audit_before", language),
+            text(
+                "audit_after" if outcome == "success" else "audit_requested", language
+            ),
+        )
+        assert comparison.rows == (
+            (
+                text("identity_role", language),
+                text("identity_operator", language),
+                text("identity_engineer", language),
+            ),
+        )
+        assert bool(reason) == (outcome == "stale")
+
+
+def test_disclosed_pairs_use_recorded_indices_and_preserve_empty_values() -> None:
+    entry = AuditRecord(
+        1,
+        operation(
+            "recipe.save",
+            "recipe-id",
+            0,
+            "product_code = OLD\ndefaults.vimo.disabled_labels[0] = Scar\n"
+            "defaults.vimo.disabled_labels[1] = —\ndisplay_name = Secret name",
+            "defaults.vimo.disabled_labels[1] = Bubble\nproduct_code = \n"
+            "display_name = C:/PathSentinel\ndefaults.vimo.disabled_labels[0] = —",
+        ),
+        "unresolved",
+        "",
+        "",
+    )
+    comparison, detail = details(entry, "en")
+    assert comparison is not None
+    assert comparison.headers[-1] == "Requested value"
+    assert comparison.rows == (
+        (text("product_code", "en"), "OLD", "(empty value)"),
+        (f"ViMo · {text('customer_audit_excluded', 'en')} [0]", "Scar", "—"),
+        (f"ViMo · {text('customer_audit_excluded', 'en')} [1]", "—", "Bubble"),
+    )
+    assert "Before: Recipe name = Secret name" in detail
+    assert text("audit_approved_values", "en") in detail
+    assert "PathSentinel" not in str(comparison) + detail
+    local = local_change_comparison(entry, "en")
+    assert local is not None and local.rows[-1] == (
+        "Recipe name",
+        "Secret name",
+        "C:/PathSentinel",
+    )
+
+
+@pytest.mark.parametrize(
+    "before,after,incomplete",
+    [
+        ("diagnostic.timeout = 1.0", "web.enabled = True", False),
+        (
+            "diagnostic.timeout = 1.0\ndiagnostic.timeout = 1.1",
+            "diagnostic.timeout = 2.0",
+            False,
+        ),
+        (
+            "diagnostic.timeout = 1.0\nmissing delimiter",
+            "diagnostic.timeout = 2.0",
+            False,
+        ),
+        ("", "diagnostic.timeout = 2.0", False),
+        ("diagnostic.timeout = 1.0\n…", "diagnostic.timeout = 2.0\n…", True),
+        (
+            ("diagnostic.timeout = 1.0\nweb.enabled = " + "x" * AUDIT_CHANGE_LIMIT)[
+                :AUDIT_CHANGE_LIMIT
+            ],
+            "diagnostic.timeout = 2.0",
+            True,
+        ),
+    ],
+    ids=[
+        "unrelated",
+        "duplicate",
+        "malformed",
+        "missing-side",
+        "ellipsis",
+        "size-limit",
+    ],
+)
+def test_unsafe_change_pairs_keep_disclosed_text(
+    before: str, after: str, incomplete: bool
+) -> None:
+    entry = AuditRecord(
+        1,
+        operation("communication.save", "communication.json", 0, before, after),
+        "failed",
+        "",
+        "OSError",
+    )
+    comparison, detail = details(entry, "en")
+    assert comparison is None and local_change_comparison(entry, "en") is None
+    assert "Requested value: " in detail
+    assert ("Before: " in detail) == bool(before)
+    assert (text("identity_audit_incomplete", "en") in detail) == incomplete
+    assert "missing delimiter" not in detail
 
 
 def test_unbatched_scope_and_missing_batch_never_broaden_to_all_records(
@@ -568,7 +731,8 @@ def test_export_keeps_literal_names_and_manual_write_evidence(
     with closing(load_workbook(path)) as book:
         values = list(book.worksheets[0].values)
         assert "PLC · W100 × 2" in str(values) and "5, 6" in str(values)
-        assert "After: Enabled" in str(values)
+        assert ("Field", "Before", None, "After", None) in values
+        assert ("Status", "Disabled", None, "Enabled", None) in values
         assert "127.0.0.1" not in str(values) and "opaque-account" not in str(values)
         named = [
             c

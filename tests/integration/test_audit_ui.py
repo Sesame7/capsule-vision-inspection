@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QDate, QPoint, QRect, Qt, QTimeZone
+from PySide6.QtGui import QTextTable
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox
 from tests.support.application import WAIT, production
@@ -378,7 +379,20 @@ def test_local_date_filters_use_recorded_instants_and_keep_full_details(
         until(lambda: len(audit.rows) == 2)
         assert [r.operation.id for r in audit.rows] == ["boundary-3", "boundary-2"]
         audit_text = audit.details.toPlainText()
-        assert all(v in audit_text for v in (before, after, detail, "Requested value"))
+        assert all(
+            v in audit_text
+            for v in (
+                "limit",
+                " 15",
+                " 18",
+                "<original>",
+                "<requested>",
+                detail,
+                "Requested value",
+            )
+        )
+        assert audit.rows[0].operation.before == before
+        assert audit.rows[0].operation.after == after
         assert "After" not in audit_text and audit.details.isReadOnly()
         assert all(v not in audit_text for v in ("Recipe", "Boundary", target))
         assert audit.rows[0].operation.target == target
@@ -489,11 +503,17 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
             assert cell and cell.text() == expected
             page.table.selectRow(row)
             if case[0] == "communication.save":
-                assert "Timeout (seconds) = 1.0" in page.details.toPlainText()
-                assert "Requested value" in page.details.toPlainText()
+                assert all(
+                    value in page.details.toPlainText()
+                    for value in ("Timeout (seconds)", "Requested value", "2.0", "1.0")
+                )
                 assert text("records_config_io", "en") in page.details.toPlainText()
                 assert page.rows[row].detail == "ConfigurationIOError"
-            elif case[0] == "account.enabled":
+            elif case[0] in ("account.role", "account.enabled"):
+                (comparison,) = page.details.document().rootFrame().childFrames()
+                assert isinstance(comparison, QTextTable)
+                assert comparison.columns() == 3 and comparison.rows() == 2
+            if case[0] == "account.enabled":
                 action = page.table.item(row, 2)
                 assert action and action.text() == action.toolTip() == text(
                     "identity_disable", "en"
@@ -537,6 +557,89 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
     finally:
         close_window(window)
         delivery.detach()
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
+    qapp: QApplication, tmp_path: Path, language: str
+) -> None:
+    assert language in ("zh", "en")
+    startup = authenticated_startup(saved_data(tmp_path))
+    app = startup.application
+    identity = app.identity
+    assert identity
+    page = AuditPage(identity)
+    long_note = (
+        "线下样品核对记录" * 39 if language == "zh" else "UnbrokenReviewLabel" * 16
+    )
+    try:
+        identity.audit.record(
+            AuditOperation(
+                "actor",
+                "Reviewer",
+                "batch.information",
+                "REVIEW-LOT",
+                "notes = Prior note\nproduct = Prior",
+                f"product = New\nnotes = {long_note}",
+            ),
+            "success",
+        )
+        identity.audit.record(
+            AuditOperation(
+                "actor",
+                "Reviewer",
+                "recipe.save",
+                "recipe",
+                "product_code = Prior\n…",
+                "display_name = New",
+            ),
+            "stale",
+            "ConfigurationIOError",
+        )
+        ensure_test_fonts()
+        page.set_language(language)
+        page.resize(560, 430)
+        page.show()
+        page.refresh()
+        until(lambda: len(page.rows) >= 2)
+        for row, record in enumerate(page.rows[:2]):
+            page.table.selectRow(row)
+            QApplication.processEvents()
+            frames = page.details.document().rootFrame().childFrames()
+            assert page.details.isReadOnly()
+            assert page.details.accessibleName() == text("audit_details", language)
+            if record.operation.action == "batch.information":
+                assert len(frames) == 1 and isinstance(frames[0], QTextTable)
+                table = frames[0]
+                assert table.columns() == table.rows() == 3
+                expected = (
+                    (
+                        text("audit_field", language),
+                        text("audit_before", language),
+                        text("audit_after", language),
+                    ),
+                    (text("batch_notes", language), "Prior note", long_note),
+                    (text("batch_product", language), "Prior", "New"),
+                )
+                for r, values in enumerate(expected):
+                    for c, value in enumerate(values):
+                        assert (
+                            table.cellAt(r, c).firstCursorPosition().block().text()
+                            == value
+                        )
+                assert page.details.horizontalScrollBar().maximum() == 0
+                assert page.details.verticalScrollBar().maximum() > 0
+            else:
+                assert not frames
+                details = page.details.toPlainText()
+                assert "product_code = Prior" in details and "New" in details
+                assert text("audit_requested", language) in details
+                assert text("identity_audit_incomplete", language) in details
+    finally:
+        page.dispose()
+        page.close()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
 
 
 def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(

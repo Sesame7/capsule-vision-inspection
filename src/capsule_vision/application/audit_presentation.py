@@ -1,6 +1,7 @@
 """Stored Audit business names shared by Records and customer reports."""
 
 import re
+from dataclasses import dataclass
 
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
@@ -30,6 +31,194 @@ OUTCOME_CAPTIONS = {
     "uncertain": "records_uncertain",
     "unresolved": "records_unresolved",
 }
+BATCH_FIELDS = {
+    "product": "batch_product",
+    "specification": "batch_specification",
+    "notes": "batch_notes",
+}
+_CONFIGURATION_LABELS = {
+    "display_name": "display_name",
+    "product_code": "product_code",
+    "disabled_labels": "customer_audit_excluded",
+    "enabled": "identity_status",
+    "required": "customer_audit_required",
+    "size": "size",
+    "color": "color",
+    "target_length": "target_length",
+    "length_tolerance": "length_tolerance",
+    "target_hue": "target_color",
+    "hue_tolerance": "color_tolerance",
+    "image_archive": "image_archive",
+    "save_ok": "archive_ok",
+    "save_ng": "archive_ng",
+    "save_error": "archive_error",
+    "save_empty": "archive_empty",
+    "cameras": "nav_cameras",
+    "camera_id": "history_camera",
+    "slots": "customer_audit_slot",
+    "channel_id": "channel",
+    "slot": "customer_audit_slot",
+    "rect": "roi_workspace",
+    "x": "roi_x",
+    "y": "roi_y",
+    "width": "roi_w",
+    "height": "roi_h",
+    "loop": "source_loop",
+    "target_fps": "vision_fps",
+    "reporting": "short_reporting",
+    "diagnostic": "comm_diagnostics",
+    "status": "status_service",
+    "timeout": "comm_timeout",
+    "type": "comm_protocol",
+    "interval_ms": "web_refresh",
+}
+_FIELD_CHANGES = {
+    "recipe.save",
+    "recipe.delete",
+    "vision.layout",
+    "vision.sources",
+    "communication.save",
+    "batch.information",
+}
+_SCALAR_CHANGES = {
+    "account.role": "identity_role",
+    "account.enabled": "identity_status",
+    "communication.web_power": "identity_status",
+    "model.rename": "model_name",
+    "batch.select": "batch_id",
+}
+_PATH_COMPONENT = r"[a-z_][a-z0-9_]*(?:\[[0-9]+\])*"
+_FIELD_PATH = re.compile(rf"{_PATH_COMPONENT}(?:\.{_PATH_COMPONENT})*")
+
+type AuditChange = tuple[str, str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeComparison:
+    headers: tuple[str, str, str]
+    rows: tuple[AuditChange, ...]
+
+
+def incomplete_changes(op: AuditOperation) -> bool:
+    if op.action not in _FIELD_CHANGES and op.action not in _SCALAR_CHANGES:
+        return False
+    return any(
+        len(value) >= AUDIT_CHANGE_LIMIT
+        or (op.action in _FIELD_CHANGES and "…" in value.splitlines())
+        for value in (op.before, op.after)
+    )
+
+
+def _parse_fields(action: str, value: str) -> dict[str, str] | None:
+    fields: dict[str, str] = {}
+    for line in value.split("\n"):
+        field, separator, recorded = line.partition(" = ")
+        if (
+            not separator
+            or not _FIELD_PATH.fullmatch(field)
+            or (action == "batch.information" and field not in BATCH_FIELDS)
+            or field in fields
+            or (recorded and not recorded.isprintable())
+        ):
+            return None
+        fields[field] = recorded
+    return fields
+
+
+def recorded_change_pairs(op: AuditOperation) -> tuple[AuditChange, ...]:
+    """Return only unambiguous pairs, using recorded keys and the prior order."""
+    if not op.before or not op.after or op.before == op.after or incomplete_changes(op):
+        return ()
+    if op.action in _SCALAR_CHANGES:
+        if not (op.before.isprintable() and op.after.isprintable()):
+            return ()
+        if op.action == "account.role" and any(
+            value.upper() not in Role.__members__ for value in (op.before, op.after)
+        ):
+            return ()
+        if op.action in ("account.enabled", "communication.web_power") and any(
+            value not in ("True", "False") for value in (op.before, op.after)
+        ):
+            return ()
+        return ((_SCALAR_CHANGES[op.action], op.before, op.after),)
+    if op.action not in _FIELD_CHANGES:
+        return ()
+    before = _parse_fields(op.action, op.before)
+    after = _parse_fields(op.action, op.after)
+    if before is None or after is None or before.keys() != after.keys():
+        return ()
+    return tuple((field, value, after[field]) for field, value in before.items())
+
+
+def change_comparison(
+    rows: tuple[AuditChange, ...], outcome: str, language: Language
+) -> ChangeComparison:
+    return ChangeComparison(
+        (
+            text("audit_field", language),
+            text("audit_before", language),
+            text(
+                "audit_after" if outcome == "success" else "audit_requested", language
+            ),
+        ),
+        rows,
+    )
+
+
+def configuration_field_caption(action: str, path: str, language: Language) -> str:
+    leaf = path.rsplit(".", 1)[-1].partition("[")[0]
+    if leaf != "mode" and leaf not in _CONFIGURATION_LABELS:
+        return ""
+    labels: list[str] = []
+    for part in path.split("."):
+        field, indexed, index = part.partition("[")
+        if field in ("vimo", "web"):
+            caption = "ViMo" if field == "vimo" else "Web"
+        elif field == "mode":
+            caption = text(
+                "plc_mode" if action == "communication.save" else "comm_source",
+                language,
+            )
+        else:
+            key = _CONFIGURATION_LABELS.get(field)
+            if key is None:  # Definition wrappers have no field caption.
+                continue
+            caption = text(key, language)
+        labels.append(f"{caption} [{index[:-1]}]" if indexed else caption)
+    return " · ".join(labels)
+
+
+def local_change_comparison(
+    record: AuditRecord, language: Language
+) -> ChangeComparison | None:
+    action = record.operation.action
+    rows: list[AuditChange] = []
+    for field, before, after in recorded_change_pairs(record.operation):
+        if action in _SCALAR_CHANGES:
+            caption = text(field, language)
+            value_action = (
+                "account.enabled" if action == "communication.web_power" else action
+            )
+            before = change_caption(value_action, before, language)
+            after = change_caption(value_action, after, language)
+            if not before or not after:
+                return None
+        elif action == "batch.information":
+            caption = text(BATCH_FIELDS[field], language)
+        else:
+            if any(
+                not readable_value(f"{field} = {value}") for value in (before, after)
+            ):
+                return None
+            caption = configuration_field_caption(action, field, language) or field
+        rows.append(
+            (
+                caption,
+                before or text("audit_empty_value", language),
+                after or text("audit_empty_value", language),
+            )
+        )
+    return change_comparison(tuple(rows), record.outcome, language) if rows else None
 
 
 def unsuccessful_login(record: AuditRecord) -> bool:
@@ -179,17 +368,12 @@ def target_caption(record: AuditRecord, language: Language) -> str:
 
 def change_caption(action: str, value: str, language: Language) -> str:
     if action == "batch.information":
-        fields = {
-            "product": "batch_product",
-            "specification": "batch_specification",
-            "notes": "batch_notes",
-        }
         lines: list[str] = []
         for line in value.splitlines():
             name, sep, recorded = line.partition(" = ")
             lines.append(
-                f"{text(fields[name], language)} · {recorded}"
-                if sep and name in fields
+                f"{text(BATCH_FIELDS[name], language)} · {recorded}"
+                if sep and name in BATCH_FIELDS
                 else line
             )
         return "\n".join(lines)

@@ -19,11 +19,18 @@ from capsule_vision.localization.record_text import readable_value, record_reaso
 from .audit import AuditAccount, AuditOperation, AuditQuery, AuditRecord
 from .audit_presentation import (
     ACTION_CAPTIONS,
+    BATCH_FIELDS,
     OUTCOME_CAPTIONS,
+    AuditChange,
+    ChangeComparison,
     change_caption,
+    change_comparison,
+    configuration_field_caption,
+    incomplete_changes,
     login_failure_reason,
     plc_requested_values,
     plc_write_range,
+    recorded_change_pairs,
     target_caption,
     unsuccessful_login,
 )
@@ -33,7 +40,7 @@ from .records_query import RecordsScope, associated_audit
 if TYPE_CHECKING:
     from .history import ProductionHistory
     from .identity import LocalIdentity
-    from .report_content import Row, Table, Value
+    from .report_content import AuditReportRow, Table, Value
 
 
 class NoAuditRecords(ValueError):
@@ -312,47 +319,6 @@ _CONFIGURATION_FIELDS = {
         "status.enabled",
     },
 }
-_CONFIGURATION_LABELS = {
-    "display_name": "display_name",
-    "product_code": "product_code",
-    "disabled_labels": "customer_audit_excluded",
-    "enabled": "identity_status",
-    "required": "customer_audit_required",
-    "size": "size",
-    "color": "color",
-    "target_length": "target_length",
-    "length_tolerance": "length_tolerance",
-    "target_hue": "target_color",
-    "hue_tolerance": "color_tolerance",
-    "image_archive": "image_archive",
-    "save_ok": "archive_ok",
-    "save_ng": "archive_ng",
-    "save_error": "archive_error",
-    "save_empty": "archive_empty",
-    "cameras": "nav_cameras",
-    "camera_id": "history_camera",
-    "slots": "customer_audit_slot",
-    "channel_id": "channel",
-    "slot": "customer_audit_slot",
-    "rect": "roi_workspace",
-    "x": "roi_x",
-    "y": "roi_y",
-    "width": "roi_w",
-    "height": "roi_h",
-    "loop": "source_loop",
-    "target_fps": "vision_fps",
-    "reporting": "short_reporting",
-    "diagnostic": "comm_diagnostics",
-    "status": "status_service",
-    "timeout": "comm_timeout",
-    "type": "comm_protocol",
-    "interval_ms": "web_refresh",
-}
-_BATCH_FIELDS = {
-    "product": "batch_product",
-    "specification": "batch_specification",
-    "notes": "batch_notes",
-}
 _SWITCH = {"True": "identity_enabled", "False": "identity_disabled"}
 _SOURCE_MODES = {"folder": "source_folder_status", "basler": "vision_basler_mode"}
 _REPORTING_MODES = {
@@ -372,7 +338,7 @@ def _configuration_value(path: str, value: str, language: Language) -> str:
         return value
     field = path.rsplit(".", 1)[-1]
     if field in ("display_name", "product_code", "disabled_labels[]"):
-        return _business_text(value)
+        return _business_text(value) if value else text("audit_empty_value", language)
     if field == "camera_id":
         return value if re.fullmatch(r"CAM[1-6]", value) else ""
     if field == "type":
@@ -394,47 +360,35 @@ def _configuration_value(path: str, value: str, language: Language) -> str:
     return value if re.fullmatch(pattern, value) else ""
 
 
-def _configuration_changes(action: str, value: str, language: Language) -> str:
-    allowed = _CONFIGURATION_FIELDS[action]
-    lines: list[str] = []
-    for line in value.splitlines():
-        path, sep, recorded = line.partition(" = ")
-        # Match the whole recorded field path before rendering any part of it.
-        normalized = re.sub(r"\[[0-9]{1,3}\]", "[]", path)
-        if not sep or "[]" in path or normalized not in allowed:
-            continue
-        rendered = _configuration_value(normalized, recorded, language)
-        if not rendered:
-            continue
-        labels: list[str] = []
-        for part in path.split("."):
-            field, indexed, index = part.partition("[")
-            if field in ("vimo", "web"):
-                caption = "ViMo" if field == "vimo" else "Web"
-            elif field == "mode":
-                caption = text(
-                    "plc_mode" if action == "communication.save" else "comm_source",
-                    language,
-                )
-            else:
-                key = _CONFIGURATION_LABELS.get(field)
-                if key is None:  # Definition wrappers have no customer caption.
-                    continue
-                caption = text(key, language)
-            labels.append(f"{caption} [{index[:-1]}]" if indexed else caption)
-        lines.append(" · ".join(labels) + " = " + rendered)
-    return "\n".join(lines)
+def _approved_field(
+    action: str, path: str, recorded: str, language: Language
+) -> tuple[str, str] | None:
+    if action == "batch.information":
+        key = BATCH_FIELDS.get(path)
+        value = (
+            _business_text(recorded)
+            if recorded
+            else text("audit_empty_value", language)
+        )
+        return (text(key, language), value) if key and value else None
+    # Match the whole recorded field path before rendering any part of it. The
+    # normalized path is for disclosure only. Pairing keeps the recorded index.
+    normalized = re.sub(r"\[[0-9]{1,3}\]", "[]", path)
+    if "[]" in path or normalized not in _CONFIGURATION_FIELDS[action]:
+        return None
+    rendered = _configuration_value(normalized, recorded, language)
+    caption = configuration_field_caption(action, path, language)
+    return (caption, rendered) if caption and rendered else None
 
 
 def _changes(action: str, value: str, language: Language) -> str:
-    if action in _CONFIGURATION_FIELDS:
-        return _configuration_changes(action, value, language)
-    if action == "batch.information":
+    if action in _CONFIGURATION_FIELDS or action == "batch.information":
         lines: list[str] = []
+        separator = " · " if action == "batch.information" else " = "
         for line in value.splitlines():
             name, sep, recorded = line.partition(" = ")
-            if sep and name in _BATCH_FIELDS and (safe := _business_text(recorded)):
-                lines.append(f"{text(_BATCH_FIELDS[name], language)} · {safe}")
+            if sep and (approved := _approved_field(action, name, recorded, language)):
+                lines.append(separator.join(approved))
         return "\n".join(lines)
     if action in ("batch.select", "batch.end", "model.rename"):
         return _business_text(value)
@@ -480,27 +434,59 @@ _FAILURE_CAPTIONS = {
 }
 
 
-def details(entry: AuditRecord, language: Language) -> str:
-    """The customer projection publishes only known fields and failure captions."""
+def _disclosed_change(
+    action: str, field: str, value: str, language: Language
+) -> tuple[str, str] | None:
+    if action in _CONFIGURATION_FIELDS or action == "batch.information":
+        return _approved_field(action, field, value, language)
+    rendered = _changes(action, value, language)
+    return (text(field, language), rendered) if rendered else None
+
+
+def details(
+    entry: AuditRecord, language: Language
+) -> tuple[ChangeComparison | None, str]:
+    """Return only approved paired fields and independently displayable detail."""
     if unsuccessful_login(entry):
         reason = login_failure_reason(entry, language)
-        return f"{text('reasons', language)}: {reason}" if reason else ""
+        return None, f"{text('reasons', language)}: {reason}" if reason else ""
     op = entry.operation
     plc_write = op.action == "plc.write"
-    before = _changes(op.action, op.before, language)
-    after = (
-        plc_requested_values(op, language, max_displayed=16)
-        if plc_write
-        else _changes(op.action, op.after, language)
-    )
-    if op.action == "batch.information" and all(
-        line.partition(" = ")[2] in ("", "—") for line in op.before.splitlines()
-    ):
-        before = ""
-    if before == after or (
-        (not before or not after) and (before or after) == _target(entry, language)
-    ):
-        before = after = ""
+    pairs = recorded_change_pairs(op)
+    rows: list[AuditChange] = []
+    omitted = False
+    incomplete = incomplete_changes(op)
+    if pairs:
+        prior: list[str] = []
+        requested: list[str] = []
+        separator = " · " if op.action == "batch.information" else " = "
+        for field, old, new in pairs:
+            left = _disclosed_change(op.action, field, old, language)
+            right = _disclosed_change(op.action, field, new, language)
+            if left is not None and right is not None:
+                rows.append((left[0], left[1], right[1]))
+            elif left is not None:
+                prior.append(separator.join(left))
+                omitted = True
+            elif right is not None:
+                requested.append(separator.join(right))
+                omitted = True
+        before, after = "\n".join(prior), "\n".join(requested)
+    else:
+        before = _changes(op.action, op.before, language)
+        after = (
+            plc_requested_values(op, language, max_displayed=16)
+            if plc_write
+            else _changes(op.action, op.after, language)
+        )
+        if not incomplete and (
+            before == after
+            or (
+                (not before or not after)
+                and (before or after) == _target(entry, language)
+            )
+        ):
+            before = after = ""
     lines = [
         f"{text(caption, language)}: {value}"
         for caption, value in (
@@ -522,13 +508,20 @@ def details(entry: AuditRecord, language: Language) -> str:
         if reason == detail:
             reason = text(_FAILURE_CAPTIONS.get(detail, "operation_error"), language)
         lines.append(f"{text('reasons', language)}: {reason}")
-    return "\n".join(lines)
+    if incomplete:
+        lines.append(text("identity_audit_incomplete", language))
+    if omitted:
+        lines.append(text("audit_approved_values", language))
+    comparison = (
+        change_comparison(tuple(rows), entry.outcome, language) if rows else None
+    )
+    return comparison, "\n".join(lines)
 
 
 def table(db: sqlite3.Connection, language: Language) -> Table:
-    from .report_content import Table
+    from .report_content import AuditReportRow, Table
 
-    def rows() -> Iterator[Row]:
+    def rows() -> Iterator[AuditReportRow]:
         for row in db.execute("SELECT * FROM audit_records ORDER BY cursor DESC"):
             entry = record(row)
             op = entry.operation
@@ -543,13 +536,17 @@ def table(db: sqlite3.Connection, language: Language) -> Table:
             outcome = text(
                 OUTCOME_CAPTIONS.get(entry.outcome, "audit_" + entry.outcome), language
             )
-            yield (
-                datetime.fromisoformat(op.utc).astimezone().replace(tzinfo=None),
-                _business_text(op.username) or "—",
-                action,
-                _target(entry, language),
-                outcome,
-                details(entry, language),
+            comparison, detail = details(entry, language)
+            yield AuditReportRow(
+                (
+                    datetime.fromisoformat(op.utc).astimezone().replace(tzinfo=None),
+                    _business_text(op.username) or "—",
+                    action,
+                    _target(entry, language),
+                    outcome,
+                ),
+                detail,
+                comparison,
             )
 
     return Table(
@@ -566,5 +563,4 @@ def table(db: sqlite3.Connection, language: Language) -> Table:
         ),
         (23, 18, 24, 23, 12),
         rows(),
-        detail_rows=True,
     )

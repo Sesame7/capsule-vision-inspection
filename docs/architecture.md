@@ -363,9 +363,14 @@ The UI has no action-type filter; action codes and their descriptions remain in
 the evidence and table. The table shows time, user, action,
 target and result. Target names come from the recorded operation. An action-specific
 category or a dash stands in for an opaque or unknown target. Selecting an operation
-shows its additional recorded changes. A successful edit shows before and after.
-An unsuccessful edit shows the prior and requested values and any recorded failure
-explanation. Routine entries with nothing to add use the full table height.
+shows its additional recorded changes. Reliably paired changes use Field, Before
+and After columns. The last column shows Requested value for unsuccessful or
+unresolved operations. Pairing uses the recorded field identities, including
+indices, in prior field order. The comparison gives recorded empty values an
+explicit caption and preserves recorded dash markers. Single-sided, ambiguous
+and incomplete evidence stays in text details with any recorded failure explanation. Long values
+wrap within the scrollable details area. Routine entries with nothing to add use
+the full table height.
 The SQLite owner pages by stable insertion order. Qt shows up to 50
 rows and clears private details on session change. Review access is checked by the
 service as well as the tab. Batch-scoped review alternates bounded reads on the
@@ -1203,8 +1208,12 @@ Batch scope and signal category without another report or Batch selector.
   records; it does not claim complete Batch operational coverage. Missing legacy
   associations remain excluded. An empty scope gives short feedback without
   publishing a file. Columns are Time, Account, Action, Target and Result, followed
-  only when relevant by approved before/after values (before/requested for an
-  unsuccessful operation) and safe failure captions. Each action has its own
+  only when relevant by approved changes and safe failure captions. Reliably
+  paired values use Field, Before and After columns beneath the event, with
+  Requested value for unsuccessful or unresolved operations. An approved value
+  whose counterpart is withheld appears under its recorded side with a disclosure
+  notice. Single-sided, ambiguous and incomplete evidence remains in text details
+  with applicable incomplete-evidence captions. Each action has its own
   disclosure rules. Configuration changes show approved fields and value types,
   with the action and result available for other changes. Reports omit credentials,
   internal IDs and hashes, network endpoints and routes, camera serials and file
@@ -1214,8 +1223,9 @@ Batch scope and signal category without another report or Batch selector.
   Engineer review shows the full recorded request and retains engineering details
   subject to the unsuccessful login rule. Both views flag incomplete historical
   write evidence and omit any potentially cut final value. PDF uses landscape A4
-  and repeats column headings. Excel keeps typed local timestamps, literal text
-  cells and a frozen table header. Neither format changes Audit evidence.
+  and repeats event and continuing comparison headings. Excel keeps typed local
+  timestamps, literal aligned comparison cells and a frozen event table header.
+  Neither format changes Audit evidence.
 
 - **Alarm Records report:** every retained event matching the shared local-date
   bounds, exact stored Batch UUID (or no associated Batch) and signal category,
@@ -1254,7 +1264,8 @@ White backgrounds, subtle grey separators and restrained dark-blue text keep
 printing readable. Production metrics remain prominent, numeric columns align
 right, and blank signature/review lines include room for handwritten dates.
 Table headings repeat on continuation pages. Audit events and their change details
-stay together when they fit on a page; oversized details continue without losing
+stay together when they fit on a page. A comparison row stays together when it
+fits below the repeated headings. Oversized details continue without losing
 lines or reducing the font size. Many
 categories split into consecutive column groups repeating Run/NG; each group
 paginates the full Run list at readable size. Ordinary reports fit approximately

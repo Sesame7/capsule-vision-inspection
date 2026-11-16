@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from capsule_vision.application.audit_presentation import ChangeComparison
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.localization.record_text import readable_value as readable_value
@@ -261,9 +262,33 @@ class HistoryEventTable(RecordsPage):
         self.details.hide()
 
     def show_details(
-        self, language: Language, fields: tuple[tuple[str, str], ...]
+        self,
+        language: Language,
+        fields: tuple[tuple[str, str], ...],
+        *,
+        comparison: ChangeComparison | None = None,
     ) -> None:
         lines: list[str] = []
+        if comparison is not None:
+            headings = "".join(
+                f'<th align="left" width="{width}%">{escape(value)}</th>'
+                for width, value in zip((28, 36, 36), comparison.headers, strict=True)
+            )
+            rows = "".join(
+                "<tr>"
+                + "".join(
+                    "<td><span style='white-space: pre-wrap'>"
+                    + escape(value)
+                    + "</span></td>"
+                    for value in row
+                )
+                + "</tr>"
+                for row in comparison.rows
+            )
+            lines.append(
+                '<table width="100%" cellpadding="3" cellspacing="1">'
+                f"<tr>{headings}</tr>{rows}</table>"
+            )
         for key, value in fields:
             if value:
                 label = f"<b>{escape(text(key, language))}</b> " if key else ""

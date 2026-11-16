@@ -130,6 +130,7 @@ ENGLISH_FALLBACK_KEYS = {
     "alarm_word",
     "audit_actor",
     "audit_all_actions",
+    "audit_approved_values",  # Customer reports offer Chinese and English.
     "audit_completed",
     "audit_id",
     "audit_plc_values_omitted",  # Customer reports offer Chinese and English.
@@ -1032,7 +1033,7 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 737
+    assert len(maintained) == 739
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
         (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 60),
