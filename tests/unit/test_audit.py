@@ -1002,7 +1002,19 @@ def test_production_commit_actor_and_stop_during_close(tmp_path: Path) -> None:
         actor = identity.login("Admin", TEST_PASSWORD).result(WAIT)
         assert actor.account
         request = app.begin_recipe_selection(candidate.configuration.recipe_id)
-        app.install_recipe_selection(request, candidate)
+        assert request.operation is not None and request.revision == actor.revision
+        listing = replace(
+            load_recipe(FIXTURES / "product-a.json"),
+            display_name="Earlier catalog name",
+        )
+        app.accept_recipe_selection(request, listing)
+        app.install_recipe_selection(request, candidate).result(WAIT)
+        (selection,) = identity.audit_page(
+            AuditQuery(action="production.recipe")
+        ).result(WAIT)
+        assert selection.operation == request.operation
+        assert selection.outcome == "success"
+        assert selection.selected_recipe_name == candidate.configuration.display_name
         app.start_batch("Lot 42").result(WAIT)
         app.end_batch().result(WAIT)
         started = app.start()
@@ -1037,4 +1049,54 @@ def test_production_commit_actor_and_stop_during_close(tmp_path: Path) -> None:
         gate.set()
         if not session.ready.done():
             session.ready.set_result(None)
+        close(app)
+
+
+def test_direct_configuration_records_full_installed_recipe_identity(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "security.sqlite3"
+    initialize_administrator(path, "Admin", TEST_PASSWORD)
+    identity = LocalIdentity(path)
+    base = prepared(tmp_path)
+    recipe = replace(
+        load_recipe(FIXTURES / "product-a.json"),
+        recipe_id="direct-" + "r" * 512,
+        display_name="  " + "Long Recipe " * 128 + "胶囊",
+    )
+    candidate = replace(
+        base,
+        configuration=replace(
+            base.configuration,
+            recipe_id=recipe.recipe_id,
+            display_name=recipe.display_name,
+        ),
+    )
+    app = ProductionApplication(lambda _p, _g: FakeSession(), identity=identity)
+    try:
+        actor = identity.login("Admin", TEST_PASSWORD).result(WAIT).account
+        assert actor is not None
+        app.configure(candidate).result(WAIT)
+        snapshot = app.snapshot()
+        assert snapshot.candidate_prepared is candidate and snapshot.active is None
+        (record,) = identity.audit_page(AuditQuery(action="production.recipe")).result(
+            WAIT
+        )
+        assert record.selected_recipe_name == recipe.display_name
+        assert record.operation.action == "production.recipe"
+        with closing(sqlite3.connect(identity.audit.path)) as db:
+            assert db.execute(
+                "SELECT target,actor_id,username,old_value,new_value,outcome,detail "
+                "FROM operations JOIN completions USING(id) WHERE id=?",
+                (record.operation.id,),
+            ).fetchone() == (
+                recipe.recipe_id,
+                actor.account_id,
+                actor.username,
+                "",
+                "",
+                "success",
+                f"display_name = {recipe.display_name}",
+            )
+    finally:
         close(app)

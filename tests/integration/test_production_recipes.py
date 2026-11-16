@@ -546,6 +546,12 @@ def test_pending_selection_cannot_outlive_its_actor(
         )
         assert data.preferences.read_bytes() == preferences
         assert picker.recipes.currentData() == "other" and picker.feedback is not None
+        if transition == "logout":
+            owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        (stale,) = owner.audit_page(AuditQuery(action="production.recipe")).result(WAIT)
+        assert stale.outcome == "stale" and stale.detail == "StaleSessionError"
+        assert stale.operation.actor_id == author.account_id
+        assert stale.operation.target == "other" and not stale.selected_recipe_name
         owner.logout()
         window.identity_controls.refresh()
         assert not picker.recipes.isEnabled()

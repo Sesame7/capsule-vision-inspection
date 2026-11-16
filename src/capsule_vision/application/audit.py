@@ -3,7 +3,7 @@
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
 from hashlib import sha256
@@ -27,6 +27,7 @@ from .identity_models import (
 )
 
 AUDIT_CHANGE_LIMIT = 2048
+_SELECTED_RECIPE_NAME_PREFIX = "display_name = "
 # Bracketed unsigned words: the two brackets replace the last ", " separator.
 _PLC_WRITE_EVIDENCE_LIMIT = max(MAX_WRITE_WORDS, MAX_WRITE_REGISTERS) * len("65535, ")
 
@@ -150,6 +151,19 @@ class AuditRecord:
     outcome: str
     completed_utc: str
     detail: str
+
+    @property
+    def selected_recipe_name(self) -> str:
+        if (
+            self.operation.action == "production.recipe"
+            and self.operation.target
+            and self.outcome == "success"
+            and self.detail.startswith(_SELECTED_RECIPE_NAME_PREFIX)
+        ):
+            name = self.detail.removeprefix(_SELECTED_RECIPE_NAME_PREFIX)
+            if name.strip():
+                return name
+        return ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,11 +500,26 @@ class AuditTrail:
     def record(self, op: AuditOperation, outcome: str, detail: str = "") -> None:
         """Best effort. Admission, recording loss and completion never wait on a caller."""
 
+        self._record(op, outcome, detail[:1024])
+
+    def record_recipe_selection(
+        self, op: AuditOperation, *, recipe_id: str, display_name: str
+    ) -> None:
+        """Record the exact installed identity as a best-effort success observation."""
+        if op.action != "production.recipe":
+            raise ValueError("Recipe selection requires a production.recipe operation")
+        self._record(
+            replace(op, target=recipe_id),
+            "success",
+            _SELECTED_RECIPE_NAME_PREFIX + display_name,
+        )
+
+    def _record(self, op: AuditOperation, outcome: str, detail: str) -> None:
         stamp = _utc()
 
         def append(db: sqlite3.Connection) -> None:
             self._intent(db, op)
-            self._terminal(db, op, outcome, detail[:1024], stamp)
+            self._terminal(db, op, outcome, detail, stamp)
 
         self._submit(append)
 

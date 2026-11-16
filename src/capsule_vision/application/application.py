@@ -383,11 +383,10 @@ class ProductionApplication:
                 self.recipe_selection_failed(request, exc)
                 raise
             if self.identity and request.operation:
-                self.identity.audit.record(
-                    replace(
-                        request.operation, target=candidate.configuration.recipe_id
-                    ),
-                    "success",
+                self.identity.audit.record_recipe_selection(
+                    request.operation,
+                    recipe_id=candidate.configuration.recipe_id,
+                    display_name=candidate.configuration.display_name,
                 )
             return process
 
@@ -467,8 +466,10 @@ class ProductionApplication:
             self._install_candidate(candidate)
             process = self._queue_process(actor.revision if actor else None)
             if actor and self.identity:
-                self.identity.audit.record(
-                    AuditOperation.by(actor, "production.recipe", recipe), "success"
+                self.identity.audit.record_recipe_selection(
+                    AuditOperation.by(actor, "production.recipe", recipe),
+                    recipe_id=recipe,
+                    display_name=candidate.configuration.display_name,
                 )
             return process
 

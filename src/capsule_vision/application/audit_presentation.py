@@ -540,6 +540,10 @@ def target_caption(
         and (approved or customer)
     ):
         return text("records_run", language)
+    if action == "production.recipe" and record.outcome == "success":
+        return disclosed_business_text(record.selected_recipe_name) or text(
+            "page_recipe", language
+        )
     if action in ("production.recipe", "production.start"):
         # Start admission can fail before a Recipe has been identified.
         return text("page_recipe" if op.target else "records_inspection", language)

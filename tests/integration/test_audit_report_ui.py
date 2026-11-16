@@ -2,6 +2,7 @@
 
 from concurrent.futures import Future
 from contextlib import closing
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
@@ -9,6 +10,7 @@ from threading import Event
 import pytest
 from openpyxl import load_workbook
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QApplication, QComboBox
 from reportlab.pdfgen.canvas import Canvas
 from tests.integration.test_audit_ui import select_account
@@ -36,6 +38,7 @@ from capsule_vision.communication.operations import (
     CommunicationResponse,
     RequestKind,
 )
+from capsule_vision.configuration import load_recipe, save_recipe
 from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
@@ -329,6 +332,135 @@ def test_audit_wording_follows_recorded_evidence_in_qt_and_customer_exports(
         page.close()
         app.close().result(WAIT)
         assert app.join(WAIT)
+
+
+def test_recipe_selection_reports_the_installed_historical_name(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = saved_data(tmp_path)
+    recipe_id = "selection-id-sentinel"
+    path = data.recipes / f"{recipe_id}.json"
+    recipe = replace(
+        load_recipe(data.recipes / "local.json"),
+        recipe_id=recipe_id,
+        display_name="Outdated picker caption",
+    )
+    save_recipe(path, recipe)
+    startup = authenticated_startup(data)
+    app, identity = startup.application, startup.application.identity
+    assert identity is not None
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    legacy_id = "legacy-selection-id"
+    earlier = "Ivory capsule / 象牙色胶囊"
+    renamed = "=Matte capsule / 哑光胶囊"
+    literal = "<b>Gloss capsule</b>"
+    private = "C:/PrivateSelectionSentinel/192.0.2.43"
+    failed = "Failed choice sentinel"
+    query = AuditQuery(action="production.recipe")
+    try:
+        window.show()
+        picker = window.production_recipes
+        index = picker.recipes.findData(recipe_id)
+        assert picker.recipes.itemText(index) == recipe.display_name
+        assert not identity.audit_page(query).result(WAIT)
+        actor = identity.snapshot()
+        assert actor.account is not None
+        legacy = AuditOperation.by(actor, query.action, legacy_id, after=legacy_id)
+        identity.audit.record(legacy, "success")
+
+        expected = {legacy.id: ""}
+        for name in (earlier, renamed, literal, private):
+            save_recipe(path, replace(recipe, display_name=name))
+            # The picker need not reload before selection reads the current saved file.
+            picker.recipes.activated.emit(picker.recipes.findData(recipe_id))
+            until(lambda: not window.editing.busy)
+            state = app.snapshot()
+            assert state.candidate_prepared is not None and state.active is None
+            assert state.candidate_prepared.configuration.display_name == name
+            record = identity.audit_page(query).result(WAIT)[0]
+            op = record.operation
+            assert op.id not in expected and op.target == recipe_id
+            assert op.actor_id == actor.account.account_id
+            assert record.outcome == "success" and record.selected_recipe_name == name
+            assert op.before == op.after == ""
+            expected[op.id] = "" if name == private else name
+
+        save_recipe(
+            path, replace(recipe, display_name=failed, model_id="missing-model")
+        )
+        picker.recipes.activated.emit(picker.recipes.findData(recipe_id))
+        until(lambda: not window.editing.busy)
+        observed = identity.audit_page(query).result(WAIT)
+        failure = observed[0]
+        assert failure.operation.target == recipe_id
+        assert failure.outcome == "failed" and not failure.selected_recipe_name
+        expected[failure.operation.id] = ""
+        assert {r.operation.id for r in observed} == expected.keys()
+        assert not identity.audit_page(AuditQuery(action="production.start")).result(
+            WAIT
+        )
+        path.unlink()
+        picker.reload()
+
+        window.navigate(3)
+        window.history_tabs.setCurrentIndex(2)
+        page = window.audit_page
+        until(lambda: expected.keys() <= {r.operation.id for r in page.rows})
+        for language in ("zh", "en"):
+            window.set_language(language)
+            fallback = text("page_recipe", language)
+            for row, record in enumerate(page.rows):
+                if record.operation.id not in expected:
+                    continue
+                caption = expected[record.operation.id] or fallback
+                page.table.selectRow(row)
+                item = page.table.item(row, 3)
+                assert item is not None
+                assert item.text() == item.data(Qt.ItemDataRole.AccessibleTextRole)
+                assert item.text() == caption
+                if caption == literal:
+                    tooltip = QTextDocument()
+                    tooltip.setHtml(item.toolTip())
+                    assert tooltip.toPlainText() == literal
+                else:
+                    assert item.toolTip() == caption
+                detail = page.details.toPlainText()
+                if record.outcome == "success":
+                    assert not detail and page.details.isHidden()
+                else:
+                    assert failed not in detail
+
+            for rendered in audit_report_texts(app, tmp_path, language, monkeypatch):
+                packed = "".join(rendered.split())
+                for shown in (earlier, renamed, literal):
+                    assert packed.count("".join(shown.split())) == 1
+                for hidden in (
+                    recipe_id,
+                    legacy_id,
+                    recipe.display_name,
+                    private,
+                    failed,
+                ):
+                    assert "".join(hidden.split()) not in packed
+            with closing(load_workbook(tmp_path / f"audit-{language}.xlsx")) as book:
+                action = (
+                    "选择生产配方" if language == "zh" else "Select Production Recipe"
+                )
+                targets = [
+                    row[3]
+                    for row in book.worksheets[0].iter_rows(min_col=1, max_col=5)
+                    if row[2].value == action
+                ]
+                assert [cell.value for cell in targets] == [
+                    expected[record.operation.id] or fallback for record in observed
+                ]
+                assert all(cell.data_type == "s" for cell in targets)
+        assert not path.exists()
+        assert identity.audit_page(query).result(WAIT) == observed
+    finally:
+        close_window(window)
+        delivery.detach()
 
 
 def test_misplaced_login_credential_and_historical_payloads_are_private(

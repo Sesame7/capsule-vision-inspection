@@ -323,6 +323,15 @@ def test_operator_admission_guest_restoration_and_audit(
             assert not app.snapshot().process_required and peer.connections == 1
         if role < Role.ADMINISTRATOR:
             owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        (selection,) = owner.audit_page(AuditQuery(action="production.recipe")).result(
+            WAIT
+        )
+        assert selection.operation.target == "local"
+        if role is Role.GUEST:
+            assert selection.outcome == "denied" and not selection.selected_recipe_name
+        else:
+            assert selection.outcome == "success"
+            assert selection.selected_recipe_name == load_recipe(path).display_name
         attempts = owner.audit_page(AuditQuery(action="recipe.process_apply")).result(
             WAIT
         )
@@ -479,6 +488,22 @@ def test_audit_failure_blocks_later_writes_and_preserves_partial_evidence(
         assert len(caught.value.attempted) == 1
         assert len(peer.packets) == 3 and app.snapshot().process_required
         assert peer.words(114, 2, 0x82) == (0, 0)
+        (selection,) = owner.audit_page(AuditQuery(action="production.recipe")).result(
+            WAIT
+        )
+        assert selection.operation == request.operation
+        assert selection.outcome == "success"
+        assert selection.selected_recipe_name == candidate.configuration.display_name
+        (attempt,) = owner.audit_page(AuditQuery(action="recipe.process_apply")).result(
+            WAIT
+        )
+        assert attempt.outcome == "failed"
+        snapshot = app.snapshot()
+        assert snapshot.candidate_prepared is candidate
+        assert snapshot.active is None and snapshot.run_id is None
+        assert not owner.audit_page(AuditQuery(action="production.start")).result(WAIT)
+        with pytest.raises(ApplicationStateError, match="readback"):
+            app.start()
     finally:
         close(startup)
 

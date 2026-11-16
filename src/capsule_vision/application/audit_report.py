@@ -251,7 +251,14 @@ def _target(entry: AuditRecord, language: Language) -> str:
         return _business_text(label) or text("batch_id", language)
     if op.action == "model.stage":
         return text("model", language)
-    return _business_text(target_caption(entry, language, customer=True)) or "—"
+    caption = _business_text(target_caption(entry, language, customer=True))
+    if op.action == "production.recipe":
+        from .report_content import EXCEL_CELL_TEXT_LIMIT
+
+        # Keep the PDF and Excel target consistent when a name cannot fit a cell.
+        if len(caption.encode("utf-16-le")) > 2 * EXCEL_CELL_TEXT_LIMIT:
+            return text("page_recipe", language)
+    return caption or "—"
 
 
 _RECIPE_FIELDS = {

@@ -31,7 +31,7 @@ from .audit_report import AuditReportRequest
 from .audit_report import capture as capture_audit
 from .history import ProductionHistory
 from .identity import LocalIdentity
-from .report_content import AuditReportRow, ReportData, Value
+from .report_content import EXCEL_CELL_TEXT_LIMIT, AuditReportRow, ReportData, Value
 from .report_scope import ReportRequest
 
 _EXCEL_ROWS = 1_048_576
@@ -113,7 +113,10 @@ def _sheet(
 
 
 def _cell(sheet: WriteOnlyWorksheet, value: Value, style: str = "Normal") -> Cell:
-    if isinstance(value, str) and len(value.encode("utf-16-le")) > 2 * 32767:
+    if (
+        isinstance(value, str)
+        and len(value.encode("utf-16-le")) > 2 * EXCEL_CELL_TEXT_LIMIT
+    ):
         raise ValueError("Text exceeds the Excel cell length limit")
     cell = WriteOnlyCell(sheet, value)
     if isinstance(value, str):

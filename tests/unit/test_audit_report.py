@@ -899,9 +899,16 @@ def test_export_keeps_literal_names_and_manual_write_evidence(
         identity.audit.complete(
             op, "success", "=Original username" if n == 1 else ""
         ).result(WAIT)
+    oversized_name = "Long capsule " * 2600
+    selection = operation("production.recipe", "", 703)
+    identity.audit.record_recipe_selection(
+        selection, recipe_id="selected-recipe-id", display_name=oversized_name
+    )
+    (record,) = identity.audit_page(AuditQuery(action=selection.action)).result(WAIT)
+    assert target_caption(record, "en") == oversized_name
     path = tmp_path / "details.xlsx"
     app.export_report(
-        AuditReportRequest(RecordsScope(STAMP + 700, STAMP + 703)), path, "en"
+        AuditReportRequest(RecordsScope(STAMP + 700, STAMP + 704)), path, "en"
     ).result(WAIT)
     with closing(load_workbook(path)) as book:
         values = list(book.worksheets[0].values)
@@ -909,6 +916,9 @@ def test_export_keeps_literal_names_and_manual_write_evidence(
         assert ("Field", "Before", None, "After", None) in values
         assert ("Enabled setting", "Disabled", None, "Enabled", None) in values
         assert "PLC acknowledged the write" in str(values)
+        assert [row[3] for row in values if row[2] == "Select Production Recipe"] == [
+            "Recipe"
+        ]
         assert "127.0.0.1" not in str(values) and "opaque-account" not in str(values)
         named = [
             c

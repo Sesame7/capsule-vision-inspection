@@ -1,6 +1,7 @@
 """Read-only, revision-fenced audit browser within History."""
 
 from dataclasses import replace
+from html import escape
 from threading import Event
 from typing import cast
 
@@ -227,13 +228,14 @@ class AuditPage(HistoryEventTable):
         for row, record in enumerate(self.rows):
             op = record.operation
             clock, full_time = record_time(op.utc)
+            target = target_caption(record, self.language)
             self.set_values(
                 row,
                 (
                     clock,
                     readable_value(op.username) or "—",
                     action_caption(op, self.language),
-                    target_caption(record, self.language),
+                    target,
                     outcome_caption(record.outcome, self.language),
                 ),
                 {
@@ -242,6 +244,13 @@ class AuditPage(HistoryEventTable):
                     4: outcome_caption(record.outcome, self.language, tooltip=True),
                 },
             )
+            if op.action == "production.recipe" and "<" in target:
+                item = self.table.item(row, 3)
+                if item is not None:
+                    # Qt auto-detects rich text in tooltips. Keep the name literal.
+                    item.setToolTip(
+                        f"<span style='white-space: pre-wrap'>{escape(target)}</span>"
+                    )
         if self.rows and self.table.currentRow() < 0:
             self.table.selectRow(0)
         self._details()

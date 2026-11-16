@@ -338,6 +338,9 @@ synthetic record provenance.
 Authentication (including `session.auto_login`), logout, actual Start/Stop, Batch
 changes, unbatched statistics clearing, saved Recipe selection and important
 security or persistence failures submit observations without waiting.
+Successful explicit Recipe selection, including identity-equipped direct
+configuration, records the stable ID and display name of the installed Candidate.
+PLC process application and Start have separate Audit outcomes.
 Rejected Start observations use the selected Recipe ID when present. An admitted
 Start keeps its captured actor and Recipe until activation, when its success
 records the Run ID and Recipe ID. A pre-activation Stop or Close produces a
@@ -363,6 +366,9 @@ The UI has no action-type filter; action codes and their descriptions remain in
 the evidence and table. The table shows time, user, action,
 target and result. Target names come from evidence recorded with the operation.
 An action-specific category or a dash stands in for an opaque or unknown target.
+Successful Recipe selections show the approved selection-time name as the target
+and tooltip. Legacy records and withheld names use the generic Recipe caption.
+The name is target evidence and adds no change comparison or detail.
 The Simplified Chinese and English views use approved account names from
 successful account changes and show Production Run for a successful Start.
 Selecting an operation shows its additional recorded changes. Reliably paired changes use Field, Before
@@ -1227,8 +1233,10 @@ Batch scope and signal category without another report or Batch selector.
   disclosure rules. Configuration changes show approved fields and value types,
   with the action and result available for other changes. Reports omit credentials,
   internal IDs and hashes, network endpoints and routes, camera serials and file
-  paths. Approved business names retain their recorded spelling. A manual PLC
-  write shows its recorded register range and up to the first 16 requested values
+  paths. Approved business names retain their recorded spelling. Recipe selection
+  targets use the approved recorded name when it fits an Excel text cell. Both
+  customer formats use the generic Recipe caption for names beyond that limit.
+  A manual PLC write shows its recorded register range and up to the first 16 requested values
   with an explicit count of any additional recorded values omitted. A successful
   manual write identifies the PLC acknowledgment. Manual write and individual
   Recipe process-value details label the recorded register request as Requested

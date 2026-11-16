@@ -18,6 +18,8 @@ from .batch_records import run_totals
 from .defect_records import Category, Hit, customer_hits
 from .models import PilotCounters, ProductionCounters
 
+EXCEL_CELL_TEXT_LIMIT = 32_767  # UTF-16 code units.
+
 type Value = str | int | float | datetime | None
 type Row = tuple[Value, ...]
 
