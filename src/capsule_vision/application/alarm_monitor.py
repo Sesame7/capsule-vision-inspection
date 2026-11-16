@@ -59,7 +59,10 @@ class AlarmMonitor:
         self._diagnostics = diagnostics
         self._condition = Condition()
         self._selection = StatusPreferences()
-        self._snapshot = AlarmSnapshot()
+        self._snapshot: AlarmSnapshot = AlarmSnapshot()
+        self._preserved_baseline: (
+            tuple[AlarmDefinitions, tuple[AlarmSignal, ...]] | None
+        ) = None
         self._cancel = Event()
         self._closed = False
         self._thread: Thread | None = None
@@ -67,20 +70,38 @@ class AlarmMonitor:
     def apply_saved(self, value: StatusPreferences) -> None:
         """Called only by composition or the committed preferences owner."""
         with self._condition:
-            if self._closed or value == self._selection:
+            saved = self._selection
+            if self._closed or value == saved:
                 return
             if (
-                value.enabled == self._selection.enabled
-                and value.endpoint == self._selection.endpoint
-                and value.word_address == self._selection.word_address
-                and value.heartbeat_address == self._selection.heartbeat_address
-                and value.fault_address == self._selection.fault_address
+                value.enabled == saved.enabled
+                and value.endpoint == saved.endpoint
+                and value.word_address == saved.word_address
+                and value.heartbeat_address == saved.heartbeat_address
+                and value.fault_address == saved.fault_address
             ):
                 # Running is not polled by this owner. Preserve the live socket,
                 # alarm baseline and health when only its future read target changes.
                 self._selection = value
                 self._snapshot = replace(self._snapshot, selection=value)
                 return
+            if (
+                saved.enabled
+                and value.enabled
+                and value.endpoint.host == saved.endpoint.host
+                and value.endpoint.port == saved.endpoint.port
+                and value.word_address == saved.word_address
+            ):
+                # Use the last accepted read, including a stale or empty active set.
+                # Further replacements before a new read keep this same comparison.
+                snapshot = self._snapshot
+                if (
+                    snapshot.observed_at is not None
+                    and snapshot.definitions is not None
+                ):
+                    self._preserved_baseline = snapshot.definitions, snapshot.active
+            else:
+                self._preserved_baseline = None
             self._cancel.set()
             self._cancel = Event()
             self._selection = value
@@ -128,6 +149,7 @@ class AlarmMonitor:
     def request_stop(self) -> None:
         with self._condition:
             self._closed = True
+            self._preserved_baseline = None
             self._snapshot = AlarmSnapshot()
             self._cancel.set()
             self._condition.notify_all()
@@ -141,6 +163,7 @@ class AlarmMonitor:
     def _unavailable(self, cancel: Event, exc: Exception, stage: str) -> None:
         with self._condition:
             if not cancel.is_set():
+                self._preserved_baseline = None
                 if self._diagnostics and self._snapshot.state != "unavailable":
                     self._diagnostics.record(
                         "alarm_monitor.unavailable",
@@ -173,26 +196,38 @@ class AlarmMonitor:
             with self._condition:
                 if cancel.is_set():
                     continue
+                baseline = self._preserved_baseline
+                if baseline is not None and definitions != baseline[0]:
+                    self._preserved_baseline = baseline = None
                 self._snapshot = replace(self._snapshot, definitions=definitions)
             with self._condition:
                 if cancel.is_set():
                     continue
                 self._owned_selection = selection
             try:
-                self._poll(selection, cancel, definitions)
+                self._poll(
+                    selection,
+                    cancel,
+                    definitions,
+                    previous=baseline[1] if baseline is not None else None,
+                )
             finally:
                 with self._condition:
                     self._owned_selection = None
 
     def _poll(
-        self, selection: StatusPreferences, cancel: Event, definitions: AlarmDefinitions
+        self,
+        selection: StatusPreferences,
+        cancel: Event,
+        definitions: AlarmDefinitions,
+        *,
+        previous: tuple[AlarmSignal, ...] | None,
     ) -> None:
         endpoint = selection.endpoint
         source = f"fins_tcp://{endpoint.host}:{endpoint.port}"
         provenance = (
             f"{definitions.origin}/{definitions.version}  SHA-256 {definitions.digest}"
         )
-        previous: tuple[AlarmSignal, ...] | None = None
         gap = True
         client: FinsTcpClient | None = None
         try:
@@ -328,6 +363,8 @@ class AlarmMonitor:
                         raw_word=word if read_ok else old.raw_word,
                         observed_at=observed if read_ok else old.observed_at,
                     )
+                    if read_ok:
+                        self._preserved_baseline = None
                     if events:
                         self._offer(events)
                 cancel.wait(self._interval)

@@ -424,12 +424,20 @@ retire the socket on its owning thread; the old status-write range remains
 reserved until retirement. Invalid definitions prevent activation. This service
 uses no new database, audit stream or connection-sharing abstraction.
 Its worker captures definitions at activation and holds bounded observations
-and one connection at a time. A first active signal is recorded as observed active. Subsequent
-successful reads record changes only. During communication loss the last known
-active set remains available and is marked stale. The first valid reading after
-a gap reconciles differences as observed active or observed recovered. All
-timestamps are host observations. Pulses entirely between reads can be missed.
-A new activation starts a fresh observation baseline.
+and one connection at a time. An active signal on the first read of a fresh
+baseline is recorded as observed active. Subsequent successful reads record
+changes only. During communication loss the last known active set remains
+available and is marked stale. The first valid reading after a gap reconciles
+differences as observed active or observed recovered. All timestamps are host
+observations. Pulses entirely between reads can be missed.
+
+A reactivation for heartbeat or fault output addresses or transport timeout
+uses the last successful alarm read as its comparison baseline when both
+selections are enabled, the host, port and alarm word match, and the newly
+loaded definitions match the prior frozen definitions. Its first valid read
+reconciles differences as after a gap. A different alarm input, changed or
+invalid definitions, disable/re-enable and a process restart discard the
+previous baseline.
 
 The saved Running address is a separate read-only target definition (default
 W16.1, fixed bit 1); this worker neither samples it nor writes it. A Running-only
@@ -439,11 +447,13 @@ and editable disabled-service behavior are defined in
 
 The immutable monitor snapshot also carries its applied selection, frozen
 definitions, last successful raw word and observation time. The Communication
-card presents that same evidence without additional PLC reads. A failed alarm read
-retains the word/time as stale; a changed saved selection clears the old evidence
-before activation. Disabled-monitor definition previews are separate read-only
-file jobs on the Communication page's existing bounded worker/delivery path;
-they never substitute for active definitions, issue PLC requests or change History.
+card presents that same evidence without additional PLC reads. A failed alarm
+read retains the word and time as stale. Selection replacement clears the
+published observations before activation. A preserved baseline is used for
+event comparison until a successful read publishes new evidence. Disabled-monitor
+definition previews are separate read-only file jobs on the Communication
+page's existing bounded worker/delivery path. They never substitute for active
+definitions, issue PLC requests or change History.
 
 One nonblocking handoff carries all transitions from a word to the existing
 History SQLite owner. Its bounded queue retains the lifecycle slot for Run

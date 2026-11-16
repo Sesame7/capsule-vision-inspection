@@ -411,6 +411,13 @@ unchanged. The first valid read after a connection gap reconciles changes as
 observed active/recovered, rather than inventing transition times or clearing
 alarms during the gap.
 
+Reactivation for changes to the heartbeat or fault output addresses or the
+transport timeout preserves the last successfully read active set for event
+comparison when Status stays enabled and the host, port, alarm word and frozen
+definitions match. The first valid read reconciles differences as after a gap.
+An unchanged active set produces no new alarm entries. A different alarm input
+or definition, disable/re-enable and process restart start a fresh baseline.
+
 The single auxiliary connection never shares the Production reporting socket,
 queue or owner. A shared PLC must support separately negotiated concurrent
 connections and sufficient capacity for [group reporting](#plc-group-reporting).

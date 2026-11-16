@@ -2,8 +2,9 @@
 
 import json
 import sqlite3
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
@@ -22,7 +23,7 @@ from capsule_vision.application import (
     alarm_records,
 )
 from capsule_vision.application.alarm_monitor import AlarmMonitor
-from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery
+from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
 from capsule_vision.communication.reporting import ReportOutcome
@@ -60,6 +61,34 @@ def selection(peer: TcpPeer, address: int = 18) -> StatusPreferences:
     return StatusPreferences(
         True, FinsTcpEndpoint(port=peer.port, timeout=0.5), address
     )
+
+
+@contextmanager
+def alarm_history(
+    tmp_path: Path, *, interval: float = 60
+) -> Generator[tuple[AlarmMonitor, ProductionHistory]]:
+    history = ProductionHistory(
+        tmp_path / "history.sqlite3", clock=lambda: 100.0, alarm_access=lambda _: 0
+    )
+    monitor = AlarmMonitor(
+        history.path.with_name(TEMPLATE.name),
+        history.offer_alarms,
+        lambda: (100.0, None, None),
+        state=lambda: ApplicationState.READY,
+        interval=interval,
+    )
+    try:
+        history.initial_selection.result(3)
+        yield monitor, history
+    finally:
+        monitor.request_stop()
+        stopped = monitor.join(2)
+        history.request_stop()
+        assert history.join(3) and stopped
+
+
+def alarm_rows(history: ProductionHistory) -> tuple[AlarmRecord, ...]:
+    return tuple(reversed(history.alarm_page(AlarmQuery()).result(3)))
 
 
 def test_bundled_workbook_mapping_override_and_persisted_selection(
@@ -335,6 +364,210 @@ def test_transitions_gaps_polarity_and_frozen_definition(tmp_path: Path) -> None
         "alarm_monitor.unavailable",
         "alarm_monitor.recovered",
     ]
+
+
+@pytest.mark.parametrize("change", ["heartbeat", "fault", "timeout"])
+def test_status_settings_replacement_reconciles_the_same_alarm_input(
+    tmp_path: Path, change: str
+) -> None:
+    definitions(tmp_path / TEMPLATE.name, signal(), signal(id="stop", bit=2))
+    with TcpPeer() as peer, alarm_history(tmp_path) as (monitor, history):
+        original = selection(peer)
+        updated = {
+            "heartbeat": replace(original, heartbeat_address=146),
+            "fault": replace(original, fault_address=147),
+            "timeout": replace(
+                original, endpoint=replace(original.endpoint, timeout=0.8)
+            ),
+        }[change]
+        peer.set_words(18, (8,))
+        monitor.apply_saved(original)
+        wait(lambda: monitor.snapshot().read_ok)
+        (first,) = alarm_rows(history)
+        assert (first.event.signal, first.event.state) == ("air", "observed_active")
+
+        monitor.apply_saved(updated)
+        wait(lambda: monitor.snapshot().read_ok)
+        snapshot = monitor.snapshot()
+        assert snapshot.selection == updated and snapshot.raw_word == 8
+        assert [s.id for s in snapshot.active] == ["air"]
+        assert peer.connections == 2
+        assert alarm_rows(history) == (first,)
+
+        monitor.apply_saved(updated)
+        running_only = replace(updated, running_address=216)
+        monitor.apply_saved(running_only)
+        assert monitor.snapshot() == replace(snapshot, selection=running_only)
+        assert peer.connections == 2 and alarm_rows(history) == (first,)
+
+        peer.set_words(18, (0,))
+        monitor.apply_saved(original)
+        wait(lambda: monitor.snapshot().read_ok)
+        assert monitor.snapshot().raw_word == 0 and not monitor.snapshot().active
+        same_first, clear = alarm_rows(history)
+        assert same_first == first
+        assert (clear.event.signal, clear.event.state) == ("air", "observed_recovered")
+
+        peer.set_words(18, (4,))
+        monitor.apply_saved(updated)
+        wait(lambda: monitor.snapshot().read_ok)
+        rows = alarm_rows(history)
+        assert rows[:2] == (first, clear)
+        assert [(r.cursor, r.event.signal, r.event.state) for r in rows[2:]] == [
+            (clear.cursor + 1, "stop", "observed_active")
+        ]
+        assert peer.connections == 4
+        assert [(p[10:12], int.from_bytes(p[13:15]), p[18:]) for p in peer.packets] == [
+            packet
+            for heartbeat, status in enumerate(
+                (original, updated, original, updated), 1
+            )
+            for packet in (
+                (b"\x01\x02", status.fault_address, b"\x00\x00"),
+                (b"\x01\x02", status.heartbeat_address, heartbeat.to_bytes(2, "big")),
+                (b"\x01\x01", status.word_address, b""),
+            )
+        ]
+
+
+@pytest.mark.parametrize(
+    "boundary", ["word", "port", "definitions", "invalid", "disable"]
+)
+def test_status_activation_boundaries_start_a_fresh_alarm_history_baseline(
+    tmp_path: Path, boundary: str
+) -> None:
+    path = tmp_path / TEMPLATE.name
+    definitions(path, signal())
+    with (
+        TcpPeer() as peer,
+        TcpPeer() as alternate,
+        alarm_history(tmp_path) as (monitor, history),
+    ):
+        original = selection(peer)
+        peer.set_words(18, (8,))
+        monitor.apply_saved(original)
+        wait(lambda: monitor.snapshot().read_ok)
+        (first,) = alarm_rows(history)
+
+        updated = original
+        if boundary == "word":
+            peer.set_words(118, (8,))
+            updated = replace(original, word_address=118)
+        elif boundary == "port":
+            alternate.set_words(18, (8,))
+            updated = selection(alternate)
+        elif boundary == "definitions":
+            # The signal itself is unchanged. Its frozen definition is new.
+            definitions(path, signal(), version="site-2")
+            updated = replace(original, heartbeat_address=146)
+        elif boundary == "invalid":
+            path.write_bytes(b"{invalid")
+            monitor.apply_saved(replace(original, heartbeat_address=146))
+            wait(lambda: monitor.snapshot().state == "unavailable")
+            assert peer.connections == 1 and alarm_rows(history) == (first,)
+            definitions(path, signal())
+        else:
+            monitor.apply_saved(replace(original, enabled=False))
+            assert monitor.snapshot().state == "off"
+            assert alarm_rows(history) == (first,)
+
+        monitor.apply_saved(updated)
+        wait(lambda: monitor.snapshot().read_ok)
+        saved, latest = alarm_rows(history)
+        assert saved == first and latest.cursor != first.cursor
+        assert (latest.event.signal, latest.event.state) == ("air", "observed_active")
+        assert (latest.event.source != first.event.source) is (boundary == "port")
+        assert (latest.event.definition != first.event.definition) is (
+            boundary == "definitions"
+        )
+        assert latest.event.address == updated.word_address
+
+
+def test_status_replacement_without_a_successful_read_starts_with_first_observation(
+    tmp_path: Path,
+) -> None:
+    definitions(tmp_path / TEMPLATE.name, signal())
+    with TcpPeer() as peer, alarm_history(tmp_path) as (monitor, history):
+        original = selection(peer)
+        peer.set_words(18, (8,))
+        peer.fail_next("read", "disconnect")
+        monitor.apply_saved(original)
+        wait(lambda: monitor.snapshot().state == "partial")
+        assert monitor.snapshot().observed_at is None and not alarm_rows(history)
+
+        monitor.apply_saved(replace(original, heartbeat_address=146))
+        wait(lambda: monitor.snapshot().read_ok)
+        (first,) = alarm_rows(history)
+        assert first.event.state == "observed_active"
+
+
+def test_status_replacement_keeps_the_last_success_through_failed_reads_and_writes(
+    tmp_path: Path,
+) -> None:
+    definitions(tmp_path / TEMPLATE.name, signal())
+    with TcpPeer() as peer, alarm_history(tmp_path, interval=0.4) as (monitor, history):
+        original = selection(peer)
+        peer.set_words(18, (8,))
+        monitor.apply_saved(original)
+        wait(lambda: monitor.snapshot().read_ok)
+        (first,) = alarm_rows(history)
+        peer.fail_next("read", "disconnect")
+        wait(lambda: monitor.snapshot().state == "partial")
+        assert monitor.snapshot().raw_word == 8
+        assert alarm_rows(history) == (first,)
+
+        peer.fail_next("sequence", "disconnect", start=147)
+        monitor.apply_saved(replace(original, fault_address=147))
+        peer.set_words(18, (0,))
+        wait(lambda: monitor.snapshot().state == "unavailable")
+        assert monitor.snapshot().raw_word is None
+        assert alarm_rows(history) == (first,)
+        wait(lambda: monitor.snapshot().read_ok)
+        saved, clear = alarm_rows(history)
+        assert saved == first and clear.event.state == "observed_recovered"
+
+        peer.set_words(18, (8,))
+        wait(lambda: monitor.snapshot().raw_word == 8)
+        assert [r.event.state for r in alarm_rows(history)] == [
+            "observed_active",
+            "observed_recovered",
+            "activated",
+        ]
+
+
+def test_only_the_latest_status_replacement_uses_the_last_accepted_read(
+    tmp_path: Path,
+) -> None:
+    definitions(tmp_path / TEMPLATE.name, signal())
+    with (
+        TcpPeer() as peer,
+        alarm_history(tmp_path, interval=0.25) as (monitor, history),
+    ):
+        original = replace(selection(peer), endpoint=FinsTcpEndpoint(port=peer.port))
+        peer.set_words(18, (8,))
+        monitor.apply_saved(original)
+        wait(lambda: monitor.snapshot().read_ok)
+        (first,) = alarm_rows(history)
+        peer.hold_next("read")
+        try:
+            assert peer.entered.wait(2)
+            peer.set_words(18, (0,))
+            monitor.apply_saved(replace(original, heartbeat_address=146))
+            latest = replace(original, fault_address=147)
+            monitor.apply_saved(latest)
+            assert monitor.protected_settings() == (latest, original)
+            pending = monitor.snapshot()
+            assert pending.state == "waiting" and pending.observed_at is None
+            assert peer.connections == 1 and alarm_rows(history) == (first,)
+        finally:
+            peer.release.set()
+
+        wait(lambda: monitor.snapshot().read_ok)
+        assert peer.connections == 2
+        assert monitor.protected_settings() == (latest,)
+        saved, clear = alarm_rows(history)
+        assert saved == first and clear.event.state == "observed_recovered"
+        assert all(int.from_bytes(p[13:15]) != 146 for p in peer.packets)
 
 
 @pytest.mark.parametrize("address", (0, 18, 77, 118, 511))
