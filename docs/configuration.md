@@ -1236,11 +1236,20 @@ changes.
 The Model selector row also offers **Prepare TensorRT cache**, independent of
 Recipe Save. It submits the selected immutable Model identity to the
 [application owner](architecture.md#inference); the UI requests initialization only,
-so neither connected cameras nor Folder inputs are needed. The adjacent icon shows
-unknown, preparing, succeeded or failed with localized accessible names. Preparation can
-take minutes; Close waits asynchronously for native work and cleanup, and Start
-is unavailable while preparation owns resources. Recipe selection/editing retains
-its existing stopped-state rules; changing the Model never retags an earlier result.
+so neither connected cameras nor Folder inputs are needed. The adjacent status icon
+shows unknown, preparing, succeeded or failed with localized accessible names.
+
+When a failed request matches the selected Model, the Recipe engineering view shows
+the recorded exception type and message in the footer event area. Higher-priority
+operational messages take precedence. The footer elides long summaries and retains
+the full details as literal text in its tooltip and accessible description. If no
+details were recorded, the footer uses the localized failure caption. The message
+clears on leaving Recipe, changing to a different Model, leaving the failed state,
+or losing engineering access.
+
+Preparation can take minutes. Close waits asynchronously for native work and cleanup,
+and Start is unavailable while preparation owns resources. Recipe selection and editing
+retain their existing stopped-state rules.
 
 Status is a bounded, session-only observation of the latest request, never inferred
 from cache files or restored on launch. Success requires initialization and actual

@@ -6,8 +6,8 @@ from threading import Event, get_ident
 
 import pytest
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QFontMetricsF
-from PySide6.QtTest import QTest
+from PySide6.QtGui import QFontMetricsF, QTextDocument
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -37,7 +37,7 @@ from capsule_vision.application import (
     StartBlocker,
 )
 from capsule_vision.application.image_archive import ArchiveSnapshot
-from capsule_vision.application.models import SelectedRecipe
+from capsule_vision.application.models import ApplicationIssue, SelectedRecipe
 from capsule_vision.configuration import (
     ConfigurationError,
     ConfigurationIOError,
@@ -444,36 +444,216 @@ def test_model_cache_preparation_is_queued_identity_bound_and_draft_independent(
         release.set()
 
 
+@pytest.mark.parametrize("language", ["zh", "en"])
 def test_model_cache_failure_is_presented_only_for_its_requested_model(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, language: Language
+) -> None:
+    from run_demo import DemoEngine
+
+    window, session, runtimes = configured_screen
+    page, app = window.recipe_page, window.bridge.application
+    footer = window.event_label
+    window.set_language(language)
+    message = "<b>M&1</b> unavailable"
+    details = f"ValueError: {message}"
+    before = app.snapshot()
+    recipe_status = page.status.text()
+
+    def broken(_request: object) -> None:
+        raise ValueError(message)
+
+    monkeypatch.setattr(app, "_preparation_factory", broken)
+    page.buttons["cache_prepare"].click()
+    until(lambda: footer.accessibleDescription() == details)
+    failed = app.preparation_snapshot()
+    assert failed.state is ModelPreparationState.FAILED and failed.issue is not None
+    assert (failed.issue.exception_type, failed.issue.message) == (
+        "ValueError",
+        message,
+    )
+    assert footer.text() == details
+    assert footer.textFormat() is Qt.TextFormat.PlainText
+    caption = text("cache_failed", language)
+    assert footer.accessibleName() == caption
+    assert not page.cache_status.text() and not page.cache_status.toolTip()
+    assert not page.cache_status.accessibleDescription()
+    assert page.cache_status.accessibleName().endswith(caption)
+    tooltip = QTextDocument()
+    tooltip.setHtml(footer.toolTip())
+    assert tooltip.toPlainText() == f"{caption}\n{details}"
+    assert not session.dirty and app.snapshot() == before and not runtimes
+    assert page.status.text() == recipe_status
+    assert page.buttons["cache_prepare"].isEnabled()
+
+    for destination in (0, 2, 3, 4):
+        window.navigate(destination)
+        assert window.pages.currentIndex() == destination
+        assert caption != footer.accessibleName()
+        assert details not in footer.text() + footer.toolTip()
+        assert not footer.accessibleDescription()
+    window.navigate(1)
+    assert footer.accessibleDescription() == details
+
+    original = page.model.currentIndex()
+    other = 1 + next(
+        i for i, m in enumerate(session.registry.models) if m.model_id == "special"
+    )
+    assert other != original
+    page.model.setCurrentIndex(other)
+    page.model.activated.emit(other)
+    assert page.cache_status.accessibleName().endswith(text("unknown", language))
+    assert not footer.text() and not footer.toolTip()
+    assert not footer.accessibleDescription()
+
+    session.discard()
+    page.show_draft()
+    assert page.model.currentIndex() == original
+    assert footer.accessibleDescription() == details
+
+    def successful(_request: object) -> DemoEngine:
+        return DemoEngine("normal", 0, 0)
+
+    monkeypatch.setattr(app, "_preparation_factory", successful)
+    page.buttons["cache_prepare"].click()
+    until(
+        lambda: page.cache_status.accessibleName().endswith(
+            text("technical_success", language)
+        )
+    )
+    assert not footer.text() and not footer.toolTip()
+    assert not footer.accessibleDescription()
+    assert app.snapshot() == before and not session.dirty and not runtimes
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_model_cache_footer_keeps_long_error_details_and_handles_missing_issue(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, language: Language
+) -> None:
+    window, _session, _runtimes = configured_screen
+    window.set_language(language)
+    window.resize(*Style.minimum)
+    page, app = window.recipe_page, window.bridge.application
+    bar, prepare = window.event_frame, page.buttons["cache_prepare"]
+    status = window.event_label
+    QApplication.processEvents()
+    footer_height = bar.height()
+    model_row = (page.model, page.cache_status, prepare)
+    row_geometry = tuple(widget.geometry() for widget in model_row)
+    indicators = (bar.state, bar.plc, bar.alarm)
+    indicator_text = tuple(widget.text() for widget in indicators)
+    message = (
+        "Initialization did not complete.\n" + "model detail & value " * 18 + "<end>"
+    )
+    details = f"RuntimeError: {message}"
+
+    def broken(_request: object) -> None:
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(app, "_preparation_factory", broken)
+    prepare.click()
+    until(lambda: status.accessibleDescription() == details)
+    QApplication.processEvents()
+    assert status.text().startswith("RuntimeError: Initialization")
+    assert status.text().endswith("…")
+    assert status.fontMetrics().horizontalAdvance(status.text()) <= status.width()
+    assert bar.height() == footer_height
+    assert tuple(widget.geometry() for widget in model_row) == row_geometry
+    assert tuple(widget.text() for widget in indicators) == indicator_text
+    assert_inside(status, bar)
+    tooltip = QTextDocument()
+    tooltip.setHtml(status.toolTip())
+    caption = text("cache_failed", language)
+    assert tooltip.toPlainText() == f"{caption}\n{details}"
+
+    snapshot_without_issue = replace(app.preparation_snapshot(), issue=None)
+    monkeypatch.setattr(app, "preparation_snapshot", lambda: snapshot_without_issue)
+    window.bridge.refresh()
+    assert status.text() == caption and status.toolTip() == caption
+    assert not status.accessibleDescription()
+
+
+def test_late_model_cache_failure_does_not_follow_changed_model(
     configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     window, session, _runtimes = configured_screen
     page, app = window.recipe_page, window.bridge.application
+    entered, release = Event(), Event()
 
     def broken(_request: object) -> None:
-        raise ValueError("test initialization failed")
+        entered.set()
+        assert release.wait(5)
+        raise ValueError("Late initialization failure")
 
     monkeypatch.setattr(app, "_preparation_factory", broken)
     page.buttons["cache_prepare"].click()
-    until(lambda: app.preparation_snapshot().state is ModelPreparationState.FAILED)
-    window.bridge.refresh()
-    assert not page.cache_status.toolTip()
-    assert page.cache_status.accessibleName().endswith(
-        text("cache_failed", page.language)
+    try:
+        until(entered.is_set)
+        other = 1 + next(
+            i for i, m in enumerate(session.registry.models) if m.model_id == "special"
+        )
+        page.model.setCurrentIndex(other)
+        page.model.activated.emit(other)
+        delivered = QSignalSpy(window.bridge.model_preparation_changed)
+        release.set()
+        until(lambda: delivered.count() > 0)
+        assert app.preparation_snapshot().state is ModelPreparationState.FAILED
+        assert page.selected_model() == session.registry.get("special")
+        assert not window.event_label.text() and not window.event_label.toolTip()
+        assert not window.event_label.accessibleDescription()
+        assert page.cache_status.accessibleName().endswith(
+            text("unknown", page.language)
+        )
+    finally:
+        release.set()
+
+
+def test_model_cache_footer_yields_to_operational_warnings_fault_and_close(
+    configured_screen: Screen, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, _session, _runtimes = configured_screen
+    page, bridge = window.recipe_page, window.bridge
+    app, footer = bridge.application, window.event_label
+    message = "Local model initialization error"
+    details = f"ValueError: {message}"
+
+    def broken(_request: object) -> None:
+        raise ValueError(message)
+
+    monkeypatch.setattr(app, "_preparation_factory", broken)
+    page.buttons["cache_prepare"].click()
+    until(lambda: footer.accessibleDescription() == details)
+    ready = app.snapshot()
+
+    class FailingArchive:
+        def archive_snapshot(self) -> ArchiveSnapshot:
+            return ArchiveSnapshot(
+                ready.generation, 0, 0, 1, 0, 0, 0, "Archive blocked", False
+            )
+
+    with monkeypatch.context() as status:
+        status.setattr(bridge, "archive", FailingArchive())
+        bridge.refresh()
+        assert footer.accessibleName() == text("archive_issue", page.language)
+        assert footer.accessibleDescription() == "Archive blocked"
+        assert message not in footer.toolTip()
+    bridge.refresh()
+    assert footer.accessibleDescription() == details
+
+    issue = ApplicationIssue("shutdown", "cleanup_failed", "OSError", "Runtime issue")
+    bridge.snapshot_changed.emit(
+        replace(ready, state=ApplicationState.FAULT, last_issue=issue)
     )
-    assert not session.dirty and app.snapshot().state is ApplicationState.READY
-    assert page.buttons["cache_prepare"].isEnabled()
-    other = 1 + next(
-        i for i, m in enumerate(session.registry.models) if m.model_id == "special"
-    )
-    assert other != page.model.currentIndex()
-    page.model.setCurrentIndex(other)
-    page.model.activated.emit(other)
     assert (
-        not page.cache_status.toolTip()
-        and page.cache_status.accessibleName().endswith(text("unknown", page.language))
+        footer.accessibleName() == f"{text('shutdown_error', page.language)} · OSError"
     )
-    session.discard()
+    assert message not in footer.toolTip()
+    bridge.snapshot_changed.emit(ready)
+    assert footer.accessibleDescription() == details
+
+    assert not window.close()
+    assert window.state_label.text() == text("state_closing", page.language)
+    assert message not in footer.text() + footer.toolTip()
+    assert not footer.accessibleDescription()
 
 
 def test_recipe_cache_action_respects_production_editing_lock(

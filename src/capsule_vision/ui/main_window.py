@@ -1,6 +1,7 @@
 """Localized production shell; application snapshots are authoritative."""
 
 from collections.abc import Callable
+from html import escape
 from math import ceil
 
 from PySide6.QtCore import (
@@ -39,6 +40,7 @@ from PySide6.QtWidgets import (
     QStyleOptionButton,
     QStylePainter,
     QTabWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -209,7 +211,7 @@ class MainWindow(QMainWindow):
         self.configuration_issue = configuration_issue
         self.configuration_messages = configuration_messages
         self._configuration_notices = configuration_notices
-        self._event_message = ""
+        self._operational_message = ""
         self._event_text = ""
         self.snapshot = snapshot
         self._frames: dict[CameraId, DisplayFrame] = {}
@@ -427,7 +429,6 @@ class MainWindow(QMainWindow):
         )
         self.production_recipes.feedback_changed.connect(self._render)
         self.editing.applied.connect(self._recipe_applied)
-        self.recipe_page.setup_changed.connect(self._render)
         self.editing.changed.connect(self._refresh_vision)
         self.editing.changed.connect(self._render)
         bridge.snapshot_changed.connect(self._refresh_vision)
@@ -493,6 +494,7 @@ class MainWindow(QMainWindow):
         self.event_icon = self.event_frame.event_icon
         self.event_label = self.event_frame.event_label
         root.addWidget(self.event_frame)
+        self.recipe_page.setup_changed.connect(self._render)
         self.recipe_page.preview_changed.connect(self._render)
         bridge.snapshot_changed.connect(self._snapshot_changed)
         bridge.model_preparation_changed.connect(self._controls_changed)
@@ -1636,7 +1638,16 @@ class MainWindow(QMainWindow):
         if not (warning or fault or self._closing) and service_issue is not None:
             message, detail = service_issue
             warning = True
-        self._event_message = message or reselection_help
+        self._operational_message = message or reselection_help
+        cache_caption = ""
+        if (
+            page == 1
+            and not (self._operational_message or warning or fault or self._closing)
+            and (cache_detail := self.recipe_page.cache_failure_details()) is not None
+        ):
+            cache_caption = text("cache_failed", language)
+            message, detail = cache_detail or cache_caption, cache_detail
+            warning = True
         self._event_text = message
         reset_help = (
             text("fault_reset_available", language)
@@ -1671,10 +1682,17 @@ class MainWindow(QMainWindow):
             )
             if part
         )
-        self.event_label.setToolTip(
-            "\n".join(part for part in (self._event_message, description) if part)
-        )
-        self.event_label.setAccessibleName(self._event_message)
+        announcement = cache_caption or self._operational_message
+        tooltip = "\n".join(part for part in (announcement, description) if part)
+        if cache_caption and detail:
+            # Qt auto-detects rich tooltips. Escape the exception so it renders literally.
+            tooltip = f"<span style='white-space: pre-wrap'>{escape(tooltip)}</span>"
+        previous_tooltip = self.event_label.toolTip()
+        if tooltip != previous_tooltip:
+            if previous_tooltip and QToolTip.text() == previous_tooltip:
+                QToolTip.hideText()
+            self.event_label.setToolTip(tooltip)
+        self.event_label.setAccessibleName(announcement)
         self.event_label.setAccessibleDescription(description)
         self.state_label.setToolTip("")
         self.event_label.setStyleSheet(
@@ -1682,7 +1700,7 @@ class MainWindow(QMainWindow):
         )
         self.event_icon.setVisible(bool(message))
         self.event_icon.setToolTip("")
-        self.event_icon.setAccessibleName(message)
+        self.event_icon.setAccessibleName(cache_caption or message)
         if message:
             in_progress = self._closing or any(
                 message == text(hint, language) for hint in _START_WAIT_HINTS
@@ -1799,7 +1817,9 @@ class MainWindow(QMainWindow):
             and not session.cli_sources
             and self.snapshot.state
             in (ApplicationState.READY, ApplicationState.RUNNING)
-            and not (self._closing or self._event_message or self.snapshot.last_issue)
+            and not (
+                self._closing or self._operational_message or self.snapshot.last_issue
+            )
         ):
             if sources.mode == "folder":
                 state_text, state_color = (

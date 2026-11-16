@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Event
 
 import pytest
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QToolTip
 from tests.support.application import WAIT, ReplayEngine
 from tests.support.qt import close_window, until
 from tests.support.startup import (
@@ -18,7 +18,11 @@ from tests.support.startup import (
     saved_data,
 )
 
-from capsule_vision.application import ApplicationState, StartBlocker
+from capsule_vision.application import (
+    ApplicationState,
+    ModelPreparationState,
+    StartBlocker,
+)
 from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
@@ -170,6 +174,43 @@ def test_page_controls_combine_role_and_state(
     assert vision.coordinates["X"].isReadOnly() != engineer
     assert vision.channel.isEnabled() and vision.buttons["vision_import"].isEnabled()
     assert vision.folder.isReadOnly() != engineer
+
+
+def test_model_cache_error_details_require_recipe_engineering_access(
+    screen: MainWindow, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, page = screen.bridge.application, screen.recipe_page
+    login(screen, Role.ENGINEER)
+    screen.navigate(1)
+    footer = screen.event_label
+    message = "Local model initialization details"
+
+    def broken(_request: object) -> None:
+        raise ValueError(message)
+
+    monkeypatch.setattr(app, "_preparation_factory", broken)
+    page.buttons["cache_prepare"].click()
+    until(lambda: message in footer.accessibleDescription())
+    failed = app.preparation_snapshot()
+    assert failed.state is ModelPreparationState.FAILED and failed.request is not None
+
+    QToolTip.showText(
+        footer.mapToGlobal(footer.rect().center()), footer.toolTip(), footer
+    )
+    assert QToolTip.isVisible()
+    for role in (Role.OPERATOR, Role.GUEST):
+        login(screen, role)
+        assert page.browsing and page.selected_model() == failed.request.model
+        assert not footer.text() and not footer.toolTip()
+        assert not footer.accessibleDescription()
+        assert (
+            message not in page.status.text() and message not in page.status.toolTip()
+        )
+        assert app.preparation_snapshot() == failed
+    until(lambda: not QToolTip.isVisible())
+
+    login(screen, Role.ENGINEER)
+    assert footer.accessibleDescription() == f"ValueError: {message}"
 
 
 def test_switch_keeps_engineering_controls_until_successful_replacement(

@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 
 from capsule_vision.application import (
     ModelPreparationRequest,
+    ModelPreparationSnapshot,
     ModelPreparationState,
 )
 from capsule_vision.application.identity_models import (
@@ -867,6 +868,7 @@ class RecipePage(QWidget):
         if self.preview is not None and not self.browsing:
             self.preview.show_settings()
         self.refresh_state()
+        self.setup_changed.emit()
 
     def _process_edited(self) -> None:
         if self._loading or not self.editable() or self.session is None:
@@ -1251,11 +1253,10 @@ class RecipePage(QWidget):
     def labels_loading(self) -> bool:
         return self._labels_thread is not None
 
-    def _present_model(self) -> None:
-        model = self._selected_model()
+    def _matching_cache_preparation(self) -> ModelPreparationSnapshot | None:
         preparation = self.bridge.application.preparation_snapshot()
         requested = self._cache_request()
-        matches = (
+        if (
             requested is not None
             and preparation.request is not None
             and replace(
@@ -1265,15 +1266,35 @@ class RecipePage(QWidget):
                 ),
             )
             == requested
+        ):
+            return preparation
+        return None
+
+    def cache_failure_details(self) -> str | None:
+        """Return matching failure details for engineering, or empty text for the caption."""
+        if self.browsing:
+            return None
+        preparation = self._matching_cache_preparation()
+        if preparation is None or preparation.state is not ModelPreparationState.FAILED:
+            return None
+        issue = preparation.issue
+        return (
+            ": ".join(
+                part for part in (issue.exception_type, issue.message) if part.strip()
+            )
+            if issue is not None
+            else ""
         )
-        state = preparation.state if matches else ModelPreparationState.UNKNOWN
+
+    def _present_cache_status(self) -> None:
+        preparation = self._matching_cache_preparation()
+        state = preparation.state if preparation else ModelPreparationState.UNKNOWN
         key = {
             ModelPreparationState.UNKNOWN: "unknown",
             ModelPreparationState.PREPARING: "preparing",
             ModelPreparationState.SUCCEEDED: "technical_success",
             ModelPreparationState.FAILED: "cache_failed",
         }[state]
-        self.cache_status.setToolTip("")
         self.cache_status.setAccessibleName(
             text("cache_prepare", self.language) + " · " + text(key, self.language)
         )
@@ -1288,6 +1309,10 @@ class RecipePage(QWidget):
             colors.secondary if state is ModelPreparationState.UNKNOWN else None,
         )
         self.cache_status.setPixmap(icon.pixmap(Style.icon, Style.icon))
+
+    def _present_model(self) -> None:
+        model = self._selected_model()
+        self._present_cache_status()
         tooltip = (
             f"{model.display_name}\nID: {model.model_id}\n{text('configured_hash', self.language)}: {model.expected_sha256}"
             if model
