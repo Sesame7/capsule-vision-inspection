@@ -42,16 +42,17 @@ def test_known_spans_nonzero_origin_and_odd_view_height(horizontal: bool) -> Non
     roi = BoundingRect(7, 5, 80, 121)
     width, height = (30, 20) if horizontal else (20, 30)
     for y in (15, 75):
-        image[y : y + height, 27 : 27 + width] = (0, 180, 180)
+        image[y - 4 : y, 27 : 27 + width] = (40, 0, 0)
+        image[y : y + height, 27 : 27 + width] = (41, 0, 0)
     before = image.copy()
     rows = evaluate_frame(image, camera(roi))
     accepted = measure_capsule(image, roi, SIZE_ONLY)
-    for row, original in zip(rows[:2], accepted.views, strict=True):
+    for row, original, y in zip(rows[:2], accepted.views, (15, 75), strict=True):
         assert row.size == original
         body = row.size.body
         assert body is not None
         box = body.bounding_rect
-        assert (box.width, box.height) == (width, height)
+        assert box == BoundingRect(27, y, width, height)
         x = 41.5 if horizontal else 36.5
         assert body.endpoints == ((x, box.y), (x, box.y + height - 1))
         assert body.length == height - 1
@@ -64,7 +65,7 @@ def rotated_image() -> NDArray[np.uint8]:
     image = np.zeros((120, 80, 3), dtype=np.uint8)
     points = np.array(((20, 10), (50, 40), (44, 46), (14, 16)), dtype=np.int32)
     for y in (0, 60):
-        cv2.fillConvexPoly(image, points + (0, y), (21, 0, 0))
+        cv2.fillConvexPoly(image, points + (0, y), (41, 0, 0))
     return image
 
 
@@ -126,7 +127,7 @@ def test_exact_competitor_threshold_and_square_body_are_deterministic() -> None:
 def test_accepted_invalidity_reason_is_preserved(kind: str, reason: str) -> None:
     image = bodies()
     if kind == "missing":
-        image[:60] = 20  # The inclusive Size background threshold.
+        image[:60] = 40  # The inclusive Size background threshold.
     elif kind == "competing":
         image[10:40, 50:70] = 180
     elif kind == "thin":

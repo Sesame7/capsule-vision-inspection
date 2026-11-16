@@ -177,6 +177,39 @@ def test_always_on_and_selective_skip_preserves_original_traditional_results(
     np.testing.assert_array_equal(image, scene())
 
 
+def test_dim_view_missing_size_still_rejects_a_present_channel(tmp_path: Path) -> None:
+    config = configuration(tmp_path, enabled_vimo=False)
+    image = scene()
+    image[70:100, 260:280] = (0, 40, 40)
+    result = (
+        ConfiguredProductionPipeline(config)
+        .inspect(cycle(config, image), no_findings)
+        .production
+    )
+    present, empty = result.cameras[0].channels[3], result.cameras[0].channels[5]
+    assert (
+        present.occupancy is not None
+        and present.occupancy.state is OccupancyState.PRESENT
+    )
+    assert present.traditional_skip is None
+    check = present.checks[0]
+    assert check.assessment == Assessment(TechnicalStatus.SUCCESS, ProductJudgment.NG)
+    assert [reason.code for reason in check.reasons] == ["capsule.lower.missing_body"]
+    values = {measurement.name: measurement.value for measurement in check.measurements}
+    assert values["capsule.upper.length"] == 29
+    assert "capsule.lower.length" not in values
+    assert values["capsule.lower.usable_pixels"] == 600
+    assert values["capsule.lower.hue"] == 30
+    assert present.business_status is ChannelBusinessStatus.NG
+    assert empty.business_status is ChannelBusinessStatus.EMPTY
+    assert empty.traditional_skip is TraditionalSkipReason.CONFIRMED_EMPTY
+    words = FirstStationReport.from_result(1, result).reject_words
+    present_word, present_bit = divmod(present.channel_id - 1, 16)
+    empty_word, empty_bit = divmod(empty.channel_id - 1, 16)
+    assert words[present_word] & (1 << present_bit)
+    assert words[empty_word] & (1 << empty_bit) == 0
+
+
 @pytest.mark.parametrize("count", [5, 6])
 @pytest.mark.parametrize("mirrored", [False, True])
 def test_layout_slots_supply_occupancy_and_traditional_rois(

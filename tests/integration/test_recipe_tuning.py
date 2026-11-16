@@ -509,6 +509,8 @@ def test_length_controls_and_complete_vertical_span_match_production(
     for y in range(22, 62):
         x = 20 + (y - 22) // 8
         image[y, x : x + 18] = (0, 180, 180)
+    image[18:22, 20:38] = (0, 40, 40)
+    image[22, :20] = (0, 40, 40)
     frame = Frame(
         FrameId(CycleId(2), CameraId("CAM1"), 2), 2, np.concatenate([image] * 6, axis=1)
     )

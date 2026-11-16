@@ -283,7 +283,6 @@ def _geometry(
 
 
 def _color(pixels: NDArray[np.uint8], usable: NDArray[np.uint8]) -> ColorMeasurement:
-    # S/V requirements imply V > 20 foreground; no component or erosion needed.
     count = cv2.countNonZero(usable)
     # Provisional: >=ceil(5% of view area), with a 12-pixel floor. Not presence.
     minimum = max(12, (usable.size + 19) // 20)
@@ -320,11 +319,12 @@ def measure_capsule(
     )
     foreground = None
     if size:
-        # Reuse Color's HSV Value when available. Size-only never converts to HSV.
+        # HSV Value equals max(B, G, R).
+        cutoff = 40
         foreground = (
-            cv2.threshold(cv2.extractChannel(hsv, 2), 20, 255, cv2.THRESH_BINARY)[1]
+            cv2.threshold(cv2.extractChannel(hsv, 2), cutoff, 255, cv2.THRESH_BINARY)[1]
             if hsv is not None
-            else cv2.bitwise_not(cv2.inRange(crop, (0, 0, 0), (20, 20, 20)))
+            else cv2.bitwise_not(cv2.inRange(crop, (0, 0, 0), (cutoff, cutoff, cutoff)))
         ).astype(np.uint8, copy=False)
     usable = (
         cv2.inRange(hsv, (0, 40, 40), (179, 255, 255)).astype(np.uint8, copy=False)

@@ -961,8 +961,10 @@ skip. Occupancy is always on and has no persisted switch/threshold fields. Recip
 ROI, old presence/blob and old per-check color fields are rejected. There is no
 automatic Recipe migration or threshold fitting.
 
-Size measures the selected body's vertical span between its top and bottom
-pixel centers in the original image, equal to its bounding height minus one.
+Size uses a fixed foreground rule over the complete Channel ROI. A pixel is
+foreground when any BGR component is strictly greater than 40. Size measures the
+selected body's vertical span between its top and bottom pixel centers in the
+original image, equal to its bounding height minus one.
 Each logical view needs valid evidence and compares that span with Target Length,
 inclusively within Length tolerance. Existing saved `target_length` and
 `length_tolerance` values apply directly. Body
@@ -1290,9 +1292,10 @@ and cached-evidence preview. They leave tolerance, enablement and Size settings
 unchanged and never Save or activate the Recipe. Programmatic refresh, language
 changes and mode switches do not create draft edits or repeat measurement.
 
-Sample Length uses the median of vertical pixel-center spans from valid
-measured views of the current frozen reference, rounded to the nearest integer
-(ties to even), with a minimum target of one pixel. Failed rows and invalid or
+Sample Length uses the median of vertical pixel-center spans from valid views
+measured on the current frozen reference with the production Size foreground rule.
+It rounds the median to the nearest integer (ties to even), with a minimum
+target of one pixel. Failed rows and invalid or
 missing views contribute no sample; a valid view does not require its companion
 view to be usable. Sampling changes only draft `target_length`, leaving tolerance,
 enablement and the saved/active Recipe unchanged. No eligible evidence leaves the
@@ -1329,8 +1332,8 @@ captions. The vertical measurement line joins the top and bottom pixel centers a
 the body's horizontal midpoint. It remains visible across the logical divider
 while retaining the owning view identity. The control row reserves height for both
 modes' localized explanations so the shared viewport remains in place when
-switching Size/Color. Threshold edits rejudge cached evidence. Mode switches
-retain the selection, while new images or camera changes clear it. Details follow
+switching Size/Color. Target and tolerance edits rejudge cached evidence. Mode
+switches retain the selection, while new images or camera changes clear it. Details follow
 the selected view of the current frozen reference.
 Disabled checks, unavailable/pending evidence, execution ERROR and content NG are
 distinct; missing scalars display `—`, never ROI-derived measurements. Tune does

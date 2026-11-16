@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from capsule_vision.configuration import ConfigurationError, load_recipe
 from capsule_vision.inference import BoundingRect
@@ -31,7 +32,7 @@ def test_complete_crossing_body_has_exactly_one_owner(
     image = np.zeros((140, 120, 3), dtype=np.uint8)
     divider = ROI.y + ROI.height // 2
     start = divider - crossing if lower else divider - 40 + crossing
-    image[start : start + 40, 25:35] = 21
+    image[start : start + 40, 25:35] = 41
     measured = measure_capsule(image, ROI, SIZE)
     owner, other = measured.views[int(lower)], measured.views[int(not lower)]
     assert owner.body is not None and owner.invalid_reason is None
@@ -53,7 +54,7 @@ def test_significant_crossing_is_ambiguous_at_existing_quarter_rule(
     image = np.zeros((140, 120, 3), dtype=np.uint8)
     divider = ROI.y + ROI.height // 2
     start = divider - crossing if lower else divider - 40 + crossing
-    image[start : start + 40, 25:35] = 21
+    image[start : start + 40, 25:35] = 41
     measured = measure_capsule(image, ROI, SIZE)
     assert all(
         v.body is None and v.invalid_reason == "ambiguous_body" for v in measured.views
@@ -96,9 +97,9 @@ def test_two_bodies_crossing_in_opposite_directions_stay_independent() -> None:
 @pytest.mark.parametrize("area,valid", [(29, False), (30, True)])
 def test_logical_view_minimum_area_is_preserved(area: int, valid: bool) -> None:
     image = np.zeros((120, 100, 3), dtype=np.uint8)
-    image[10:13, 20:30] = 21
+    image[10:13, 20:30] = 41
     if area == 29:
-        image[10, 20] = 20
+        image[10, 20] = 40
     view = measure_capsule(image, BoundingRect(0, 0, 100, 120), SIZE).views[0]
     assert (view.body is not None) is valid
     if not valid:
@@ -112,15 +113,31 @@ def test_external_bottom_is_still_truncated() -> None:
     assert view.body is None and view.invalid_reason == "truncated_body"
 
 
+@pytest.mark.parametrize("bridge_value", [40, 41])
+def test_body_is_truncated_only_when_edge_connection_is_foreground(
+    bridge_value: int,
+) -> None:
+    image = np.zeros((140, 120, 3), dtype=np.uint8)
+    image[15:55, 28:38] = (0, 0, 180)
+    image[30, ROI.x : 28] = (0, 0, bridge_value)
+    view = measure_capsule(image, ROI, SIZE).views[0]
+    if bridge_value == 40:
+        assert view.invalid_reason is None and view.body is not None
+        assert view.body.bounding_rect == BoundingRect(28, 15, 10, 40)
+        assert view.body.endpoints == ((32.5, 15), (32.5, 54))
+    else:
+        assert view.body is None and view.invalid_reason == "truncated_body"
+
+
 @pytest.mark.parametrize("direction", [-1, 1])
 def test_diagonal_line_is_degenerate_and_noncollinear_body_is_valid(
     direction: int,
 ) -> None:
     image = np.zeros((140, 120, 3), dtype=np.uint8)
-    cv2.line(image, (50, 20), (50 + 29 * direction, 49), (21, 0, 0), 1)
+    cv2.line(image, (50, 20), (50 + 29 * direction, 49), (41, 0, 0), 1)
     line = measure_capsule(image, ROI, SIZE).views[0]
     assert line.body is None and line.invalid_reason == "invalid_geometry"
-    image[30, 51 + 10 * direction] = (21, 0, 0)
+    image[30, 51 + 10 * direction] = (41, 0, 0)
     view = measure_capsule(image, ROI, SIZE).views[0]
     assert view.invalid_reason is None and view.body is not None
     assert view.body.bounding_rect == BoundingRect(
@@ -162,7 +179,8 @@ def test_saved_size_values_apply_unchanged_to_tilted_bodies(
         points = np.array(
             [(28, y), (37, y), (45, y + 29), (36, y + 29)], dtype=np.int32
         )
-        cv2.fillConvexPoly(image, points, (21, 0, 0))
+        cv2.fillConvexPoly(image, points, (41, 0, 0))
+        image[y - 4 : y, 28:38] = (40, 0, 0)  # Dim ends lie outside the T40 body.
     before = image.copy()
     measured = measure_capsule(image, ROI, settings)
     for view, y in zip(measured.views, (15, 75), strict=True):
@@ -180,22 +198,31 @@ def test_saved_size_values_apply_unchanged_to_tilted_bodies(
     np.testing.assert_array_equal(image, before)
 
 
-def test_one_segmentation_color_only_skips_size(
+def test_size_paths_label_the_same_strict_t40_mask(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     image = np.zeros((120, 100, 3), dtype=np.uint8)
     image[10:40, 20:40] = (0, 180, 180)
     image[70:100, 20:40] = (0, 180, 180)
-    calls = 0
+    image[3, :6] = [
+        (21, 0, 0),
+        (40, 40, 40),
+        (41, 0, 0),
+        (0, 41, 0),
+        (0, 0, 41),
+        (0, 40, 0),
+    ]
+    before = image.copy()
+    image.setflags(write=False)
+    masks: list[NDArray[np.uint8]] = []
     original = cv2.connectedComponentsWithStats
 
     def observed(
-        foreground: np.ndarray[tuple[int, ...], np.dtype[np.uint8]],
+        foreground: NDArray[np.uint8],
         *,
         connectivity: int,
     ):
-        nonlocal calls
-        calls += 1
+        masks.append(foreground.copy())
         return original(foreground, connectivity=connectivity)
 
     def forbidden(*args: object) -> None:
@@ -207,13 +234,17 @@ def test_one_segmentation_color_only_skips_size(
     roi = BoundingRect(0, 0, 100, 120)
     color = CapsuleSettings(color=ColorSettings(True, 30, 0))
     only = measure_capsule(image, roi, color)
-    assert calls == 0 and all(v.body is None for v in only.views)
+    assert not masks and all(v.body is None for v in only.views)
     both = measure_capsule(image, roi, replace(color, size=SIZE.size))
-    assert calls == 1
+    assert len(masks) == 1
     assert [v.color for v in both.views] == [v.color for v in only.views]
     size_only = measure_capsule(image, roi, SIZE)
-    assert calls == 2
+    assert len(masks) == 2
     assert [v.body for v in both.views] == [v.body for v in size_only.views]
+    expected = np.where(np.any(before > 40, axis=2), 255, 0).astype(np.uint8)
+    for mask in masks:
+        np.testing.assert_array_equal(mask, expected)
+    np.testing.assert_array_equal(image, before)
 
 
 @pytest.mark.parametrize(

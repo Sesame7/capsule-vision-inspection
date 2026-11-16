@@ -722,7 +722,8 @@ unset. Confirmed EMPTY skips enabled Size/Color with recorded provenance.
 Enabled full-camera inference and result validation still run. Execution errors,
 collection failures and forced rejects retain their own reasons.
 
-Size thresholds the complete Channel ROI once (any BGR channel >20), then labels
+Size thresholds the complete Channel ROI once using `max(B, G, R) > 40`. The
+combined Size and Color path uses the equivalent HSV `V > 40`. Size then labels
 8-connected foreground once. The divider at `height // 2` assigns logical views;
 it does not crop Size bodies. Each component belongs to at most one view. Its
 predominant foreground side and centroid position must agree. The existing view
@@ -748,9 +749,10 @@ measurement. Each logical view supplies its own valid body evidence. The Size
 judge applies the saved Recipe values using
 `abs(length - target_length) <= length_tolerance` for each view.
 
-Color retains independently cropped upper/lower views, usable saturated/bright
-HSV pixels and circular Hue statistics. Only requested capabilities execute;
-Color-only does not label or measure Size bodies. Occupancy, ViMo and confirmed-EMPTY
+Color measures independently cropped upper/lower views using pixels with HSV
+saturation and Value of at least 40 and circular Hue statistics. Only requested
+capabilities execute. Color-only skips Size body labeling and measurement.
+Occupancy, ViMo and confirmed-EMPTY
 skip/reporting remain unchanged. These checks require product/lighting calibration;
 geometric tests cannot certify half-capsule detection or physical rejection.
 
