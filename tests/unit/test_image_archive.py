@@ -23,7 +23,7 @@ from capsule_vision.application.image_archive import (
 )
 from capsule_vision.configuration import ImageArchiveSettings
 from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
-from capsule_vision.inspection import CycleId, Frame
+from capsule_vision.inspection import CameraId, CycleId, Frame, FrameId
 from capsule_vision.inspection.production import (
     CameraInspectionResult,
     FindingSource,
@@ -522,3 +522,51 @@ def test_raw_pixel_limits_include_collecting_frames(tmp_path: Path) -> None:
         finally:
             archive.request_stop()
             assert archive.join(3) and archive.snapshot().retained_bytes == 0
+
+
+def test_default_archive_keeps_the_collecting_frame_and_raw_byte_bounds(
+    tmp_path: Path,
+) -> None:
+    cameras = production().layout.camera_ids
+    archive = ImageArchive(ImageArchiveSettings(str(tmp_path), True), 1, cameras)
+
+    def retain(cycle: int, camera: CameraId, height: int, width: int) -> None:
+        archive.retain(
+            Frame(
+                FrameId(CycleId(cycle), camera, cycle),
+                3.0,
+                np.zeros((height, width, 3), dtype=np.uint8),
+            )
+        )
+
+    archive.start()
+    try:
+        for cycle in range(1, 9):
+            assert archive.begin(CycleId(cycle))
+        assert not archive.begin(CycleId(9))
+        retain(1, cameras[0], 2731, 4096)  # A single image exceeds 32 MiB.
+        oversized = archive.snapshot()
+        assert oversized.dropped == 2 and oversized.retained_bytes == 0
+        assert oversized.last_issue == "Archive raw-pixel capacity exceeded"
+
+        # Eight images at 32 MiB minus 8 KiB leave 64 KiB of the shared budget.
+        for camera in cameras:
+            retain(1, camera, 2730, 4096)
+        for camera in cameras[:2]:
+            retain(2, camera, 2730, 4096)
+        retain(2, cameras[2], 85, 257)  # 65,535 bytes of contiguous BGR.
+        full = archive.snapshot()
+        assert full.retained_bytes == 256 * 1024 * 1024 - 1
+        assert full.dropped == 2 and full.collecting == 8 and full.pending == 0
+
+        retain(2, cameras[3], 20, 60)
+        overflow = archive.snapshot()
+        assert overflow.dropped == 3 and overflow.retained_bytes == full.retained_bytes
+        assert overflow.last_issue == "Archive raw-pixel capacity exceeded"
+        archive.complete(CycleId(2), None)
+        assert archive.snapshot().retained_bytes == 6 * 2730 * 4096 * 3
+    finally:
+        archive.request_stop()
+        assert archive.join(3)
+    drained = archive.snapshot()
+    assert drained.retained_bytes == drained.collecting == drained.written == 0

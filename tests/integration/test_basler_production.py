@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.support.application import WAIT
 from tests.support.cycles import image_result
 from tests.support.diagnostics import observations
+from tests.support.fins_tcp import TcpPeer
 from tests.support.production import inferred
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import select_production_recipe
@@ -76,9 +77,10 @@ from capsule_vision.application.production_application import (
 )
 from capsule_vision.application.run_configuration import RunConfiguration
 from capsule_vision.application.source_control import SourceControlState
-from capsule_vision.communication import FinsUdpEndpoint
+from capsule_vision.communication import FinsTcpEndpoint, FinsUdpEndpoint
 from capsule_vision.communication.reporting import (
     ProductionReportingCommands,
+    ReportingMode,
     ReportingSelection,
     ReportingSettings,
     ReportStage,
@@ -98,7 +100,7 @@ from capsule_vision.diagnostics import (
 )
 from capsule_vision.inference import BoundingRect, ImageResult
 from capsule_vision.inference._validation import uint8_array
-from capsule_vision.inspection import CameraId
+from capsule_vision.inspection import CameraId, CycleStatus, FrameId
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
@@ -504,6 +506,180 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
         assert {
             c.camera: c.image_path for c in saved.cameras if c.image_path is not None
         } == {file.parent.name: file for file in root.rglob("*.png")}
+    finally:
+        reopened.request_stop()
+        assert reopened.join(WAIT)
+
+
+@pytest.mark.parametrize("camera_count", [5, 6])
+def test_four_cycle_archive_burst_drains_and_links_with_a_blocked_writer(
+    qapp: QApplication,
+    tmp_path: Path,
+    passive: PassiveBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    camera_count: int,
+) -> None:
+    from capsule_vision.application.image_archive import write_png
+
+    data = saved_data(tmp_path, camera_count=camera_count)
+    passive.serials = SERIALS[:camera_count]
+    width, height = 2048, 1728
+    passive.dimensions.update(dict.fromkeys(passive.serials, (width, height)))
+    save_basler(data.sources)
+    root = tmp_path / "archive"
+    recipe = data.recipes / "local.json"
+    save_recipe(
+        recipe,
+        replace(
+            load_recipe(recipe),
+            image_archive=ImageArchiveSettings(str(root), save_empty=True),
+        ),
+    )
+    entered, release = Event(), Event()
+    saved_frames: list[FrameId] = []
+
+    def writer(directory: Path, item: ArchiveImage) -> Path:
+        assert not item.frame.image.flags.writeable
+        saved_frames.append(item.frame.id)
+        entered.set()
+        assert release.wait(4 * WAIT)
+        return write_png(directory, item)
+
+    def archiver(
+        settings: ImageArchiveSettings,
+        generation: int,
+        cameras: tuple[CameraId, ...],
+        *,
+        diagnostics: RunDiagnostics | None = None,
+    ) -> ImageArchive:
+        return ImageArchive(
+            settings, generation, cameras, writer=writer, diagnostics=diagnostics
+        )
+
+    monkeypatch.setattr(production_session, "ImageArchive", archiver)
+    engine = Engine()
+    engine.release_warm.set()
+    startup = authenticated_startup(data, engine_factory=lambda _: engine)
+    app = startup.application
+    assert isinstance(app, SourceProductionApplication) and app.history is not None
+    history = app.history
+    expected_frames: set[FrameId] = set()
+    expected_count = 4 * camera_count
+    frame_bytes = height * width * 3
+    with TcpPeer() as peer:
+        try:
+            app.set_reporting_selection(
+                ReportingSelection(
+                    True,
+                    ReportingSettings(
+                        endpoint=FinsTcpEndpoint(port=peer.port),
+                        mode=ReportingMode.FOUR_CYCLE,
+                    ),
+                )
+            )
+            app.start().result(WAIT)
+            run_id = app.snapshot().run_id
+            assert run_id is not None
+            initial = app.archive_snapshot()
+            assert (
+                initial is not None and initial.pending == initial.retained_bytes == 0
+            )
+            peer.set_words(48, (73,))
+            order = tuple(reversed(range(camera_count)))
+            for cycle in range(1, 5):
+                passive.expose(cycle, order, intensity=cycle)
+                until(
+                    lambda cycle=cycle: (
+                        app.snapshot().counters.cycles_completed == cycle
+                    )
+                )
+                inspected = app.snapshot()
+                result = inspected.latest_production_result
+                assert result is not None and result.cycle_id == cycle
+                assert result.cycle_status is CycleStatus.COMPLETE
+                assert inspected.counters.business_empty == cycle * camera_count * 6
+                assert entered.wait(WAIT) and not release.is_set()
+                observed = app.archive_snapshot()
+                assert observed is not None
+                assert observed.pending == cycle * camera_count
+                assert observed.retained_bytes == observed.pending * frame_bytes
+                assert observed.collecting == observed.written == observed.dropped == 0
+                assert observed.failed == 0
+                for camera in result.cameras:
+                    assert camera.frame_id is not None
+                    assert camera.image_shape == (height, width, 3)
+                    expected_frames.add(camera.frame_id)
+            assert len(expected_frames) == expected_count
+            until(
+                lambda: (
+                    (report := app.reporting_snapshot()) is not None
+                    and report.acknowledged_count == 1
+                )
+            )
+            assert peer.words(49) == (73,)
+            assert len(history.query().result(WAIT).records) == 4
+            assert history.snapshot().images_linked == 0
+            assert len(saved_frames) == 1 and not root.exists()
+
+            if camera_count == 6:
+                # One more frame fits the byte budget. The writable queue is full.
+                peer.set_words(48, (74,))
+                passive.expose(5, order, intensity=5)
+                until(lambda: app.snapshot().counters.cycles_completed == 5)
+                assert app.snapshot().counters.business_empty == 5 * camera_count * 6
+                saturated = app.archive_snapshot()
+                assert saturated is not None and saturated.pending == 24
+                assert saturated.retained_bytes == expected_count * frame_bytes
+                assert saturated.dropped == 6 and saturated.collecting == 0
+                assert saturated.last_issue == "Archive write queue capacity exceeded"
+
+            closed = app.close()
+            assert not closed.done()
+            release.set()
+            closed.result(3 * WAIT)
+        finally:
+            release.set()
+            app.close().result(3 * WAIT)
+            assert app.join(WAIT)
+
+    drained = app.archive_snapshot()
+    assert drained is not None and not drained.alive
+    assert drained.written == expected_count and drained.failed == 0
+    assert drained.dropped == (6 if camera_count == 6 else 0)
+    assert drained.retained_bytes == drained.pending == drained.collecting == 0
+    assert len(saved_frames) == expected_count and set(saved_frames) == expected_frames
+    saved = history.snapshot()
+    assert saved.images_linked == expected_count and saved.image_links_lost == 0
+
+    reopened = ProductionHistory(data.history)
+    try:
+        records = reopened.query().result(WAIT).records
+        assert {record.cycle_id for record in records} == set(
+            range(1, 6 if camera_count == 6 else 5)
+        )
+        files: set[Path] = set()
+        for record in records:
+            assert (
+                record.context.run_id == run_id and len(record.cameras) == camera_count
+            )
+            for camera in record.cameras:
+                path = camera.image_path
+                if record.cycle_id == 5:
+                    assert path is None
+                    continue
+                assert path is not None and path.parent.name == camera.camera
+                assert path.name.startswith("3_") and path.name.endswith(
+                    f"_{record.cycle_id}_{camera.camera}_{run_id}.png"
+                )
+                image = cv2.imdecode(
+                    np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR
+                )
+                index = int(camera.camera.removeprefix("CAM")) - 1
+                assert image is not None and image.shape == (height, width, 3)
+                assert np.all(image == record.cycle_id + index)
+                files.add(path)
+        assert len(files) == expected_count and files == set(root.rglob("*.png"))
+        assert not list(root.rglob("*.part"))
     finally:
         reopened.request_stop()
         assert reopened.join(WAIT)

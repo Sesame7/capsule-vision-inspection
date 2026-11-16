@@ -1393,11 +1393,15 @@ Recipe switch controls one image per camera/cycle, independently of other camera
 Unassigned findings do not invent channel judgments. Collection-forced rejection
 does not turn an unfinished frame into an inspected archive image.
 
-Handoff is bounded and performs no encoding/filesystem work. The session registers
-PLC submission first; image writing never gates accounting, reporting ACKs or
-inspection deadlines. Limits are 8 collecting cycles, 12 queued/active writes,
-32 MiB per frame and 128 MiB combined retained/queued/active raw pixels. Encoding
-uses additional transient storage for one image, so this is not an RSS cap.
+The session registers PLC submission first. Each Cycle hands off eligible images
+at its terminal inspection result. Encoding and filesystem work run on the
+archive worker, independently of accounting, reporting ACKs and inspection
+deadlines. Limits are 8 collecting Cycles, 24 queued or active writes,
+32 MiB per frame and 256 MiB of combined retained, queued and active raw pixels.
+With no existing archive backlog, one burst of four Cycles with up to six eligible
+images each fits these defaults even while the writer is temporarily blocked,
+provided the combined raw pixels are within the byte budget. Encoding uses
+additional transient storage for one image beyond that budget.
 Overflow drops archival work with scalar diagnostics; disk/encoding/path failures
 record a bounded last issue and continue subsequent images. Bridge observation
 shows an archive warning/detail without changing judgments, counters or PLC state.
