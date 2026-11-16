@@ -62,7 +62,11 @@ prescribe a new service, database or framework.
 - Each IPC identifies a Production Batch by its trimmed, nonempty, case-sensitive label and retains a stable internal UUID. Selecting a new label starts its own totals. Selecting a previously used label continues its original Batch and totals, including after an explicit End.
 - Switching labels changes the selection. End Batch records an end event and clears the selection after confirmation. Startup restores the last selection and totals and waits for an explicit Start. Each successful Start creates a distinct Run, including Runs that stop before the first Cycle. A named Batch requires durable Run admission.
 - Basler can Start without a Batch in every reporting mode. Retain the unbatched Run, its Cycles and eligible PLC groups when storage supports them. If recording is unavailable or incomplete, show that uncertainty and allow inspection. Later Batch selections apply only to subsequent Runs.
-- In READY without a named Batch, an Operator or higher can confirm **Clear Statistics** in the Batch dialog. This starts fresh displayed counts in the last successful Start's counting mode and preserves recorded Runs and groups.
+- In READY without a named Batch, an Operator or higher can confirm **Clear
+  Statistics** in the Batch dialog. This resets the displayed counters and
+  preserves the current effective counting basis and persisted History, including
+  Batch, Run and group records. The counting basis may come from a previously
+  selected or restored Batch. See [Display and Web](architecture.md#display-and-web).
 - Switching Recipe does not itself reset the operator Batch's cumulative quantities. Exact constraints on changing Recipe while running remain subject to the current lifecycle contract unless deliberately changed in a later Phase.
 
 ## 3. PLC reporting, result semantics and display
@@ -253,7 +257,11 @@ for an explicitly approved change. The product requirements are:
 - Alarm monitoring is **independent of PLC detection-result reporting**. When configured and enabled, it can run after software startup while Production is READY, RUNNING, or stopped; unavailable communication is an **unknown/unavailable monitor state**, not proof that all PLC alarms cleared.
 - PLC retains responsibility for equipment/mechanical safety response. Software displays actual PLC alarm signals and important software faults, recording alarm occurrence and recovery transitions rather than every poll. Preserve current application FAULT/cleanup semantics for serious software failures. Do not add alarm acknowledgment, complex severity editors, sound systems, or remote notifications in the first implementation.
 - PLC alarm reads must preserve the timing and ownership of critical four-Cycle reporting reads and writes. Enabling both on the same PLC requires field confirmation that it can serve two independent FINS/TCP connections concurrently and meet reporting deadlines.
-- Engineer and Administrator can review the initial Audit Trail by date, actor and action. It has no automatic retention deletion. All roles can observe current alarms. Operator and above can review 30 days of alarm observations by date, category and Batch. Engineer and above can save the independent monitor selection. See [PLC alarm monitoring](communication.md#plc-alarm-monitoring) for activation and equipment acceptance.
+- The approved Audit review filter set for Engineer and Administrator is limited
+  to date range, Batch scope (all Batches, a selected Batch, or unbatched), and
+  historical account. Action type remains visible on each entry. Audit records
+  have no automatic retention deletion. See the [Audit Trail contract](architecture.md#audit-trail).
+- All roles can observe current alarms. Operator and above can review 30 days of alarm observations by date, category and Batch. Engineer and above can save the independent monitor selection. See [PLC alarm monitoring](communication.md#plc-alarm-monitoring) for activation and equipment acceptance.
 
 ## 8. Global UI and multilingual quality contract
 
