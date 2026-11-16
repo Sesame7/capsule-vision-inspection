@@ -1492,6 +1492,7 @@ def test_recipe_discard_reads_disk_and_preserves_other_domains(
     assert session.entry is not None
     entry = session.entry
     assert not page.buttons["recipe_discard"].isEnabled()
+    assert not page.buttons["save"].isEnabled()
     edit(page.metadata["display_name"], "Unsaved")
     page.capsule_enabled["size"].click()
     draft = replace(session.draft)
@@ -1519,6 +1520,7 @@ def test_recipe_discard_reads_disk_and_preserves_other_domains(
             save_recipe(
                 entry.path, entry.recipe
             )  # Restore this test's file for teardown.
+    assert page.buttons["save"].isEnabled() == (outcome != "reload")
     if outcome != "failure":
         assert entry.path.read_bytes() == payload
     assert session.machine_editor.definition == machine
@@ -1588,6 +1590,22 @@ def test_rule_rows_expand_and_collapse_without_toggling_checks(
     assert page.preview is not None and not session.draft.capsule.size.enabled
 
 
+def test_blank_recipe_draft_allows_initial_save_and_reload_restores_saved_state(
+    configured_screen: Screen,
+) -> None:
+    window, session, _ = configured_screen
+    page = window.recipe_page
+    original = session.entry
+    assert original is not None
+    session.new()
+    page.show_draft()
+    assert session.entry is None and not session.dirty
+    assert page.buttons["save"].isEnabled()
+    page.buttons["reload"].click()
+    assert session.entry == original
+    assert not page.buttons["save"].isEnabled()
+
+
 @pytest.mark.parametrize("duplicate", [False, True])
 def test_new_duplicate_dialog_and_save(
     configured_screen: Screen, duplicate: bool
@@ -1603,6 +1621,7 @@ def test_new_duplicate_dialog_and_save(
             )
         )
     assert session.entry is not None
+    assert not page.buttons["save"].isEnabled()
     original = session.entry
     page.buttons["duplicate_recipe" if duplicate else "new_recipe"].click()
     dialog = page.findChildren(QDialog)[-1]
@@ -1628,9 +1647,11 @@ def test_new_duplicate_dialog_and_save(
     assert (
         len(session.catalog.discover().entries) == 2
     )  # Draft only until Save and apply.
-    page.save()
+    assert page.buttons["save"].isEnabled()
+    page.buttons["save"].click()
     until(lambda: not page.busy)
     assert session.entry is not None and load_recipe(session.entry.path) == expected
+    assert not page.buttons["save"].isEnabled()
     assert load_recipe(original.path) == original.recipe
     assert len(session.catalog.discover().entries) == 3
     assert window.bridge.application.snapshot().active is None
@@ -1698,6 +1719,7 @@ def test_invalid_save_blocks_navigation(
     page.buttons["new_recipe"].click()
     until(lambda: not page.busy)
     assert session.entry == original and session.dirty
+    assert page.buttons["save"].isEnabled()
     assert page.status.text() == text("recipe_validation_error", page.language)
     assert "display_name" in page.status.toolTip()
     assert not page.findChildren(QDialog)
@@ -1891,6 +1913,7 @@ def test_actual_dirty_dialog(
     until(lambda: not page.busy)
     assert not any(d.isVisible() for d in page.findChildren(QMessageBox))
     assert session.dirty == (decision == "cancel")
+    assert page.buttons["save"].isEnabled() == (decision == "cancel")
     assert load_recipe(original.path).display_name == (
         "未保存" if decision == "save" else original.recipe.display_name
     )
@@ -1945,10 +1968,14 @@ def test_save_failure_keeps_draft_file_and_application(
     monkeypatch.setattr(session, "save", fail)
     page = window.recipe_page
     edit(page.metadata["display_name"], "Keep draft")
-    page.save()
+    save_button = page.buttons["save"]
+    assert save_button.isEnabled()
+    save_button.click()
+    assert not save_button.isEnabled()
     until(lambda: not page.busy)
     assert page.status.text() == text("recipe_save_error", page.language)
     assert "read-only" in page.status.toolTip() and session.dirty and not page.busy
+    assert save_button.isEnabled()
     assert session.entry.path.read_bytes() == original
     assert window.bridge.application.snapshot() == before
 
@@ -1979,6 +2006,7 @@ def test_dirty_save_switch_leaves_production_selection_unchanged(
     page.recipes.activated.emit(target)
     until(lambda: not page.busy)
     assert session.entry is not None and session.entry.path != original.path
+    assert not page.buttons["save"].isEnabled()
     assert load_recipe(original.path).display_name == "Persisted"
     assert page.status.text() != text("recipe_prepare_error", page.language)
     assert window.bridge.application.snapshot() == replace(

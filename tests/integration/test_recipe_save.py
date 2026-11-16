@@ -9,7 +9,7 @@ from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT, ReplayEngine
 from tests.support.qt import close_window, until
-from tests.support.recipe_ui import Screen
+from tests.support.recipe_ui import Screen, edit
 from tests.support.recipe_ui import configured_screen as configured_screen
 from tests.support.startup import (
     TEST_PASSWORD,
@@ -83,8 +83,26 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
             return prepare(editor, identity)
 
         monkeypatch.setattr(RecipeEditorSession, "prepare_saved", counted)
-        session.draft.display_name = "Latest saved"
-        window.recipe_page.save()
+        window.navigate(1)
+        page = window.recipe_page
+        save_button = page.buttons["save"]
+        path = session.entry.path
+        original = path.read_bytes(), path.stat().st_mtime_ns
+        assert not save_button.isEnabled()
+        edit(page.metadata["display_name"], "Reverted edit")
+        assert save_button.isEnabled()
+        edit(page.metadata["display_name"], session.entry.recipe.display_name)
+        assert not save_button.isEnabled()
+        save_button.click()
+        page.save()
+        assert not window.editing.busy and not calls and applied.count() == 0
+        assert (path.read_bytes(), path.stat().st_mtime_ns) == original
+        assert not owner.audit_page(AuditQuery(action="recipe.save")).result(WAIT)
+        assert app.snapshot() == before
+
+        edit(page.metadata["display_name"], "Latest saved")
+        assert save_button.isEnabled()
+        save_button.click()
         until(lambda: not window.editing.busy)
         saved = app.snapshot()
         assert saved == replace(
@@ -97,6 +115,7 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         assert not calls and applied.count() == 0
         assert data.preferences.read_bytes() == preferences
         assert not session.dirty
+        assert not save_button.isEnabled()
         assert load_recipe(session.entry.path).display_name == "Latest saved"
         assert window.recipe_page.status.text() == text("saved", window.language)
         picker = window.production_recipes

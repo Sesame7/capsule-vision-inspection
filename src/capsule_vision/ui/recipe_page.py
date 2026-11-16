@@ -615,6 +615,10 @@ class RecipePage(QWidget):
     def editable(self) -> bool:
         return not self.browsing and self.editing.editable() and not self.closing
 
+    def _has_save_work(self) -> bool:
+        session = self.session
+        return session is not None and (session.entry is None or session.dirty)
+
     def identity_changed(self) -> None:
         self.process_parameters.end_plc_preview()
         if self._dialog is not None:
@@ -1055,6 +1059,8 @@ class RecipePage(QWidget):
                 enabled = bool(self.archive_directory.text())
             if key == "reload":
                 enabled = session is not None and not self.busy and not self.closing
+            elif key == "save":
+                enabled = allowed and self._has_save_work()
             elif key == "recipe_discard":
                 enabled = allowed and session is not None and session.dirty
             elif key == "delete_recipe":
@@ -1578,8 +1584,7 @@ class RecipePage(QWidget):
     ) -> None:
         if not self.editable() or self.session is None:
             return
-        session = self.session
-        changed = session.dirty or session.entry is None
+        changed = self._has_save_work()
 
         def finished(_: object, error: BaseException | None) -> None:
             if error is not None:

@@ -152,7 +152,8 @@ def test_page_controls_combine_role_and_state(
         "dent",
     )
     assert page.metadata["display_name"].isReadOnly() != engineer
-    for key in ("save", "new_recipe", "model_import", "model_rename", "cache_prepare"):
+    assert not page.buttons["save"].isEnabled()
+    for key in ("new_recipe", "model_import", "model_rename", "cache_prepare"):
         assert page.buttons[key].isEnabled() == engineer
     assert page.model.isEnabled() == engineer
     window.navigate(2)
@@ -275,9 +276,11 @@ def test_browsing_saved_recipes_preserves_dirty_engineering_state(
     draft = session.draft
     definition = draft.to_recipe()
     page.show_draft()
+    assert page.buttons["save"].isEnabled()
     before = window.bridge.application.snapshot()
     files = {p: p.read_bytes() for p in (tmp_path / "data").rglob("*.json")}
     login(window, role)
+    assert not page.buttons["save"].isEnabled()
     assert page.metadata["display_name"].text() == entry.recipe.display_name
     idx = page.recipes.findText("Second saved")
     page.recipes.activated.emit(idx)
@@ -322,6 +325,7 @@ def test_browsing_saved_recipes_preserves_dirty_engineering_state(
         load_preferences(tmp_path / "data/app.json").last_applied_recipe_id == "local"
     )
     login(window, Role.ENGINEER)
+    assert page.buttons["save"].isEnabled()
     assert page.recipes.currentText() == entry.recipe.display_name
     assert (
         page.metadata["display_name"].text() == "Unsaved engineer edit"

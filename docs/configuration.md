@@ -1472,8 +1472,10 @@ frame are still image evidence: enabled Size/Color can report missing-body/unusa
 color NG with unavailable numeric measurements. Tune has no Occupancy fusion and
 does not reinterpret that result as Production EMPTY or consume historical NG.
 
-Recipe **Save** persists its definition and audit evidence, including definitions
-with incomplete Model references. Invalid Communication settings or incomplete
+The Recipe **Save** button is enabled only for pending draft changes or a new
+Recipe awaiting its first save, subject to the existing permissions and editing
+locks. Save persists the definition and audit evidence, including definitions with
+incomplete Model references. Invalid Communication settings or incomplete
 MachineLayout/source definitions do not block that persistence. Save reports its
 publication outcome and does not prepare the Recipe or apply PLC process values.
 Dirty navigation/close still offers Save, Discard or Cancel.
