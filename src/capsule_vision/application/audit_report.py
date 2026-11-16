@@ -12,27 +12,34 @@ from threading import Event
 from time import time
 from typing import TYPE_CHECKING
 
-from capsule_vision.localization.catalog import AUDIT_ACTIONS, text
+from capsule_vision.localization.audit_wording import audit_text
+from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
-from capsule_vision.localization.record_text import readable_value, record_reason
 
 from .audit import AuditAccount, AuditOperation, AuditQuery, AuditRecord
 from .audit_presentation import (
-    ACTION_CAPTIONS,
     BATCH_FIELDS,
-    OUTCOME_CAPTIONS,
     AuditChange,
     ChangeComparison,
+    action_caption,
+    after_caption_key,
+    before_caption_key,
     change_caption,
     change_comparison,
     configuration_field_caption,
+    failure_caption,
     incomplete_changes,
-    login_failure_reason,
+    outcome_caption,
+    outcome_evidence_caption,
     plc_requested_values,
     plc_write_range,
     recorded_change_pairs,
+    scalar_change_caption,
     target_caption,
     unsuccessful_login,
+)
+from .audit_presentation import (
+    disclosed_business_text as _business_text,
 )
 from .identity_models import Role
 from .records_query import RecordsScope, associated_audit
@@ -226,28 +233,8 @@ def field_groups(
     return left, right
 
 
-_PRIVATE_TEXT = re.compile(
-    r"""\\|(?:^|[\s("'=])(?:[a-z]:/|/\S|\.{1,2}/)|"""
-    r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b|"
-    r"\b(?=[a-z0-9._-]*[a-z])[a-z0-9._-]+:[0-9]{1,5}\b|"
-    r"\b(?:password|passwd|credential|verifier|secret|salt|digest|token)\s*[:=]",
-    re.IGNORECASE | re.ASCII,
-)
-
-
-def _business_text(value: str) -> str:
-    # Apply this only to fields explicitly recorded as business names or text.
-    return (
-        readable_value(value)
-        if value.isprintable() and not _PRIVATE_TEXT.search(value)
-        else ""
-    )
-
-
 def _target(entry: AuditRecord, language: Language) -> str:
     op = entry.operation
-    if op.action == "production.start" and entry.outcome == "success":
-        return text("records_run", language)
     if op.action == "plc.write":
         if register_range := plc_write_range(op.target):
             address, count = register_range
@@ -262,15 +249,9 @@ def _target(entry: AuditRecord, language: Language) -> str:
             else "",
         }[op.action]
         return _business_text(label) or text("batch_id", language)
-    if (
-        op.action in ("account.role", "account.enabled", "account.reset_password")
-        and entry.outcome == "success"
-    ):
-        # The account owner supplies the committed target username.
-        return _business_text(entry.detail) or text("records_user", language)
     if op.action == "model.stage":
         return text("model", language)
-    return _business_text(target_caption(entry, language)) or "—"
+    return _business_text(target_caption(entry, language, customer=True)) or "—"
 
 
 _RECIPE_FIELDS = {
@@ -417,39 +398,25 @@ def _changes(action: str, value: str, language: Language) -> str:
     return ""
 
 
-_FAILURE_CAPTIONS = {
-    "AuthorizationError": "audit_denied",
-    "StaleSessionError": "identity_stale",
-    "ValueError": "records_config_error",
-    "OSError": "records_config_io",
-    "AuditUnavailable": "audit_required",
-    "AuthenticationError": "identity_invalid",
-    "SecurityStorageError": "identity_storage",
-    "AccountConflictError": "identity_conflict",
-    "PasswordReuseError": "identity_rotate",
-    "CancelledError": "audit_cancelled",
-    "ApplicationStateError": "read_only",
-    "PermissionError": "audit_denied",
-    "ReportingWriteProtectedError": "plc_reporting_write_protected",
-}
-
-
 def _disclosed_change(
     action: str, field: str, value: str, language: Language
 ) -> tuple[str, str] | None:
     if action in _CONFIGURATION_FIELDS or action == "batch.information":
         return _approved_field(action, field, value, language)
     rendered = _changes(action, value, language)
-    return (text(field, language), rendered) if rendered else None
+    return (
+        (scalar_change_caption(action, field, language), rendered) if rendered else None
+    )
 
 
 def details(
     entry: AuditRecord, language: Language
 ) -> tuple[ChangeComparison | None, str]:
     """Return only approved paired fields and independently displayable detail."""
+    reason = failure_caption(entry, language, customer=True)
+    reason_line = f"{audit_text('reasons', language)}: {reason}" if reason else ""
     if unsuccessful_login(entry):
-        reason = login_failure_reason(entry, language)
-        return None, f"{text('reasons', language)}: {reason}" if reason else ""
+        return None, reason_line
     op = entry.operation
     plc_write = op.action == "plc.write"
     pairs = recorded_change_pairs(op)
@@ -488,30 +455,21 @@ def details(
         ):
             before = after = ""
     lines = [
-        f"{text(caption, language)}: {value}"
+        f"{audit_text(caption, language)}: {value}"
         for caption, value in (
-            ("audit_before", before),
-            (
-                "audit_after"
-                if entry.outcome == "success" and not plc_write
-                else "audit_requested",
-                after,
-            ),
+            (before_caption_key(op.action, language), before),
+            (after_caption_key(entry, language), after),
         )
         if value
     ]
-    detail = entry.detail.strip()
-    if entry.outcome != "success" and detail not in ("", entry.outcome, op.target):
-        # record_reason leaves unknown input unchanged. Only its known
-        # translations and the explicit classifications above reach the report.
-        reason = record_reason(detail, language)
-        if reason == detail:
-            reason = text(_FAILURE_CAPTIONS.get(detail, "operation_error"), language)
-        lines.append(f"{text('reasons', language)}: {reason}")
+    if evidence := outcome_evidence_caption(entry, language):
+        lines.append(evidence)
+    if reason_line:
+        lines.append(reason_line)
     if incomplete:
-        lines.append(text("identity_audit_incomplete", language))
+        lines.append(audit_text("identity_audit_incomplete", language))
     if omitted:
-        lines.append(text("audit_approved_values", language))
+        lines.append(audit_text("audit_approved_values", language))
     comparison = (
         change_comparison(tuple(rows), entry.outcome, language) if rows else None
     )
@@ -525,25 +483,14 @@ def table(db: sqlite3.Connection, language: Language) -> Table:
         for row in db.execute("SELECT * FROM audit_records ORDER BY cursor DESC"):
             entry = record(row)
             op = entry.operation
-            short = ACTION_CAPTIONS.get(op.action)
-            if op.action == "account.enabled" and op.after in ("True", "False"):
-                short = "identity_enable" if op.after == "True" else "identity_disable"
-            action = (
-                text(short or op.action, language)
-                if short or op.action in AUDIT_ACTIONS
-                else text("audit_action", language)
-            )
-            outcome = text(
-                OUTCOME_CAPTIONS.get(entry.outcome, "audit_" + entry.outcome), language
-            )
             comparison, detail = details(entry, language)
             yield AuditReportRow(
                 (
                     datetime.fromisoformat(op.utc).astimezone().replace(tzinfo=None),
                     _business_text(op.username) or "—",
-                    action,
+                    action_caption(op, language, customer=True),
                     _target(entry, language),
-                    outcome,
+                    outcome_caption(entry.outcome, language),
                 ),
                 detail,
                 comparison,

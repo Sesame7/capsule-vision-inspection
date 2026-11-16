@@ -25,7 +25,14 @@ from capsule_vision.application.audit import (
     AuditQuery,
     AuditRecord,
 )
-from capsule_vision.application.audit_presentation import local_change_comparison
+from capsule_vision.application.audit_presentation import (
+    ACTION_CAPTIONS,
+    action_caption,
+    failure_caption,
+    local_change_comparison,
+    outcome_caption,
+    target_caption,
+)
 from capsule_vision.application.audit_report import (
     AuditReportRequest,
     NoAuditRecords,
@@ -41,8 +48,9 @@ from capsule_vision.application.identity_models import (
 )
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.report_content import AuditReportRow, ReportData
-from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.audit_wording import audit_text
+from capsule_vision.localization.catalog import AUDIT_ACTIONS, text
+from capsule_vision.localization.languages import LANGUAGES, Language
 
 STAMP = 1_800_000_000
 
@@ -77,6 +85,172 @@ def operation(
         id=f"observed-{n}",
         utc=datetime.fromtimestamp(STAMP + n, UTC).isoformat(timespec="microseconds"),
     )
+
+
+@pytest.mark.parametrize("language", ("zh", "en"))
+def test_audit_action_captions_cover_all_recorded_codes(language: Language) -> None:
+    captions = {
+        "session.login": ("登录", "Sign in"),
+        "session.auto_login": ("启动时自动登录", "Startup auto-login"),
+        "session.logout": ("退出登录", "Logout"),
+        "account.create": ("创建账户", "Create account"),
+        "account.enabled": ("更改账户状态", "Change account status"),
+        "account.role": ("更改角色", "Change Role"),
+        "account.change_password": ("修改密码", "Change Password"),
+        "account.reset_password": ("重置为临时密码", "Reset to temporary password"),
+        "account.set_auto_login": (
+            "授权启动时自动登录",
+            "Authorize startup auto-login",
+        ),
+        "account.disable_auto_login": (
+            "撤销启动自动登录授权",
+            "Revoke startup auto-login",
+        ),
+        "production.start": ("启动检测", "Start inspection"),
+        "production.stop": ("停止检测", "Stop inspection"),
+        "production.recipe": ("选择生产配方", "Select Production Recipe"),
+        "batch.select": ("选择批次", "Select Batch"),
+        "batch.end": ("结束批次选择", "End Batch selection"),
+        "batch.information": ("编辑批次信息", "Edit Batch information"),
+        "production.clear_statistics": ("清零统计", "Clear Statistics"),
+        "recipe.save": ("保存配方定义", "Save Recipe definition"),
+        "recipe.delete": ("删除配方", "Delete Recipe"),
+        "model.stage": ("暂存并检查模型", "Stage Model import"),
+        "model.publish": ("发布模型", "Publish Model"),
+        "model.import": ("模型导入", "Model import"),
+        "model.rename": ("重命名模型", "Rename Model"),
+        "model.delete": ("删除模型", "Delete Model"),
+        "model.cache": ("准备模型缓存", "Prepare Model cache"),
+        "vision.sources": ("保存相机源设置", "Save camera source settings"),
+        "vision.layout": ("保存设备布局", "Save machine layout"),
+        "alarm_definitions.create": ("创建本地报警文件", "Create local alarm file"),
+        "communication.save": ("保存通讯设置", "Save communication settings"),
+        "communication.web_power": ("保存 Web 启用选项", "Save Web on/off setting"),
+        "plc.write": ("手动 PLC 写入", "Manual PLC write"),
+        "recipe.process_apply": ("应用配方 PLC 参数", "Apply Recipe PLC values"),
+        "recipe.process_value": (
+            "写入并回读工艺参数",
+            "Write and read back process value",
+        ),
+        "security.admission": ("操作授权检查", "Command authorization check"),
+        "security.storage": ("账户存储异常", "Account storage issue"),
+        "history.storage": ("生产历史存储异常", "Production History storage issue"),
+        "preferences.save": ("保存应用首选项", "Save application preferences"),
+    }
+    assert len(captions) == 37 and set(captions) == set(AUDIT_ACTIONS) | set(
+        ACTION_CAPTIONS
+    )
+    column = int(language == "en")
+    for action, caption in captions.items():
+        op = operation(action, "", 0)
+        assert action_caption(op, language) == caption[column]
+        assert action_caption(op, language, customer=True) == caption[column]
+        full = (
+            ("从模板创建本地报警文件", "Create local alarm file from template")[column]
+            if action == "alarm_definitions.create"
+            else caption[column]
+        )
+        assert action_caption(op, language, tooltip=True) == full
+    for value, caption in (
+        ("True", ("启用账户", "Enable account")),
+        ("False", ("停用账户", "Disable account")),
+    ):
+        op = operation("account.enabled", "", 0, after=value)
+        assert (
+            action_caption(op, language)
+            == action_caption(op, language, tooltip=True)
+            == caption[column]
+        )
+    for outcome, caption in {
+        "success": ("成功", "Success"),
+        "failed": ("失败", "Failed"),
+        "denied": ("已拒绝", "Denied"),
+        "stale": ("请求已失效", "Superseded"),
+        "cancelled": ("已取消", "Cancelled"),
+        "uncertain": ("执行结果不确定", "Execution uncertain"),
+        "unresolved": ("无完成记录", "No completion recorded"),
+    }.items():
+        assert outcome_caption(outcome, language) == caption[column]
+        assert outcome_caption(outcome, language, tooltip=True) == caption[column]
+
+
+def test_audit_captions_leave_shared_keys_and_other_ui_languages_intact() -> None:
+    assert text("replay_start", "en") == "Start"
+    assert text("identity_login", "en") == "Login"
+    assert text("product_code", "en") == "Product code (optional)"
+    assert text("audit_denied", "zh") == "权限不足"
+    assert text("records_uncertain", "en") == "Uncertain"
+    start = AuditRecord(
+        1, operation("production.start", "run-id", 0), "success", "", ""
+    )
+    for language in LANGUAGES:
+        if language in ("zh", "en"):
+            continue
+        for action in set(AUDIT_ACTIONS) | set(ACTION_CAPTIONS):
+            op = operation(action, "", 0)
+            assert action_caption(op, language) == text(
+                ACTION_CAPTIONS.get(action, action), language
+            )
+        assert outcome_caption("unresolved", language) == text(
+            "records_unresolved", language
+        )
+        assert outcome_caption("denied", language) == text("audit_denied", language)
+        assert target_caption(start, language) == text("page_recipe", language)
+
+
+def test_recorded_reasons_remain_action_specific_and_supported() -> None:
+    cases = (
+        ("production.start", "failed", "ApplicationStateError", "Start unavailable"),
+        ("recipe.save", "failed", "AuditUnavailable", "Audit confirmation unavailable"),
+        ("model.delete", "uncertain", "OSError", "File or system operation failed"),
+        ("model.delete", "failed", "PermissionError", "Access denied"),
+        ("vision.sources", "failed", "ValueError", "Validation failed"),
+        (
+            "account.change_password",
+            "failed",
+            "AuthenticationError",
+            "Identity check failed",
+        ),
+        ("account.role", "failed", "AccountConflictError", "Account conflict"),
+        ("account.role", "stale", "StaleSessionError", ""),
+        ("session.auto_login", "cancelled", "CancelledError", ""),
+        ("plc.write", "failed", "FinsTcpEnvelopeError", ""),
+        ("plc.write", "failed", "FinsPlcError", "PLC rejected the write"),
+        ("plc.write", "failed", "ModbusExceptionResponse", "PLC rejected the write"),
+        ("plc.write", "uncertain", "FinsPlcError", ""),
+        (
+            "plc.write",
+            "failed",
+            "ReportingWriteProtectedError",
+            "Write blocked for a protected address",
+        ),
+        (
+            "plc.write",
+            "denied",
+            "Manual write overlaps active reporting HR 50..52",
+            "Write blocked for a protected address",
+        ),
+        (
+            "plc.write",
+            "denied",
+            "Manual write overlaps active PLC status W16, W17",
+            "Write blocked for a protected address",
+        ),
+        (
+            "plc.write",
+            "denied",
+            "Manual write overlaps active PLC status W16, W17 at 192.0.2.2",
+            "",
+        ),
+    )
+    for action, outcome, raw_reason, reason in cases:
+        entry = AuditRecord(1, operation(action, "target", 0), outcome, "", raw_reason)
+        assert failure_caption(entry, "en", customer=True) == reason
+        _, detail = details(entry, "en")
+        if reason:
+            assert f"Reason: {reason}" in detail
+        assert raw_reason not in detail
+        assert "not sent" not in detail
 
 
 def fill(identity: LocalIdentity, history: ProductionHistory) -> tuple[str, list[str]]:
@@ -164,7 +338,7 @@ def test_complete_filtered_snapshot_and_no_temporal_batch_attribution(
         assert last.comparison is not None
         assert last.comparison.headers == ("Field", "Before", "Requested value")
         assert last.comparison.rows == (("Product name", "Previous", "Product 000"),)
-        assert last.detail == "Reasons: Could not read or write the configuration file"
+        assert last.detail == "Reason: Could not read or write the configuration file"
         assert batch not in str(rows) and "actual-run" not in str(rows)
     assert evidence(identity.audit.path) == original
     narrow = tmp_path / "narrow.db"
@@ -287,7 +461,7 @@ def test_actual_reports_include_all_rows_and_paginate(
             f"A{failure}:E{failure}",
         } <= {str(region) for region in sheet.merged_cells.ranges}
         assert sheet.cell(failure, 1).value == (
-            f"{text('reasons', language)}: {text('records_config_io', language)}"
+            f"{audit_text('reasons', language)}: {text('records_config_io', language)}"
         )
 
 
@@ -428,7 +602,7 @@ def test_private_snapshot_does_not_adopt_later_events_or_completions(
         with closing(load_workbook(output)) as book:
             rows = list(book.worksheets[0].values)
             assert "Later Batch" not in str(rows)
-            assert any(r[4] == "Unresolved" for r in rows)
+            assert any(r[4] == "No completion recorded" for r in rows)
     finally:
         release.set()
 
@@ -459,7 +633,7 @@ def test_customer_changes_keep_failures_but_never_credentials_or_opaque_ids() ->
     )
     comparison, detail = details(secret, "en")
     assert comparison is None
-    assert "secret" not in detail and "hidden" not in detail and "Denied" in detail
+    assert detail == "Reason: Operation denied"
 
 
 def test_report_localizes_configuration_changes_and_retains_recorded_names() -> None:
@@ -498,7 +672,8 @@ def test_report_localizes_configuration_changes_and_retains_recorded_names() -> 
     unknown = AuditRecord(
         2, operation("model.cache", "a" * 64, 1), "failed", "", "VendorNativeException"
     )
-    assert details(unknown, "en") == (None, "Reasons: Operation incomplete")
+    assert details(unknown, "en") == (None, "")
+    assert failure_caption(unknown, "en") == "VendorNativeException"
 
 
 @pytest.mark.parametrize(
@@ -550,7 +725,7 @@ def test_customer_details_require_approved_actions_fields_and_values(
     )
     comparison, shown = details(entry, "en")
     assert comparison is None
-    assert "Reasons: Operation incomplete" in shown and "Sentinel" not in shown
+    assert "Reason:" not in shown and "Sentinel" not in shown
     assert all(value in shown for value in retained)
 
 
@@ -582,7 +757,7 @@ def test_role_compares_recorded_values_under_the_correct_heading(outcome: str) -
                 text("identity_engineer", language),
             ),
         )
-        assert bool(reason) == (outcome == "stale")
+        assert not reason
 
 
 def test_disclosed_pairs_use_recorded_indices_and_preserve_empty_values() -> None:
@@ -605,12 +780,12 @@ def test_disclosed_pairs_use_recorded_indices_and_preserve_empty_values() -> Non
     assert comparison is not None
     assert comparison.headers[-1] == "Requested value"
     assert comparison.rows == (
-        (text("product_code", "en"), "OLD", "(empty value)"),
+        ("Product code", "OLD", "(empty value)"),
         (f"ViMo · {text('customer_audit_excluded', 'en')} [0]", "Scar", "—"),
         (f"ViMo · {text('customer_audit_excluded', 'en')} [1]", "—", "Bubble"),
     )
     assert "Before: Recipe name = Secret name" in detail
-    assert text("audit_approved_values", "en") in detail
+    assert "Some values are omitted from this report." in detail
     assert "PathSentinel" not in str(comparison) + detail
     local = local_change_comparison(entry, "en")
     assert local is not None and local.rows[-1] == (
@@ -667,7 +842,7 @@ def test_unsafe_change_pairs_keep_disclosed_text(
     assert comparison is None and local_change_comparison(entry, "en") is None
     assert "Requested value: " in detail
     assert ("Before: " in detail) == bool(before)
-    assert (text("identity_audit_incomplete", "en") in detail) == incomplete
+    assert ("Recorded values are incomplete" in detail) == incomplete
     assert "missing delimiter" not in detail
 
 
@@ -732,7 +907,8 @@ def test_export_keeps_literal_names_and_manual_write_evidence(
         values = list(book.worksheets[0].values)
         assert "PLC · W100 × 2" in str(values) and "5, 6" in str(values)
         assert ("Field", "Before", None, "After", None) in values
-        assert ("Status", "Disabled", None, "Enabled", None) in values
+        assert ("Enabled setting", "Disabled", None, "Enabled", None) in values
+        assert "PLC acknowledged the write" in str(values)
         assert "127.0.0.1" not in str(values) and "opaque-account" not in str(values)
         named = [
             c

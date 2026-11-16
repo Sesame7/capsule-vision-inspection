@@ -36,8 +36,10 @@ from capsule_vision.communication.operations import (
     CommunicationResponse,
     RequestKind,
 )
+from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.ui.audit_page import AuditPage
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.report_dialog import ReportDialog
@@ -74,6 +76,259 @@ def audit_report_texts(
             if value is not None
         )
     return "\n".join(drawn), cells
+
+
+@pytest.mark.parametrize("language", ("zh", "en"))
+def test_audit_wording_follows_recorded_evidence_in_qt_and_customer_exports(
+    language: Language,
+    qapp: QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = authenticated_startup(saved_data(tmp_path)).application
+    identity = app.identity
+    assert identity
+    page = AuditPage(identity)
+    plc = "FINS/TCP 192.0.2.43:9600 130 220 × 2"
+    private_name = "C:/PrivatePathSentinel/engineering.txt"
+    cases = (
+        (
+            "pending",
+            "communication.save",
+            "communication.json",
+            "diagnostic.timeout = 1.0",
+            "diagnostic.timeout = 2.0",
+            "unresolved",
+            "",
+        ),
+        ("ack", "plc.write", plc, "", "[17, 65535]", "success", ""),
+        (
+            "uncertain",
+            "plc.write",
+            plc,
+            "",
+            "[15, 65535]",
+            "uncertain",
+            "FinsTimeoutError",
+        ),
+        (
+            "blocked",
+            "plc.write",
+            "FINS/TCP 192.0.2.43:9600 177 300 × 2",
+            "",
+            "",
+            "denied",
+            "Manual write overlaps active PLC status W301, W302",
+        ),
+        ("denied", "plc.write", plc, "", "", "denied", "AuthorizationError"),
+        ("rejection", "plc.write", plc, "", "[11, 65535]", "failed", "FinsPlcError"),
+        (
+            "legacy",
+            "plc.write",
+            plc,
+            "",
+            "[9, 65535]",
+            "failed",
+            "FinsTcpEnvelopeError",
+        ),
+        (
+            "process-value",
+            "recipe.process_value",
+            "recipe-internal",
+            "Application " + "a1" * 16,
+            "PrivateParameterSentinel: D108–D109 = 320",
+            "success",
+            "Register readback matched",
+        ),
+        (
+            "process-apply",
+            "recipe.process_apply",
+            "recipe-internal",
+            "",
+            f"Recipe SHA256 {'b4' * 32}; 192.0.2.43:9600; W16.1; 1 values; {private_name}",
+            "success",
+            "1 register values verified; no ladder-consumption confirmation",
+        ),
+        (
+            "no-readback",
+            "recipe.process_value",
+            "recipe-internal",
+            "",
+            "PrivateParameterSentinel: D108–D109 = 420",
+            "success",
+            "Vendor completion",
+        ),
+        (
+            "former",
+            "account.role",
+            "c2" * 16,
+            "OPERATOR",
+            "ENGINEER",
+            "success",
+            "Former Engineer",
+        ),
+        (
+            "redacted",
+            "account.reset_password",
+            "c2" * 16,
+            "",
+            "",
+            "success",
+            private_name,
+        ),
+        (
+            "stale",
+            "account.role",
+            "c2" * 16,
+            "",
+            "",
+            "stale",
+            "Former private candidate",
+        ),
+        (
+            "activated",
+            "production.start",
+            "d3" * 16,
+            "",
+            "recorded-recipe-id",
+            "success",
+            "",
+        ),
+    )
+    zh = language == "zh"
+    pending = "无完成记录" if zh else "No completion recorded"
+    uncertain = "执行结果不确定" if zh else "Execution uncertain"
+    denied = "已拒绝" if zh else "Denied"
+    protection = (
+        "写入已被阻止，地址受保护" if zh else "Write blocked for a protected address"
+    )
+    acknowledgement = "PLC 已确认写入请求" if zh else "PLC acknowledged the write"
+    unknown = "无法确认是否写入" if zh else "Write execution unknown"
+    rejection = "PLC 拒绝写入" if zh else "PLC rejected the write"
+    matched = "回读一致" if zh else "Readback matched"
+    verified = (
+        "所请求的寄存器值回读一致"
+        if zh
+        else "Requested register values matched on readback"
+    )
+    requested = "请求值" if zh else "Requested value"
+    account = "账户" if zh else "Account"
+    run = "生产运行" if zh else "Production Run"
+    expected_results = {
+        "pending": pending,
+        "uncertain": uncertain,
+        "blocked": denied,
+        "denied": denied,
+    }
+    expected_details = {
+        "pending": requested,
+        "ack": acknowledgement,
+        "uncertain": unknown,
+        "blocked": protection,
+        "rejection": rejection,
+        "process-apply": verified,
+    }
+    query = AuditQuery()
+    try:
+        for row_id, action, target, before, after, outcome, reason in cases:
+            op = AuditOperation(
+                "synthetic-user", "Reviewer", action, target, before, after, id=row_id
+            )
+            identity.audit.intent(op).result(WAIT)
+            if outcome != "unresolved":
+                identity.audit.complete(op, outcome, reason).result(WAIT)
+        stored = identity.audit_page(query).result(WAIT)
+        page.set_language(language)
+        page.show()
+        page.refresh()
+        until(lambda: {c[0] for c in cases} <= {r.operation.id for r in page.rows})
+        for i, record in enumerate(page.rows):
+            row_id = record.operation.id
+            page.table.selectRow(i)
+            target = page.table.item(i, 3)
+            result = page.table.item(i, 4)
+            assert target is not None and result is not None
+            detail = page.details.toPlainText()
+            if row_id in expected_results:
+                assert result.text() == result.toolTip() == expected_results[row_id]
+                assert result.data(Qt.ItemDataRole.AccessibleTextRole) == result.text()
+            if row_id in expected_details:
+                assert expected_details[row_id] in detail
+            if row_id == "pending":
+                assert "After" not in detail and "变更后" not in detail
+            if row_id == "ack":
+                assert requested in detail and matched not in detail
+            if row_id in ("process-value", "no-readback"):
+                expected = [f"{requested} {record.operation.after}"]
+                if row_id == "process-value":
+                    expected.append(matched)
+                assert detail.splitlines() == expected
+                assert (
+                    result.text()
+                    == result.toolTip()
+                    == text("records_success", language)
+                )
+            if row_id == "denied":
+                assert not detail
+            if row_id == "legacy":
+                assert "FinsTcpEnvelopeError" in detail
+                assert "not sent" not in detail and "未发送" not in detail
+            if row_id in ("former", "redacted", "stale", "activated"):
+                caption = {"former": "Former Engineer", "activated": run}.get(
+                    row_id, account
+                )
+                assert target.text() == target.toolTip() == caption
+                assert private_name not in detail and "d3" * 16 not in detail
+            if row_id == "stale":
+                assert "Former private candidate" in detail
+            if row_id == "activated":
+                assert ("配方 ID" if zh else "Recipe ID") in detail
+        for rendered in audit_report_texts(app, tmp_path, language, monkeypatch):
+            assert f"{requested}: D108–D109 = 320\n{matched}" in rendered
+            assert f"{requested}: D108–D109 = 420" in rendered.splitlines()
+            assert f"{'变更后' if zh else 'After'}: D108–D109" not in rendered
+            assert rendered.splitlines().count(matched) == 1
+            packed = "".join(rendered.split())
+            for value in (
+                pending,
+                uncertain,
+                denied,
+                protection,
+                acknowledgement,
+                unknown,
+                rejection,
+                matched,
+                verified,
+                requested,
+                "Former Engineer",
+                run,
+                "保存通讯设置" if zh else "Save communication settings",
+            ):
+                assert "".join(value.split()) in packed
+            for private in (
+                "192.0.2.43",
+                private_name,
+                "PrivateParameterSentinel",
+                "recipe-internal",
+                "Former private candidate",
+                "recorded-recipe-id",
+                "d3" * 16,
+                "Operation incomplete",
+                "FinsTcpEnvelopeError",
+                "W301",
+                "W302",
+                "未发送",
+                "not sent",
+                "Manual write overlaps",
+                "no ladder-consumption confirmation",
+            ):
+                assert "".join(private.split()) not in packed
+        assert identity.audit_page(query).result(WAIT) == stored
+    finally:
+        page.dispose()
+        page.close()
+        app.close().result(WAIT)
+        assert app.join(WAIT)
 
 
 def test_misplaced_login_credential_and_historical_payloads_are_private(
@@ -132,7 +387,7 @@ def test_misplaced_login_credential_and_historical_payloads_are_private(
             if row.outcome == "success":
                 assert target.text() == "TestAdmin"
             else:
-                assert target.text() == text("records_user", "en")
+                assert target.text() == "Account"
             presented = [
                 page.details.toPlainText(),
                 page.details.toolTip(),
@@ -154,8 +409,8 @@ def test_misplaced_login_credential_and_historical_payloads_are_private(
                 for secret in (historical, TEST_PASSWORD)
             )
         for output in audit_report_texts(app, tmp_path, "en", monkeypatch):
-            assert "TestAdmin" in output and "Login" in output
-            assert text("identity_invalid", "en") in output
+            assert "TestAdmin" in output and "Sign in" in output
+            assert "Invalid credentials or account unavailable." in output
             assert historical not in output and TEST_PASSWORD not in output
         assert identity.audit_page(query).result(WAIT) == evidence
         assert identity.audit.path.read_bytes() == database
@@ -313,7 +568,7 @@ def test_manual_write_audit_shows_complete_qt_values_and_bounded_customer_summar
             displayed = page.details.toPlainText()
             assert text("audit_requested", "en") in displayed
             assert expected_values[entry.operation.id] in displayed
-            assert (text("identity_audit_incomplete", "en") in displayed) == (
+            assert ("Recorded values are incomplete" in displayed) == (
                 entry.operation.id == legacy.id
             )
             assert ", 1248" not in displayed
@@ -330,7 +585,7 @@ def test_manual_write_audit_shows_complete_qt_values_and_bounded_customer_summar
                 assert ", ".join(map(str, values[:16])) in visible
                 assert f", {values[16]}" not in visible
                 assert ", 1248" not in visible
-                assert text("identity_audit_incomplete", language) in visible
+                assert audit_text("identity_audit_incomplete", language) in visible
                 omitted = text("audit_plc_values_omitted", language)
                 assert omitted.format(count=MAX_WRITE_WORDS - 16) in visible
                 assert omitted.format(count=len(legacy_values) - 1 - 16) in visible

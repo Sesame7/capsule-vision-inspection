@@ -3,9 +3,10 @@
 import re
 from dataclasses import dataclass
 
-from capsule_vision.localization.catalog import text
+from capsule_vision.localization.audit_wording import audit_text, has_approved_wording
+from capsule_vision.localization.catalog import AUDIT_ACTIONS, text
 from capsule_vision.localization.languages import Language
-from capsule_vision.localization.record_text import readable_value
+from capsule_vision.localization.record_text import readable_value, record_reason
 
 from .audit import AUDIT_CHANGE_LIMIT, AuditOperation, AuditRecord
 from .identity_models import Role
@@ -31,6 +32,31 @@ OUTCOME_CAPTIONS = {
     "uncertain": "records_uncertain",
     "unresolved": "records_unresolved",
 }
+
+
+def action_caption(
+    operation: AuditOperation,
+    language: Language,
+    *,
+    tooltip: bool = False,
+    customer: bool = False,
+) -> str:
+    action = operation.action
+    short = ACTION_CAPTIONS.get(action)
+    if action == "account.enabled" and operation.after in ("True", "False"):
+        short = "identity_enable" if operation.after == "True" else "identity_disable"
+    if short and (not tooltip or short.startswith("identity_")):
+        return audit_text(short, language)
+    if action in AUDIT_ACTIONS:
+        return audit_text(action, language)
+    return text("audit_action", language) if customer else readable_value(action) or "—"
+
+
+def outcome_caption(outcome: str, language: Language, *, tooltip: bool = False) -> str:
+    key = "audit_" + outcome
+    return audit_text(key if tooltip else OUTCOME_CAPTIONS.get(outcome, key), language)
+
+
 BATCH_FIELDS = {
     "product": "batch_product",
     "specification": "batch_specification",
@@ -183,9 +209,15 @@ def configuration_field_caption(action: str, path: str, language: Language) -> s
             key = _CONFIGURATION_LABELS.get(field)
             if key is None:  # Definition wrappers have no field caption.
                 continue
-            caption = text(key, language)
+            caption = audit_text(key, language)
         labels.append(f"{caption} [{index[:-1]}]" if indexed else caption)
     return " · ".join(labels)
+
+
+def scalar_change_caption(action: str, field: str, language: Language) -> str:
+    if action == "communication.web_power" and has_approved_wording(language):
+        return audit_text("audit_web_enabled", language)
+    return audit_text(field, language)
 
 
 def local_change_comparison(
@@ -195,7 +227,7 @@ def local_change_comparison(
     rows: list[AuditChange] = []
     for field, before, after in recorded_change_pairs(record.operation):
         if action in _SCALAR_CHANGES:
-            caption = text(field, language)
+            caption = scalar_change_caption(action, field, language)
             value_action = (
                 "account.enabled" if action == "communication.web_power" else action
             )
@@ -236,7 +268,136 @@ def login_failure_reason(record: AuditRecord, language: Language) -> str:
         "DatabaseError": "identity_storage",
         "OSError": "identity_storage",
     }.get(record.detail)
-    return text(key, language) if key else ""
+    return audit_text(key, language) if key else ""
+
+
+_FAILURE_CAPTIONS = {
+    "AuthorizationError": "audit_denied",
+    "StaleSessionError": "identity_stale",
+    "ValueError": "records_config_error",
+    "OSError": "records_config_io",
+    "AuditUnavailable": "audit_required",
+    "AuthenticationError": "identity_invalid",
+    "SecurityStorageError": "identity_storage",
+    "AccountConflictError": "identity_conflict",
+    "PasswordReuseError": "identity_rotate",
+    "CancelledError": "audit_cancelled",
+    "ApplicationStateError": "read_only",
+    "PermissionError": "audit_denied",
+    "ReportingWriteProtectedError": "plc_reporting_write_protected",
+}
+_APPROVED_FAILURE_CAPTIONS = {
+    "AuthorizationError": "audit_authorization_denied",
+    "AuthenticationError": "audit_identity_check_failed",
+    "ApplicationStateError": "audit_state_unavailable",
+    "OSError": "audit_file_error",
+    "PermissionError": "audit_access_denied",
+}
+_REDUNDANT_REASONS = {
+    ("denied", "AuthorizationError"),
+    ("stale", "StaleSessionError"),
+    ("cancelled", "CancelledError"),
+}
+_PROTECTED_WRITE_DETAIL = re.compile(
+    r"Manual write overlaps active (?:PLC status W[0-9]{1,5}, W[0-9]{1,5}"
+    r"|reporting (?:W|HR )[0-9]{1,5}\.\.[0-9]{1,5})"
+)
+_PROCESS_READBACK_DETAIL = re.compile(
+    r"[1-9][0-9]* register values verified; no ladder-consumption confirmation"
+)
+_MATCHED_READBACK_DETAIL = "Register readback matched"
+
+
+def _plc_failure_key(detail: str, outcome: str) -> str:
+    if outcome in ("failed", "denied") and (
+        detail == "ReportingWriteProtectedError"
+        or _PROTECTED_WRITE_DETAIL.fullmatch(detail)
+    ):
+        return "plc_reporting_write_protected"
+    if outcome == "failed" and detail in ("FinsPlcError", "ModbusExceptionResponse"):
+        return "audit_plc_rejected"
+    if detail in ("FinsTimeoutError", "ModbusTimeoutError"):
+        return "audit_plc_timeout"
+    return ""
+
+
+def failure_caption(
+    record: AuditRecord, language: Language, *, customer: bool = False
+) -> str:
+    """Translate recorded classifications with a positive customer disclosure rule."""
+    if unsuccessful_login(record):
+        return login_failure_reason(record, language)
+    detail = record.detail.strip()
+    if record.outcome == "success" or detail in (
+        "",
+        record.outcome,
+        record.operation.target,
+    ):
+        return ""
+    approved = has_approved_wording(language)
+    if approved:
+        action = record.operation.action
+        if (record.outcome, detail) in _REDUNDANT_REASONS:
+            return ""
+        if action == "plc.write" and (key := _plc_failure_key(detail, record.outcome)):
+            return audit_text(key, language)
+        if action == "production.start" and detail == "ApplicationStateError":
+            return audit_text("audit_start_unavailable", language)
+        if detail == "ValueError" and action in _FIELD_CHANGES:
+            return audit_text("audit_validation_failed", language)
+    translated = record_reason(detail, language)
+    if translated != detail:
+        return translated
+    if approved:
+        key = _APPROVED_FAILURE_CAPTIONS.get(detail, _FAILURE_CAPTIONS.get(detail))
+        if key and detail not in ("ValueError", "ReportingWriteProtectedError"):
+            return audit_text(key, language)
+        return "" if customer else detail
+    if customer:
+        return text(_FAILURE_CAPTIONS.get(detail, "operation_error"), language)
+    return detail
+
+
+def outcome_evidence_caption(record: AuditRecord, language: Language) -> str:
+    """Report the kind of PLC evidence established by the recorded outcome."""
+    if not has_approved_wording(language):
+        return ""
+    action = record.operation.action
+    if action == "plc.write" and record.outcome == "uncertain":
+        return audit_text("audit_plc_unknown", language)
+    if record.outcome != "success":
+        return ""
+    if action == "plc.write":
+        return audit_text("audit_plc_acknowledged", language)
+    if action == "recipe.process_value" and record.detail == _MATCHED_READBACK_DETAIL:
+        return audit_text("audit_readback_matched", language)
+    if action == "recipe.process_apply" and _PROCESS_READBACK_DETAIL.fullmatch(
+        record.detail
+    ):
+        return audit_text("audit_registers_matched", language)
+    return ""
+
+
+def before_caption_key(action: str, language: Language) -> str:
+    if has_approved_wording(language) and action == "batch.end":
+        return "audit_previous_batch"
+    return "audit_before"
+
+
+def after_caption_key(
+    record: AuditRecord, language: Language, *, local: bool = False
+) -> str:
+    op = record.operation
+    if record.outcome != "success" or op.action == "plc.write":
+        return "audit_requested"
+    if has_approved_wording(language):
+        if op.action == "recipe.process_value":
+            return "audit_requested"
+        if local and op.action == "production.start":
+            return "audit_recipe_id"
+        if local and op.action == "model.publish" and _published_module(op.after):
+            return "audit_module_id"
+    return "audit_after"
 
 
 def plc_write_range(target: str) -> tuple[str, int] | None:
@@ -262,7 +423,7 @@ def plc_requested_values(
         # The old character cap can leave an apparently valid partial last word.
         recorded = recorded.rpartition(",")[0]
 
-    incomplete = text("identity_audit_incomplete", language)
+    incomplete = audit_text("identity_audit_incomplete", language)
     words = recorded.split(", ")
     if any(
         not re.fullmatch(r"[0-9]{1,5}", word) or int(word) > 65535 for word in words
@@ -283,22 +444,54 @@ def plc_requested_values(
     return "\n".join(lines)
 
 
-def target_caption(record: AuditRecord, language: Language) -> str:
+_PRIVATE_TEXT = re.compile(
+    r"""\\|(?:^|[\s("'=])(?:[a-z]:/|/\S|\.{1,2}/)|"""
+    r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b|"
+    r"\b(?=[a-z0-9._-]*[a-z])[a-z0-9._-]+:[0-9]{1,5}\b|"
+    r"\b(?:password|passwd|credential|verifier|secret|salt|digest|token)\s*[:=]",
+    re.IGNORECASE | re.ASCII,
+)
+
+
+def disclosed_business_text(value: str) -> str:
+    """Apply only to fields explicitly recorded as business names or text."""
+    return (
+        readable_value(value)
+        if value.isprintable() and not _PRIVATE_TEXT.search(value)
+        else ""
+    )
+
+
+_TARGET_CATEGORIES = {
+    "security.storage": "security.storage",
+    "history.storage": "history.storage",
+    "production.clear_statistics": "records_inspection",
+    "vision.layout": "records_layout",
+    "vision.sources": "records_sources",
+    "communication.save": "page_communication",
+    "alarm_definitions.create": "alarm_file",
+}
+_APPROVED_TARGET_CATEGORIES = {
+    "security.storage": "audit_account_storage",
+    "history.storage": "audit_production_history",
+    "recipe.process_apply": "audit_process_parameters",
+    "recipe.process_value": "audit_process_parameter",
+    "preferences.save": "audit_preferences",
+}
+
+
+def target_caption(
+    record: AuditRecord, language: Language, *, customer: bool = False
+) -> str:
     op = record.operation
     if unsuccessful_login(record):
-        return text("records_user", language)
+        return audit_text("records_user", language)
     action, target = op.action, readable_value(op.target)
-    categories = {
-        "security.storage": "security.storage",
-        "history.storage": "history.storage",
-        "production.clear_statistics": "records_inspection",
-        "vision.layout": "records_layout",
-        "vision.sources": "records_sources",
-        "communication.save": "page_communication",
-        "alarm_definitions.create": "alarm_file",
-    }
-    if action in categories:
-        return text(categories[action], language)
+    approved = has_approved_wording(language)
+    if approved and action in _APPROVED_TARGET_CATEGORIES:
+        return audit_text(_APPROVED_TARGET_CATEGORIES[action], language)
+    if action in _TARGET_CATEGORIES:
+        return audit_text(_TARGET_CATEGORIES[action], language)
     if action in ("plc.write", "communication.web_power"):
         return "PLC" if action == "plc.write" else "Web"
     if action in ("batch.select", "batch.end"):
@@ -314,23 +507,39 @@ def target_caption(record: AuditRecord, language: Language) -> str:
             language,
         )
     if action.startswith(("session.", "account.")):
+        fallback = audit_text("records_user", language)
+        if (
+            (approved or customer)
+            and record.outcome == "success"
+            and action in ("account.role", "account.enabled", "account.reset_password")
+        ):
+            # The account owner records the committed target name here.
+            name = disclosed_business_text(record.detail)
+            if name or customer:
+                return name or fallback
         if (
             action in ("account.set_auto_login", "account.disable_auto_login")
             and record.outcome == "success"
         ):
-            return readable_value(record.detail) or text("records_user", language)
+            return readable_value(record.detail) or fallback
         # Only the recorded actor/target match establishes a self operation.
         if op.actor_id and op.target == op.actor_id:
-            return readable_value(op.username) or text("records_user", language)
+            return readable_value(op.username) or fallback
         if action == "account.create":
             username, sep, role = op.after.rpartition(" · ")
             if sep and role in ("enabled", "first setup"):
                 username, sep, role = username.rpartition(" · ")
             if sep and role in Role.__members__:
-                return readable_value(username) or text("records_user", language)
+                return readable_value(username) or fallback
             if op.actor_id == "offline-maintenance":
-                return readable_value(op.after) or text("records_user", language)
-        return text("records_user", language)
+                return readable_value(op.after) or fallback
+        return fallback
+    if (
+        action == "production.start"
+        and record.outcome == "success"
+        and (approved or customer)
+    ):
+        return text("records_run", language)
     if action in ("production.recipe", "production.start"):
         # Start admission can fail before a Recipe has been identified.
         return text("page_recipe" if op.target else "records_inspection", language)
@@ -366,6 +575,13 @@ def target_caption(record: AuditRecord, language: Language) -> str:
     return "—"
 
 
+def _published_module(value: str) -> str:
+    parts = value.rsplit(" · ", 2)
+    if len(parts) == 3 and re.fullmatch(r"[0-9a-fA-F]{64}", parts[2]):
+        return readable_value(parts[1])
+    return ""
+
+
 def change_caption(action: str, value: str, language: Language) -> str:
     if action == "batch.information":
         lines: list[str] = []
@@ -394,12 +610,10 @@ def change_caption(action: str, value: str, language: Language) -> str:
             return (
                 f"{role} · {text('identity_enabled', language)}"
                 if parts[2] == "enabled"
-                else text("identity_setup", language)
+                else audit_text("identity_setup", language)
             )
-    if action == "model.publish":
-        parts = value.rsplit(" · ", 2)
-        if len(parts) == 3 and re.fullmatch(r"[0-9a-fA-F]{64}", parts[2]):
-            return readable_value(parts[1])
+    if action == "model.publish" and (module := _published_module(value)):
+        return module
     if action == "account.enabled" and value in ("True", "False"):
         return text(
             "identity_enabled" if value == "True" else "identity_disabled", language

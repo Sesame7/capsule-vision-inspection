@@ -1,5 +1,6 @@
 """Local calendar presentation and the two read-only event tables in Records."""
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from html import escape
 from math import ceil
@@ -267,6 +268,7 @@ class HistoryEventTable(RecordsPage):
         fields: tuple[tuple[str, str], ...],
         *,
         comparison: ChangeComparison | None = None,
+        caption: Callable[[str, Language], str] = text,
     ) -> None:
         lines: list[str] = []
         if comparison is not None:
@@ -291,7 +293,7 @@ class HistoryEventTable(RecordsPage):
             )
         for key, value in fields:
             if value:
-                label = f"<b>{escape(text(key, language))}</b> " if key else ""
+                label = f"<b>{escape(caption(key, language))}</b> " if key else ""
                 lines.append(
                     f"<p style='margin: 2px 0'>{label}<span style='white-space: pre-wrap'>{escape(value)}</span></p>"
                 )

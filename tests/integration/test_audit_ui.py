@@ -214,7 +214,7 @@ def test_audit_tab_filters_pages_and_revokes_pending_delivery(
         assert (
             result.toolTip()
             == result.data(Qt.ItemDataRole.AccessibleTextRole)
-            == text("audit_success", window.language)
+            == result.text()
         )
         assert "old" in page.details.toPlainText()
         assert (
@@ -438,9 +438,9 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
     # action, stored target, prior value, requested value, outcome, operator caption
     cases = (
         ("session.login", actor, "", "", "success", "Reviewer"),
-        ("session.login", other, "", "", "failed", "User"),
-        ("account.role", other, "OPERATOR", "ENGINEER", "success", "User"),
-        ("account.enabled", other, "True", "False", "success", "User"),
+        ("session.login", other, "", "", "failed", "Account"),
+        ("account.role", other, "OPERATOR", "ENGINEER", "success", "Account"),
+        ("account.enabled", other, "True", "False", "success", "Account"),
         ("account.create", other, "", "Lee · ENGINEER · enabled", "success", "Lee"),
         ("production.stop", other, "", "", "success", "Production Run"),
         ("batch.end", other, "LOT-4", "", "success", "LOT-4"),
@@ -515,9 +515,7 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
                 assert comparison.columns() == 3 and comparison.rows() == 2
             if case[0] == "account.enabled":
                 action = page.table.item(row, 2)
-                assert action and action.text() == action.toolTip() == text(
-                    "identity_disable", "en"
-                )
+                assert action and action.text() == action.toolTip() == "Disable account"
                 assert all(
                     text(key, "en") in page.details.toPlainText()
                     for key in ("identity_enabled", "identity_disabled")
@@ -528,7 +526,7 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
                     and "Engineer" in page.details.toPlainText()
                 )
             elif case[0] == "model.publish":
-                assert "Segmentation" in page.details.toPlainText()
+                assert "Module ID Segmentation" in page.details.toPlainText()
             elif expected == recipe_name:
                 assert page.details.isHidden()
                 assert page.table.fontMetrics().horizontalAdvance(
@@ -634,7 +632,12 @@ def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
                 details = page.details.toPlainText()
                 assert "product_code = Prior" in details and "New" in details
                 assert text("audit_requested", language) in details
-                assert text("identity_audit_incomplete", language) in details
+                incomplete = (
+                    "已记录的值不完整"
+                    if language == "zh"
+                    else "Recorded values are incomplete"
+                )
+                assert incomplete in details
     finally:
         page.dispose()
         page.close()

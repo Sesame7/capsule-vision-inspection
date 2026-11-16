@@ -361,16 +361,23 @@ pages on the existing Audit owner; admission, execution and delivery remain
 revision-fenced. Selecting an account matches its recorded ID and name exactly.
 The UI has no action-type filter; action codes and their descriptions remain in
 the evidence and table. The table shows time, user, action,
-target and result. Target names come from the recorded operation. An action-specific
-category or a dash stands in for an opaque or unknown target. Selecting an operation
-shows its additional recorded changes. Reliably paired changes use Field, Before
+target and result. Target names come from evidence recorded with the operation.
+An action-specific category or a dash stands in for an opaque or unknown target.
+The Simplified Chinese and English views use approved account names from
+successful account changes and show Production Run for a successful Start.
+Selecting an operation shows its additional recorded changes. Reliably paired changes use Field, Before
 and After columns. The last column shows Requested value for unsuccessful or
 unresolved operations. Pairing uses the recorded field identities, including
 indices, in prior field order. The comparison gives recorded empty values an
 explicit caption and preserves recorded dash markers. Single-sided, ambiguous
-and incomplete evidence stays in text details with any recorded failure explanation. Long values
-wrap within the scrollable details area. Routine entries with nothing to add use
-the full table height.
+and incomplete evidence stays in text details. Long values wrap within the
+scrollable details area. Simplified Chinese and English use Audit-specific
+captions for actions, results and recognized reasons. **No completion recorded**
+identifies an operation without a recorded completion at review time.
+**Execution uncertain** reflects a recorded uncertain result. **Denied** covers
+authorization and other admission refusals. A recorded protected-address refusal
+has its own reason. The local view keeps available engineering details.
+Routine entries with nothing to add use the full table height.
 The SQLite owner pages by stable insertion order. Qt shows up to 50
 rows and clears private details on session change. Review access is checked by the
 service as well as the tab. Batch-scoped review alternates bounded reads on the
@@ -1208,7 +1215,10 @@ Batch scope and signal category without another report or Batch selector.
   records; it does not claim complete Batch operational coverage. Missing legacy
   associations remain excluded. An empty scope gives short feedback without
   publishing a file. Columns are Time, Account, Action, Target and Result, followed
-  only when relevant by approved changes and safe failure captions. Reliably
+  only when relevant by approved changes, recorded result evidence and safe
+  failure captions. The report uses the same Simplified Chinese and English
+  Audit terminology as local review. It omits generic failure text when there
+  is no additional disclosable classification. Reliably
   paired values use Field, Before and After columns beneath the event, with
   Requested value for unsuccessful or unresolved operations. An approved value
   whose counterpart is withheld appears under its recorded side with a disclosure
@@ -1219,8 +1229,13 @@ Batch scope and signal category without another report or Batch selector.
   internal IDs and hashes, network endpoints and routes, camera serials and file
   paths. Approved business names retain their recorded spelling. A manual PLC
   write shows its recorded register range and up to the first 16 requested values
-  with an explicit count of any additional recorded values omitted. The local
-  Engineer review shows the full recorded request and retains engineering details
+  with an explicit count of any additional recorded values omitted. A successful
+  manual write identifies the PLC acknowledgment. Manual write and individual
+  Recipe process-value details label the recorded register request as Requested
+  value regardless of outcome. Matching register readback appears separately
+  when the successful Recipe process operation's completion records it. Historical
+  records require reliable send-stage evidence to describe a request as unsent.
+  Local Engineer review shows the full recorded request and retains engineering details
   subject to the unsuccessful login rule. Both views flag incomplete historical
   write evidence and omit any potentially cut final value. PDF uses landscape A4
   and repeats event and continuing comparison headings. Excel keeps typed local

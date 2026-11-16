@@ -8,29 +8,25 @@ from PySide6.QtCore import Qt, Slot
 
 from capsule_vision.application.audit import AuditQuery, AuditRecord
 from capsule_vision.application.audit_presentation import (
-    ACTION_CAPTIONS as _ACTION_CAPTIONS,
-)
-from capsule_vision.application.audit_presentation import (
-    OUTCOME_CAPTIONS as _OUTCOME_CAPTIONS,
-)
-from capsule_vision.application.audit_presentation import (
-    change_caption as _change_caption,
-)
-from capsule_vision.application.audit_presentation import (
+    action_caption,
+    after_caption_key,
+    before_caption_key,
+    change_caption,
+    failure_caption,
     incomplete_changes,
     local_change_comparison,
-    login_failure_reason,
+    outcome_caption,
+    outcome_evidence_caption,
     plc_requested_values,
+    target_caption,
     unsuccessful_login,
-)
-from capsule_vision.application.audit_presentation import (
-    target_caption as _target_caption,
 )
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import IdentityError, Role
 from capsule_vision.application.records_query import RecordsScope, scoped_audit_page
-from capsule_vision.localization.catalog import AUDIT_ACTIONS, text
+from capsule_vision.localization.audit_wording import audit_text, has_approved_wording
+from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 from .audit_accounts import AuditAccounts
@@ -39,7 +35,6 @@ from .history_event_table import (
     HistoryEventTable,
     audit_utc_bound,
     readable_value,
-    record_reason,
     record_time,
 )
 
@@ -104,9 +99,19 @@ class AuditPage(HistoryEventTable):
             (
                 ("short_time", "2026-12-31 23:59:59", "2026-12-31 23:59:59", 1),
                 ("records_user", "DEV-Operator", "DEV-Example-Engineer", 3),
-                ("audit_action", "Change role", "Save camera sources", 4),
+                (
+                    "audit_action",
+                    "Change role",
+                    audit_text("recipe.process_value", "en"),
+                    4,
+                ),
                 ("audit_target", "DEV-LOT-F", "DEV-Example-Trainee-1", 4),
-                ("audit_outcome", "Success", "Superseded", 1),
+                (
+                    "audit_outcome",
+                    "Success",
+                    outcome_caption("unresolved", "en"),
+                    1,
+                ),
             ),
         )
         self.table.setAccessibleName(text("audit_trail", language))
@@ -222,33 +227,20 @@ class AuditPage(HistoryEventTable):
         for row, record in enumerate(self.rows):
             op = record.operation
             clock, full_time = record_time(op.utc)
-            full_action = (
-                text(op.action, self.language)
-                if op.action in AUDIT_ACTIONS
-                else readable_value(op.action) or "—"
-            )
-            short_key = _ACTION_CAPTIONS.get(op.action)
-            if op.action == "account.enabled" and op.after in ("True", "False"):
-                short_key = (
-                    "identity_enable" if op.after == "True" else "identity_disable"
-                )
-            action = text(short_key, self.language) if short_key else full_action
-            if short_key and short_key.startswith("identity_"):
-                full_action = action
-            outcome_key = "audit_" + record.outcome
             self.set_values(
                 row,
                 (
                     clock,
                     readable_value(op.username) or "—",
-                    action,
-                    _target_caption(record, self.language),
-                    text(
-                        _OUTCOME_CAPTIONS.get(record.outcome, outcome_key),
-                        self.language,
-                    ),
+                    action_caption(op, self.language),
+                    target_caption(record, self.language),
+                    outcome_caption(record.outcome, self.language),
                 ),
-                {0: full_time, 2: full_action, 4: text(outcome_key, self.language)},
+                {
+                    0: full_time,
+                    2: action_caption(op, self.language, tooltip=True),
+                    4: outcome_caption(record.outcome, self.language, tooltip=True),
+                },
             )
         if self.rows and self.table.currentRow() < 0:
             self.table.selectRow(0)
@@ -260,57 +252,67 @@ class AuditPage(HistoryEventTable):
             self.clear_details()
             return
         record = self.rows[row]
+        reason = failure_caption(record, self.language)
         if unsuccessful_login(record):
             self.show_details(
                 self.language,
-                (("reasons", login_failure_reason(record, self.language)),),
+                (("reasons", reason),),
+                caption=audit_text,
             )
             return
         op = record.operation
         plc_write = op.action == "plc.write"
         comparison = local_change_comparison(record, self.language)
         incomplete = incomplete_changes(op)
-        before = _change_caption(op.action, op.before, self.language)
+        before = change_caption(op.action, op.before, self.language)
         after = (
             plc_requested_values(op, self.language)
             if plc_write
-            else _change_caption(op.action, op.after, self.language)
+            else change_caption(op.action, op.after, self.language)
         )
         if op.action == "production.recipe" and op.after == op.target:
             after = ""
         if not incomplete:
             if before == after:
                 before = after = ""
-            elif (not before or not after) and (before or after) == _target_caption(
+            elif (not before or not after) and (before or after) == target_caption(
                 record, self.language
             ):
                 before = after = ""
-        success = record.outcome == "success"
-        reason = ""
-        if not success and record.detail.strip() not in (
-            record.outcome,
-            op.target,
-            before,
-            after,
+        evidence = outcome_evidence_caption(record, self.language)
+        if (
+            has_approved_wording(self.language)
+            and op.action == "alarm_definitions.create"
+            and record.outcome == "success"
+            and after == "Bundled template"
         ):
-            reason = record_reason(record.detail.strip(), self.language)
+            after = ""
+            evidence = audit_text("audit_from_template", self.language)
         self.show_details(
             self.language,
             (
-                ("audit_before", before if comparison is None else ""),
                 (
-                    "audit_after" if success and not plc_write else "audit_requested",
+                    before_caption_key(op.action, self.language),
+                    before if comparison is None else "",
+                ),
+                (
+                    after_caption_key(record, self.language, local=True),
                     after if comparison is None else "",
                 ),
-                ("reasons", reason),
+                ("", evidence),
+                (
+                    "reasons",
+                    reason if record.detail.strip() not in (before, after) else "",
+                ),
                 (
                     "",
-                    text("identity_audit_incomplete", self.language)
+                    audit_text("identity_audit_incomplete", self.language)
                     if incomplete
                     else "",
                 ),
             ),
             comparison=comparison,
+            caption=audit_text,
         )
 
     def dispose(self) -> None:
