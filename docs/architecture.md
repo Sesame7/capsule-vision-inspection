@@ -703,21 +703,24 @@ Reporting eligibility and ambiguity checks are in [communication](communication.
 
 Full-camera ViMo runs at most once per eligible camera frame when enabled, then
 findings are assigned against saved channel ROIs with original global ChannelIds.
-After label filtering, each PRESENT or UNKNOWN channel consumes its assigned
-findings, including a finding shared with another channel. Confirmed EMPTY
-channels omit those assignments and their defect reasons from the effective
-judgment. Unassigned findings remain available as diagnostic evidence. The
-camera aggregates the channel judgments and collection status, and its defect
-overlays show the findings and reasons consumed by those channels. See the
+After label filtering, each channel consumes its assigned findings unless
+Occupancy confirms EMPTY. A shared finding can still contribute to another
+channel, and a failed Occupancy measurement leaves the assignments available.
+Unassigned findings remain available as diagnostic evidence. The camera
+aggregates the channel judgments and collection status, and its defect overlays
+show the findings and reasons consumed by those channels. See the
 [PLC projection contract](communication.md#first-station-registers) for reject bits.
 
 Occupancy always measures the centered `max(1, width*70//100)` portion of the saved
-ROI, split into upper/lower views; a pixel is foreground if any BGR component is
-greater than 20. Each view is EMPTY at <=1%, PRESENT at >=5%, otherwise UNKNOWN.
-Only equal EMPTY/EMPTY or PRESENT/PRESENT pairs fuse to that state. Geometry stays
-unchanged. Valid EMPTY explicitly skips enabled Size/Color with recorded
-provenance. Enabled full-camera inference and result validation still run.
-Execution errors, collection failures and forced rejects retain their own reasons.
+ROI and retains foreground and total pixel counts for each upper/lower view.
+A pixel is foreground if any BGR component is greater than 40. A valid view is
+PRESENT when more than 5% of its pixels are foreground and EMPTY otherwise.
+After both views are measured successfully, either PRESENT view makes the
+channel PRESENT. Two EMPTY views make the channel EMPTY. Missing or invalid
+measurements record a technical failure and leave the Occupancy classification
+unset. Confirmed EMPTY skips enabled Size/Color with recorded provenance.
+Enabled full-camera inference and result validation still run. Execution errors,
+collection failures and forced rejects retain their own reasons.
 
 Size thresholds the complete Channel ROI once (any BGR channel >20), then labels
 8-connected foreground once. The divider at `height // 2` assigns logical views;

@@ -15,7 +15,6 @@ from .layout import valid_rect
 class OccupancyState(Enum):
     EMPTY = auto()
     PRESENT = auto()
-    UNKNOWN = auto()
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,11 +37,10 @@ class OccupancyView:
 
     @property
     def state(self) -> OccupancyState:
-        if self.ratio <= 0.01:
-            return OccupancyState.EMPTY
-        if self.ratio >= 0.05:
+        # Compare with 1/20 using counts so the 5% boundary is exact.
+        if self.foreground_pixels * 20 > self.total_pixels:
             return OccupancyState.PRESENT
-        return OccupancyState.UNKNOWN
+        return OccupancyState.EMPTY
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,15 +60,17 @@ class OccupancyEvidence:
 
     @property
     def state(self) -> OccupancyState:
-        upper, lower = self.upper.state, self.lower.state
-        if upper is lower and upper in (OccupancyState.EMPTY, OccupancyState.PRESENT):
-            return upper
-        return OccupancyState.UNKNOWN
+        if (
+            self.upper.state is OccupancyState.PRESENT
+            or self.lower.state is OccupancyState.PRESENT
+        ):
+            return OccupancyState.PRESENT
+        return OccupancyState.EMPTY
 
 
 @dataclass(frozen=True, slots=True)
 class OccupancyResult:
-    """Evidence or explicit failure; unavailable data never asserts EMPTY."""
+    """A binary classification from evidence or an explicit technical failure."""
 
     evidence: OccupancyEvidence | None = None
     error_code: str | None = None
@@ -88,10 +88,8 @@ class OccupancyResult:
             raise ValueError("Successful Occupancy cannot carry failure details")
 
     @property
-    def state(self) -> OccupancyState:
-        return (
-            self.evidence.state if self.evidence is not None else OccupancyState.UNKNOWN
-        )
+    def state(self) -> OccupancyState | None:
+        return self.evidence.state if self.evidence is not None else None
 
 
 def occupancy_rect(roi: BoundingRect) -> BoundingRect:
@@ -123,8 +121,8 @@ def measure_occupancy(image: NDArray[np.uint8], roi: BoundingRect) -> OccupancyE
     middle = rect.height // 2
 
     def count(view: NDArray[np.uint8]) -> OccupancyView:
-        # Same E0-R kernel: complement of inclusive BGR <=20, without inversion.
-        background = cv2.inRange(view, (0, 0, 0), (20, 20, 20))
+        # Foreground is the complement of inclusive BGR <= 40.
+        background = cv2.inRange(view, (0, 0, 0), (40, 40, 40))
         total = int(background.size)
         return OccupancyView(total - cv2.countNonZero(background), total)
 

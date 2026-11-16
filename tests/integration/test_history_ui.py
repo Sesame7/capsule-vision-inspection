@@ -964,7 +964,7 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
     if scenario not in ("mixed", "failed"):
         occupancy = {
             "empty": OccupancyState.EMPTY,
-            "unknown": OccupancyState.UNKNOWN,
+            "unknown": None,
         }.get(scenario, OccupancyState.PRESENT)
         result = replace(
             result,

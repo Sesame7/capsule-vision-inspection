@@ -299,15 +299,13 @@ class ChannelInspectionResult:
         assessment = self.assessment
         if assessment.judgment is ProductJudgment.NG:
             return ChannelBusinessStatus.NG
-        if self.occupancy is not None and self.occupancy.evidence is not None:
-            if self.occupancy.state is OccupancyState.EMPTY:
-                return ChannelBusinessStatus.EMPTY
-            if (
-                self.occupancy.state is OccupancyState.PRESENT
-                and assessment
-                == Assessment(TechnicalStatus.SUCCESS, ProductJudgment.OK)
-            ):
-                return ChannelBusinessStatus.OK
+        presence = self.occupancy.state if self.occupancy is not None else None
+        if presence is OccupancyState.EMPTY:
+            return ChannelBusinessStatus.EMPTY
+        if presence is OccupancyState.PRESENT and assessment == Assessment(
+            TechnicalStatus.SUCCESS, ProductJudgment.OK
+        ):
+            return ChannelBusinessStatus.OK
         return ChannelBusinessStatus.UNKNOWN
 
     @property

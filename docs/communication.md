@@ -96,8 +96,11 @@ A set bit requests rejection for its channel. OK clears the bit.
 NG and UNKNOWN set it. EMPTY clears the bit only on a normally completed cycle
 with an observed frame and valid shape for every configured camera and no collection
 failure. The channel must have successful Occupancy evidence of EMPTY in both
-views. A forced rejection, a channel NG or an error in any enabled channel check
-(including an optional check) prevents the bit from clearing for EMPTY.
+views, each with at most 5% foreground under the
+[inspection rule](architecture.md#inspection-and-results). Missing or failed
+Occupancy evidence cannot verify EMPTY. A forced rejection, a channel NG or an
+error in any enabled channel check (including an optional check) prevents the
+bit from clearing for EMPTY.
 ViMo findings assigned to a confirmed EMPTY channel and findings outside all
 channel ROIs contribute no reject bits. The same finding can still reject
 another channel it overlaps. A disabled check or a Size/Color check skipped

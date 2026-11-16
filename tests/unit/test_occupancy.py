@@ -1,4 +1,4 @@
-"""Center-region geometry, scalar evidence and conservative presence semantics."""
+"""Center-region geometry, scalar evidence and binary presence semantics."""
 
 from dataclasses import FrozenInstanceError, asdict
 
@@ -14,13 +14,13 @@ from capsule_vision.inspection.production import (
 )
 from capsule_vision.inspection.production.occupancy import occupancy_rect
 
-EMPTY, PRESENT, UNKNOWN = OccupancyState
+EMPTY, PRESENT = OccupancyState
 
 
 @pytest.mark.parametrize("width", [1, 2, 3, 7, 79, 80, 175, 176, 177])
 def test_center_geometry_and_odd_height(width: int) -> None:
     roi = BoundingRect(2, 3, width, 5)
-    image = np.full((10, width + 5, 3), 20, dtype=np.uint8)
+    image = np.full((10, width + 5, 3), 40, dtype=np.uint8)
     image.flags.writeable = False
     evidence = measure_occupancy(image, roi)
     expected_width = max(1, width * 70 // 100)
@@ -31,34 +31,53 @@ def test_center_geometry_and_odd_height(width: int) -> None:
     assert evidence.lower == OccupancyView(0, expected_width * 3)
     assert evidence.state is EMPTY
     assert roi == BoundingRect(2, 3, width, 5)
-    assert np.all(image == 20) and not image.flags.writeable
+    assert np.all(image == 40) and not image.flags.writeable
 
 
 @pytest.mark.parametrize(
     "foreground,state",
-    [(0, EMPTY), (1, EMPTY), (2, UNKNOWN), (4, UNKNOWN), (5, PRESENT)],
+    [(0, EMPTY), (4, EMPTY), (5, EMPTY), (6, PRESENT), (100, PRESENT)],
 )
-def test_inclusive_ratio_boundaries(foreground: int, state: OccupancyState) -> None:
+def test_presence_requires_strictly_more_than_five_percent(
+    foreground: int, state: OccupancyState
+) -> None:
     view = OccupancyView(foreground, 100)
     assert view.ratio == foreground / 100 and view.state is state
 
 
-@pytest.mark.parametrize("upper", [EMPTY, PRESENT, UNKNOWN])
-@pytest.mark.parametrize("lower", [EMPTY, PRESENT, UNKNOWN])
+@pytest.mark.parametrize("component", [0, 1, 2])
+def test_foreground_is_strictly_above_40_in_any_bgr_component(component: int) -> None:
+    roi = BoundingRect(0, 0, 72, 4)
+    rect = occupancy_rect(roi)
+    image = np.full((4, 72, 3), 40, dtype=np.uint8)
+    image[0, rect.x, component] = 39
+    image[0, rect.x + 1, component] = 41
+    image[2:, rect.x, component] = 41
+    evidence = measure_occupancy(image, roi)
+    assert evidence.upper == OccupancyView(1, 100)
+    assert evidence.lower == OccupancyView(2, 100)
+    assert evidence.state is EMPTY
+
+
+@pytest.mark.parametrize(
+    "upper,lower,expected",
+    [(0, 0, EMPTY), (5, 5, EMPTY), (5, 6, PRESENT), (6, 5, PRESENT), (6, 6, PRESENT)],
+)
 def test_independent_views_and_all_fusion_pairs(
-    upper: OccupancyState, lower: OccupancyState
+    upper: int, lower: int, expected: OccupancyState
 ) -> None:
     # Each measured view has exactly 100 pixels; no rounding in thresholds.
     image = np.zeros((4, 72, 3), dtype=np.uint8)
-    rect = occupancy_rect(BoundingRect(0, 0, 72, 4))
+    roi = BoundingRect(0, 0, 72, 4)
+    rect = occupancy_rect(roi)
     assert rect.width == 50
-    counts = {EMPTY: 1, UNKNOWN: 2, PRESENT: 5}
-    for start, state in ((0, upper), (2, lower)):
-        image[start, rect.x : rect.x + counts[state], 2] = 21
-    evidence = measure_occupancy(image, BoundingRect(0, 0, 72, 4))
-    assert evidence.upper.state is upper and evidence.lower.state is lower
-    expected = upper if upper is lower and upper is not UNKNOWN else UNKNOWN
+    for start, count in ((0, upper), (2, lower)):
+        image[start, rect.x : rect.x + count, 2] = 41
+    evidence = measure_occupancy(image, roi)
+    assert evidence.upper == OccupancyView(upper, 100)
+    assert evidence.lower == OccupancyView(lower, 100)
     assert evidence.state is expected
+    assert OccupancyResult(evidence).state is expected
 
 
 def test_neighbor_only_foreground_and_no_pixel_aliases() -> None:
@@ -67,7 +86,7 @@ def test_neighbor_only_foreground_and_no_pixel_aliases() -> None:
     image.flags.writeable = False
     evidence = measure_occupancy(image, BoundingRect(0, 0, 80, 120))
     assert evidence.state is EMPTY and evidence.measurement_rect.x == 12
-    assert np.any(image > 20)
+    assert np.any(image > 40)
     assert asdict(evidence) == {
         "measurement_rect": {"x": 12, "y": 0, "width": 56, "height": 120},
         "upper": {"foreground_pixels": 0, "total_pixels": 3360},
@@ -96,12 +115,13 @@ def test_invalid_image_and_empty_evidence_never_assert_empty() -> None:
         OccupancyView(101, 100)
     with pytest.raises(ValueError):
         OccupancyResult()
-    result = OccupancyResult(error_code="occupancy.result_unavailable")
-    assert result.state is UNKNOWN and result.evidence is None
+    for code in ("occupancy.execution_error", "occupancy.result_unavailable"):
+        result = OccupancyResult(error_code=code)
+        assert result.state is None and result.evidence is None
 
 
 def test_row_strided_readonly_input_matches_contiguous_input() -> None:
-    base = np.random.default_rng(7).integers(0, 30, (20, 90, 3), dtype=np.uint8)
+    base = np.random.default_rng(7).integers(0, 51, (20, 90, 3), dtype=np.uint8)
     view = base[::2, :80]
     view.flags.writeable = False
     before = base.copy()

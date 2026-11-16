@@ -67,7 +67,8 @@ def test_failed_occupancy_is_not_empty_or_ok(ng: bool) -> None:
             error_code="occupancy.execution_error", exception_type="RuntimeError"
         ),
     )
-    assert row.occupancy is not None and row.occupancy.evidence is None
+    assert row.occupancy is not None and row.occupancy.state is None
+    assert row.occupancy.evidence is None
     assert row.business_status is (
         ChannelBusinessStatus.NG if ng else ChannelBusinessStatus.UNKNOWN
     )

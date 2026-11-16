@@ -285,20 +285,23 @@ def test_unassigned_finding_preserves_verified_empty_bits() -> None:
     )
 
 
-def test_occupancy_execution_error_does_not_clear_empty_report_bit() -> None:
+@pytest.mark.parametrize(
+    "code", ["occupancy.execution_error", "occupancy.result_unavailable"]
+)
+def test_occupancy_failure_does_not_clear_empty_report_bit(code: str) -> None:
     result = mixed_result()
     camera = result.cameras[0]
     row = replace(
         camera.channels[1],
-        occupancy=OccupancyResult(
-            error_code="occupancy.execution_error", exception_type="RuntimeError"
-        ),
+        occupancy=OccupancyResult(error_code=code),
         traditional_skip=None,
     )
     camera = replace(camera, channels=(camera.channels[0], row, *camera.channels[2:]))
     report = FirstStationReport.from_result(
         1, replace(result, cameras=(camera, *result.cameras[1:]))
     )
+    assert row.occupancy is not None and row.occupancy.state is None
+    assert row.assessment.technical_status is TechnicalStatus.ERROR
     assert row.business_status is ChannelBusinessStatus.UNKNOWN
     assert report.reject_words == (0xCF3E, 0x3CF3, 15)
 

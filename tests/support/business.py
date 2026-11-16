@@ -39,7 +39,6 @@ def channel(
     counts = {
         OccupancyState.EMPTY: 0,
         OccupancyState.PRESENT: 2,
-        OccupancyState.UNKNOWN: 1,
     }
     evidence = None
     if occupancy is not None:
@@ -85,10 +84,10 @@ def mixed_result(
     states = (
         (OccupancyState.PRESENT, TechnicalStatus.SUCCESS, ProductJudgment.OK),
         (OccupancyState.EMPTY, TechnicalStatus.SUCCESS, ProductJudgment.OK),
-        (OccupancyState.UNKNOWN, TechnicalStatus.SUCCESS, ProductJudgment.OK),
+        (None, TechnicalStatus.SUCCESS, ProductJudgment.OK),
         (OccupancyState.PRESENT, TechnicalStatus.ERROR, ProductJudgment.NG),
         (OccupancyState.PRESENT, TechnicalStatus.ERROR, ProductJudgment.UNKNOWN),
-        (OccupancyState.UNKNOWN, TechnicalStatus.SUCCESS, ProductJudgment.NG),
+        (None, TechnicalStatus.SUCCESS, ProductJudgment.NG),
     )
     return replace(
         base,

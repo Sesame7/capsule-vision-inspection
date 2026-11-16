@@ -51,15 +51,18 @@ from capsule_vision.ui.batch_dialog import BatchDialog
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 
+EXPOSURE_LEVELS = (10, 40, 50, 60)
+
 
 class ExposureFindings(Engine):
     def infer(self, image_bgr: NDArray[np.generic]) -> ImageResult:
         raw = super().infer(image_bgr)
-        exposure = int(image_bgr[0, 0, 0]) // 10
+        # The fake source adds a per-camera offset of less than ten.
+        level = (int(image_bgr[0, 0, 0]) // 10) * 10
         # One background region on every exposure. The first slot also has
         # a finding on exposure 1 (empty) and 3 (occupied), but not on 4.
         regions = [BoundingRect(58, 15, 2, 2)]
-        if exposure in (1, 3):
+        if level in (EXPOSURE_LEVELS[0], EXPOSURE_LEVELS[2]):
             regions.append(BoundingRect(1, 1, 2, 2))
         return replace(raw, regions=inferred(*regions).regions)
 
@@ -99,8 +102,8 @@ def test_unbatched_basler_run_keeps_its_cycles_and_eligible_group(
             assert not snapshot.unbatched_run_uncertain
             with pytest.raises(ApplicationStateError):
                 app.clear_statistics()
-            for ordinal in range(1, cycles + 1):
-                backend.expose(ordinal)
+            for ordinal, level in enumerate(EXPOSURE_LEVELS[:cycles], 1):
+                backend.expose(ordinal, intensity=level)
                 until(
                     lambda ordinal=ordinal: (
                         app.snapshot().counters.cycles_completed == ordinal

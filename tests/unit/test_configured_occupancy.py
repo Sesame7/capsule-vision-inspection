@@ -68,14 +68,14 @@ def configuration(
 def scene() -> NDArray[np.uint8]:
     image = np.zeros((120, 480, 3), dtype=np.uint8)
     image[:, 80:160] = bodies()
-    # Weak centered signal in both views (between 1% and 5%).
+    # Sparse bright signal stays below 5% in both views.
     image[10:20, 180:190] = (0, 180, 180)
     image[70:80, 180:190] = (0, 180, 180)
-    # Mixed PRESENT/EMPTY is UNKNOWN, not a skip.
+    # A body in the upper view alone establishes presence.
     image[:60, 240:320] = bodies()[:60]
     # Neighbor signal excluded by the center, not a modified saved ROI.
     image[:, 320:332] = 255
-    image[:, 400:] = 20
+    image[:, 400:] = 40
     return image
 
 
@@ -128,15 +128,15 @@ def test_always_on_and_selective_skip_preserves_original_traditional_results(
     monkeypatch.setattr("capsule_vision.application.pipeline.measure_capsule", measure)
     result = (ConfiguredProductionPipeline(config).inspect(snapshot, infer)).production
     assert calls == (6 if vimo else 0)
-    assert len(seen) == (18 if settings.enabled else 0)
+    assert len(seen) == (12 if settings.enabled else 0)
     assert result.layout is config.layout
     assert tuple(c.camera_id for c in result.cameras) == config.layout.camera_ids
     words = FirstStationReport.from_result(1, result).reject_words
     expected = (
         OccupancyState.EMPTY,
         OccupancyState.PRESENT,
-        OccupancyState.UNKNOWN,
-        OccupancyState.UNKNOWN,
+        OccupancyState.EMPTY,
+        OccupancyState.PRESENT,
         OccupancyState.EMPTY,
         OccupancyState.EMPTY,
     )
@@ -151,8 +151,10 @@ def test_always_on_and_selective_skip_preserves_original_traditional_results(
             word, bit = divmod(row.channel_id - 1, 16)
             if state is OccupancyState.EMPTY:
                 assert words[word] & (1 << bit) == 0
-            elif state is OccupancyState.UNKNOWN:
-                assert words[word] & (1 << bit)
+            else:
+                assert bool(words[word] & (1 << bit)) is (
+                    row.business_status is not ChannelBusinessStatus.OK
+                )
             check = row.checks[0]
             if settings.enabled and state is not OccupancyState.EMPTY:
                 assert check == judge_capsule(
@@ -242,7 +244,8 @@ def test_confirmed_empty_ignores_defects_after_full_image_inference(
     tmp_path: Path, cameras: int
 ) -> None:
     config = configuration(tmp_path, count=cameras)
-    image = np.zeros((120, 481, 3), dtype=np.uint8)
+    image = np.full((120, 481, 3), 40, dtype=np.uint8)
+    image[0, 12:24, 1] = 255
     original = replace(
         inferred(BoundingRect(1, 1, 4, 4), BoundingRect(480, 1, 1, 2)),
         image_shape=(120, 481, 3),
@@ -280,9 +283,10 @@ def test_confirmed_empty_ignores_defects_after_full_image_inference(
     assert totals.business_empty == cameras * 6 and totals.production_ng_cycles == 0
 
 
-def test_one_finding_across_empty_present_and_unknown_slots(tmp_path: Path) -> None:
+def test_shared_finding_preserved_for_presence_in_either_view(tmp_path: Path) -> None:
     config = replace(configuration(tmp_path), capsule=CapsuleSettings())
     image = scene()
+    image[:60, 160:240] = bodies()[:60]
     raw = replace(inferred(BoundingRect(75, 1, 90, 4)), image_shape=(120, 480, 3))
     result = (
         ConfiguredProductionPipeline(config)
@@ -290,14 +294,24 @@ def test_one_finding_across_empty_present_and_unknown_slots(tmp_path: Path) -> N
         .production
     )
     for camera in result.cameras:
-        empty, present, unknown = camera.channels[:3]
+        empty, both_views, upper_only = camera.channels[:3]
         assert [
-            row.occupancy.state for row in (empty, present, unknown) if row.occupancy
-        ] == [OccupancyState.EMPTY, OccupancyState.PRESENT, OccupancyState.UNKNOWN]
+            row.occupancy.state
+            for row in (empty, both_views, upper_only)
+            if row.occupancy
+        ] == [OccupancyState.EMPTY, OccupancyState.PRESENT, OccupancyState.PRESENT]
+        assert (
+            upper_only.occupancy is not None
+            and upper_only.occupancy.evidence is not None
+        )
+        assert upper_only.occupancy.evidence.upper.state is OccupancyState.PRESENT
+        assert upper_only.occupancy.evidence.lower.state is OccupancyState.EMPTY
         assert empty.business_status is ChannelBusinessStatus.EMPTY
         assert not empty.vimo_findings and not empty.reasons
-        assert present.vimo_findings[0].finding is unknown.vimo_findings[0].finding
-        for row in (present, unknown):
+        assert (
+            both_views.vimo_findings[0].finding is upper_only.vimo_findings[0].finding
+        )
+        for row in (both_views, upper_only):
             assert row.business_status is ChannelBusinessStatus.NG
             assert [reason.code for reason in row.reasons] == ["defect_region"]
         assert camera_archive_status(camera) == 1
@@ -343,7 +357,7 @@ def test_confirmed_empty_preserves_enabled_vimo_errors(
 def test_occupancy_exception_is_explicit_required_error_and_later_channels_continue(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ng: bool
 ) -> None:
-    config = replace(configuration(tmp_path), capsule=CapsuleSettings())
+    config = configuration(tmp_path)
     count = 0
 
     def measure(image: NDArray[np.uint8], roi: BoundingRect):
@@ -357,6 +371,7 @@ def test_occupancy_exception_is_explicit_required_error_and_later_channels_conti
         "capsule_vision.application.pipeline.measure_occupancy", measure
     )
     image = scene()
+    image[:, :80] = bodies()
     raw = replace(
         inferred(*((BoundingRect(1, 1, 4, 4),) if ng else ())),
         image_shape=(120, 480, 3),
@@ -374,8 +389,12 @@ def test_occupancy_exception_is_explicit_required_error_and_later_channels_conti
         message="one occupancy call failed",
     )
     assert first.occupancy is not None
-    assert first.occupancy.state is OccupancyState.UNKNOWN
+    assert first.occupancy.state is None
     assert first.traditional_skip is None
+    assert first.checks[0].assessment == Assessment(
+        TechnicalStatus.SUCCESS, ProductJudgment.OK
+    )
+    assert bool(first.vimo_findings) is ng
     assert FirstStationReport.from_result(1, result).reject_words[0] & 1
     assert first.assessment == Assessment(
         TechnicalStatus.ERROR, ProductJudgment.NG if ng else ProductJudgment.UNKNOWN
@@ -422,11 +441,18 @@ def test_incomplete_cycles_have_unavailable_occupancy_without_any_algorithm(
     )
     assert len(result.channels) == 36
     assert all(
-        row.occupancy == OccupancyResult(error_code="occupancy.result_unavailable")
+        row.occupancy is not None
+        and row.occupancy.state is None
+        and row.occupancy.error_code == "occupancy.result_unavailable"
         for row in result.channels
     )
     assert all(row.traditional_skip is None for row in result.channels)
     assert all(camera.timing.occupancy_ms is None for camera in result.cameras)
+    assert FirstStationReport.from_result(1, result).reject_words == (
+        0xFFFF,
+        0xFFFF,
+        0x000F,
+    )
 
 
 def test_skip_provenance_cannot_mask_success_or_missing_evidence(
@@ -441,6 +467,10 @@ def test_skip_provenance_cannot_mask_success_or_missing_evidence(
     empty = result.channels[0]
     with pytest.raises(ValueError, match="EMPTY skip"):
         replace(empty, occupancy=None)
+    with pytest.raises(ValueError, match="EMPTY skip"):
+        replace(
+            empty, occupancy=OccupancyResult(error_code="occupancy.execution_error")
+        )
     with pytest.raises(ValueError, match="EMPTY skip"):
         replace(empty, checks=result.channels[1].checks)
 
@@ -464,7 +494,7 @@ def test_ordinary_traditional_failure_remains_error_and_does_not_stop_later_chan
             cycle(config, scene()), no_findings
         )
     ).production
-    assert seen == 18
+    assert seen == 12
     row = result.channels[1]
     assert row.assessment == Assessment(TechnicalStatus.ERROR, ProductJudgment.UNKNOWN)
     assert row.checks[0].reasons[0].code == "capsule.execution_error"

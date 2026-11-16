@@ -213,7 +213,7 @@ def collected(configuration: ResolvedInspectionConfiguration) -> CollectedCycle:
     for index, camera in reversed(tuple(enumerate(configuration.layout.cameras))):
         # PRESENT input lets policy tests exercise traditional success/error;
         # the corner pixel remains the independent camera invocation marker.
-        pixels = np.full((20, 60, 3), 30, dtype=np.uint8)
+        pixels = np.full((20, 60, 3), 50, dtype=np.uint8)
         pixels[0, 0] = index
         cycle = collector.accept(
             Frame(

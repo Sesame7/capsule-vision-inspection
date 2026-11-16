@@ -231,13 +231,13 @@ def test_indicator_distinguishes_pending_disabled_error_and_ng() -> None:
             Indicator.ERROR_NG,
         ),
         (
-            OccupancyState.UNKNOWN,
+            None,
             TechnicalStatus.SUCCESS,
             ProductJudgment.OK,
             Indicator.UNKNOWN,
         ),
         (
-            OccupancyState.UNKNOWN,
+            None,
             TechnicalStatus.SUCCESS,
             ProductJudgment.NG,
             Indicator.NG,

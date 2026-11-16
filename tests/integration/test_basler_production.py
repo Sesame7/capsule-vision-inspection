@@ -428,7 +428,8 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
                 tmp_path / "draft-only"
             )
             # All six observed frames must contain product for this NG archive case.
-            passive.expose(1, (5, 3, 1, 4, 2, 0), intensity=30)
+            presence_intensity = 50
+            passive.expose(1, (5, 3, 1, 4, 2, 0), intensity=presence_intensity)
             assert entered.wait(WAIT)
             until(lambda: app.snapshot().counters.cycles_completed == 1)
             until(
@@ -472,7 +473,7 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
                 index = result.layout.camera_ids.index(item.frame.id.camera_id)
                 assert (
                     item.status == 1
-                    and np.all(item.frame.image == 30 + index)
+                    and np.all(item.frame.image == presence_intensity + index)
                     and not item.frame.image.flags.writeable
                 )
             if not disk_failure:

@@ -27,6 +27,7 @@ from capsule_vision.inspection import CameraId, CycleId, Frame, FrameId
 from capsule_vision.inspection.production import (
     CameraInspectionResult,
     FindingSource,
+    OccupancyResult,
     OccupancyState,
     ProductJudgment,
     Reason,
@@ -35,11 +36,7 @@ from capsule_vision.inspection.production import (
 
 OK, NG, UNKNOWN = ProductJudgment
 SUCCESS, ERROR, DISABLED = TechnicalStatus
-PRESENT, EMPTY, UNCERTAIN = (
-    OccupancyState.PRESENT,
-    OccupancyState.EMPTY,
-    OccupancyState.UNKNOWN,
-)
+EMPTY, PRESENT = OccupancyState
 STAMP = datetime(2026, 10, 17, 23, 59, 59, 123456).astimezone()
 RUN = "bbd4acd7f3d8483f88311a2ab0d9c0c9"
 
@@ -69,7 +66,6 @@ def pixels(camera: CameraInspectionResult) -> Frame:
         (PRESENT, ERROR, UNKNOWN, 2),
         (PRESENT, ERROR, NG, 1),
         (EMPTY, SUCCESS, OK, 0),
-        (UNCERTAIN, SUCCESS, OK, None),
         (None, SUCCESS, OK, None),
         (PRESENT, DISABLED, UNKNOWN, None),
     ],
@@ -97,6 +93,17 @@ def test_camera_decision_uses_all_six_explicit_channels(
 
 
 @pytest.mark.parametrize(
+    "code", ["occupancy.execution_error", "occupancy.result_unavailable"]
+)
+def test_occupancy_failure_keeps_error_archive_eligibility(code: str) -> None:
+    camera = inspected()
+    row = replace(camera.channels[0], occupancy=OccupancyResult(error_code=code))
+    assert row.occupancy is not None and row.occupancy.state is None
+    changed = replace(camera, channels=(row, *camera.channels[1:]))
+    assert camera_archive_status(changed) == 2
+
+
+@pytest.mark.parametrize(
     "enabled",
     [
         (True, False, False, False),
@@ -116,7 +123,7 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
         (PRESENT, SUCCESS, NG),
         (PRESENT, ERROR, UNKNOWN),
         (EMPTY, SUCCESS, OK),
-        (UNCERTAIN, SUCCESS, OK),
+        (None, SUCCESS, OK),
         (PRESENT, ERROR, NG),
     )
     result = replace(
@@ -197,7 +204,6 @@ def test_mixed_cameras_switches_pixels_identity_timestamp_and_once(
         ((PRESENT, SUCCESS, NG), 1),
         ((PRESENT, ERROR, UNKNOWN), 2),
         ((EMPTY, ERROR, UNKNOWN), 2),
-        ((UNCERTAIN, SUCCESS, OK), None),
         ((None, SUCCESS, OK), None),
         ((PRESENT, DISABLED, UNKNOWN), None),
     ],

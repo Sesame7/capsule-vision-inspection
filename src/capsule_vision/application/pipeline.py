@@ -221,9 +221,10 @@ class ConfiguredProductionPipeline:
         for slot, traditional_check, presence in zip(
             layout.slots, traditional, occupancy, strict=True
         ):
+            confirmed_empty = presence.state is OccupancyState.EMPTY
             matched = (
                 ()
-                if presence.state is OccupancyState.EMPTY
+                if confirmed_empty
                 else tuple(
                     item for item in assignments if item.channel_id == slot.channel_id
                 )
@@ -242,8 +243,7 @@ class ConfiguredProductionPipeline:
                     matched,
                     occupancy=presence,
                     traditional_skip=TraditionalSkipReason.CONFIRMED_EMPTY
-                    if self.configuration.capsule.enabled
-                    and presence.state is OccupancyState.EMPTY
+                    if self.configuration.capsule.enabled and confirmed_empty
                     else None,
                 )
             )

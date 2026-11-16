@@ -68,7 +68,7 @@ def test_collected_cycle_worker_and_production_results_compose(
     )
     collector.begin(CycleId(1))
     # Occupied frames exercise both assigned NG and independent camera failures.
-    first_marker = 31
+    first_marker = 50
     inputs = {
         first_marker + index: Frame(
             FrameId(CycleId(1), camera.camera_id, 5 - index),
