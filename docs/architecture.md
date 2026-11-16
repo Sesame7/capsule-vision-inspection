@@ -371,12 +371,20 @@ and tooltip. Legacy records and withheld names use the generic Recipe caption.
 The name is target evidence and adds no change comparison or detail.
 The Simplified Chinese and English views use approved account names from
 successful account changes and show Production Run for a successful Start.
-Selecting an operation shows its additional recorded changes. Reliably paired changes use Field, Before
-and After columns. The last column shows Requested value for unsuccessful or
-unresolved operations. Pairing uses the recorded field identities, including
-indices, in prior field order. The comparison gives recorded empty values an
-explicit caption and preserves recorded dash markers. Single-sided, ambiguous
-and incomplete evidence stays in text details. Long values wrap within the
+Selecting an operation shows its additional recorded changes. Reliably paired
+changes use Field, Before and After columns. The last column shows Requested
+value for unsuccessful or unresolved operations. Pairing uses exact recorded
+field paths, including indices, in prior field order. Recipe Save/Delete, Vision
+layout/sources and Communication Save show unpaired fields in separate Field
+and Recorded value columns under Before, After or Requested as appropriate.
+Missing sides supply no values. Explicit empty values have a caption and recorded
+dashes retain their spelling. A recorded missing-file or unreadable-file observation
+provides prior context for Communication Save. Ambiguous sides use a text fallback.
+An ellipsis, a value at the usual 96-character limit or a side at the 2,048-character
+limit can indicate an incomplete summary. Review shows the possible truncation
+and the existing summary limits of 16 fields, 96 characters per value and 2,048
+per side while retaining the recorded evidence. Exact publication bytes and
+Production activation have separate evidence. Long values wrap within the
 scrollable details area. Simplified Chinese and English use Audit-specific
 captions for actions, results and recognized reasons. **No completion recorded**
 identifies an operation without a recorded completion at review time.
@@ -1224,12 +1232,13 @@ Batch scope and signal category without another report or Batch selector.
   only when relevant by approved changes, recorded result evidence and safe
   failure captions. The report uses the same Simplified Chinese and English
   Audit terminology as local review. It omits generic failure text when there
-  is no additional disclosable classification. Reliably
-  paired values use Field, Before and After columns beneath the event, with
-  Requested value for unsuccessful or unresolved operations. An approved value
-  whose counterpart is withheld appears under its recorded side with a disclosure
-  notice. Single-sided, ambiguous and incomplete evidence remains in text details
-  with applicable incomplete-evidence captions. Each action has its own
+  is no additional disclosable classification. Reliably paired values use Field,
+  Before and After columns beneath the event, with Requested value for unsuccessful
+  or unresolved operations. Approved unpaired configuration values, including a
+  value whose counterpart is withheld, use Field and Recorded value columns
+  under the recorded side. The report identifies omitted values and potentially
+  incomplete summaries. Potentially cut values are withheld. Ambiguous configuration
+  sides use only individually approved text lines. Each action has its own
   disclosure rules. Configuration changes show approved fields and value types,
   with the action and result available for other changes. Reports omit credentials,
   internal IDs and hashes, network endpoints and routes, camera serials and file
@@ -1246,8 +1255,8 @@ Batch scope and signal category without another report or Batch selector.
   Local Engineer review shows the full recorded request and retains engineering details
   subject to the unsuccessful login rule. Both views flag incomplete historical
   write evidence and omit any potentially cut final value. PDF uses landscape A4
-  and repeats event and continuing comparison headings. Excel keeps typed local
-  timestamps, literal aligned comparison cells and a frozen event table header.
+  and repeats event and continuing detail-table headings. Excel keeps typed local
+  timestamps, literal aligned field and value cells and a frozen event table header.
   Neither format changes Audit evidence.
 
 - **Alarm Records report:** every retained event matching the shared local-date

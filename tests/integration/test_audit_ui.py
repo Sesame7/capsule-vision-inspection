@@ -28,6 +28,7 @@ from capsule_vision.application.audit import (
 )
 from capsule_vision.application.history import HistoryContext
 from capsule_vision.application.identity_models import AuthorizationError, Role
+from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.audit_page import AuditPage
@@ -528,7 +529,15 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
             elif case[0] == "model.publish":
                 assert "Module ID Segmentation" in page.details.toPlainText()
             elif expected == recipe_name:
-                assert page.details.isHidden()
+                (recorded,) = page.details.document().rootFrame().childFrames()
+                assert isinstance(recorded, QTextTable)
+                assert recorded.columns() == recorded.rows() == 2
+                assert recorded.cellAt(0, 1).firstCursorPosition().block().text() == (
+                    "Recorded value · After"
+                )
+                assert recorded.cellAt(1, 1).firstCursorPosition().block().text() == (
+                    recipe_name
+                )
                 assert page.table.fontMetrics().horizontalAdvance(
                     recipe_name
                 ) > page.table.columnWidth(3)
@@ -628,16 +637,24 @@ def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
                 assert page.details.horizontalScrollBar().maximum() == 0
                 assert page.details.verticalScrollBar().maximum() > 0
             else:
-                assert not frames
-                details = page.details.toPlainText()
-                assert "product_code = Prior" in details and "New" in details
-                assert text("audit_requested", language) in details
-                incomplete = (
-                    "已记录的值不完整"
-                    if language == "zh"
-                    else "Recorded values are incomplete"
+                assert len(frames) == 2
+                assert all(
+                    isinstance(frame, QTextTable) and frame.columns() == 2
+                    for frame in frames
                 )
-                assert incomplete in details
+                details = page.details.toPlainText()
+                assert text("audit_recorded_before", language) in details
+                assert text("audit_recorded_requested", language) in details
+                assert (
+                    audit_text("product_code", language) in details
+                    and "Prior" in details
+                )
+                assert text("display_name", language) in details and "New" in details
+                incomplete = text("audit_config_summary_incomplete", language).format(
+                    fields=16, value=96, side=2048
+                )
+                assert details.lstrip().startswith(incomplete)
+                assert page.details.horizontalScrollBar().maximum() == 0
     finally:
         page.dispose()
         page.close()

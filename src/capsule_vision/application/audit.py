@@ -27,6 +27,8 @@ from .identity_models import (
 )
 
 AUDIT_CHANGE_LIMIT = 2048
+CONFIGURATION_SUMMARY_FIELDS = 16
+CONFIGURATION_SUMMARY_VALUE_LENGTH = 96
 _SELECTED_RECIPE_NAME_PREFIX = "display_name = "
 # Bracketed unsigned words: the two brackets replace the last ", " separator.
 _PLC_WRITE_EVIDENCE_LIMIT = max(MAX_WRITE_WORDS, MAX_WRITE_REGISTERS) * len("65535, ")
@@ -56,7 +58,7 @@ def differences(old: object, new: object) -> tuple[str, str]:
     after: list[str] = []
 
     def visit(path: str, a: object, b: object) -> None:
-        if len(before) > 16 or a == b:
+        if len(before) > CONFIGURATION_SUMMARY_FIELDS or a == b:
             return
         sample = b if b is not None else a
         if is_dataclass(sample) and not isinstance(sample, type):
@@ -82,7 +84,9 @@ def differences(old: object, new: object) -> tuple[str, str]:
                 return (
                     "—"
                     if v is None
-                    else str(v.value if isinstance(v, Enum) else v)[:96]
+                    else str(v.value if isinstance(v, Enum) else v)[
+                        :CONFIGURATION_SUMMARY_VALUE_LENGTH
+                    ]
                 )
 
             before.append(f"{path} = {literal(a)}")
@@ -93,7 +97,8 @@ def differences(old: object, new: object) -> tuple[str, str]:
 
 
 def tuple_summary(lines: list[str]) -> str:
-    return "\n".join(lines[:16] + (["…"] if len(lines) > 16 else []))
+    limit = CONFIGURATION_SUMMARY_FIELDS
+    return "\n".join(lines[:limit] + (["…"] if len(lines) > limit else []))
 
 
 @dataclass(frozen=True, slots=True)

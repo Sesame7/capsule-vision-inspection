@@ -454,6 +454,26 @@ STRINGS: dict[str, tuple[str, str]] = {
     "audit_requested": ("请求值", "Requested value"),
     "audit_field": ("字段", "Field"),
     "audit_empty_value": ("（空值）", "(empty value)"),
+    "audit_recorded_before": ("记录值 · 变更前", "Recorded value · Before"),
+    "audit_recorded_after": ("记录值 · 变更后", "Recorded value · After"),
+    "audit_recorded_requested": ("记录值 · 请求值", "Recorded value · Requested"),
+    "audit_config_summary_incomplete": (
+        "配置摘要可能不完整。最多记录 {fields} 个字段，每个值最多 {value} 个字符，每侧最多 {side} 个字符。",
+        "Configuration summary may be incomplete. Limits are {fields} fields, {value} characters per value and {side} characters per side.",
+    ),
+    "audit_config_unaligned": (
+        "部分字段无法可靠对齐。",
+        "Some fields could not be aligned reliably.",
+    ),
+    "audit_config_missing_file": ("配置文件缺失", "Configuration file missing"),
+    "audit_config_unreadable": ("无法读取配置文件", "Configuration file unreadable"),
+    "audit_config_no_field_values": (
+        "未记录各字段值",
+        "No individual field values recorded",
+    ),
+    "audit_camera_id": ("相机 ID", "Camera ID"),
+    "audit_slot_number": ("位置编号", "Slot number"),
+    "audit_source_mode": ("采集模式", "Source mode"),
     "audit_approved_values": (
         "仅显示允许披露的记录值。",
         "Only approved recorded values are shown.",

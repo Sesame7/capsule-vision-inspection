@@ -131,10 +131,22 @@ ENGLISH_FALLBACK_KEYS = {
     "audit_actor",
     "audit_all_actions",
     "audit_approved_values",  # Customer reports offer Chinese and English.
+    # The configuration Audit presentation adds reviewed Chinese and English captions.
+    "audit_camera_id",
     "audit_completed",
+    "audit_config_missing_file",
+    "audit_config_no_field_values",
+    "audit_config_summary_incomplete",
+    "audit_config_unaligned",
+    "audit_config_unreadable",
     "audit_id",
     "audit_plc_values_omitted",  # Customer reports offer Chinese and English.
+    "audit_recorded_after",
+    "audit_recorded_before",
+    "audit_recorded_requested",
     "audit_remarks",
+    "audit_slot_number",
+    "audit_source_mode",
     "batch_edit_idle",
     "batch_edit_info",
     "batch_first_run",

@@ -20,6 +20,7 @@ from capsule_vision.application import ProductionApplication, production_report
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.audit import (
     AUDIT_CHANGE_LIMIT,
+    CONFIGURATION_SUMMARY_VALUE_LENGTH,
     AuditAccount,
     AuditOperation,
     AuditQuery,
@@ -27,7 +28,10 @@ from capsule_vision.application.audit import (
 )
 from capsule_vision.application.audit_presentation import (
     ACTION_CAPTIONS,
+    ChangeComparison,
+    RecordedFields,
     action_caption,
+    configuration_details,
     failure_caption,
     local_change_comparison,
     outcome_caption,
@@ -335,9 +339,12 @@ def test_complete_filtered_snapshot_and_no_temporal_batch_attribution(
         last = rows[-1]
         assert isinstance(last, AuditReportRow)
         assert last.values[0] == datetime.fromtimestamp(STAMP)
-        assert last.comparison is not None
-        assert last.comparison.headers == ("Field", "Before", "Requested value")
-        assert last.comparison.rows == (("Product name", "Previous", "Product 000"),)
+        assert last.detail_tables == (
+            ChangeComparison(
+                ("Field", "Before", "Requested value"),
+                (("Product name", "Previous", "Product 000"),),
+            ),
+        )
         assert last.detail == "Reason: Could not read or write the configuration file"
         assert batch not in str(rows) and "actual-run" not in str(rows)
     assert evidence(identity.audit.path) == original
@@ -615,8 +622,7 @@ def test_customer_changes_keep_failures_but_never_credentials_or_opaque_ids() ->
         "",
         "TimeoutError",
     )
-    comparison, detail = details(entry, "en")
-    assert comparison is not None
+    (comparison,), detail = details(entry, "en")
     assert comparison.headers[-1] == "Requested value" and "Timeout" in detail
     secret = AuditRecord(
         2,
@@ -631,8 +637,8 @@ def test_customer_changes_keep_failures_but_never_credentials_or_opaque_ids() ->
         "",
         "AuthorizationError",
     )
-    comparison, detail = details(secret, "en")
-    assert comparison is None
+    tables, detail = details(secret, "en")
+    assert not tables
     assert detail == "Reason: Operation denied"
 
 
@@ -651,8 +657,7 @@ def test_report_localizes_configuration_changes_and_retains_recorded_names() -> 
         "ConfigurationIOError",
     )
     for language in ("zh", "en"):
-        comparison, detail = details(entry, language)
-        assert comparison is not None
+        (comparison,), detail = details(entry, language)
         assert [change[1:] for change in comparison.rows] == [
             ("Salt coating", "=Unchanged formula-like name"),
             ("120", "130"),
@@ -672,7 +677,7 @@ def test_report_localizes_configuration_changes_and_retains_recorded_names() -> 
     unknown = AuditRecord(
         2, operation("model.cache", "a" * 64, 1), "failed", "", "VendorNativeException"
     )
-    assert details(unknown, "en") == (None, "")
+    assert details(unknown, "en") == ((), "")
     assert failure_caption(unknown, "en") == "VendorNativeException"
 
 
@@ -723,8 +728,9 @@ def test_customer_details_require_approved_actions_fields_and_values(
         "",
         "Transport error at HostSentinel:9600",
     )
-    comparison, shown = details(entry, "en")
-    assert comparison is None
+    tables, detail = details(entry, "en")
+    assert all(isinstance(table, RecordedFields) for table in tables)
+    shown = str(tables) + detail
     assert "Reason:" not in shown and "Sentinel" not in shown
     assert all(value in shown for value in retained)
 
@@ -739,10 +745,8 @@ def test_role_compares_recorded_values_under_the_correct_heading(outcome: str) -
         "StaleSessionError" if outcome == "stale" else "",
     )
     for language in ("zh", "en"):
-        comparison, reason = details(entry, language)
-        assert comparison is not None and comparison == local_change_comparison(
-            entry, language
-        )
+        (comparison,), reason = details(entry, language)
+        assert comparison == local_change_comparison(entry, language)
         assert comparison.headers == (
             text("audit_field", language),
             text("audit_before", language),
@@ -776,19 +780,20 @@ def test_disclosed_pairs_use_recorded_indices_and_preserve_empty_values() -> Non
         "",
         "",
     )
-    comparison, detail = details(entry, "en")
-    assert comparison is not None
+    (comparison, single), detail = details(entry, "en")
     assert comparison.headers[-1] == "Requested value"
     assert comparison.rows == (
         ("Product code", "OLD", "(empty value)"),
         (f"ViMo · {text('customer_audit_excluded', 'en')} [0]", "Scar", "—"),
         (f"ViMo · {text('customer_audit_excluded', 'en')} [1]", "—", "Bubble"),
     )
-    assert "Before: Recipe name = Secret name" in detail
+    assert single == RecordedFields(
+        ("Field", "Recorded value · Before"), (("Recipe name", "Secret name"),)
+    )
     assert "Some values are omitted from this report." in detail
     assert "PathSentinel" not in str(comparison) + detail
-    local = local_change_comparison(entry, "en")
-    assert local is not None and local.rows[-1] == (
+    (local,) = configuration_details(entry, "en").tables
+    assert local.rows[-1] == (
         "Recipe name",
         "Secret name",
         "C:/PathSentinel",
@@ -796,26 +801,38 @@ def test_disclosed_pairs_use_recorded_indices_and_preserve_empty_values() -> Non
 
 
 @pytest.mark.parametrize(
-    "before,after,incomplete",
+    "before,after,paired,unaligned,incomplete",
     [
-        ("diagnostic.timeout = 1.0", "web.enabled = True", False),
+        ("diagnostic.timeout = 1.0", "web.enabled = True", False, False, False),
         (
             "diagnostic.timeout = 1.0\ndiagnostic.timeout = 1.1",
             "diagnostic.timeout = 2.0",
+            False,
+            True,
             False,
         ),
         (
             "diagnostic.timeout = 1.0\nmissing delimiter",
             "diagnostic.timeout = 2.0",
             False,
+            True,
+            False,
         ),
-        ("", "diagnostic.timeout = 2.0", False),
-        ("diagnostic.timeout = 1.0\n…", "diagnostic.timeout = 2.0\n…", True),
+        ("", "diagnostic.timeout = 2.0", False, False, False),
+        (
+            "diagnostic.timeout = 1.0\n…",
+            "diagnostic.timeout = 2.0\n…",
+            True,
+            False,
+            True,
+        ),
         (
             ("diagnostic.timeout = 1.0\nweb.enabled = " + "x" * AUDIT_CHANGE_LIMIT)[
                 :AUDIT_CHANGE_LIMIT
             ],
             "diagnostic.timeout = 2.0",
+            True,
+            False,
             True,
         ),
     ],
@@ -828,8 +845,8 @@ def test_disclosed_pairs_use_recorded_indices_and_preserve_empty_values() -> Non
         "size-limit",
     ],
 )
-def test_unsafe_change_pairs_keep_disclosed_text(
-    before: str, after: str, incomplete: bool
+def test_configuration_uses_recorded_sides_when_comparison_is_incomplete(
+    before: str, after: str, paired: bool, unaligned: bool, incomplete: bool
 ) -> None:
     entry = AuditRecord(
         1,
@@ -838,12 +855,124 @@ def test_unsafe_change_pairs_keep_disclosed_text(
         "",
         "OSError",
     )
-    comparison, detail = details(entry, "en")
-    assert comparison is None and local_change_comparison(entry, "en") is None
-    assert "Requested value: " in detail
-    assert ("Before: " in detail) == bool(before)
-    assert ("Recorded values are incomplete" in detail) == incomplete
-    assert "missing delimiter" not in detail
+    tables, detail = details(entry, "en")
+    local = configuration_details(entry, "en")
+    for shown in (tables, local.tables):
+        assert bool(shown) and isinstance(shown[0], ChangeComparison) == paired
+        assert shown[-1].headers[-1] == (
+            "Requested value" if paired else "Recorded value · Requested"
+        )
+    assert ("Before: Diagnostics" in detail) == unaligned
+    assert ("Some fields could not be aligned reliably." in detail) == unaligned
+    assert (
+        "16 fields, 96 characters per value and 2048 characters per side" in detail
+    ) == incomplete
+    assert "missing delimiter" not in detail and "x" * 100 not in detail
+    if unaligned:
+        assert local.text[0][1] == before
+
+
+@pytest.mark.parametrize("line_ending", ("\n", "\r\n"))
+def test_configuration_partial_overlap_keeps_field_identity_and_recorded_order(
+    line_ending: str,
+) -> None:
+    entry = AuditRecord(
+        1,
+        operation(
+            "vision.layout",
+            "machine.tsv",
+            0,
+            line_ending.join(
+                (
+                    "layout.cameras[1].slots[0].rect.x = 111",
+                    "layout.cameras[1].slots[1].rect.x = —",
+                    "layout.cameras[0].slots[0].slot = 0",
+                )
+            )
+            + line_ending,
+            "layout.cameras[0].slots[0].slot = 1\n"
+            "layout.cameras[1].slots[2].rect.x = 222\n"
+            "layout.cameras[1].slots[0].rect.x = 112",
+        ),
+        "success",
+        "",
+        "",
+    )
+    for language in ("zh", "en"):
+        tables, detail = details(entry, language)
+        assert len(tables) == 3 and not detail
+        compare, before, after = tables
+        assert isinstance(compare, ChangeComparison)
+        assert isinstance(before, RecordedFields) and isinstance(after, RecordedFields)
+        assert compare.headers[-1] == text("audit_after", language)
+        assert tuple(row[1:] for row in compare.rows) == (("111", "112"), ("0", "1"))
+        assert text("audit_slot_number", language) in compare.rows[-1][0]
+        assert before.rows[0][1] == "—" and " [1]" in before.rows[0][0]
+        assert after.rows[0][1] == "222" and " [2]" in after.rows[0][0]
+        assert "rect." not in str(tables)
+
+
+def test_first_communication_save_can_record_prior_status_without_field_values() -> (
+    None
+):
+    entry = AuditRecord(
+        1,
+        operation(
+            "communication.save",
+            "communication.json",
+            0,
+            "Unreadable configuration",
+            "Saved defaults",
+        ),
+        "failed",
+        "",
+        "",
+    )
+    assert details(entry, "en") == (
+        (),
+        "Before: Configuration file unreadable\nRequested value: No individual field values recorded",
+    )
+
+
+@pytest.mark.parametrize("aggregate_limit", (False, True))
+def test_clipped_name_is_never_used_as_a_customer_value_or_target(
+    aggregate_limit: bool,
+) -> None:
+    prefix = "Name prefix kept in Audit "
+    clipped = ("Genuine looking " * 12)[
+        : CONFIGURATION_SUMMARY_VALUE_LENGTH - len(prefix)
+    ] + prefix
+    before = "display_name = Prior name\nproduct_code = Lot A"
+    after = "product_code = Lot B\n"
+    if aggregate_limit:
+        clipped = prefix
+        filler_length = (
+            AUDIT_CHANGE_LIMIT
+            - len(after)
+            - len("private.path = \ndisplay_name = ")
+            - len(clipped)
+        )
+        after += "private.path = " + "x" * filler_length + "\n"
+    after += "display_name = " + clipped
+    if aggregate_limit:
+        assert len(after) == AUDIT_CHANGE_LIMIT
+    entry = AuditRecord(
+        1, operation("recipe.save", "recipe", 0, before, after), "success", "", ""
+    )
+    tables, detail = details(entry, "en")
+    assert len(tables) == 2
+    comparison, prior = tables
+    assert comparison == ChangeComparison(
+        ("Field", "Before", "After"), (("Product code", "Lot A", "Lot B"),)
+    )
+    assert prior == RecordedFields(
+        ("Field", "Recorded value · Before"), (("Recipe name", "Prior name"),)
+    )
+    assert "Configuration summary may be incomplete." in detail
+    assert "Some values are omitted" in detail
+    assert target_caption(entry, "en", customer=True) == "Recipe"
+    assert clipped not in str(tables) + detail
+    assert clipped in str(configuration_details(entry, "en"))
 
 
 def test_unbatched_scope_and_missing_batch_never_broaden_to_all_records(

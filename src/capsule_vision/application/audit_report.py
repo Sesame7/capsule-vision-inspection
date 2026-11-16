@@ -19,13 +19,15 @@ from capsule_vision.localization.languages import Language
 from .audit import AuditAccount, AuditOperation, AuditQuery, AuditRecord
 from .audit_presentation import (
     BATCH_FIELDS,
+    CONFIGURATION_ACTIONS,
     AuditChange,
-    ChangeComparison,
+    AuditDetailTable,
     action_caption,
     after_caption_key,
     before_caption_key,
     change_caption,
     change_comparison,
+    configuration_details,
     configuration_field_caption,
     failure_caption,
     incomplete_changes,
@@ -370,13 +372,12 @@ def _approved_field(
 
 
 def _changes(action: str, value: str, language: Language) -> str:
-    if action in _CONFIGURATION_FIELDS or action == "batch.information":
+    if action == "batch.information":
         lines: list[str] = []
-        separator = " · " if action == "batch.information" else " = "
         for line in value.splitlines():
             name, sep, recorded = line.partition(" = ")
             if sep and (approved := _approved_field(action, name, recorded, language)):
-                lines.append(separator.join(approved))
+                lines.append(" · ".join(approved))
         return "\n".join(lines)
     if action in ("batch.select", "batch.end", "model.rename"):
         return _business_text(value)
@@ -408,7 +409,7 @@ def _changes(action: str, value: str, language: Language) -> str:
 def _disclosed_change(
     action: str, field: str, value: str, language: Language
 ) -> tuple[str, str] | None:
-    if action in _CONFIGURATION_FIELDS or action == "batch.information":
+    if action == "batch.information":
         return _approved_field(action, field, value, language)
     rendered = _changes(action, value, language)
     return (
@@ -416,15 +417,34 @@ def _disclosed_change(
     )
 
 
+def _detail_lines(fields: tuple[tuple[str, str], ...], language: Language) -> list[str]:
+    return [
+        f"{audit_text(caption, language)}: {value}" if caption else value
+        for caption, value in fields
+        if value
+    ]
+
+
 def details(
     entry: AuditRecord, language: Language
-) -> tuple[ChangeComparison | None, str]:
-    """Return only approved paired fields and independently displayable detail."""
+) -> tuple[tuple[AuditDetailTable, ...], str]:
+    """Project approved values and independently displayable detail."""
     reason = failure_caption(entry, language, customer=True)
     reason_line = f"{audit_text('reasons', language)}: {reason}" if reason else ""
     if unsuccessful_login(entry):
-        return None, reason_line
+        return (), reason_line
     op = entry.operation
+    if op.action in CONFIGURATION_ACTIONS:
+        config = configuration_details(
+            entry,
+            language,
+            disclose=lambda path, value: _approved_field(
+                op.action, path, value, language
+            ),
+        )
+        lines = _detail_lines((*config.text, ("reasons", reason)), language)
+        return config.tables, "\n".join((*lines, *config.notices))
+
     plc_write = op.action == "plc.write"
     pairs = recorded_change_pairs(op)
     rows: list[AuditChange] = []
@@ -461,14 +481,13 @@ def details(
             )
         ):
             before = after = ""
-    lines = [
-        f"{audit_text(caption, language)}: {value}"
-        for caption, value in (
+    lines = _detail_lines(
+        (
             (before_caption_key(op.action, language), before),
             (after_caption_key(entry, language), after),
-        )
-        if value
-    ]
+        ),
+        language,
+    )
     if evidence := outcome_evidence_caption(entry, language):
         lines.append(evidence)
     if reason_line:
@@ -477,10 +496,8 @@ def details(
         lines.append(audit_text("identity_audit_incomplete", language))
     if omitted:
         lines.append(audit_text("audit_approved_values", language))
-    comparison = (
-        change_comparison(tuple(rows), entry.outcome, language) if rows else None
-    )
-    return comparison, "\n".join(lines)
+    tables = (change_comparison(tuple(rows), entry.outcome, language),) if rows else ()
+    return tables, "\n".join(lines)
 
 
 def table(db: sqlite3.Connection, language: Language) -> Table:
@@ -490,7 +507,7 @@ def table(db: sqlite3.Connection, language: Language) -> Table:
         for row in db.execute("SELECT * FROM audit_records ORDER BY cursor DESC"):
             entry = record(row)
             op = entry.operation
-            comparison, detail = details(entry, language)
+            tables, detail = details(entry, language)
             yield AuditReportRow(
                 (
                     datetime.fromisoformat(op.utc).astimezone().replace(tzinfo=None),
@@ -500,7 +517,7 @@ def table(db: sqlite3.Connection, language: Language) -> Table:
                     outcome_caption(entry.outcome, language),
                 ),
                 detail,
-                comparison,
+                tables,
             )
 
     return Table(

@@ -9,8 +9,9 @@ from threading import Event
 
 import pytest
 from openpyxl import load_workbook
+from openpyxl.styles import Alignment
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QTextDocument
+from PySide6.QtGui import QTextDocument, QTextTable
 from PySide6.QtWidgets import QApplication, QComboBox
 from reportlab.pdfgen.canvas import Canvas
 from tests.integration.test_audit_ui import select_account
@@ -592,6 +593,7 @@ def test_customer_exports_of_actual_saves_omit_internal_configuration(
             (revision,) = identity.audit.revisions(kind, resource).result(WAIT)
             assert revision.confirmed and private in revision.record.operation.after
             if kind == "communication":
+                assert revision.record.operation.before == "Missing file"
                 assert f"diagnostic.port = {port}" in revision.record.operation.after
                 assert (
                     f"diagnostic.destination.network = {route}"
@@ -617,6 +619,13 @@ def test_customer_exports_of_actual_saves_omit_internal_configuration(
             )
             page.table.selectRow(row)
             assert private in page.details.toPlainText()
+            if action == "communication.save":
+                (recorded,) = page.details.document().rootFrame().childFrames()
+                assert isinstance(recorded, QTextTable) and recorded.columns() == 2
+                assert (
+                    text("audit_config_missing_file", "en")
+                    in page.details.toPlainText()
+                )
 
         for language in ("en", "zh"):
             for output in audit_report_texts(app, tmp_path, language, monkeypatch):
@@ -625,9 +634,41 @@ def test_customer_exports_of_actual_saves_omit_internal_configuration(
                 assert "".join(name.split()) in compact
                 assert "".join(text("archive_ng", language).split()) in compact
                 assert "".join(text("comm_timeout", language).split()) in compact
+                assert (
+                    "".join(text("audit_config_missing_file", language).split())
+                    in compact
+                )
+                assert (
+                    "".join(text("audit_recorded_after", language).split()) in compact
+                )
                 assert "2.5" in compact
-                for private in (archive, host, f" = {port}", f" = {route}"):
+                for private in (archive, host):
                     assert "".join(private.split()) not in compact
+                assert {str(port), str(route)}.isdisjoint(output.splitlines())
+            with closing(load_workbook(tmp_path / f"audit-{language}.xlsx")) as book:
+                (sheet,) = book.worksheets
+                rows = list(sheet.iter_rows(max_col=5))
+                heading = (
+                    text("audit_field", language),
+                    None,
+                    text("audit_recorded_after", language),
+                    None,
+                    None,
+                )
+                index = next(
+                    i
+                    for i, row in enumerate(rows)
+                    if tuple(c.value for c in row) == heading
+                )
+                timeout = next(
+                    row for row in rows[index + 1 :] if row[2].value == "2.5"
+                )
+                assert text("comm_timeout", language) in str(timeout[0].value)
+                assert timeout[2].data_type == "s"
+                assert timeout[2].alignment == Alignment(
+                    horizontal="left", wrap_text=True, vertical="top"
+                )
+                assert timeout[1].value is timeout[3].value is timeout[4].value is None
     finally:
         close_window(window)
         delivery.detach()

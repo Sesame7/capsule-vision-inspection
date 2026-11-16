@@ -9,10 +9,12 @@ from PySide6.QtCore import Qt, Slot
 
 from capsule_vision.application.audit import AuditQuery, AuditRecord
 from capsule_vision.application.audit_presentation import (
+    CONFIGURATION_ACTIONS,
     action_caption,
     after_caption_key,
     before_caption_key,
     change_caption,
+    configuration_details,
     failure_caption,
     incomplete_changes,
     local_change_comparison,
@@ -270,6 +272,16 @@ class AuditPage(HistoryEventTable):
             )
             return
         op = record.operation
+        if op.action in CONFIGURATION_ACTIONS:
+            config = configuration_details(record, self.language)
+            self.show_details(
+                self.language,
+                (*config.text, ("reasons", reason)),
+                tables=config.tables,
+                notices=config.notices,
+                caption=audit_text,
+            )
+            return
         plc_write = op.action == "plc.write"
         comparison = local_change_comparison(record, self.language)
         incomplete = incomplete_changes(op)
@@ -320,7 +332,7 @@ class AuditPage(HistoryEventTable):
                     else "",
                 ),
             ),
-            comparison=comparison,
+            tables=(comparison,) if comparison is not None else (),
             caption=audit_text,
         )
 

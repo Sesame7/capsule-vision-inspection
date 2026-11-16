@@ -23,6 +23,8 @@ from .defect_records import Category
 from .report_content import AuditReportRow, ReportData, Table, Value
 from .report_identification import ExportIdentification
 
+type _WrappedRow = list[list[str]]
+
 _FONT = "CapsuleReportCJK"
 _MARGIN = 14 * mm
 _SIZE = 10.0
@@ -363,35 +365,38 @@ class _Pages:
             self.band(headers, widths, head=True, numeric=table.numeric_columns)
 
         count = 0
-        comparison_widths = [self.body * weight for weight in (0.24, 0.38, 0.38)]
         for row in table.rows:
             self.data.check()
             count += 1
             values = row.values if isinstance(row, AuditReportRow) else row
-            blocks = [(cells(values, widths), widths, False)]
-            comparison_headers: list[list[str]] = []
-            comparison_height = 0.0
-            if isinstance(row, AuditReportRow) and row.comparison is not None:
-                comparison_headers = cells(row.comparison.headers, comparison_widths)
-                comparison_height = _band_height(comparison_headers)
-                if row_space < comparison_height + _LINE + _ROW_PAD:
-                    raise ValueError(
-                        "Audit comparison heading is too tall for an A4 page"
+            sections: list[tuple[list[_WrappedRow], list[float], _WrappedRow]] = [
+                ([cells(values, widths)], widths, [])
+            ]
+            if isinstance(row, AuditReportRow):
+                for fields in row.detail_tables:
+                    weights = (
+                        (0.24, 0.38, 0.38) if len(fields.headers) == 3 else (0.4, 0.6)
                     )
-                blocks.extend(
-                    (cells(change, comparison_widths), comparison_widths, True)
-                    for change in row.comparison.rows
-                )
-            if isinstance(row, AuditReportRow) and row.detail:
-                blocks.append(
-                    (
-                        [_wrap(row.detail, self.body - 2 * _PAD, _SIZE)],
-                        [self.body],
-                        False,
+                    sizes = [self.body * weight for weight in weights]
+                    sections.append(
+                        (
+                            [cells(value, sizes) for value in fields.rows],
+                            sizes,
+                            cells(fields.headers, sizes),
+                        )
                     )
-                )
-            height = comparison_height + sum(
-                _band_height(lines) for lines, _, _ in blocks
+                if row.detail:
+                    sections.append(
+                        (
+                            [[_wrap(row.detail, self.body - 2 * _PAD, _SIZE)]],
+                            [self.body],
+                            [],
+                        )
+                    )
+            height = sum(
+                (_band_height(titles) if titles else 0)
+                + sum(_band_height(lines) for lines in rows)
+                for rows, _, titles in sections
             )
             if count == 1:
                 # Keep the first event with its heading. An event larger than a
@@ -403,41 +408,45 @@ class _Pages:
             if self.y - height < _BOTTOM and height <= row_space:
                 self.page()
                 heading()
-            heading_pending = True
-            for block, (lines, block_widths, is_comparison) in enumerate(blocks):
-                if is_comparison:
-                    row_height = _band_height(lines)
-                    reserved = comparison_height if heading_pending else 0.0
-                    if (
-                        row_height <= row_space - comparison_height
-                        and self.y - _BOTTOM < reserved + row_height
-                    ):
-                        self.page()
-                        heading()
-                        heading_pending = True
-                while any(lines):
-                    reserved = (
-                        comparison_height if is_comparison and heading_pending else 0.0
-                    )
-                    fit = int((self.y - _BOTTOM - _ROW_PAD - reserved) // _LINE)
-                    if fit < 1:
-                        self.page()
-                        heading()
-                        heading_pending = True
-                        reserved = comparison_height if is_comparison else 0.0
+            for section, (rows, sizes, titles) in enumerate(sections):
+                title_height = _band_height(titles) if titles else 0
+                if row_space < title_height + _LINE + _ROW_PAD:
+                    raise ValueError("Audit detail heading is too tall for an A4 page")
+                heading_pending = bool(titles)
+                for index, lines in enumerate(rows):
+                    if titles:
+                        row_height = _band_height(lines)
+                        reserved = title_height if heading_pending else 0
+                        if (
+                            row_height <= row_space - title_height
+                            and self.y - _BOTTOM < reserved + row_height
+                        ):
+                            self.page()
+                            heading()
+                            heading_pending = True
+                    while any(lines):
+                        reserved = title_height if heading_pending else 0
                         fit = int((self.y - _BOTTOM - _ROW_PAD - reserved) // _LINE)
-                    if is_comparison and heading_pending:
-                        self.band(comparison_headers, comparison_widths, head=True)
-                        heading_pending = False
-                    self.band(
-                        [v[:fit] for v in lines],
-                        block_widths,
-                        numeric=table.numeric_columns if block == 0 else (),
-                        emphasize=table.emphasize_first and count == 1,
-                        separator=block == len(blocks) - 1
-                        and all(len(v) <= fit for v in lines),
-                    )
-                    lines = [v[fit:] for v in lines]
+                        if fit < 1:
+                            self.page()
+                            heading()
+                            heading_pending = bool(titles)
+                            fit = int(
+                                (self.y - _BOTTOM - _ROW_PAD - title_height) // _LINE
+                            )
+                        if heading_pending:
+                            self.band(titles, sizes, head=True)
+                            heading_pending = False
+                        self.band(
+                            [v[:fit] for v in lines],
+                            sizes,
+                            numeric=table.numeric_columns if section == 0 else (),
+                            emphasize=table.emphasize_first and count == 1,
+                            separator=section == len(sections) - 1
+                            and index == len(rows) - 1
+                            and all(len(v) <= fit for v in lines),
+                        )
+                        lines = [v[fit:] for v in lines]
         if not count:
             if self.y - header_height - _LINE - _ROW_PAD < _BOTTOM:
                 self.page()

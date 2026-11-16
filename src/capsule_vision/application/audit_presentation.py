@@ -1,6 +1,7 @@
 """Stored Audit business names shared by Records and customer reports."""
 
 import re
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from capsule_vision.localization.audit_wording import audit_text, has_approved_wording
@@ -8,7 +9,13 @@ from capsule_vision.localization.catalog import AUDIT_ACTIONS, text
 from capsule_vision.localization.languages import Language
 from capsule_vision.localization.record_text import readable_value, record_reason
 
-from .audit import AUDIT_CHANGE_LIMIT, AuditOperation, AuditRecord
+from .audit import (
+    AUDIT_CHANGE_LIMIT,
+    CONFIGURATION_SUMMARY_FIELDS,
+    CONFIGURATION_SUMMARY_VALUE_LENGTH,
+    AuditOperation,
+    AuditRecord,
+)
 from .identity_models import Role
 
 ACTION_CAPTIONS = {
@@ -64,6 +71,7 @@ BATCH_FIELDS = {
 }
 _CONFIGURATION_LABELS = {
     "display_name": "display_name",
+    "recipe_id": "recipe_id",
     "product_code": "product_code",
     "disabled_labels": "customer_audit_excluded",
     "enabled": "identity_status",
@@ -79,11 +87,14 @@ _CONFIGURATION_LABELS = {
     "save_ng": "archive_ng",
     "save_error": "archive_error",
     "save_empty": "archive_empty",
+    "root_directory": "archive_directory",
     "cameras": "nav_cameras",
-    "camera_id": "history_camera",
+    "camera_id": "audit_camera_id",
+    "folder": "source_folder",
+    "basler_serial": "source_serial",
     "slots": "customer_audit_slot",
     "channel_id": "channel",
-    "slot": "customer_audit_slot",
+    "slot": "audit_slot_number",
     "rect": "roi_workspace",
     "x": "roi_x",
     "y": "roi_y",
@@ -95,17 +106,22 @@ _CONFIGURATION_LABELS = {
     "diagnostic": "comm_diagnostics",
     "status": "status_service",
     "timeout": "comm_timeout",
+    "host": "comm_host",
+    "port": "comm_port",
     "type": "comm_protocol",
     "interval_ms": "web_refresh",
 }
-_FIELD_CHANGES = {
-    "recipe.save",
-    "recipe.delete",
-    "vision.layout",
-    "vision.sources",
-    "communication.save",
-    "batch.information",
-}
+CONFIGURATION_ACTIONS = frozenset(
+    {
+        "recipe.save",
+        "recipe.delete",
+        "vision.layout",
+        "vision.sources",
+        "communication.save",
+    }
+)
+_FIELD_CHANGES = CONFIGURATION_ACTIONS | {"batch.information"}
+_CONFIGURATION_WRAPPERS = {"defaults", "capsule", "layout", "settings", "endpoint"}
 _SCALAR_CHANGES = {
     "account.role": "identity_role",
     "account.enabled": "identity_status",
@@ -125,6 +141,25 @@ class ChangeComparison:
     rows: tuple[AuditChange, ...]
 
 
+type RecordedField = tuple[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedFields:
+    headers: tuple[str, str]
+    rows: tuple[RecordedField, ...]
+
+
+type AuditDetailTable = ChangeComparison | RecordedFields
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationDetails:
+    tables: tuple[AuditDetailTable, ...] = ()
+    text: tuple[tuple[str, str], ...] = ()
+    notices: tuple[str, ...] = ()
+
+
 def incomplete_changes(op: AuditOperation) -> bool:
     if op.action not in _FIELD_CHANGES and op.action not in _SCALAR_CHANGES:
         return False
@@ -135,19 +170,24 @@ def incomplete_changes(op: AuditOperation) -> bool:
     )
 
 
-def _parse_fields(action: str, value: str) -> dict[str, str] | None:
+def _parse_field(line: str) -> RecordedField | None:
+    field, separator, recorded = line.partition(" = ")
+    if (
+        separator
+        and _FIELD_PATH.fullmatch(field)
+        and (not recorded or recorded.isprintable())
+    ):
+        return field, recorded
+    return None
+
+
+def _parse_fields(lines: Iterable[str]) -> dict[str, str] | None:
     fields: dict[str, str] = {}
-    for line in value.split("\n"):
-        field, separator, recorded = line.partition(" = ")
-        if (
-            not separator
-            or not _FIELD_PATH.fullmatch(field)
-            or (action == "batch.information" and field not in BATCH_FIELDS)
-            or field in fields
-            or (recorded and not recorded.isprintable())
-        ):
+    for line in lines:
+        pair = _parse_field(line)
+        if pair is None or pair[0] in fields:
             return None
-        fields[field] = recorded
+        fields[pair[0]] = pair[1]
     return fields
 
 
@@ -167,11 +207,16 @@ def recorded_change_pairs(op: AuditOperation) -> tuple[AuditChange, ...]:
         ):
             return ()
         return ((_SCALAR_CHANGES[op.action], op.before, op.after),)
-    if op.action not in _FIELD_CHANGES:
+    if op.action != "batch.information":
         return ()
-    before = _parse_fields(op.action, op.before)
-    after = _parse_fields(op.action, op.after)
-    if before is None or after is None or before.keys() != after.keys():
+    before = _parse_fields(op.before.split("\n"))
+    after = _parse_fields(op.after.split("\n"))
+    if (
+        before is None
+        or after is None
+        or before.keys() != after.keys()
+        or not before.keys() <= BATCH_FIELDS.keys()
+    ):
         return ()
     return tuple((field, value, after[field]) for field, value in before.items())
 
@@ -200,18 +245,178 @@ def configuration_field_caption(action: str, path: str, language: Language) -> s
         field, indexed, index = part.partition("[")
         if field in ("vimo", "web"):
             caption = "ViMo" if field == "vimo" else "Web"
+        elif field == "host" and path == "web.host":
+            caption = text("web_bind", language)
         elif field == "mode":
             caption = text(
-                "plc_mode" if action == "communication.save" else "comm_source",
+                "plc_mode" if action == "communication.save" else "audit_source_mode",
                 language,
             )
+        elif field in _CONFIGURATION_WRAPPERS and not indexed:
+            continue
         else:
             key = _CONFIGURATION_LABELS.get(field)
-            if key is None:  # Definition wrappers have no field caption.
-                continue
+            if key is None:
+                return ""  # The engineering view can keep the exact path.
             caption = audit_text(key, language)
         labels.append(f"{caption} [{index[:-1]}]" if indexed else caption)
     return " · ".join(labels)
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfigurationSide:
+    fields: dict[str, str] | None
+    lines: tuple[str, ...]
+    tail: str
+    incomplete: bool
+
+
+def _summary_value_at_limit(value: str) -> bool:
+    return len(value) == CONFIGURATION_SUMMARY_VALUE_LENGTH
+
+
+def _configuration_side(value: str) -> _ConfigurationSide:
+    content = value.replace("\r\n", "\n").removesuffix("\n")
+    lines = content.split("\n") if content else []
+    capped = len(value) >= AUDIT_CHANGE_LIMIT
+    marked = "…" in lines
+    tail = ""
+    if lines and lines[-1] == "…":
+        lines.pop()
+    elif capped and not value.endswith("\n"):
+        # The end of a capped side can cut through a field path or value.
+        tail = lines.pop()
+    incomplete = (
+        capped
+        or marked
+        or any(_summary_value_at_limit(line.partition(" = ")[2]) for line in lines)
+    )
+    return _ConfigurationSide(_parse_fields(lines), tuple(lines), tail, incomplete)
+
+
+def _project_configuration_side(
+    side: _ConfigurationSide,
+    project: Callable[[str, str], RecordedField | None],
+    *,
+    customer: bool,
+) -> tuple[dict[str, RecordedField], str, bool]:
+    if side.fields is not None:
+        fields = {
+            field: shown
+            for field, value in side.fields.items()
+            if (shown := project(field, value)) is not None
+        }
+        fallback = "" if customer else readable_value(side.tail)
+        return fields, fallback, len(fields) != len(side.fields) or bool(side.tail)
+    if not customer:
+        fallback = "\n".join(
+            line for line in (*side.lines, side.tail) if readable_value(line)
+        )
+        return {}, fallback, False
+    # An ambiguous side can disclose vetted lines as text without pairing them.
+    lines = [
+        " = ".join(shown)
+        for line in side.lines
+        if (field := _parse_field(line)) is not None
+        and (shown := project(*field)) is not None
+    ]
+    return {}, "\n".join(lines), len(lines) != len(side.lines) or bool(side.tail)
+
+
+def configuration_details(
+    record: AuditRecord,
+    language: Language,
+    *,
+    disclose: Callable[[str, str], RecordedField | None] | None = None,
+) -> ConfigurationDetails:
+    op = record.operation
+    prior_note = ""
+    next_note = ""
+    if op.action == "communication.save":
+        prior_note = {
+            "Missing file": "audit_config_missing_file",
+            "Unreadable configuration": "audit_config_unreadable",
+        }.get(op.before, "")
+        if op.after == "Saved defaults":
+            next_note = "audit_config_no_field_values"
+    before = _configuration_side("" if prior_note else op.before)
+    after = _configuration_side("" if next_note else op.after)
+    incomplete = before.incomplete or after.incomplete
+    unaligned = before.fields is None or after.fields is None
+    if op.before == op.after and not incomplete and not unaligned:
+        return ConfigurationDetails()
+
+    def project(field: str, value: str) -> RecordedField | None:
+        if disclose is not None:
+            # A clipped value can lose delimiters that the disclosure check needs.
+            return None if _summary_value_at_limit(value) else disclose(field, value)
+        if not readable_value(f"{field} = {value}"):
+            return None
+        caption = configuration_field_caption(op.action, field, language) or field
+        return caption, value or text("audit_empty_value", language)
+
+    old, old_text, old_omitted = _project_configuration_side(
+        before, project, customer=disclose is not None
+    )
+    new, new_text, new_omitted = _project_configuration_side(
+        after, project, customer=disclose is not None
+    )
+    old_raw, new_raw = before.fields or {}, after.fields or {}
+    paired = {
+        field
+        for field in old.keys() & new.keys()
+        if not (
+            _summary_value_at_limit(old_raw[field])
+            or _summary_value_at_limit(new_raw[field])
+        )
+    }
+    tables: list[AuditDetailTable] = []
+    pairs = tuple(
+        (caption, value, new[field][1])
+        for field, (caption, value) in old.items()
+        if field in paired
+    )
+    if pairs:
+        tables.append(change_comparison(pairs, record.outcome, language))
+    for values, heading in (
+        (old, "audit_recorded_before"),
+        (
+            new,
+            "audit_recorded_after"
+            if record.outcome == "success"
+            else "audit_recorded_requested",
+        ),
+    ):
+        if rows := tuple(
+            shown for field, shown in values.items() if field not in paired
+        ):
+            tables.append(
+                RecordedFields(
+                    (text("audit_field", language), text(heading, language)), rows
+                )
+            )
+
+    details = (
+        ("audit_before", text(prior_note, language) if prior_note else old_text),
+        (
+            after_caption_key(record, language),
+            text(next_note, language) if next_note else new_text,
+        ),
+    )
+    notices: list[str] = []
+    if incomplete:
+        notices.append(
+            text("audit_config_summary_incomplete", language).format(
+                fields=CONFIGURATION_SUMMARY_FIELDS,
+                value=CONFIGURATION_SUMMARY_VALUE_LENGTH,
+                side=AUDIT_CHANGE_LIMIT,
+            ),
+        )
+    if unaligned:
+        notices.append(text("audit_config_unaligned", language))
+    if disclose is not None and (old_omitted or new_omitted):
+        notices.append(audit_text("audit_approved_values", language))
+    return ConfigurationDetails(tuple(tables), details, tuple(notices))
 
 
 def scalar_change_caption(action: str, field: str, language: Language) -> str:
@@ -235,14 +440,8 @@ def local_change_comparison(
             after = change_caption(value_action, after, language)
             if not before or not after:
                 return None
-        elif action == "batch.information":
-            caption = text(BATCH_FIELDS[field], language)
         else:
-            if any(
-                not readable_value(f"{field} = {value}") for value in (before, after)
-            ):
-                return None
-            caption = configuration_field_caption(action, field, language) or field
+            caption = text(BATCH_FIELDS[field], language)
         rows.append(
             (
                 caption,
@@ -554,10 +753,9 @@ def target_caption(
             if action == "recipe.save" and record.outcome == "success"
             else op.before
         )
-        for line in changes.splitlines():
-            key, sep, value = line.partition(" = ")
-            if sep and key == "display_name" and readable_value(value) and value != "—":
-                return value
+        name = (_configuration_side(changes).fields or {}).get("display_name", "")
+        if name != "—" and not _summary_value_at_limit(name) and readable_value(name):
+            return name
         return text("page_recipe", language)
     if action.startswith("model."):
         if action == "model.rename":
@@ -597,12 +795,6 @@ def change_caption(action: str, value: str, language: Language) -> str:
                 else line
             )
         return "\n".join(lines)
-    if (
-        action == "recipe.save"
-        and value.startswith("display_name = ")
-        and "\n" not in value
-    ):
-        return readable_value(value.removeprefix("display_name = "))
     if action == "account.create":
         parts = value.rsplit(" · ", 2)
         if (
@@ -624,10 +816,6 @@ def change_caption(action: str, value: str, language: Language) -> str:
         )
     if action == "account.role" and value.upper() in Role.__members__:
         return text("identity_" + value.lower(), language)
-    if action == "communication.save" and (
-        match := re.fullmatch(r"diagnostic\.timeout = (\d+(?:\.\d+)?)", value)
-    ):
-        return f"{text('comm_diagnostics', language)} · {text('comm_timeout', language)} = {match[1]}"
     return "\n".join(
         line for line in value.splitlines() if not line or readable_value(line)
     )

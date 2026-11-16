@@ -18,7 +18,10 @@ from reportlab.pdfgen.canvas import Canvas
 from tests.unit.test_report_matrix import matrix_snapshot
 
 from capsule_vision.application import report_identification
-from capsule_vision.application.audit_presentation import ChangeComparison
+from capsule_vision.application.audit_presentation import (
+    ChangeComparison,
+    RecordedFields,
+)
 from capsule_vision.application.report_content import AuditReportRow, ReportData, Table
 from capsule_vision.application.report_pdf import write_pdf
 from capsule_vision.localization.catalog import text
@@ -315,13 +318,21 @@ def test_audit_comparison_repeats_aligned_columns_across_page_breaks(
     comparison = ChangeComparison(
         ("Field", "Before", "Requested value"), (("Long value", before, after),)
     )
+    recorded = RecordedFields(
+        ("Field", "Recorded value · Before"),
+        (("Additional evidence", "\n".join(f"Single value {i}" for i in range(55))),),
+    )
 
     def tables(_data: ReportData) -> Iterator[Table]:
         yield Table(
             "Events",
             ("Event",),
             (1,),
-            (AuditReportRow(("Audit event",), "Reasons: Timeout", comparison),),
+            (
+                AuditReportRow(
+                    ("Audit event",), "Reasons: Timeout", (comparison, recorded)
+                ),
+            ),
         )
 
     def record(c: Canvas, x: float, y: float, value: str) -> None:
@@ -338,13 +349,19 @@ def test_audit_comparison_repeats_aligned_columns_across_page_breaks(
     before_x = marks["Before"][0][1]
     after_x = marks["Requested value"][0][1]
     assert marks["Field"][0][1] < before_x < after_x
-    pages = {p for p, _, _ in marks["Field"]}
+    pages = {p for p, _, _ in marks["Before"]}
     assert len(pages) >= 3
-    assert {p for p, _, _ in marks["Before"]} == pages
     assert {p for p, _, _ in marks["Requested value"]} == pages
     for i in range(53):
         [(page, x, y)] = marks[f"Original {i}"]
         assert x == before_x and y > 14 * mm + 26
         if i < 52:
             assert marks[f"Requested {i}"] == [(page, after_x, y)]
+    single_pages = {p for p, _, _ in marks["Recorded value · Before"]}
+    assert len(single_pages) >= 2
+    assert {p for p, _, _ in marks["Field"]} == pages | single_pages
+    value_x = marks["Recorded value · Before"][0][1]
+    for i in range(55):
+        [(page, x, y)] = marks[f"Single value {i}"]
+        assert page in single_pages and x == value_x and y > 14 * mm + 26
     assert len(marks["Audit event"]) == len(marks["Reasons: Timeout"]) == 1

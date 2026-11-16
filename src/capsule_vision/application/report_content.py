@@ -13,7 +13,7 @@ from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 from . import alarm_report, audit_report
-from .audit_presentation import ChangeComparison
+from .audit_presentation import AuditDetailTable
 from .batch_records import run_totals
 from .defect_records import Category, Hit, customer_hits
 from .models import PilotCounters, ProductionCounters
@@ -28,7 +28,7 @@ type Row = tuple[Value, ...]
 class AuditReportRow:
     values: Row
     detail: str = ""
-    comparison: ChangeComparison | None = None
+    detail_tables: tuple[AuditDetailTable, ...] = ()
 
 
 @dataclass(frozen=True)

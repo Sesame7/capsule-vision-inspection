@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from capsule_vision.application.audit_presentation import ChangeComparison
+from capsule_vision.application.audit_presentation import AuditDetailTable
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.localization.record_text import readable_value as readable_value
@@ -267,14 +267,16 @@ class HistoryEventTable(RecordsPage):
         language: Language,
         fields: tuple[tuple[str, str], ...],
         *,
-        comparison: ChangeComparison | None = None,
+        tables: tuple[AuditDetailTable, ...] = (),
+        notices: tuple[str, ...] = (),
         caption: Callable[[str, Language], str] = text,
     ) -> None:
-        lines: list[str] = []
-        if comparison is not None:
+        lines = [f"<p style='margin: 2px 0'>{escape(notice)}</p>" for notice in notices]
+        for table in tables:
+            widths = (28, 36, 36) if len(table.headers) == 3 else (40, 60)
             headings = "".join(
                 f'<th align="left" width="{width}%">{escape(value)}</th>'
-                for width, value in zip((28, 36, 36), comparison.headers, strict=True)
+                for width, value in zip(widths, table.headers, strict=True)
             )
             rows = "".join(
                 "<tr>"
@@ -285,7 +287,7 @@ class HistoryEventTable(RecordsPage):
                     for value in row
                 )
                 + "</tr>"
-                for row in comparison.rows
+                for row in table.rows
             )
             lines.append(
                 '<table width="100%" cellpadding="3" cellspacing="1">'

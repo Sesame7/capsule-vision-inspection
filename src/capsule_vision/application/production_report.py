@@ -37,6 +37,7 @@ from .report_scope import ReportRequest
 _EXCEL_ROWS = 1_048_576
 _WRAPPED = Alignment(wrap_text=True, vertical="center")
 _WRAPPED_TOP = Alignment(wrap_text=True, vertical="top")
+_WRAPPED_TOP_LEFT = Alignment(horizontal="left", wrap_text=True, vertical="top")
 
 
 def _check_cancel(cancel: Event) -> None:
@@ -227,7 +228,7 @@ def write_workbook(
         *,
         run_number: bool = False,
         numeric: tuple[int, ...] = (),
-        top_aligned: bool = False,
+        alignment: Alignment | None = None,
     ) -> None:
         nonlocal number
         data.check()
@@ -236,9 +237,9 @@ def write_workbook(
             raise ValueError("Report exceeds the Excel worksheet row limit")
         layout.row_dimensions[number].height = height
         cells = [_cell(sheet, v, style) for v in values]
-        if top_aligned:
+        if alignment is not None:
             for cell in cells:
-                cell.alignment = _WRAPPED_TOP
+                cell.alignment = alignment
         if run_number:
             cells[0].alignment = Alignment(horizontal="center", vertical="center")
         for column in numeric:
@@ -354,25 +355,33 @@ def write_workbook(
                             for v, w in zip(values.values, widths, strict=True)
                         ),
                     )
-                    comparison = values.comparison
-                    if comparison is not None:
-                        sizes = (widths[0], sum(widths[1:3]), sum(widths[3:]))
+                    for detail_table in values.detail_tables:
+                        paired = len(detail_table.headers) == 3
+                        spans = ((0, 0), (1, 2), (3, 4)) if paired else ((0, 1), (2, 4))
+                        detail_alignment = _WRAPPED_TOP if paired else _WRAPPED_TOP_LEFT
+                        sizes = [sum(widths[first : last + 1]) for first, last in spans]
                         for index, change in enumerate(
-                            (comparison.headers, *comparison.rows)
+                            (detail_table.headers, *detail_table.rows)
                         ):
-                            field, before, after = change
+                            detail_cells: list[Value] = [None] * len(widths)
+                            for (first, _), value in zip(spans, change, strict=True):
+                                detail_cells[first] = value
                             row(
-                                (field, before, None, after, None),
+                                detail_cells,
                                 "Heading" if index == 0 else "Normal",
                                 height=20
                                 * max(
                                     lines(v, w - 2)
                                     for v, w in zip(change, sizes, strict=True)
                                 ),
-                                top_aligned=index > 0,
+                                alignment=detail_alignment if index > 0 else None,
                             )
-                            merged("B", "C")
-                            merged("D", "E")
+                            for first, end in spans:
+                                if first != end:
+                                    merged(
+                                        get_column_letter(first + 1),
+                                        get_column_letter(end + 1),
+                                    )
                     if values.detail:
                         row(
                             [values.detail],
