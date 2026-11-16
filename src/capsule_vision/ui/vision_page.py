@@ -1561,7 +1561,7 @@ class VisionPage(QWidget):
         self.buttons["roi_refresh"].setEnabled(
             viewing and self.reference_mode in ("folder", "runtime")
         )
-        self.buttons["save"].setEnabled(self.editable())
+        self.buttons["save"].setEnabled(self.editable() and self._has_save_work())
         self.buttons["save"].setToolTip(
             text(
                 "save"
@@ -1810,6 +1810,11 @@ class VisionPage(QWidget):
     @property
     def vision_dirty(self) -> bool:
         return self.draft.dirty or bool(self.sources is not None and self.sources.dirty)
+
+    def _has_save_work(self) -> bool:
+        return self.draft.needs_save or (
+            self.sources is not None and self.sources.needs_save
+        )
 
     def _can_discard(self) -> bool:
         return (
@@ -2190,7 +2195,7 @@ class VisionPage(QWidget):
         self, after: Callable[[], None] | None = None, *, revision: int | None = None
     ) -> None:
         """Persist independent definitions; no source IO, model work or activation."""
-        if not self._allowed() or self._preparing:
+        if not self._allowed() or self._preparing or not self._has_save_work():
             return
         try:
             revision = self.editing.bridge.application.authorize_engineering(revision)

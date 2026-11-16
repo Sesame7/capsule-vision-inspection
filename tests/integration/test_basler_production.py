@@ -2584,6 +2584,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         assert workspace is not None and workspace.sources is not None
         until(lambda: not window.recipe_page.busy)
         assert workspace.frame is None and workspace.editable()
+        assert not workspace.buttons["save"].isEnabled()
         workspace.coordinates["X"].setText("1")
         workspace.apply_geometry()
         assert workspace.draft.dirty
@@ -2593,6 +2594,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         workspace.connect_source.click()
         until(lambda: not window.recipe_page.busy)
         assert startup.application.source_snapshot().state is ConnectionState.CONNECTED
+        assert not workspace.vision_dirty and not workspace.buttons["save"].isEnabled()
         assert all(
             not card.device.isEnabled() for card in workspace.camera_cards.values()
         )
@@ -2662,6 +2664,7 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
         assert (
             startup.application.source_snapshot().state is ConnectionState.DISCONNECTED
         )
+        assert not workspace.vision_dirty and not workspace.buttons["save"].isEnabled()
         assert workspace.source_modes["folder"].isEnabled()
     finally:
         close_window(window)

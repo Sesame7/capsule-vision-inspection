@@ -170,7 +170,13 @@ def test_page_controls_combine_role_and_state(
     vision = window.vision_workspace
     assert vision is not None
     until(lambda: not window.editing.busy)
+    assert not vision.buttons["save"].isEnabled()
+    assert vision.sources is not None
+    vision.sources.set_loop(not vision.sources.saved.loop)
+    vision.refresh()
     assert vision.buttons["save"].isEnabled() == engineer
+    vision.sources.discard()
+    vision.refresh()
     assert vision.coordinates["X"].isReadOnly() != engineer
     assert vision.channel.isEnabled() and vision.buttons["vision_import"].isEnabled()
     assert vision.folder.isReadOnly() != engineer

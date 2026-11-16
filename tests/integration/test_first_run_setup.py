@@ -219,6 +219,8 @@ def test_empty_vision_sources_save_independently_and_cam6_is_a_placeholder(
     assert not workspace.canvas.rois and workspace.canvas.model.size is None
     assert workspace.canvas.model.rect is None
     assert workspace.sources is not None and not workspace.sources.persisted
+    assert not workspace.vision_dirty and not data.sources.exists()
+    assert workspace.buttons["save"].isEnabled()
     assert workspace.buttons["save"].text() == text("save", window.language)
     assert "save_apply" not in workspace.buttons
     assert workspace.buttons["save"].toolTip() == text("save", window.language)
@@ -234,6 +236,7 @@ def test_empty_vision_sources_save_independently_and_cam6_is_a_placeholder(
         and not data.models.exists()
     )
     assert workspace.sources.persisted and not workspace.sources.dirty
+    assert not workspace.buttons["save"].isEnabled()
     assert window.bridge.application.snapshot().state is ApplicationState.UNCONFIGURED
     assert window.bridge.application.snapshot().counters == ProductionCounters()
     assert not window.bridge.frames.cameras and not engines
@@ -515,6 +518,8 @@ def test_first_machine_save_uses_connected_dimensions_without_source_actions(
     for i, camera in enumerate(workspace.draft.camera_ids, 1):
         workspace.sources.set_serial(camera, str(1000 + i))
     workspace.sources.save()
+    workspace.refresh()
+    assert not workspace.vision_dirty and not workspace.buttons["save"].isEnabled()
     observed = replace(
         connection.source_snapshot(),
         state=ConnectionState.CONNECTED,
@@ -527,11 +532,13 @@ def test_first_machine_save_uses_connected_dimensions_without_source_actions(
         patch.setattr(connection, "source_snapshot", lambda: observed)
         workspace.refresh()
         assert workspace.draft.complete and workspace.frame is None
+        assert workspace.draft.dirty and workspace.buttons["save"].isEnabled()
         assert workspace.canvas.model.size == (61, 20)
         assert workspace.coordinates["H"].text() == "20"
         workspace.buttons["save"].click()
         until(lambda: not window.recipe_page.busy)
         assert workspace.draft.persisted and not workspace.vision_dirty
+        assert not workspace.buttons["save"].isEnabled()
         assert load_machine_layout(data.machine) == workspace.draft.saved
         assert connection.source_snapshot() is observed
         assert not workspace.source_editable()

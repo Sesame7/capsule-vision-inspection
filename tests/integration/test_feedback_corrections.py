@@ -28,6 +28,7 @@ from capsule_vision.configuration import (
     ConfigurationIOError,
     ConfigurationPublication,
     RecipeDefinition,
+    load_camera_sources,
     save_camera_sources,
     save_recipe,
 )
@@ -354,7 +355,6 @@ def test_vision_folder_unavailability_does_not_block_save_or_apply(
     path = tmp_path / "camera_sources.json"
     save_camera_sources(path, sources)
     session.camera_sources = CameraSourceDraft(sources, path)
-    original = path.read_bytes()
     snapshot = window.bridge.application.snapshot()
     show(window, language)
     window.navigate(4)
@@ -365,16 +365,16 @@ def test_vision_folder_unavailability_does_not_block_save_or_apply(
         "folder_reference_error", language
     )
     assert folder in window.event_label.toolTip()
-    workspace.save_setup()
+    workspace.loop.click()
+    assert workspace.buttons["save"].isEnabled()
+    workspace.buttons["save"].click()
     until(lambda: not window.recipe_page.busy)
     assert not window.event_label.text()
     assert workspace.status.accessibleName() == text("saved", language)
     assert not workspace.status.toolTip()
     assert workspace.status.text() == "" and workspace.status.pixmap() is not None
-    assert (
-        path.read_bytes() == original
-        and window.bridge.application.snapshot() == snapshot
-    )
+    assert load_camera_sources(path) == replace(sources, loop=not sources.loop)
+    assert window.bridge.application.snapshot() == snapshot
     workspace.refresh_frame()
     until(lambda: not window.recipe_page.busy)
     assert window.event_label.accessibleName() == text(
@@ -407,10 +407,11 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
     assert "rejected" in window.event_label.toolTip()
     if language == "en":
         QApplication.processEvents()
-    workspace.operation(
-        lambda: workspace.set_rect(geometry.layout.cameras[0].slots[0].rect)
-    )
+    rect = geometry.layout.cameras[0].slots[0].rect
+    workspace.operation(lambda: workspace.set_rect(replace(rect, width=rect.width - 1)))
     assert not window.event_label.text() and not window.event_label.toolTip()
+    workspace.loop.click()
+    assert workspace.draft.dirty and sources.dirty
     details = f"Write {sources.path}: [WinError 5] Access is denied"
 
     def fail(
@@ -420,8 +421,9 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
 
     with monkeypatch.context() as patch:
         patch.setattr(workspace.draft, "save", fail)
-        workspace.save_setup()
+        workspace.buttons["save"].click()
         until(lambda: not window.recipe_page.busy)
+    assert workspace.draft.dirty and not sources.dirty
     assert window.event_label.accessibleName() == text(
         "vision_sources_only_saved", language
     )
@@ -439,18 +441,22 @@ def test_vision_save_and_partial_save_keep_diagnostics_and_clear_after_retry(
     )
     assert details in window.event_label.accessibleDescription()
     window.set_language(language)
+    workspace.loop.click()
     with monkeypatch.context() as patch:
         patch.setattr(sources, "save", fail)
-        workspace.save_setup()
+        workspace.buttons["save"].click()
         until(lambda: not window.recipe_page.busy)
+    assert not workspace.draft.dirty and sources.dirty
     assert window.event_label.accessibleName() == text("source_partial_save", language)
     assert (
         window.event_label.toolTip()
         == f"{text('source_partial_save', language)}\nCameraSources: ConfigurationIOError: {details}"
     )
     assert window.bridge.application.snapshot().candidate == candidate
-    workspace.save_setup()
+    assert workspace.buttons["save"].isEnabled()
+    workspace.buttons["save"].click()
     until(lambda: not window.recipe_page.busy)
+    assert not workspace.buttons["save"].isEnabled()
     assert not window.event_label.text() and not window.event_label.toolTip()
 
 
@@ -469,7 +475,9 @@ def test_vision_partial_save_retranslates_saved_part_of_failure(
         return result
 
     monkeypatch.setattr(workspace.session, "save_vision", save_vision)
-    workspace.save_setup()
+    workspace.loop.click()
+    assert workspace.buttons["save"].isEnabled()
+    workspace.buttons["save"].click()
     until(
         lambda: (
             window.event_label.accessibleName()

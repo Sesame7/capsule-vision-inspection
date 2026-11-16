@@ -8,11 +8,13 @@ from typing import Never
 import pytest
 from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication
+from tests.support.application import WAIT
 from tests.support.qt import close_window, until
 from tests.support.recipe_ui import select_production_recipe
 from tests.support.startup import authenticated_startup, saved_data
 
 from capsule_vision.application import ApplicationState, StartBlocker
+from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.basler_connection import SourceConnectionSnapshot
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.startup import ApplicationData
@@ -23,6 +25,7 @@ from capsule_vision.configuration import (
     load_camera_sources,
     load_machine_layout,
     save_camera_sources,
+    save_machine_layout,
 )
 from capsule_vision.configuration.preferences import load_preferences
 from capsule_vision.inference import BoundingRect
@@ -75,8 +78,10 @@ def edit_geometry(workspace: VisionPage) -> None:
     )
 
 
+@pytest.mark.parametrize("edited", ["machine", "sources", "both"])
 def test_save_only_marks_candidate_stale_and_same_id_selection_recovers(
     saved_screen: tuple[MainWindow, VisionPage, ApplicationData],
+    edited: str,
 ) -> None:
     window, workspace, data = saved_screen
     app = window.bridge.application
@@ -87,13 +92,18 @@ def test_save_only_marks_candidate_stale_and_same_id_selection_recovers(
     assert not hasattr(workspace, "save_and_apply")
     assert workspace.buttons["save"].text() == text("save", window.language)
     assert workspace.sources is not None
-    edit_geometry(workspace)
-    workspace.sources.set_loop(not workspace.sources.saved.loop)
+    assert not workspace.buttons["save"].isEnabled()
+    if edited in ("machine", "both"):
+        edit_geometry(workspace)
+    if edited in ("sources", "both"):
+        workspace.loop.click()
+    assert workspace.buttons["save"].isEnabled()
     # Save is independent of the Recipe editor and its unsaved input.
     workspace.session.draft.display_name = "Unsaved Recipe input"
     workspace.buttons["save"].click()
     until(lambda: not window.editing.busy)
     assert not workspace.vision_dirty and applied.count() == 0
+    assert not workspace.buttons["save"].isEnabled()
     assert load_machine_layout(data.machine) == workspace.draft.definition
     assert load_camera_sources(data.sources) == workspace.sources.definition
     current = app.snapshot()
@@ -133,18 +143,87 @@ def test_save_only_marks_candidate_stale_and_same_id_selection_recovers(
     )
 
 
-def test_unchanged_save_never_installs_or_invalidates_candidate(
+def test_unchanged_persisted_vision_has_no_ui_save_or_audit(
     saved_screen: tuple[MainWindow, VisionPage, ApplicationData],
 ) -> None:
     window, workspace, data = saved_screen
-    before = window.bridge.application.snapshot()
+    app = window.bridge.application
+    owner = app.identity
+    assert owner is not None
+    before = app.snapshot()
     preferences = data.preferences.read_bytes()
+    files = (data.machine, data.sources)
+    saved_files = tuple((path.read_bytes(), path.stat().st_mtime_ns) for path in files)
     applied = QSignalSpy(window.editing.applied)
+    saved = QSignalSpy(workspace.setup_saved)
+    save = workspace.buttons["save"]
+    assert not save.isEnabled()
+    workspace.loop.click()
+    assert save.isEnabled()
+    workspace.loop.click()
+    assert not workspace.vision_dirty and not save.isEnabled()
+    save.click()
     workspace.save_setup()
-    until(lambda: not window.editing.busy)
-    assert window.bridge.application.snapshot() == before
+    assert not window.editing.busy and saved.count() == 0
+    assert app.snapshot() == before
+    assert (
+        tuple((path.read_bytes(), path.stat().st_mtime_ns) for path in files)
+        == saved_files
+    )
+    for action in ("vision.layout", "vision.sources"):
+        assert not owner.audit_page(AuditQuery(action=action)).result(WAIT)
     assert data.preferences.read_bytes() == preferences and applied.count() == 0
     assert window.buttons["operation"].isEnabled()
+
+
+@pytest.mark.parametrize("missing", ["machine", "sources"])
+def test_unchanged_supplied_definition_can_create_missing_file(
+    saved_screen: tuple[MainWindow, VisionPage, ApplicationData], missing: str
+) -> None:
+    window, workspace, data = saved_screen
+    assert workspace.sources is not None
+    path = data.machine if missing == "machine" else data.sources
+    saved = path.read_bytes()
+    path.unlink()
+    # An explicit composition can supply an in-memory baseline for a new file.
+    if missing == "machine":
+        workspace.draft.load_saved(workspace.draft.saved)
+    else:
+        workspace.sources.load_saved(workspace.sources.saved)
+    workspace.refresh()
+    assert workspace.draft.persisted and workspace.sources.persisted
+    assert not workspace.vision_dirty and not path.exists()
+    assert workspace.buttons["save"].isEnabled()
+    workspace.buttons["save"].click()
+    until(lambda: not window.editing.busy)
+    assert path.read_bytes() == saved
+    assert not workspace.buttons["save"].isEnabled()
+
+
+@pytest.mark.parametrize("conflict", ["machine", "sources"])
+def test_pending_vision_save_preserves_external_file_conflict(
+    saved_screen: tuple[MainWindow, VisionPage, ApplicationData], conflict: str
+) -> None:
+    window, workspace, data = saved_screen
+    assert workspace.sources is not None
+    if conflict == "machine":
+        edit_geometry(workspace)
+        path = data.machine
+        save_machine_layout(path, workspace.draft.definition)
+    else:
+        workspace.loop.click()
+        path = data.sources
+        original = workspace.sources.saved
+        save_camera_sources(path, replace(original, target_fps=original.target_fps + 1))
+    external = path.read_bytes(), path.stat().st_mtime_ns
+    assert workspace.buttons["save"].isEnabled()
+    workspace.buttons["save"].click()
+    until(lambda: not window.editing.busy)
+    assert (path.read_bytes(), path.stat().st_mtime_ns) == external
+    assert workspace.draft.dirty == (conflict == "machine")
+    assert workspace.sources.dirty == (conflict == "sources")
+    assert workspace.buttons["save"].isEnabled()
+    assert "changed/invalid on disk" in window.event_label.toolTip()
 
 
 @pytest.mark.parametrize("failed", ["machine", "sources"])
@@ -176,6 +255,7 @@ def test_partial_save_invalidates_only_successfully_changed_dependencies(
     assert (data.sources.read_bytes() == sources) == (failed == "sources")
     assert workspace.draft.dirty == (failed == "machine")
     assert workspace.sources.dirty == (failed == "sources")
+    assert workspace.buttons["save"].isEnabled()
     assert "partial Save failure" in window.event_label.toolTip()
     assert not window.buttons["operation"].isEnabled()
 

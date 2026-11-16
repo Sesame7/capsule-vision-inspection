@@ -184,6 +184,13 @@ class MachineLayoutDraft:
             return bool(self._geometry) or self.camera_ids != self._saved_camera_ids
         return not self.complete or self.definition != self._saved
 
+    @property
+    def needs_save(self) -> bool:
+        """Include edits and a complete layout without a saved file."""
+        return self.dirty or (
+            self.path is not None and not self._file_present and self.complete
+        )
+
     def rois(self, identity: CameraId) -> tuple[ChannelROI, ...]:
         camera = self._geometry.get(identity)
         return camera.slots if camera else ()
@@ -345,6 +352,11 @@ class CameraSourceDraft:
     @property
     def dirty(self) -> bool:
         return self.definition != self.saved
+
+    @property
+    def needs_save(self) -> bool:
+        """Include first publication of an unchanged source definition."""
+        return not (self.persisted and self._file_present) or self.dirty
 
     def set_folder(self, camera: CameraId, folder: str) -> None:
         row = replace(self.definition.camera(camera), folder=folder)

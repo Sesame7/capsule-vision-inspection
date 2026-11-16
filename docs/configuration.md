@@ -1401,9 +1401,15 @@ Folder is a source selection, not device connectivity or a continuously verified
 camera count. Camera counts come from actual connected CameraId/serial matches.
 Unsaved selections do not change that strip. Lifecycle transitions and errors keep
 precedence; source availability does not establish full inspection readiness.
-One visible Save action sits beside Discard; a compact status symbol exposes
-clean, dirty, saving or failed state through its symbol and localized accessible
-name, without a runtime tooltip.
+One visible Save action sits beside Discard. With the existing editing permissions
+and locks, Save is available for draft edits or the first publication of
+CameraSources or a complete MachineLayout. Unchanged drafts with their saved files
+leave Save disabled. Once CameraSources are saved, an uninitialized layout with no
+pending edits waits for ROI geometry. Connect and Disconnect update observed bounds
+while preserving existing source values and ROI geometry. First-time ROI
+initialization counts as a layout edit. A compact status symbol exposes clean,
+dirty, saving or failed state through its symbol and localized accessible name,
+without a runtime tooltip.
 The image selector and previous/next browse Folder inputs. Import loads a temporary
 image; Use runtime image freezes the latest eligible same-camera/source display
 frame, with explicit refresh. Neither tracks live pixels. Fit and 1:1 retain their
