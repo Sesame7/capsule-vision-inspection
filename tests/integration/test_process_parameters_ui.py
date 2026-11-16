@@ -145,7 +145,9 @@ def test_process_save_preserves_raw_errors_and_missing_target_blocks_application
         assert page.status.text() == text("saved", page.language)
         window.navigate(0)
         picker = window.production_recipes
-        picker.recipes.activated.emit(picker.recipes.currentIndex())
+        picker.recipes.activated.emit(
+            picker.recipes.findData(session.entry.recipe.recipe_id)
+        )
         until(lambda: not page.busy)
         snapshot = startup.application.snapshot()
         assert snapshot.candidate_prepared is not None

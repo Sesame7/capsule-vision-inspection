@@ -210,6 +210,7 @@ class MainWindow(QMainWindow):
         self.configuration_messages = configuration_messages
         self._configuration_notices = configuration_notices
         self._event_message = ""
+        self._event_text = ""
         self.snapshot = snapshot
         self._frames: dict[CameraId, DisplayFrame] = {}
         self._columns = 0
@@ -1543,6 +1544,7 @@ class MainWindow(QMainWindow):
             else ""
         )
         detail = ""
+        reselection_help = ""
         production_feedback = self.production_recipes.feedback if page == 0 else None
         if production_feedback and not (warning or fault or self._closing):
             key, detail = production_feedback
@@ -1562,8 +1564,15 @@ class MainWindow(QMainWindow):
             )
             not in (None, "permission_operator")
         ):
-            message = text(hint, language)
-            warning = hint not in _START_WAIT_HINTS
+            if (
+                hint == "recipe_reprepare_hint"
+                and self.production_recipes.shows_reselection_placeholder
+            ):
+                reselection_help = text(hint, language)
+                message = ""
+            else:
+                message = text(hint, language)
+                warning = hint not in _START_WAIT_HINTS
         if self._source_issue and event_key == "command_error":
             camera, exception_type = self._source_issue
             source_message = " · ".join(
@@ -1627,7 +1636,8 @@ class MainWindow(QMainWindow):
         if not (warning or fault or self._closing) and service_issue is not None:
             message, detail = service_issue
             warning = True
-        self._event_message = message
+        self._event_message = message or reselection_help
+        self._event_text = message
         reset_help = (
             text("fault_reset_available", language)
             if fault and not self._closing and self.buttons["secondary"].isEnabled()
@@ -1662,9 +1672,9 @@ class MainWindow(QMainWindow):
             if part
         )
         self.event_label.setToolTip(
-            "\n".join(part for part in (message, description) if part)
+            "\n".join(part for part in (self._event_message, description) if part)
         )
-        self.event_label.setAccessibleName(message)
+        self.event_label.setAccessibleName(self._event_message)
         self.event_label.setAccessibleDescription(description)
         self.state_label.setToolTip("")
         self.event_label.setStyleSheet(
@@ -1966,7 +1976,7 @@ class MainWindow(QMainWindow):
     def _render_status_text(self) -> None:
         self.event_label.setText(
             self.event_label.fontMetrics().elidedText(
-                " ".join(self._event_message.split()),
+                " ".join(self._event_text.split()),
                 Qt.TextElideMode.ElideRight,
                 self.event_label.width(),
             )

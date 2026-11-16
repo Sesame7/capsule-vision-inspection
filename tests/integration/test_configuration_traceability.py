@@ -193,7 +193,7 @@ def test_save_reselect_replay_and_restart_keep_exact_run_revisions(
                 audit, "recipe", recipe_id, recipe_path, account.account_id
             )
             window.navigate(0)
-            picker.recipes.activated.emit(picker.recipes.currentIndex())
+            picker.recipes.activated.emit(picker.recipes.findData(recipe_id))
             until(lambda: not window.editing.busy)
             candidate = app.snapshot().candidate_prepared
             assert candidate and candidate is not before_save.candidate_prepared

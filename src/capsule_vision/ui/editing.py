@@ -20,6 +20,7 @@ from .production_bridge import QtProductionBridge
 class EditingCoordinator(QObject):
     changed = Signal()
     applied = Signal(object)
+    recipe_published = Signal(str)
 
     def __init__(
         self,
@@ -130,7 +131,7 @@ class EditingCoordinator(QObject):
 
         app = self.bridge.application
 
-        def save() -> bool:
+        def save() -> str:
             saved_revision = app.authorize_engineering(revision)
             try:
                 saved = session.save(saved_revision)
@@ -139,13 +140,22 @@ class EditingCoordinator(QObject):
                 app.observe_saved_recipe(exc.operation.target)
                 raise
             if saved is not None:
-                app.observe_saved_recipe(saved.recipe.recipe_id)
-            return True
+                recipe_id = saved.recipe.recipe_id
+                app.observe_saved_recipe(recipe_id)
+                return recipe_id
+            return ""
 
         def saved(value: object, error: BaseException | None) -> None:
             self.bridge.refresh()
+            recipe_id = (
+                error.operation.target
+                if isinstance(error, RevisionConfirmationError)
+                else value
+            )
+            if isinstance(recipe_id, str) and recipe_id:
+                self.recipe_published.emit(recipe_id)
             # Close drains this job without changing a completed publication's outcome.
-            completed(None, None if value is True else error)
+            completed(None, None if isinstance(value, str) else error)
 
         return self.run_model_io(save, saved, revision=revision)
 

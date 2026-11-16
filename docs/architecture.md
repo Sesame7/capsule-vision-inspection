@@ -1518,12 +1518,17 @@ either confirmation returns to the editor with its input intact.
 The stacked player and Batch fit the existing ordinary-font header height, leaving
 the metrics row and camera grid geometry unchanged. The Production identity has two
 rows: state with conditional inline active/requested identity, then the saved-Recipe
-selector and Refresh. The selector reflects the accepted saved Recipe, including
-startup restoration. An incomplete selection keeps that identity and shows setup
-guidance with Start disabled. Request and active details remain available in the
-accessible text and tooltips. Refresh lists saved definitions without preparing
-them or relabeling the selected identity. Camera cards replace the empty-canvas
-guidance when a prepared layout becomes available.
+selector and Refresh. The selector normally reflects the accepted saved Recipe,
+including startup restoration. An incomplete selection keeps that identity and
+shows setup guidance with Start disabled. Request and active details remain
+available in the accessible text and tooltips. Refresh lists saved definitions
+without preparing them or relabeling the selected identity. When Recipe Save
+invalidates the candidate, the selector shows the unselected placeholder and the
+dropdown lists current saved names. The placeholder remains until explicit selection
+installs a prepared candidate. The generic reselection instruction stays available
+in tooltips and accessible feedback while the bottom strip shows other relevant
+warnings or faults. Camera cards replace the empty-canvas guidance when a prepared
+layout becomes available.
 The selector prefers 170 logical pixels; long names elide only in its closed label,
 with full text retained in the model, tooltips and accessibility.
 Header space after Batch and selector width can shrink while preserving the player

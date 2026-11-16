@@ -50,11 +50,13 @@ def test_selected_save_has_no_plc_io_and_reselection_blocks_start_until_verified
 
             window.navigate(0)
             picker = window.production_recipes
-            picker.recipes.activated.emit(picker.recipes.currentIndex())
+            assert picker.recipes.currentIndex() == -1
+            picker.recipes.activated.emit(picker.recipes.findData("local"))
             until(plc.entered.is_set)
             window.bridge.refresh()
             qapp.processEvents()
             assert window.editing.busy and app.snapshot().process_required
+            assert picker.recipes.currentData() == "local"
             assert app.snapshot().start_blocker is StartBlocker.PROCESS_APPLYING
             assert not window.buttons["operation"].isEnabled()
             assert window.buttons["operation"].accessibleDescription() == text(

@@ -1466,10 +1466,11 @@ Dirty navigation/close still offers Save, Discard or Cancel.
 Publishing a materially changed definition matching both the selected and candidate
 IDs makes that candidate ineligible for Start before the stopped editing slot is
 released. This applies even if audit confirmation fails after publication.
+Application retains the selected identity and old candidate evidence.
+Start stays disabled with explicit reselection guidance. Only successful preparation
+replaces the candidate, and only successful Start changes the active configuration.
 An unpublished change, unchanged Save or unrelated Recipe Save does not invalidate
-the candidate. Production retains the selected identity and old candidate evidence,
-shows that reselection is required, and disables Start. Only successful preparation
-replaces the candidate; only successful Start changes the active configuration.
+the candidate.
 
 Production's compact saved-Recipe selector accepts a valid saved definition before
 preparing its MachineLayout, Model and source dependencies, off Qt dispatch on the
@@ -1484,15 +1485,22 @@ reselection; saving unrelated configuration or merely opening a page cannot appl
 The catalog refreshes on page entry and through Refresh. Refresh lists
 incomplete Recipes and reports invalid/ambiguous files without selecting anything
 or replacing the candidate. Missing, invalid or ambiguous definitions cannot become
-a new selection. The selector reflects the Application-owned selection, including
-successful startup candidate restoration. Refreshing a renamed saved definition
-does not relabel the selected definition or prepared evidence. An unavailable
-catalog entry can remain visible as previous evidence but cannot be newly selected.
-The state and optional active/requested identity share the first header row;
-the selector and Refresh occupy the second. Pending validation identifies the
-request separately; after validation the selector reflects the accepted choice,
-even if preparation fails. Failure preserves the old candidate and active evidence
-without relabeling either. Selection survives navigation and unrelated editing.
+a new selection. The selector normally reflects the Application-owned selection,
+including successful startup candidate restoration. Refreshing a renamed saved
+definition does not relabel the selected definition or prepared evidence. An
+unavailable catalog entry can remain visible as previous evidence but cannot be
+newly selected.
+
+When Recipe Save invalidates the candidate, the selector shows the unselected
+placeholder and the dropdown refreshes with current saved Recipe names. The
+placeholder stays visible until explicit selection installs a prepared candidate.
+While it is visible, the generic reselection instruction stays in tooltips and
+accessible feedback, leaving the bottom strip available for other warnings.
+The state and optional active/requested identity share the first header row. The
+selector and Refresh occupy the second. Pending validation identifies the request
+separately. A validated choice normally appears in the selector even if preparation
+fails. Failure preserves the old candidate and active evidence without relabeling
+either. Selection survives navigation and unrelated editing.
 The selector's full tooltip/accessibility retains preparation-failure details even
 when an earlier Start warning has priority in the bottom strip.
 Recipe editor selection and unsaved drafts remain independent. Reselecting the same ID prepares the latest saved version. While

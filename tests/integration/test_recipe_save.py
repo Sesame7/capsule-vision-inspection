@@ -28,6 +28,7 @@ from capsule_vision.application.application import RecipeSelection
 from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.editing import RecipeEditorSession
 from capsule_vision.application.identity_models import Role
+from capsule_vision.application.image_archive import ArchiveSnapshot
 from capsule_vision.configuration import load_recipe, save_machine_layout
 from capsule_vision.localization.catalog import text
 from capsule_vision.ui.bootstrap import create_window
@@ -58,6 +59,7 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
     owner.login(author.username, TEST_PASSWORD).result(WAIT)
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
+    preparing, release = Event(), Event()
     try:
         window.show()
         app.start().result(WAIT)
@@ -76,6 +78,8 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
             editor: RecipeEditorSession, identity: str
         ) -> PreparedConfiguration:
             calls.append((identity, get_ident()))
+            preparing.set()
+            assert release.wait(10)
             return prepare(editor, identity)
 
         monkeypatch.setattr(RecipeEditorSession, "prepare_saved", counted)
@@ -95,6 +99,11 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         assert not session.dirty
         assert load_recipe(session.entry.path).display_name == "Latest saved"
         assert window.recipe_page.status.text() == text("saved", window.language)
+        picker = window.production_recipes
+        assert picker.recipes.currentIndex() == -1
+        assert (
+            picker.recipes.itemText(picker.recipes.findData("local")) == "Latest saved"
+        )
         with pytest.raises(ApplicationStateError, match="re-preparation"):
             app.start()
         assert engines == [before.active_prepared]
@@ -105,23 +114,58 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         assert not owner.audit_page(AuditQuery(action="production.recipe")).result(WAIT)
 
         window.navigate(0)
-        picker = window.production_recipes
         assert before.selected_recipe is not None
-        assert picker.recipes.currentData() == before.selected_recipe.recipe_id
-        assert picker.recipes.currentText() == before.selected_recipe.display_name
+        index = picker.recipes.findData(before.selected_recipe.recipe_id)
+        assert index >= 0 and picker.recipes.itemText(index) == "Latest saved"
+        assert (
+            picker.recipes.currentIndex() == -1 and picker.recipes.currentData() is None
+        )
+        assert picker.recipes.placeholderText() == text(
+            "select_saved_recipe", window.language
+        )
+        assert before.selected_recipe.display_name not in picker.recipes.toolTip()
+        assert not window.identity_label.isVisible()
         hint = text("recipe_reprepare_hint", window.language)
         assert (
             hint in picker.recipes.toolTip() and hint in picker.recipes.accessibleName()
         )
         assert hint in operation.toolTip()
+        assert operation.accessibleDescription() == hint
         assert operation.isVisible() and not operation.isEnabled()
         assert operation.geometry() == start_geometry
         assert window.state_label.text() == text("report_stopped", window.language)
         assert window.event_frame.state.text() == window.state_label.text()
         assert window.event_label.accessibleName() == hint
+        assert window.event_label.toolTip() == hint
+        assert not window.event_label.text() and not window.event_icon.isVisible()
+
+        class FailingArchive:
+            def archive_snapshot(self) -> ArchiveSnapshot:
+                return ArchiveSnapshot(
+                    saved.generation, 0, 0, 1, 0, 0, 0, "Archive blocked", False
+                )
+
+        with monkeypatch.context() as status:
+            status.setattr(window.bridge, "archive", FailingArchive())
+            window.bridge.refresh()
+            assert window.event_label.text()
+            assert window.event_label.accessibleName() == text(
+                "archive_issue", window.language
+            )
+            assert "Archive blocked" in window.event_label.toolTip()
+            assert window.event_icon.isVisible() and not operation.isEnabled()
+        window.bridge.refresh()
         assert not calls  # Opening Production and refreshing the list did not select.
 
-        picker.recipes.activated.emit(picker.recipes.currentIndex())
+        picker.recipes.setCurrentIndex(index)
+        picker.recipes.activated.emit(index)
+        until(preparing.is_set)
+        window.bridge.refresh()
+        assert app.snapshot().candidate_prepared is before.candidate_prepared
+        assert picker.recipes.currentIndex() == -1
+        assert "Latest saved" in picker.recipes.toolTip()
+        assert not operation.isEnabled()
+        release.set()
         until(lambda: not window.editing.busy)
         assert len(calls) == 1 and calls[0][0] == "local" and calls[0][1] != get_ident()
         assert applied.count() == 1
@@ -142,6 +186,7 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         assert app.snapshot().active_prepared is candidate
         app.stop().result(WAIT)
     finally:
+        release.set()
         close_window(window)
         delivery.detach()
 
@@ -175,9 +220,11 @@ def test_logout_after_committed_save_preserves_publication_and_stale_candidate(
             start_blocker=StartBlocker.PERMISSION,
         )
         assert applied.count() == 0
+        picker = window.production_recipes
+        assert picker.recipes.currentIndex() == -1 and not picker.recipes.isEnabled()
         owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
         window.identity_controls.refresh()
-        picker = window.production_recipes
+        assert picker.recipes.currentIndex() == -1 and picker.recipes.isEnabled()
         picker.select(picker.recipes.findData("local"))
         until(lambda: not window.editing.busy)
         assert not app.snapshot().candidate_requires_preparation
@@ -193,6 +240,8 @@ def test_unrelated_and_unchanged_saves_do_not_prepare(
 ) -> None:
     window, session, _ = configured_screen
     before = window.bridge.application.snapshot()
+    assert before.selected_recipe is not None
+    picker = window.production_recipes
 
     def forbidden(_owner: RecipeEditorSession, _identity: str) -> PreparedConfiguration:
         pytest.fail("Unrelated or unchanged Save must not prepare")
@@ -201,6 +250,7 @@ def test_unrelated_and_unchanged_saves_do_not_prepare(
     window.recipe_page.save()
     assert not window.editing.busy
     assert window.bridge.application.snapshot() == before
+    assert picker.recipes.currentData() == before.selected_recipe.recipe_id
     session.load(
         next(
             e
@@ -214,6 +264,12 @@ def test_unrelated_and_unchanged_saves_do_not_prepare(
     assert session.entry is not None
     assert load_recipe(session.entry.path).display_name == "Unrelated saved"
     assert window.bridge.application.snapshot() == before
+    window.navigate(0)
+    assert picker.recipes.currentText() == before.selected_recipe.display_name
+    assert (
+        picker.recipes.itemText(picker.recipes.findData("product-b"))
+        == "Unrelated saved"
+    )
     assert window.buttons["operation"].isEnabled()
 
 
@@ -309,12 +365,14 @@ def test_failed_reselection_keeps_saved_definition_and_blocks_start(
         assert window.recipe_page.status.text() == text("saved", window.language)
         window.navigate(0)
         picker = window.production_recipes
-        assert picker.recipes.currentData() == "product-a"
+        assert picker.recipes.currentIndex() == -1
+        index = picker.recipes.findData("product-a")
+        assert index >= 0 and picker.recipes.itemText(index) == "Saved independently"
         assert not window.buttons["operation"].isEnabled()
         with pytest.raises(ApplicationStateError, match="re-preparation"):
             app.start()
 
-        picker.recipes.activated.emit(picker.recipes.currentIndex())
+        picker.recipes.activated.emit(index)
         until(lambda: not window.editing.busy)
         state = app.snapshot()
         assert state.candidate_prepared is before.candidate_prepared
@@ -324,7 +382,11 @@ def test_failed_reselection_keeps_saved_definition_and_blocks_start(
             and not runtimes
         )
         assert state.state is ApplicationState.UNCONFIGURED
-        assert picker.recipes.currentText() == "Saved independently"
+        assert state.selected_recipe is not None
+        assert state.selected_recipe.display_name == "Saved independently"
+        assert picker.recipes.currentIndex() == -1
+        assert picker.recipes.itemText(index) == "Saved independently"
+        assert not window.identity_label.isVisible()
         key = (
             "recipe_setup_required"
             if failure == "unknown_model"
@@ -407,8 +469,9 @@ def test_reselection_cannot_replace_newer_candidate(
     until(lambda: not window.editing.busy)
     assert app.snapshot().candidate_requires_preparation
     picker = window.production_recipes
-    picker.recipes.activated.emit(picker.recipes.currentIndex())
+    picker.recipes.activated.emit(picker.recipes.findData("product-a"))
     until(lambda: not window.editing.busy)
     assert app.snapshot().candidate_prepared is other
     assert not app.snapshot().candidate_requires_preparation
+    assert picker.recipes.currentData() == "product-b"
     assert picker.feedback and picker.feedback[0] == "identity_stale"

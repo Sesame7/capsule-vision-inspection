@@ -195,11 +195,18 @@ def test_recipe_published_unconfirmed_is_visible_and_blocks_old_candidate(
 
         window.navigate(0)
         picker = window.production_recipes
-        picker.recipes.activated.emit(picker.recipes.currentIndex())
+        assert picker.recipes.currentIndex() == -1
+        index = picker.recipes.findData(editor.entry.recipe.recipe_id)
+        assert (
+            index >= 0
+            and picker.recipes.itemText(index) == "Published without confirmation"
+        )
+        picker.recipes.activated.emit(index)
         until(lambda: not window.editing.busy)
         prepared = startup.application.snapshot()
         assert not prepared.candidate_requires_preparation
         assert prepared.candidate_prepared is not snapshot.candidate_prepared
+        assert picker.recipes.currentText() == "Published without confirmation"
         assert (
             text("configuration_confirmation_incomplete", language)
             == window.recipe_page.status.text()

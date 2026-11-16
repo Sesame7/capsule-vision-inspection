@@ -1,6 +1,6 @@
 """Compact saved Recipe selection; selection and candidate remain Application-owned."""
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal, Slot
 from PySide6.QtGui import QPaintEvent, QPalette, QStandardItemModel
 from PySide6.QtWidgets import (
     QComboBox,
@@ -67,6 +67,7 @@ class ProductionRecipes(QWidget):
         self._requested: tuple[str, str] | None = None
         self._catalog_revision = 0
         self._selection_presentation: tuple[int, str | None, str | None] | None = None
+        self._hide_stale_selection = False
         self.setMaximumWidth(self.selector_width + Style.touch + Style.small)
         self.setFixedHeight(Style.touch)
         row = QHBoxLayout(self)
@@ -84,6 +85,7 @@ class ProductionRecipes(QWidget):
         row.addWidget(self.refresh_button)
         self.recipes.activated.connect(self.select)
         self.refresh_button.clicked.connect(self.reload)
+        editing.recipe_published.connect(self._recipe_published)
         editing.changed.connect(self.refresh_state)
         editing.bridge.snapshot_changed.connect(self.refresh_state)
         editing.bridge.model_preparation_changed.connect(self.refresh_state)
@@ -96,6 +98,24 @@ class ProductionRecipes(QWidget):
         if self.feedback is not None and self.feedback[0] == "recipe_setup_required":
             return "recipe_setup_required"
         return "configure_first"
+
+    @property
+    def shows_reselection_placeholder(self) -> bool:
+        return self._hide_stale_selection
+
+    @Slot(str)
+    def _recipe_published(self, recipe_id: str) -> None:
+        snapshot = self.editing.bridge.snapshot
+        selected, candidate = snapshot.selected_recipe, snapshot.candidate
+        if (
+            snapshot.candidate_requires_preparation
+            and selected is not None
+            and candidate is not None
+            and selected.recipe_id == candidate.recipe_id == recipe_id
+        ):
+            # Keep the placeholder through acceptance and dependency preparation.
+            self._hide_stale_selection = True
+            self.reload()
 
     def reload(self) -> None:
         if self.editing.busy or self.editing.closing or self._requested is not None:
@@ -162,8 +182,11 @@ class ProductionRecipes(QWidget):
         """Reflect the validated selection without implying preparation or activation."""
         candidate = snapshot.candidate_prepared
         selected = snapshot.selected_recipe
-        identity = selected.recipe_id if selected else None
-        name = selected.display_name if selected else None
+        if not snapshot.candidate_requires_preparation:
+            self._hide_stale_selection = False
+        displayed = None if self._hide_stale_selection else selected
+        identity = displayed.recipe_id if displayed else None
+        name = displayed.display_name if displayed else None
         presentation = self._catalog_revision, identity, name
         if presentation != self._selection_presentation:
             self._selection_presentation = presentation
@@ -175,10 +198,10 @@ class ProductionRecipes(QWidget):
                     f"{entry.recipe.display_name} [{entry.recipe.recipe_id}]",
                     Qt.ItemDataRole.ToolTipRole,
                 )
-            if selected is not None:
+            if displayed is not None:
                 index = self.recipes.findData(identity)
                 if index < 0:
-                    self.recipes.addItem(selected.display_name, identity)
+                    self.recipes.addItem(displayed.display_name, identity)
                     index = self.recipes.count() - 1
                     model = self.recipes.model()
                     if isinstance(model, QStandardItemModel):
@@ -187,17 +210,19 @@ class ProductionRecipes(QWidget):
                 # Catalog refresh cannot relabel an already selected definition.
                 self.recipes.setItemText(index, name or "")
         self.recipes.setCurrentIndex(
-            self.recipes.findData(identity) if selected else -1
+            self.recipes.findData(identity) if displayed else -1
         )
-        details = (
-            f"{text('page_recipe', self.language)}: {name}\nID: {identity}"
-            if selected
-            else text("select_saved_recipe", self.language)
-        )
+        if displayed is not None:
+            details = f"{text('page_recipe', self.language)}: {name}\nID: {identity}"
+        elif self._hide_stale_selection:
+            details = text("recipe_reprepare_hint", self.language)
+        else:
+            details = text("select_saved_recipe", self.language)
         inline = ""
         active = snapshot.active_prepared
         if active is not None and (
-            active.configuration.recipe_id != identity
+            selected is None
+            or active.configuration.recipe_id != selected.recipe_id
             or snapshot.has_pending_configuration
         ):
             active_text = f"{text('active_recipe', self.language)}: {active.configuration.display_name}"
@@ -209,7 +234,7 @@ class ProductionRecipes(QWidget):
                 and not snapshot.candidate_requires_preparation
             ):
                 details += f"\n{text('pending_recipe', self.language)}: {name}"
-        if snapshot.candidate_requires_preparation:
+        if snapshot.candidate_requires_preparation and not self._hide_stale_selection:
             stale = text("recipe_reprepare", self.language)
             inline = f"{inline} · {stale}" if inline else stale
             details += f"\n{text('recipe_reprepare_hint', self.language)}"
