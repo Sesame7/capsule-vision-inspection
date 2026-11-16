@@ -2,6 +2,7 @@
 
 from collections import Counter
 from dataclasses import replace
+from html import escape
 from math import ceil
 from pathlib import Path
 
@@ -74,17 +75,22 @@ from .permissions import permits
 from .report_dialog import ReportDialog
 from .style import Style, button_width, theme_colors
 
+_COUNT_SEPARATOR = "\u2009·\u2009"
+_RESULT_SAMPLE = _COUNT_SEPARATOR.join(
+    ("OK 12", "NG 12", "EMPTY 12", "UNKNOWN 12", text("history_cycle_error", "en"))
+)
+# Reserve the compact fields first. Most spare width goes to Batch and Recipe.
 _CYCLE_COLUMNS = (
     ("short_time", "12-31 23:59:59.999", "12-31 23:59:59.999", 1),
-    ("records_cycle", "9999", "99999", 1),
-    ("history_group", "9999 · 4/4", "9999 · 4/4", 1),
-    ("batch_id", "DEV-LOT-F", "LOT-20261020-003", 6),
-    ("page_recipe", "Yellow", "黄色胶囊-规格B-灯检方案", 7),
+    ("records_cycle", "999999", "999999", 1),
+    ("history_group", "999999 · 4/4", "999999 · 4/4", 1),
+    ("batch_id", "LOT-20261020-003", "LOT-20261020-003", 4),
+    ("page_recipe", "阿莫西林胶囊", "黄色胶囊-规格B-灯检方案", 6),
     (
         "audit_outcome",
-        "OK 36 · NG 0 · EMPTY 6",
-        "OK 12 · NG 13 · EMPTY 10 · UNKNOWN 1 · ERR 12",
-        4,
+        _RESULT_SAMPLE,
+        _RESULT_SAMPLE,
+        1,
     ),
 )
 
@@ -135,7 +141,7 @@ def _inspection_reason(code: str, language: Language) -> str:
 class _ResultDelegate(QStyledItemDelegate):
     """Right-aligned two-digit fields, independent of proportional space widths."""
 
-    warnings_role = Qt.ItemDataRole.UserRole + 1
+    cycle_error_role = Qt.ItemDataRole.UserRole + 1
 
     @staticmethod
     def counts(record: HistoryRecord) -> tuple[tuple[str, int], ...]:
@@ -153,14 +159,19 @@ class _ResultDelegate(QStyledItemDelegate):
     def spans(
         metrics: QFontMetrics,
         counts: tuple[tuple[str, int], ...],
-        warnings: str = "",
     ) -> tuple[tuple[str, int, Qt.AlignmentFlag], ...]:
         number_width = 2 * max(metrics.horizontalAdvance(str(i)) for i in range(10))
         left, right = Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignRight
         spans: list[tuple[str, int, Qt.AlignmentFlag]] = []
         for label, count in counts:
             if spans:
-                spans.append((" · ", metrics.horizontalAdvance(" · "), left))
+                spans.append(
+                    (
+                        _COUNT_SEPARATOR,
+                        metrics.horizontalAdvance(_COUNT_SEPARATOR),
+                        left,
+                    )
+                )
             spans.extend(
                 (
                     (label + " ", metrics.horizontalAdvance(label + " "), left),
@@ -171,9 +182,6 @@ class _ResultDelegate(QStyledItemDelegate):
                     ),
                 )
             )
-        if warnings:
-            value = " · " + warnings
-            spans.append((value, metrics.horizontalAdvance(value), left))
         return tuple(spans)
 
     def paint(
@@ -186,7 +194,6 @@ class _ResultDelegate(QStyledItemDelegate):
         if not isinstance(record, HistoryRecord):
             super().paint(painter, option, index)
             return
-        warnings: object = index.data(self.warnings_role)
         view = QStyleOptionViewItem(option)
         self.initStyleOption(view, index)
         view.text = ""
@@ -197,23 +204,25 @@ class _ResultDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipRect(rect)
         painter.setFont(option.font)
-        painter.setPen(QColor(theme_colors(option.widget).primary))
-        spans = self.spans(
-            option.fontMetrics,
-            self.counts(record),
-            warnings if isinstance(warnings, str) else "",
+        colors = theme_colors(option.widget)
+        painter.setPen(QColor(colors.primary))
+        metrics = option.fontMetrics
+        cycle_error: object = index.data(self.cycle_error_role)
+        suffix = (
+            _COUNT_SEPARATOR + cycle_error
+            if isinstance(cycle_error, str) and cycle_error
+            else ""
         )
-        if sum(width for _, width, _ in spans) > rect.width():
-            caption = option.fontMetrics.elidedText(
-                str(index.data()), Qt.TextElideMode.ElideRight, rect.width()
+        spans = self.spans(metrics, self.counts(record))
+        count_width = max(0, rect.width() - metrics.horizontalAdvance(suffix))
+        left = Qt.AlignmentFlag.AlignLeft
+        if sum(width for _, width, _ in spans) > count_width:
+            caption = metrics.elidedText(
+                "".join(value for value, _, _ in spans),
+                Qt.TextElideMode.ElideRight,
+                count_width,
             )
-            painter.drawText(
-                rect,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                caption,
-            )
-            painter.restore()
-            return
+            spans = ((caption, metrics.horizontalAdvance(caption), left),)
         x = rect.x()
         for value, width, alignment in spans:
             painter.drawText(
@@ -222,6 +231,19 @@ class _ResultDelegate(QStyledItemDelegate):
                 value,
             )
             x += width
+        if suffix:
+            painter.setPen(QColor(colors.warning))
+            error_width = rect.right() - x + 1
+            error = metrics.elidedText(
+                suffix if x > rect.x() else suffix.removeprefix(_COUNT_SEPARATOR),
+                Qt.TextElideMode.ElideRight,
+                error_width,
+            )
+            painter.drawText(
+                QRect(x, rect.y(), error_width, rect.height()),
+                left | Qt.AlignmentFlag.AlignVCenter,
+                error,
+            )
         painter.restore()
 
 
@@ -480,7 +502,7 @@ class HistoryPage(QWidget):
             )
 
     def _size_content(self) -> None:
-        fit_record_columns(self.cycles, _CYCLE_COLUMNS)
+        fit_record_columns(self.cycles, _CYCLE_COLUMNS, padding=2 * Style.small)
         padding = 2 * Style.small + 8
         width = Style.touch
         for button, key in (
@@ -636,7 +658,7 @@ class HistoryPage(QWidget):
         camera_header = self.channels.horizontalHeaderItem(0)
         assert camera_header is not None
         camera_header.setToolTip(text("history_camera", language))
-        self.channel_detail.setAccessibleName(text("history_channel", language))
+        self.channel_detail.setAccessibleName(text("history_result", language))
         self.channel_detail.setPlaceholderText(text("history_select_channel", language))
         self._present()
 
@@ -807,13 +829,17 @@ class HistoryPage(QWidget):
             clock, full_time = record_time(
                 record.context.completed_at, milliseconds=True
             )
+            counts = " · ".join(
+                f"{state} {count}" for state, count in _ResultDelegate.counts(record)
+            )
+            cycle_error, cycle_detail = self._cycle_captions(record)
             values = (
                 clock,
                 str(record.cycle_id),
                 self._group_caption(record),
                 readable_value(record.context.batch_label) or "—",
                 readable_value(record.context.recipe_name) or "—",
-                self._summary(record),
+                " · ".join(filter(None, (counts, cycle_error))),
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -831,13 +857,10 @@ class HistoryPage(QWidget):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setToolTip(value)
                 if column == 5:
-                    item.setToolTip(value)
+                    item.setToolTip("\n".join(filter(None, (counts, cycle_detail))))
                     item.setData(Qt.ItemDataRole.AccessibleTextRole, value)
                     item.setData(Qt.ItemDataRole.UserRole, record)
-                    item.setData(
-                        _ResultDelegate.warnings_role,
-                        " · ".join(self._cycle_warnings(record)),
-                    )
+                    item.setData(_ResultDelegate.cycle_error_role, cycle_error)
                 if column == 4:
                     item.setToolTip(
                         (
@@ -868,14 +891,8 @@ class HistoryPage(QWidget):
             return "—"
         return f"{record.group_first_cycle} · {record.group_slot}/{record.group_size}"
 
-    def _summary(self, record: HistoryRecord) -> str:
-        parts = [f"{state} {count}" for state, count in _ResultDelegate.counts(record)]
-        return " · ".join((*parts, *self._cycle_warnings(record)))
-
-    def _cycle_warnings(
-        self, record: HistoryRecord, language: Language | None = None
-    ) -> tuple[str, ...]:
-        language = language or self.language
+    def _cycle_captions(self, record: HistoryRecord) -> tuple[str, str]:
+        language = self.language
         warnings: list[str] = []
         if record.status != "COMPLETE":
             status_key = {
@@ -884,10 +901,12 @@ class HistoryPage(QWidget):
                 "SHUTDOWN": "cycle_shutdown",
             }.get(record.status)
             warnings.append(text(status_key, language) if status_key else record.status)
+        cycle_error = ""
         if record.technical == "ERROR" and not any(
             c.technical == "ERROR" for c in record.channels
         ):
-            warnings.append(text("history_cycle_error", language))
+            cycle_error = text("history_cycle_error", language)
+            warnings.append(cycle_error)
         elif record.technical == "DISABLED":
             warnings.append(text("history_cycle_disabled", language))
         if record.judgment == "NG" and not any(
@@ -898,18 +917,16 @@ class HistoryPage(QWidget):
             c.business == "UNKNOWN" for c in record.channels
         ):
             warnings.append(text("history_cycle_unknown", language))
-        return tuple(warnings)
+        return cycle_error, " · ".join(warnings)
 
     @Slot()
     def _selected(self) -> None:
-        index = self.cycles.currentRow()
-        if not self.cycles.selectedItems() or not 0 <= index < len(self._data.records):
+        record = self._selected_record()
+        if record is None:
             self._detail_record_id = None
             self.channels.setRowCount(0)
-            self.channel_detail.clear()
             self._channel_selected()
             return
-        record = self._data.records[index]
         old_item = self.channels.currentItem()
         old_channel: object = (
             old_item.data(Qt.ItemDataRole.UserRole) if old_item else None
@@ -943,18 +960,12 @@ class HistoryPage(QWidget):
         self._channel_selected()
         self._size_content()
 
-    @Slot()
-    def _channel_selected(self) -> None:
-        item = self.channels.currentItem()
-        selected: object = (
-            item.data(Qt.ItemDataRole.UserRole) if item and item.isSelected() else None
-        )
+    def _channel_summary(self, selected: object, camera: HistoryCamera | None) -> str:
         reasons: list[str] = []
-        source = self._selected_camera()
         if isinstance(selected, (HistoryChannel, HistoryCamera)):
             labels: tuple[str, ...] = ()
             if isinstance(selected, HistoryChannel):
-                evidence = source[1].image_evidence if source else None
+                evidence = camera.image_evidence if camera else None
                 if evidence is not None:
                     labels = tuple(
                         finding.label
@@ -975,7 +986,26 @@ class HistoryPage(QWidget):
         separator = "\n"
         if isinstance(selected, HistoryChannel):
             separator = "、" if self.language == "zh" else ", "
-        detail = separator.join(dict.fromkeys(filter(None, reasons)))
+        return separator.join(dict.fromkeys(filter(None, reasons)))
+
+    @Slot()
+    def _channel_selected(self) -> None:
+        item = self.channels.currentItem()
+        selected: object = (
+            item.data(Qt.ItemDataRole.UserRole) if item and item.isSelected() else None
+        )
+        record = self._selected_record()
+        _, cycle_detail = self._cycle_captions(record) if record else ("", "")
+        source = self._selected_camera()
+        summary = self._channel_summary(selected, source[1] if source else None)
+        if cycle_detail and summary:
+            key = (
+                "history_channel"
+                if isinstance(selected, HistoryChannel)
+                else "history_camera"
+            )
+            summary = f"{text(key, self.language)} · {summary}"
+        details = [cycle_detail, summary]
         if self._image_issue is not None:
             record_id, camera, path, key = self._image_issue
             if source and (
@@ -987,10 +1017,17 @@ class HistoryPage(QWidget):
                 camera,
                 path,
             ):
-                detail = "\n".join(filter(None, (detail, text(key, self.language))))
+                details.append(text(key, self.language))
             else:
                 self._image_issue = None
+        detail = "\n".join(filter(None, details))
         self.channel_detail.setPlainText(detail)
+        self.channel_detail.setAccessibleDescription(detail)
+        self.channel_detail.setToolTip(
+            f"<span style='white-space: pre-wrap'>{escape(detail)}</span>"
+            if detail
+            else ""
+        )
         self._image_selection_changed()
         self._size_detail()
 
@@ -1005,15 +1042,17 @@ class HistoryPage(QWidget):
         self.image_button.setToolTip(description)
         self.image_button.setAccessibleDescription(description)
 
+    def _selected_record(self) -> HistoryRecord | None:
+        cycle = self.cycles.currentRow()
+        if self.cycles.selectedItems() and 0 <= cycle < len(self._data.records):
+            return self._data.records[cycle]
+        return None
+
     def _selected_camera(self) -> tuple[HistoryRecord, HistoryCamera] | None:
-        cycle, camera = self.cycles.currentRow(), self.channels.currentRow()
-        if (
-            not self.cycles.selectedItems()
-            or not self.channels.selectedItems()
-            or not 0 <= cycle < len(self._data.records)
-        ):
+        record = self._selected_record()
+        if record is None or not self.channels.selectedItems():
             return None
-        record = self._data.records[cycle]
+        camera = self.channels.currentRow()
         if 0 <= camera < len(record.cameras):
             return record, record.cameras[camera]
         return None
@@ -1069,7 +1108,7 @@ class HistoryPage(QWidget):
         parts = [time_caption]
         if isinstance(channel, HistoryChannel):
             parts.append(f"CH{channel.channel:02d}")
-        parts.extend(self.channel_detail.toPlainText().splitlines())
+        parts.extend(self._channel_summary(channel, camera).splitlines())
         self.image_dialog = HistoryImageDialog(
             self,
             image,

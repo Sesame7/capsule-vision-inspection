@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import pytest
 from PySide6.QtCore import QDate, QPoint, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QScreen
+from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QScreen, QTextDocument
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -275,12 +275,19 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
         )
         detail = page.channel_detail
         qapp.processEvents()
-        assert detail.toPlainText() == summary
+        cycle_note = text("records_cycle_failed", language)
+        channel_label = text("history_channel", language)
+        full_detail = f"{cycle_note}\n{channel_label} · {summary}"
+        assert detail.toPlainText() == full_detail
+        assert detail.accessibleDescription() == full_detail
+        tooltip = QTextDocument()
+        tooltip.setHtml(detail.toolTip())
+        assert tooltip.toPlainText() == full_detail
         assert {
             "capsule.color.upper.tolerance",
             "capsule.color.lower.tolerance",
         }.issubset(channel_at(page, 1, 2).reasons)
-        assert detail.document().firstBlock().layout().lineCount() == 1
+        assert detail.document().lastBlock().layout().lineCount() == 1
         if wraps:
             one_line_height = detail.height()
             page.resize(880, 900)
@@ -290,16 +297,16 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
                     and not detail.verticalScrollBar().isVisible()
                 )
             )
-            assert detail.document().firstBlock().layout().lineCount() > 1
-            assert detail.toPlainText() == summary
+            assert detail.document().lastBlock().layout().lineCount() > 1
+            assert detail.toPlainText() == full_detail
         page.channels.setCurrentCell(1, 3)
-        assert page.channel_detail.toPlainText() == "Scratch"
+        assert detail.toPlainText() == f"{cycle_note}\n{channel_label} · Scratch"
         page.channels.setCurrentCell(1, 1)
-        assert page.channel_detail.toPlainText() == ""
+        assert detail.toPlainText() == cycle_note
         page.channels.setCurrentCell(1, 0)
-        assert page.channel_detail.toPlainText() == text(
-            "records_unassigned", language
-        ).format(labels="Background")
+        camera_label = text("history_camera", language)
+        unassigned = text("records_unassigned", language).format(labels="Background")
+        assert detail.toPlainText() == f"{cycle_note}\n{camera_label} · {unassigned}"
         page.channels.setCurrentCell(2, 1)
         assert (
             text("records_missing_frame", language) in page.channel_detail.toPlainText()
@@ -312,6 +319,7 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
         title_suffix = f"CAM2 · {text('history_cycle', language)} 1"
         assert viewer.windowTitle().endswith(title_suffix)
         assert f"CH08 · {summary}" in viewer.caption.accessibleName()
+        assert cycle_note not in viewer.caption.accessibleName()
         assert (
             len(viewer.viewport.overlays) == 3
         )  # Shared/identical geometry is drawn once.
@@ -320,6 +328,7 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
         page.cycles.selectRow(0)
         page.channels.setCurrentCell(0, 1)
         assert page.image_dialog is viewer and not page.image_button.isEnabled()
+        assert not detail.toPlainText() and not detail.accessibleDescription()
         assert viewer.windowTitle().endswith(title_suffix)
         assert "CH08" in viewer.caption.accessibleName()
         for width, height in ((800, 380), (440, 690)):
@@ -444,7 +453,7 @@ def test_history_filters_pagination_selection_and_presentation(
     delivery = FutureDelivery()
     window = create_window(startup, delivery)
     window.set_language("zh")
-    window.resize(1080, 1600)
+    window.resize(1080, 1920)
     window.show()
     before = startup.application.snapshot()
     try:
@@ -454,7 +463,10 @@ def test_history_filters_pagination_selection_and_presentation(
         until(lambda: not page.busy)
         assert window.pages.currentWidget() is window.history_tabs
         assert window.history_tabs.currentWidget() is page
+        assert window.size() == QSize(1080, 1920)
         assert page.cycles.rowCount() == 50 and page.channels.rowCount() == 6
+        assert page.cycles.columnCount() == 6
+        assert not page.cycles.horizontalScrollBar().isVisible()
         assert page.channels.columnCount() == 7
         assert (
             page.cycles.editTriggers() is QAbstractItemView.EditTrigger.NoEditTriggers
@@ -516,6 +528,8 @@ def test_history_filters_pagination_selection_and_presentation(
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 0 and page.channels.rowCount() == 0
         assert page.channel_detail.isHidden() and not page.channel_detail.toPlainText()
+        assert not page.channel_detail.toolTip()
+        assert not page.channel_detail.accessibleDescription()
         page.result.set_selected(frozenset(("EMPTY",)))
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 50 and startup.application.snapshot() == before
@@ -530,10 +544,12 @@ def test_history_filters_pagination_selection_and_presentation(
 @pytest.mark.parametrize(
     "language,theme,size",
     [
-        ("zh", "dark", (1080, 1500)),
-        ("zh", "dark", (1920, 1017)),
+        ("zh", "dark", (1080, 1920)),
+        ("en", "dark", (1080, 1920)),
+        ("de", "dark", (1080, 1920)),
+        ("zh", "dark", (1920, 1080)),
         ("zh", "dark", (3440, 1200)),
-        ("en", "light", (1920, 1017)),
+        ("en", "light", (1920, 1080)),
     ],
 )
 def test_viewport_allocation_real_identifiers_and_numeric_fields(
@@ -561,39 +577,40 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
     )
     try:
         for cycle_id, recipe, ok, ng in (
-            (1, "胶囊A", 20, 2),
-            (2, "阿莫西林胶囊", 6, 2),
-            (3, "黄色胶囊-规格B-灯检方案", 0, 0),
+            (912563, "胶囊A", 20, 2),
+            (912564, "阿莫西林胶囊", 6, 2),
+            (912565, "黄色胶囊-规格B-灯检方案", 0, 0),
         ):
             result = mixed_result(cycle_id)
-            result = replace(
-                result,
-                cameras=tuple(
-                    replace(
-                        camera,
-                        channels=tuple(
-                            business_channel(
-                                channel,
-                                OccupancyState.PRESENT
-                                if i < ok + ng
-                                else OccupancyState.EMPTY,
-                                TechnicalStatus.SUCCESS,
-                                ProductJudgment.NG
-                                if ok <= i < ok + ng
-                                else ProductJudgment.OK,
-                            )
-                            for channel in camera.channels
-                            for i in (int(channel.channel_id) - 1,)
-                        ),
-                    )
-                    for camera in result.cameras
-                ),
-            )
+            if ok:
+                result = replace(
+                    result,
+                    cameras=tuple(
+                        replace(
+                            camera,
+                            channels=tuple(
+                                business_channel(
+                                    channel,
+                                    OccupancyState.PRESENT
+                                    if i < ok + ng
+                                    else OccupancyState.EMPTY,
+                                    TechnicalStatus.SUCCESS,
+                                    ProductJudgment.NG
+                                    if ok <= i < ok + ng
+                                    else ProductJudgment.OK,
+                                )
+                                for channel in camera.channels
+                                for i in (int(channel.channel_id) - 1,)
+                            ),
+                        )
+                        for camera in result.cameras
+                    ),
+                )
             assert history.offer(
                 replace(
                     context,
                     batch_label="LOT-20261020-003"
-                    if cycle_id == 2
+                    if cycle_id == 912564
                     else context.batch_label,
                     recipe_name=recipe,
                 ),
@@ -602,7 +619,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         page.activate()
         until(lambda: not page.busy)
         qapp.processEvents()
-        assert page.width() == size[0]
+        assert page.size() == QSize(*size)
         layout = page.layout()
         assert layout is not None
         margins = layout.contentsMargins()
@@ -611,6 +628,9 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         assert page.cycles.width() == page.channels.width() == page.workspace.width()
         assert content(page.cycles, 2, 5) == "OK 20 · NG 2 · EMPTY 14"
         assert content(page.cycles, 1, 5) == "OK 6 · NG 2 · EMPTY 28"
+        assert (
+            content(page.cycles, 0, 5) == "OK 6 · NG 12 · EMPTY 6 · UNKNOWN 12 · ERR 12"
+        )
         widths = [page.cycles.columnWidth(i) for i in range(6)]
         viewport = page.cycles.viewport().width()
         print(
@@ -624,6 +644,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             for i in range(6)
         )
         metrics = page.cycles.fontMetrics()
+        assert metrics.horizontalAdvance("912563 · 4/4") + 12 <= widths[2]
         for row in range(3):
             for col in range(6):
                 item = page.cycles.item(row, col)
@@ -698,12 +719,18 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
         option = QStyleOptionViewItem()
         option.initFrom(page.cycles)
         option.widget = page.cycles
-        option.rect = QRect(0, 0, widths[5], 36)
+        result_cell = page.cycles.item(0, 5)
+        assert result_cell is not None
+        option.rect = QRect(QPoint(), page.cycles.visualItemRect(result_cell).size())
         pixmap = QPixmap(widths[5], 36)
         right_edges: list[list[int]] = []
         with monkeypatch.context() as patch:
             patch.setattr(QPainter, "drawText", draw_text)
-            for row, expected in ((2, ["20", "2", "14"]), (1, ["6", "2", "28"])):
+            for row, expected in (
+                (2, ["20", "2", "14"]),
+                (1, ["6", "2", "28"]),
+                (0, ["6", "12", "6", "12", "12"]),
+            ):
                 drawn.clear()
                 painter = QPainter(pixmap)
                 try:
@@ -722,7 +749,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
                     for rect, _ in numbers
                 )
                 right_edges.append([rect.right() for rect, _ in numbers])
-        assert right_edges[0] == right_edges[1]
+        assert right_edges[0] == right_edges[1] == right_edges[2][:3]
         page.grab()
 
         page.resize(1920 if size[0] == 1080 else 1080, size[1])
@@ -762,6 +789,9 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             assert item is not None and item.text() == value
             assert item.toolTip() == item.text() + (
                 "\nID: recipe-a" if col == 4 else ""
+            )
+            assert (
+                item.data(Qt.ItemDataRole.AccessibleDescriptionRole) == item.toolTip()
             )
             assert metrics.horizontalAdvance(item.text()) > page.cycles.columnWidth(col)
         assert (
@@ -892,26 +922,46 @@ def test_stored_recipe_names_missing_names_and_content_sized_channel_details(
 
 
 @pytest.mark.parametrize(
-    "scenario,expected",
+    "scenario,counts,cycle_keys",
     [
-        ("mixed", "OK 6 · NG 12 · EMPTY 6 · UNKNOWN 12 · ERR 12"),
-        ("ok", "OK 36 · NG 0"),
-        ("empty", "OK 0 · NG 0 · EMPTY 36"),
-        ("unknown", "OK 0 · NG 0 · UNKNOWN 36"),
-        ("unassigned", "OK 36 · NG 0"),
-        ("cycle_error", "OK 36 · NG 0 · 周期 ERR · 周期 UNKNOWN"),
-        ("timed_out", "OK 36 · NG 0 · 周期超时 · 周期 ERR · 周期 UNKNOWN"),
+        ("mixed", "OK 6 · NG 12 · EMPTY 6 · UNKNOWN 12 · ERR 12", ()),
+        ("ok", "OK 36 · NG 0", ()),
+        ("empty", "OK 0 · NG 0 · EMPTY 36", ()),
+        ("unknown", "OK 0 · NG 0 · UNKNOWN 36", ()),
+        ("unassigned", "OK 36 · NG 0", ()),
+        (
+            "cycle_error",
+            "OK 36 · NG 0",
+            ("history_cycle_error", "history_cycle_unknown"),
+        ),
+        (
+            "failed",
+            "OK 6 · NG 12 · EMPTY 6 · UNKNOWN 12 · ERR 12",
+            ("records_cycle_failed",),
+        ),
+        ("failed_accounted", "OK 36 · NG 0", ("records_cycle_failed",)),
+        (
+            "timed_out",
+            "OK 36 · NG 0",
+            ("cycle_timeout", "history_cycle_error", "history_cycle_unknown"),
+        ),
+        (
+            "shutdown",
+            "OK 36 · NG 0",
+            ("cycle_shutdown", "history_cycle_error", "history_cycle_unknown"),
+        ),
     ],
 )
 def test_business_counts_independent_errors_and_cycle_anomalies(
     qapp: QApplication,
     tmp_path: Path,
     scenario: str,
-    expected: str,
+    counts: str,
+    cycle_keys: tuple[str, ...],
 ) -> None:
     ensure_test_fonts()
     result = mixed_result()
-    if scenario != "mixed":
+    if scenario not in ("mixed", "failed"):
         occupancy = {
             "empty": OccupancyState.EMPTY,
             "unknown": OccupancyState.UNKNOWN,
@@ -963,12 +1013,22 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
                 *result.cameras[1:],
             ),
         )
-    elif scenario == "timed_out":
-        result = replace(result, cycle_status=CycleStatus.TIMED_OUT)
+    elif scenario in ("failed", "failed_accounted", "timed_out", "shutdown"):
+        status = {
+            "failed": CycleStatus.FAILED,
+            "failed_accounted": CycleStatus.FAILED,
+            "timed_out": CycleStatus.TIMED_OUT,
+            "shutdown": CycleStatus.SHUTDOWN,
+        }[scenario]
+        result = replace(
+            result,
+            cycle_status=status,
+            frame_failures_in_checks=scenario == "failed_accounted",
+        )
     history = ProductionHistory(tmp_path / "history.sqlite3")
     page = HistoryPage(history)
     apply_theme(page, "dark")
-    page.resize(1080, 1500)
+    page.resize(1080, 1920)
     page.show()
     try:
         assert history.offer(
@@ -983,7 +1043,6 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
         )
         page.activate()
         until(lambda: not page.busy)
-        assert content(page.cycles, 0, 5) == expected
         qapp.processEvents()
         result_item = page.cycles.item(0, 5)
         assert result_item is not None
@@ -991,20 +1050,6 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             page.cycles.viewport()
             .rect()
             .contains(page.cycles.visualItemRect(result_item))
-        )
-        # Exceptional warnings can elide at narrow widths; the full summary
-        # remains accessible, independently of the fixed-width count rendering.
-        assert (
-            result_item.toolTip()
-            == result_item.data(Qt.ItemDataRole.AccessibleTextRole)
-            == expected
-        )
-        counts = [
-            part for part in expected.split(" · ") if part.rpartition(" ")[2].isdigit()
-        ]
-        assert (
-            page.cycles.columnWidth(5)
-            >= page.cycles.fontMetrics().horizontalAdvance(" · ".join(counts)) + 12
         )
         stored = history.query().result(WAIT).records[0]
         assert (
@@ -1015,6 +1060,35 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             == 36
         )
         assert stored.technical == result.assessment.technical_status.name
+        assert stored.status == result.cycle_status.name
+        if scenario == "failed_accounted":
+            assert stored.technical == "SUCCESS"
+        for language in ("en", "zh"):
+            page.set_language(language)
+            result_item = page.cycles.item(0, 5)
+            assert result_item is not None
+            cycle_detail = " · ".join(text(key, language) for key in cycle_keys)
+            expected = counts
+            if "history_cycle_error" in cycle_keys:
+                expected += " · " + text("history_cycle_error", language)
+                assert all(c.technical != "ERROR" for c in stored.channels)
+            assert (
+                result_item.text()
+                == result_item.data(Qt.ItemDataRole.AccessibleTextRole)
+                == expected
+            )
+            assert page.cycles.columnWidth(5) >= (
+                page.cycles.fontMetrics().horizontalAdvance(expected) + 12
+            )
+            full = counts + ("\n" + cycle_detail if cycle_detail else "")
+            assert (
+                result_item.toolTip()
+                == result_item.data(Qt.ItemDataRole.AccessibleDescriptionRole)
+                == full
+            )
+            assert page.channel_detail.toPlainText() == cycle_detail
+            assert page.channel_detail.accessibleDescription() == cycle_detail
+            assert page.channel_detail.isVisible() == bool(cycle_detail)
         texts = [
             content(page.cycles, 0, 5),
             page.channels.toolTip(),
@@ -1052,22 +1126,17 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             )
             page.channels.setCurrentCell(0, 1)
             assert page.channel_detail.isHidden()
-        elif scenario in ("cycle_error", "timed_out"):
-            assert "周期 ERR" in content(page.cycles, 0, 5)
         if scenario == "cycle_error":
             page.channels.setCurrentCell(0, 0)
-            assert text("collection_short", "zh") in page.channel_detail.toPlainText()
+            cycle_line, camera_line = page.channel_detail.toPlainText().splitlines()
+            assert cycle_line == cycle_detail
+            assert camera_line.startswith(text("history_camera", "zh") + " · ")
+            assert text("collection_short", "zh") in camera_line
             item = page.channels.item(0, 0)
             assert (
                 item is not None
                 and "camera_collection_error" in stored.cameras[0].reasons
             )
-        if scenario in ("cycle_error", "timed_out"):
-            page.set_language("en")
-            assert content(page.cycles, 0, 5) == expected.replace(
-                "周期超时", text("cycle_timeout", "en")
-            ).replace("周期", "Cycle")
-            assert "Cycle" in content(page.cycles, 0, 5)
     finally:
         page.dispose()
         page.close()
@@ -1121,12 +1190,17 @@ def test_historical_camera_ng_keeps_its_stored_judgment(
     try:
         page.activate()
         until(lambda: not page.busy)
-        assert content(page.cycles, 0, 5) == "OK 36 · NG 0 · 周期 NG"
+        assert content(page.cycles, 0, 5) == "OK 36 · NG 0"
+        assert page.channel_detail.toPlainText() == "周期 NG"
         stored = cycle_record(page)
         assert stored.judgment == stored.cameras[0].judgment == "NG"
         assert stored.cameras[0].unassigned_labels == ("background",)
         page.set_language("en")
-        assert content(page.cycles, 0, 5).endswith("Cycle NG")
+        item = page.cycles.item(0, 5)
+        assert item is not None
+        assert item.text() == "OK 36 · NG 0"
+        assert item.toolTip() == "OK 36 · NG 0\nCycle NG"
+        assert page.channel_detail.toPlainText() == "Cycle NG"
     finally:
         page.dispose()
         page.close()

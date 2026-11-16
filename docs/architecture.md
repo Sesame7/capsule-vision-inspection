@@ -1110,10 +1110,18 @@ one compact summary of recorded defect labels and localized reasons. Repeated
 labels and matching reasons from both capsule views appear once, and the summary
 wraps when needed. The generic model-defect reason remains available for older
 details. Selecting a camera can show its recorded unassigned labels separately.
-List summaries always show OK then NG,
-including zeros. EMPTY, UNKNOWN and independent technical ERR follow only when nonzero. A channel may
-contribute to both a business count and ERR. Cycle-level anomalies absent from those counts
-remain explicit; routine COMPLETE/SUCCESS is implicit in the presentation only.
+
+Result summaries always show OK then NG, including zeros. EMPTY, UNKNOWN and
+technical ERR follow only when nonzero. A channel can contribute to both a
+business count and ERR. A recorded Cycle technical ERROR without a channel ERR
+count adds a compact Cycle ERR marker. Nonroutine completion and other Cycle
+outcomes absent from the counts appear in the selected record's details and full
+Result tooltip. The Cycle explanation has its own line above any selected camera
+or channel reasons. Full details remain available through tooltips and accessible
+descriptions. Routine COMPLETE/SUCCESS is implicit in the presentation only.
+The six columns use compact count spacing and reserve room for ordinary Cycle and
+Group identifiers. Longer Batch and Recipe names use most of the spare width.
+
 Query failures remain explicit. Audit and Alarm History indicate when a new query
 is pending, including when rows from the previous query remain visible. Independent
 storage and query failures retain their own details. For each visible Cycle the

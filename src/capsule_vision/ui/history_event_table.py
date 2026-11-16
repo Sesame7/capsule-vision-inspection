@@ -98,7 +98,10 @@ type RecordColumn = tuple[str, str, str, int]
 
 
 def fit_record_columns(
-    table: QTableWidget | QTreeWidget, columns: tuple[RecordColumn, ...]
+    table: QTableWidget | QTreeWidget,
+    columns: tuple[RecordColumn, ...],
+    *,
+    padding: int = 2 * Style.space,
 ) -> None:
     if not columns:
         return
@@ -109,7 +112,6 @@ def fit_record_columns(
     titles = header.fontMetrics()
     minimums: list[int] = []
     preferred: list[int] = []
-    padding = 2 * Style.space
     for key, short, common, _ in columns:
         # Budget representative localized headings independent of the active page.
         # Unusually long captions can elide without displacing business values.
