@@ -237,11 +237,18 @@ A new authentication attempt supersedes an older pending attempt without changin
 the active session or its revision. Ordinary authentication rejection (including
 wrong credentials, unknown names and disabled target accounts) and cancellation
 preserve the otherwise-valid current session. Logout, committed login, current-account
-role/enablement/password changes and Close invalidate pending authentication and
-uncommitted account-management requests from an older session decision. Cancellation
+role/enablement/password changes and accepted Application Close invalidate pending
+authentication and uncommitted account decisions from an older session revision. Cancellation
 and successful login are ordered by the service commit lock: canceling a specific
 pending attempt prevents its Last Login write, but cannot undo a login that already
-committed. Accepted worker requests still drain to terminal completion.
+committed.
+
+Close immediately publishes a new Guest revision and blocks new identity requests
+whether initiated directly or in the window. The account worker still settles
+accepted requests and records their outcomes. Already committed account changes
+keep their results. If resource cleanup fails before final identity shutdown,
+identity admission reopens for fresh authentication once Close reports failure.
+The previous session remains revoked.
 
 Corrupt, unsupported and unwritable stores are never silently replaced. Normal
 startup exposes the unavailable storage observation and `Startup.security_error`,

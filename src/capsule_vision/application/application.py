@@ -1262,11 +1262,12 @@ class ProductionApplication:
 
     def close(self) -> Future[None]:
         with self._condition:
-            if self._closed is not None:
+            if self._closed is not None and (self._closing or not self._closed.done()):
                 return self._closed
+            future = _promise(Future[None]())
             if self.identity is not None:
-                self.identity.cancel_startup_login()
-            self._closed = _promise(Future())
+                self.identity.fence_for_close(future)
+            self._closed = future
             self._closing = True
             self.cancel_process_application()
             if self.diagnostics:
@@ -1283,7 +1284,6 @@ class ProductionApplication:
             session = self._session
             preparation = self._preparation
             self._condition.notify_all()
-            future = self._closed
         if session is not None:
             session.request_stop()
         if preparation is not None:
@@ -1865,9 +1865,6 @@ class ProductionApplication:
                 )
                 if closing and not can_close:
                     self._closing = False
-                    self._closed = (
-                        None  # Permit an explicit later cleanup/close attempt.
-                    )
             if startup is not None and not startup.done():
                 if start_operation and self.identity:
                     self.identity.audit.record(
@@ -1907,7 +1904,7 @@ class ProductionApplication:
                         cleanup_error = exc
                         with self._condition:
                             self._fault("shutdown", exc)
-                            self._closing, self._closed = False, None
+                            self._closing = False
                     else:
                         with self._condition:
                             self._state = ApplicationState.CLOSED

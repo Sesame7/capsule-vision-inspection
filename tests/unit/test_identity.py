@@ -6,20 +6,28 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Generator
-from contextlib import contextmanager
+from concurrent.futures import Future
+from contextlib import closing, contextmanager
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from threading import Event
 
 import pytest
+from tests.support.application import FakeSession, close
 
+from capsule_vision.application import (
+    ApplicationError,
+    ApplicationState,
+    ProductionApplication,
+    passwords,
+)
 from capsule_vision.application import identity as identity_module
-from capsule_vision.application import passwords
 from capsule_vision.application._account_store import AccountStore
 from capsule_vision.application.account_maintenance import (
     initialize_administrator,
     recover_administrator,
 )
+from capsule_vision.application.audit import AuditOperation
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
     AccountConflictError,
@@ -31,6 +39,7 @@ from capsule_vision.application.identity_models import (
     Role,
     SecurityBusyError,
     SecurityStorageError,
+    SessionSnapshot,
     StaleSessionError,
     StorageState,
 )
@@ -347,6 +356,255 @@ def test_close_retains_actual_worker_and_rejects_admission(
         assert owner.join(WAIT)
     assert owner.storage_snapshot().state is StorageState.CLOSED
     recover_administrator(database, "Admin", SECRET)
+
+
+class HeldCloseApplication(ProductionApplication):
+    def __init__(self, owner: LocalIdentity) -> None:
+        self.cleanup_entered = Event()
+        self.release_cleanup = Event()
+        self.fail_cleanup = False
+        super().__init__(lambda _prepared, _generation: FakeSession(), identity=owner)
+
+    def _close_resources(self) -> None:
+        self.cleanup_entered.set()
+        assert self.release_cleanup.wait(WAIT)
+        if self.fail_cleanup:
+            raise ApplicationError("Controlled resource cleanup failure")
+        super()._close_resources()
+
+
+@contextmanager
+def held_close(owner: LocalIdentity) -> Generator[HeldCloseApplication]:
+    app = HeldCloseApplication(owner)
+    try:
+        yield app
+    finally:
+        app.fail_cleanup = False
+        app.release_cleanup.set()
+        close(app)
+
+
+@pytest.mark.parametrize("recover", [False, True], ids=["success", "recover-and-retry"])
+def test_application_close_fences_pending_login_and_queued_account_change(
+    database: Path, monkeypatch: pytest.MonkeyPatch, recover: bool
+) -> None:
+    entered, release = Event(), Event()
+
+    def held(password: str, verifier: passwords.PasswordVerifier) -> bool:
+        entered.set()
+        assert release.wait(WAIT)
+        return passwords.verify_password(password, verifier)
+
+    with opened(database) as owner, held_close(owner) as app:
+        actor = owner.login("Admin", SECRET).result(WAIT)
+        assert actor.account is not None
+        actor_id = actor.account.account_id
+        monkeypatch.setattr(identity_module, "verify_password", held)
+        try:
+            pending = owner.login("Admin", SECRET)
+            assert entered.wait(WAIT)
+            queued = owner.create_account(
+                "Uncommitted", Role.OPERATOR, SECRET, revision=actor.revision
+            )
+            app.fail_cleanup = recover
+            closed = app.close()
+            revoked = owner.snapshot()
+            assert revoked == SessionSnapshot(actor.revision + 1)
+            assert app.cleanup_entered.wait(WAIT)
+            assert not closed.done() and not closed.cancel()
+            assert app.close() is closed and owner.snapshot() == revoked
+            assert owner.storage_snapshot().state is StorageState.READY
+            assert not owner.join(0)
+            with pytest.raises(IdentityError, match="closing"):
+                owner.login("Admin", SECRET)
+            with pytest.raises(IdentityError, match="closing"):
+                owner.create_account("Rejected", Role.OPERATOR, SECRET)
+
+            fresh: Future[SessionSnapshot] | None = None
+            if recover:
+                offered: Future[Future[SessionSnapshot]] = Future()
+
+                def reauthenticate(_closed: Future[None]) -> None:
+                    try:
+                        offered.set_result(owner.login("Admin", SECRET))
+                    except IdentityError as exc:
+                        offered.set_exception(exc)
+
+                closed.add_done_callback(reauthenticate)
+                app.release_cleanup.set()
+                with pytest.raises(ApplicationError, match="Close failed"):
+                    closed.result(WAIT)
+                assert app.snapshot().state is ApplicationState.FAULT and not app.join(
+                    0
+                )
+                assert owner.snapshot() == revoked
+                assert owner.begin_startup_login() is None
+                fresh = offered.result(WAIT)
+
+            release.set()
+            with pytest.raises(StaleSessionError):
+                pending.result(WAIT)
+            with pytest.raises(StaleSessionError):
+                queued.result(WAIT)
+            if fresh is not None:
+                authenticated = fresh.result(WAIT)
+                assert authenticated.revision == revoked.revision + 1
+                assert authenticated.role is Role.ADMINISTRATOR
+                assert [a.username for a in owner.list_accounts().result(WAIT)] == [
+                    "Admin"
+                ]
+                app.fail_cleanup = False
+                retry = app.close()
+                assert retry is not closed
+                closed = retry
+            else:
+                assert not closed.done() and not owner.join(0)
+                app.release_cleanup.set()
+            closed.result(WAIT)
+            assert app.close() is closed
+            assert app.join(WAIT) and owner.join(0)
+            assert owner.snapshot().role is Role.GUEST
+        finally:
+            release.set()
+
+    with closing(sqlite3.connect(owner.audit.path)) as db:
+        assert set(
+            db.execute(
+                "SELECT action, actor_id, username, outcome, detail "
+                "FROM operations JOIN completions USING (id) WHERE outcome='stale'"
+            )
+        ) == {
+            ("session.login", actor_id, "Admin", "stale", "StaleSessionError"),
+            ("account.create", actor_id, "Admin", "stale", "StaleSessionError"),
+        }
+
+
+@pytest.mark.parametrize("operation", ["first-setup", "self-change", "rotation"])
+def test_application_close_fences_password_work_before_its_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    path = tmp_path / "security.sqlite3"
+    replacement = "uncommitted replacement credential"
+    if operation != "first-setup":
+        initialize_administrator(path, "Admin", SECRET)
+    entered, release = Event(), Event()
+
+    def held(password: str) -> passwords.PasswordVerifier:
+        entered.set()
+        assert release.wait(WAIT)
+        return passwords.hash_password(password)
+
+    with opened(path) as owner, held_close(owner) as app:
+        if operation == "rotation":
+            owner.login("Admin", SECRET).result(WAIT)
+            owner.create_account("Worker", Role.OPERATOR, SECRET).result(WAIT)
+            actor = owner.login("Worker", SECRET).result(WAIT)
+            assert actor.rotation_required
+        elif operation == "self-change":
+            actor = owner.login("Admin", SECRET).result(WAIT)
+        else:
+            actor = owner.snapshot()
+        monkeypatch.setattr(identity_module, "hash_password", held)
+        try:
+            if operation == "first-setup":
+                pending = owner.setup_administrator(
+                    "Admin", SECRET, revision=actor.revision
+                )
+            elif operation == "rotation":
+                pending = owner.rotate_password(replacement, actor.revision)
+            else:
+                pending = owner.change_password(
+                    SECRET, replacement, revision=actor.revision
+                )
+            assert entered.wait(WAIT)
+            closed = app.close()
+            assert app.cleanup_entered.wait(WAIT) and not closed.done()
+            assert owner.snapshot() == SessionSnapshot(actor.revision + 1)
+            with pytest.raises(IdentityError, match="closing"):
+                if operation == "first-setup":
+                    owner.setup_administrator("Admin", SECRET)
+                elif operation == "rotation":
+                    owner.rotate_password(replacement, actor.revision)
+                else:
+                    owner.change_password(SECRET, replacement)
+            release.set()
+            with pytest.raises(StaleSessionError):
+                pending.result(WAIT)
+            assert not closed.done()
+        finally:
+            release.set()
+
+    if actor.account is None:
+        assert not path.exists()
+    else:
+        with closing(AccountStore(path)) as store:
+            account, verifier = store.by_id(actor.account.account_id)
+            assert account.must_change_password == (operation == "rotation")
+            assert passwords.verify_password(SECRET, verifier)
+    with closing(sqlite3.connect(owner.audit.path)) as db:
+        assert db.execute(
+            "SELECT action, actor_id, outcome FROM operations "
+            "JOIN completions USING (id) WHERE outcome='stale'"
+        ).fetchall() == [
+            (
+                "account.create"
+                if actor.account is None
+                else "account.change_password",
+                actor.account.account_id if actor.account is not None else "guest",
+                "stale",
+            )
+        ]
+
+
+def test_application_close_drains_a_committed_account_change_with_original_actor(
+    database: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered, release = Event(), Event()
+    stopping = Event()
+    with opened(database) as owner, held_close(owner) as app:
+        actor = owner.login("Admin", SECRET).result(WAIT)
+        assert actor.account is not None
+        complete = owner.audit.complete
+        request_stop = owner.request_stop
+
+        def held(op: AuditOperation, outcome: str, detail: str = "") -> Future[None]:
+            if op.action == "account.create":
+                entered.set()
+                assert release.wait(WAIT)
+            return complete(op, outcome, detail)
+
+        def stop_identity() -> None:
+            request_stop()
+            stopping.set()
+
+        monkeypatch.setattr(owner.audit, "complete", held)
+        monkeypatch.setattr(owner, "request_stop", stop_identity)
+        try:
+            accepted = owner.create_account("Committed", Role.OPERATOR, SECRET)
+            assert entered.wait(WAIT)
+            closed = app.close()
+            assert app.cleanup_entered.wait(WAIT)
+            assert owner.snapshot() == SessionSnapshot(actor.revision + 1)
+            assert not stopping.is_set()
+            app.release_cleanup.set()
+            assert stopping.wait(WAIT)
+            assert not accepted.done() and not closed.done() and not owner.join(0)
+            release.set()
+            account = accepted.result(WAIT)
+            closed.result(WAIT)
+        finally:
+            release.set()
+
+    with closing(AccountStore(database)) as store:
+        assert store.by_id(account.account_id)[0] == account
+    with closing(sqlite3.connect(owner.audit.path)) as db:
+        assert db.execute(
+            "SELECT actor_id, username, target, outcome FROM operations "
+            "JOIN completions USING (id) WHERE action='account.create' AND target=?",
+            (account.account_id,),
+        ).fetchall() == [
+            (actor.account.account_id, "Admin", account.account_id, "success")
+        ]
 
 
 def test_authentication_queue_is_bounded_and_logout_invalidates_all_pending(

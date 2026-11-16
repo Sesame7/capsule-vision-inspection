@@ -1819,9 +1819,15 @@ def test_canceled_connection_unsafe_cleanup_retains_owner_until_explicit_recover
         assert passive.cleanup_calls == 1  # Cancellation did not retry native cleanup.
         with pytest.raises(ApplicationStateError):
             app.start()
+        authenticated = app.identity.snapshot()
         with pytest.raises(ApplicationError, match="Close failed"):
             app.close().result(WAIT)
         assert not app.join(0) and app.source_snapshot().thread_alive
+        guest = app.identity.snapshot()
+        assert guest.role is Role.GUEST and guest.revision == authenticated.revision + 1
+        with pytest.raises(AuthorizationError):
+            app.disconnect_source()
+        app.identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
         passive.unsafe = False
         app.disconnect_source()
         assert not app.source_snapshot().thread_alive

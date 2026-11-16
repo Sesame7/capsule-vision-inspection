@@ -83,7 +83,8 @@ class LocalIdentity:
         self._lease = SecurityLease(path)
         self._lock = Lock()
         self._queue: Queue[Callable[[], None] | None] = Queue(16)
-        self._accepting = True
+        self._stop_requested = False
+        self._close_request: Future[None] | None = None
         self._session = SessionSnapshot()
         self._authentication: Future[SessionSnapshot] | None = None
         self._startup_login: Future[SessionSnapshot] | None = None
@@ -416,10 +417,26 @@ class LocalIdentity:
             self._authentication = None
             return True
 
-    def cancel_startup_login(self) -> None:
-        attempt = self._startup_login
-        if attempt is not None:
-            self.cancel_login(attempt)
+    @property
+    def _accepting(self) -> bool:
+        # Called under the session lock. Close completion reopens admission
+        # only if cleanup failed before the owner was asked to stop.
+        return not self._stop_requested and (
+            self._close_request is None or self._close_request.done()
+        )
+
+    def fence_for_close(self, completion: Future[None]) -> None:
+        """Revoke session decisions at Close admission while the worker drains."""
+        with self._lock:
+            if not self._accepting:
+                return
+            self._close_request = completion
+            if (
+                self._authentication is not None
+                and self._authentication is self._startup_login
+            ):
+                self._login_cancelled.set()
+            self._publish(None)
 
     def _admin[T](self, operation: Callable[[AccountStore], T]) -> Future[T]:
         with self._lock:
@@ -723,10 +740,12 @@ class LocalIdentity:
 
     def request_stop(self) -> None:
         with self._lock:
-            if not self._accepting:
+            if self._stop_requested:
                 return
-            self._accepting = False
-            self._publish(None)
+            if self._accepting:
+                self._publish(None)
+            self._stop_requested = True
+            self._close_request = None
             try:
                 self._queue.put_nowait(None)
             except Full:
@@ -776,7 +795,7 @@ class LocalIdentity:
                 if work is not None:
                     work()
                 with self._lock:
-                    if not self._accepting and self._queue.empty():
+                    if self._stop_requested and self._queue.empty():
                         break
         finally:
             try:

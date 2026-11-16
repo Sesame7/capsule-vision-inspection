@@ -1154,6 +1154,45 @@ def test_close_drains_pending_account_creation_before_releasing_storage(
         assert reopened.join(5)
 
 
+def test_failed_close_restores_login_controls_for_fresh_authentication(
+    identity_screen: tuple[MainWindow, LocalIdentity], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, owner = identity_screen
+    app = window.bridge.application
+    join = FakeSession.join
+    unsafe = True
+
+    def join_session(session: FakeSession, timeout: float | None = None) -> bool:
+        return not unsafe and join(session, timeout)
+
+    monkeypatch.setattr(FakeSession, "join", join_session)
+    try:
+        login(window.identity_controls)
+        previous = owner.snapshot()
+        assert previous.role is Role.ADMINISTRATOR
+        completed(app.start())
+        window.close()
+        until(
+            lambda: (
+                window.snapshot.state is ApplicationState.FAULT
+                and not window.bridge.closing
+                and window.navbar.user.isEnabled()
+            )
+        )
+        guest = owner.snapshot()
+        assert guest.role is Role.GUEST and guest.revision > previous.revision
+        assert window.navbar.user.text() == "Guest"
+        assert window.isVisible() and window.snapshot.runtime_owned
+        login(window.identity_controls)
+        renewed = owner.snapshot()
+        assert renewed.role is Role.ADMINISTRATOR and renewed.revision > guest.revision
+    finally:
+        unsafe = False
+    window.close()
+    until(lambda: window.bridge.closed and window.communication.closed)
+    assert owner.join(0) and owner.snapshot().role is Role.GUEST
+
+
 def test_logout_and_administrator_protection_keep_an_existing_synthetic_session_running(
     identity_screen: tuple[MainWindow, LocalIdentity],
 ) -> None:

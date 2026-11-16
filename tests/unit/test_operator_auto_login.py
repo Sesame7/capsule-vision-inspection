@@ -23,6 +23,7 @@ from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
     Account,
     AuthorizationError,
+    IdentityError,
     Role,
     SecurityStorageError,
     SessionSnapshot,
@@ -306,8 +307,13 @@ def test_pending_startup_checks_newer_session_or_storage_decision_before_commit(
         elif decision == "logout":
             guest = owner.logout()
         elif decision == "close":
-            startup.application.close()
+            closed = startup.application.close()
+            guest = SessionSnapshot(revision=1)
+            assert owner.snapshot() == guest
             assert teardown.wait(WAIT)  # Identity shutdown has not been reached.
+            assert not closed.done() and not owner.join(0)
+            with pytest.raises(IdentityError, match="closing"):
+                owner.login("TestAdmin", TEST_PASSWORD)
         else:
             with closing(sqlite3.connect(data.security)) as db, db:
                 db.execute(
@@ -331,6 +337,12 @@ def test_pending_startup_checks_newer_session_or_storage_decision_before_commit(
         release_read.set()
         release_teardown.set()
         close(startup)
+    if decision == "close":
+        with closing(sqlite3.connect(data.audit)) as db:
+            assert db.execute(
+                "SELECT actor_id, target, outcome FROM operations "
+                "JOIN completions USING (id) WHERE action='session.auto_login'"
+            ).fetchall() == [("system", operator.account_id, "cancelled")]
 
 
 def test_last_login_write_failure_does_not_create_operator_session(

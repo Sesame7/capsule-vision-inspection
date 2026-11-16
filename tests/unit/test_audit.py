@@ -943,9 +943,16 @@ def test_start_audit_waits_for_cleanup_and_checks_actual_outcome(
         if problem == "terminal":
             session.failure = RuntimeError("Genuine failure during shutdown")
         assert not start.done()
-        assert not identity.audit_page(AuditQuery(action="production.start")).result(
-            WAIT
-        )
+        query = AuditQuery(action="production.start")
+        if ending == "close":
+            with pytest.raises(StaleSessionError):
+                identity.audit_page(query)
+            with closing(sqlite3.connect(identity.audit.path)) as db:
+                assert not db.execute(
+                    "SELECT 1 FROM operations WHERE action='production.start'"
+                ).fetchone()
+        else:
+            assert not identity.audit_page(query).result(WAIT)
         release.set()
         with pytest.raises(
             ApplicationError, match="Startup did not activate candidate"

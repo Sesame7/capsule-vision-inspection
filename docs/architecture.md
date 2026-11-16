@@ -216,15 +216,25 @@ records its provenance through the existing audit writer when available and warn
 on audit loss. See [local accounts](configuration.md#local-accounts).
 
 Startup acquires identity ownership before creating application resources and
-passes that owner into the existing Application lifetime. Close drains it and
-joins the actual worker after the existing source/History cleanup. Missing account
-storage remains Guest without creating a database. Unavailable storage remains
-explicit. After restoring the saved configuration, normal startup queues one
+passes that owner into the existing Application lifetime. Missing account storage
+remains Guest without creating a database. Unavailable storage remains explicit.
+After restoring the saved configuration, normal startup queues one
 auto-login attempt on the same identity worker. The attempt shares manual
 authentication's revision and supersession checks. The store rechecks the saved
 ID and eligible Operator inside the Last Login transaction. Publication creates
-the ordinary Operator revision. Application Close fences the startup attempt at
-admission and retains the existing identity worker drain during cleanup.
+the ordinary Operator revision.
+
+At Close admission, Application advances the session to a new Guest revision and
+blocks new identity admissions under the same lock that orders account commits.
+Pending authentication, first setup, password and account-management decisions
+lose their authorization to commit. Committed transactions retain their results
+and audit attribution. The identity worker continues to settle requests during
+resource cleanup. After application resources settle, final identity shutdown
+drains the worker and Audit and waits for actual termination. A recoverable
+resource cleanup failure before final identity shutdown reopens admission for
+fresh authentication after the Close result reports failure. The session stays
+Guest until a new login succeeds.
+
 The window presents Login, Logout, Switch User, Change Password and
 Administrator account management through this same service. The forced-change
 form is window-modal. Credential forms clear secrets on submission or dismissal.
@@ -797,8 +807,8 @@ publication: once the connection is valid, Stop retains it even if later warm-up
 or activation fails. Basler session shutdown detaches its callbacks and drains
 reports but keeps the SDK connection grabbing/discarding. Vision Disconnect is
 available only with inspection stopped; it releases cameras and joins their actual owner.
-Application Close first settles inspection, then disconnects application-owned
-sources on the lifecycle thread. Partial connection failures remain source FAULT
+After Close admission, the lifecycle thread settles inspection, then disconnects
+application-owned sources. Partial connection failures remain source FAULT
 with explicit ownership/error observations; a failed application Close remains
 application FAULT. Unresolved SDK cleanup retains its
 original owner for an explicit Disconnect/Close retry. There is no automatic
