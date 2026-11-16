@@ -499,30 +499,41 @@ def setup(screen: Screen, *, pixel_scale: int = 1) -> RecipeTuning:
     return preview
 
 
-def test_length_controls_and_complete_crossing_axis(configured_screen: Screen) -> None:
+def test_length_controls_and_complete_vertical_span_match_production(
+    configured_screen: Screen,
+) -> None:
     window, session, _ = configured_screen
     preview = setup(configured_screen)
     window.set_language("en")
     image = np.zeros((120, 80, 3), dtype=np.uint8)
-    image[22:62, 20:30] = (0, 180, 180)
+    for y in range(22, 62):
+        x = 20 + (y - 22) // 8
+        image[y, x : x + 18] = (0, 180, 180)
+    frame = Frame(
+        FrameId(CycleId(2), CameraId("CAM1"), 2), 2, np.concatenate([image] * 6, axis=1)
+    )
+    before = frame.image.copy()
     window.bridge.frames.publish(
-        Frame(
-            FrameId(CycleId(2), CameraId("CAM1"), 2),
-            2,
-            np.concatenate([image] * 6, axis=1),
-        ),
+        frame,
         generation=0,
     )
     preview.refresh_reference()
     until(lambda: not preview.busy)
     preview.select_view(0, 0)
     assert set(preview.spins) == {"target_length", "length_tolerance"}
-    assert "Length 39.00" in preview.selection_detail.text()
+    assert "Length 39 [29, 29] px" in preview.selection_detail.text()
     measured = preview.measurements[0].measured
     assert measured is not None and measured.views[0].body is not None
     assert measured.views[1].body is None
     body = measured.views[0].body
-    assert max(y for _, y in body.endpoints) == 61
+    assert body.endpoints == ((30.5, 22), (30.5, 61))
+    production = ConfiguredProductionPipeline(
+        session.resolve(session.draft.to_recipe())
+    ).inspect_frame(frame, image_result)
+    assert production.channels[0].checks[0] == judge_capsule(
+        measured, session.draft.capsule
+    )
+    np.testing.assert_array_equal(frame.image, before)
     transform = preview.canvas.model.transform(
         preview.canvas.width(), preview.canvas.height()
     )
@@ -530,8 +541,8 @@ def test_length_controls_and_complete_crossing_axis(configured_screen: Screen) -
     pixels = preview.canvas.grab().toImage()
     for x, y in body.endpoints:
         point = QPoint(
-            round(transform.x + x * transform.scale),
-            round(transform.y + y * transform.scale),
+            round(transform.x + (x + 0.5) * transform.scale),
+            round(transform.y + (y + 0.5) * transform.scale),
         )
         assert pixels.pixelColor(point).name() == "#ffff00"
     original = session.draft.capsule
@@ -793,7 +804,7 @@ def test_manual_hue_permissions_disabled_color_and_close(
 
 
 @pytest.mark.parametrize("partial", (False, True))
-def test_length_sample_uses_cached_valid_axes_and_changes_only_target(
+def test_length_sample_uses_cached_valid_spans_and_changes_only_target(
     configured_screen: Screen, monkeypatch: pytest.MonkeyPatch, partial: bool
 ) -> None:
     import capsule_vision.ui.recipe_tuning as module
@@ -805,30 +816,20 @@ def test_length_sample_uses_cached_valid_axes_and_changes_only_target(
     )
     preview.show_settings()
     if partial:
-        row = preview.measurements[0]
-        assert row.measured is not None
-        upper, lower = row.measured.views
-        assert upper.body is not None and lower.body is not None
-        first = replace(
-            row.measured,
-            views=(
-                replace(upper, body=replace(upper.body, length=291.25)),
-                replace(lower, body=replace(lower.body, length=292.75)),
-            ),
+        # Three channels supply 27, 30, 31 and 40 px. Two views are missing.
+        image = np.zeros((120, 480, 3), dtype=np.uint8)
+        for x, y, length in ((20, 10, 27), (20, 70, 30), (100, 70, 31), (180, 10, 40)):
+            image[y : y + length + 1, x : x + 20] = (0, 180, 180)
+        window.bridge.frames.publish(
+            Frame(FrameId(CycleId(2), CameraId("CAM1"), 2), 2, image), generation=0
         )
-        second = replace(
-            row.measured,
-            views=(
-                replace(upper, body=None, invalid_reason="missing_body"),
-                replace(lower, body=replace(lower.body, length=310.0)),
-            ),
-        )
+        preview.refresh_reference()
+        until(lambda: not preview.busy)
         preview.measurements = (
-            replace(row, measured=first),
-            replace(preview.measurements[1], measured=second),
+            *preview.measurements[:3],
             *(
                 replace(r, measured=None, error="unavailable")
-                for r in preview.measurements[2:]
+                for r in preview.measurements[3:]
             ),
         )
     frame, evidence = preview.frame, preview.measurements
@@ -840,7 +841,7 @@ def test_length_sample_uses_cached_valid_axes_and_changes_only_target(
 
     monkeypatch.setattr(module, "measure_reference", forbidden)
     preview.length_sample.click()
-    expected = 293 if partial else 29  # Major-axis scalars, not 80×120 ROIs.
+    expected = 30 if partial else 29  # The partial median of 30.5 rounds to even.
     assert session.draft.capsule == replace(
         original, size=replace(original.size, target_length=expected)
     )
@@ -1241,7 +1242,7 @@ def test_view_judgment_is_separate_from_other_view_and_check(
     preview.spins["target_length"].setValue(21)
     assert (
         "Size NG" in preview.selection_detail.text()
-        and "Length 29.00 [21, 21]" in preview.selection_detail.text()
+        and "Length 29 [21, 21]" in preview.selection_detail.text()
     )
     window.set_language("zh")
     assert preview.canvas.toolTip() == (
@@ -1712,7 +1713,7 @@ def _assert_preview_zoom_selection(
             assert preview.canvas.selection == (index, view_index)
             detail = preview.selection_detail.text()
             assert f"CH{row.slot.channel_id:02d}" in detail and view.name in detail
-            assert "Length 89.00 [29, 29]" in detail
+            assert "Length 89 [29, 29]" in detail
             assert "Size NG" in detail and "Occupancy" not in detail
             count += 1
     assert count > 0

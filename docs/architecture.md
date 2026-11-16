@@ -736,14 +736,17 @@ component's full area rejects that view. External Channel ROI edge contact is
 truncated; internal-divider contact alone is valid. Missing, competing, ambiguous,
 externally truncated and degenerate geometry remain explicit NG evidence.
 
-Size reuses selected component labels to fit the minimum-area rotated rectangle
-from transient external boundary vertices. Its longer side is Length, spanning
-pixel centers (30 occupied axis-aligned pixels span 29 px). Scalar bounds, major
-and minor lengths and original-image axis endpoints survive measurement; contours
-and label arrays do not. Production, frozen Recipe tuning and the offline evaluator
-use this same implementation. Thresholds do not affect measurement validity.
-Each logical view independently requires `abs(length - target_length) <=
-length_tolerance`. The other view never receives a duplicate or passing placeholder.
+Length is the selected component's vertical pixel-center span in the original
+image. A bounding height of 30 pixels gives 29 px between the top and bottom
+pixel centers. The complete component bounds are retained for the owning view.
+Tune and the offline evaluator draw the endpoints at those Y coordinates and
+the horizontal midpoint of the bounds. Component statistics also reject
+degenerate geometry, including straight single-pixel diagonals.
+
+Production, frozen Recipe tuning and the offline evaluator use the same
+measurement. Each logical view supplies its own valid body evidence. The Size
+judge applies the saved Recipe values using
+`abs(length - target_length) <= length_tolerance` for each view.
 
 Color retains independently cropped upper/lower views, usable saturated/bright
 HSV pixels and circular Hue statistics. Only requested capabilities execute;

@@ -120,8 +120,8 @@ def _capsule(value: object) -> CapsuleSettings:
     }.intersection(cast(dict[object, object], raw_size)):
         raise ValueError(
             "Legacy Size W/H fields are unsupported. Explicitly replace them with "
-            "target_length and length_tolerance after validating pixel-center "
-            "major-axis lengths; existing targets cannot be converted automatically."
+            "target_length and length_tolerance after validating vertical "
+            "pixel-center lengths; old W/H targets cannot be converted automatically."
         )
     size = _object(
         row.get("size", {}),

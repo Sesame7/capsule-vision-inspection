@@ -3,7 +3,6 @@
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass, replace
-from math import isfinite
 from pathlib import Path
 from statistics import median
 from threading import Thread
@@ -264,8 +263,8 @@ class PreviewCanvas(RoiCanvas):
                 painter.drawRect(body)
                 points = tuple(
                     QPointF(
-                        transform.x + x * transform.scale,
-                        transform.y + y * transform.scale,
+                        transform.x + (x + 0.5) * transform.scale,
+                        transform.y + (y + 0.5) * transform.scale,
                     )
                     for x, y in view.body.endpoints
                 )
@@ -788,7 +787,7 @@ class RecipeTuning(QWidget):
         header = f"{self.camera.camera_id} · CH{slot.channel_id:02d} · {caption} · {check_name} {status}"
         if mode == "size":
             body = view.body if view is not None and enabled and available else None
-            actual = f"{body.length:.2f}" if body is not None else "—"
+            actual = str(body.length) if body is not None else "—"
             s = settings.size
             values = f"{text('length', self.language)} {actual} [{s.target_length - s.length_tolerance}, {s.target_length + s.length_tolerance}] px"
         else:
@@ -853,10 +852,7 @@ class RecipeTuning(QWidget):
             for row in self.measurements
             if not row.error and row.measured and row.measured.size_measured
             for view in row.measured.views
-            if view.invalid_reason is None
-            and view.body is not None
-            and isfinite(view.body.length)
-            and view.body.length > 0
+            if view.invalid_reason is None and view.body is not None
         ]
         if not lengths:
             self.show_message(text("length_sample_missing", self.language))

@@ -1,6 +1,5 @@
 """Black-background two-view capsule screening; calibration remains external."""
 
-import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -69,12 +68,19 @@ class CapsuleSettings:
 
 @dataclass(frozen=True, slots=True)
 class BodyMeasurement:
-    """Size geometry in original full-image coordinates."""
+    """Selected body's vertical Size geometry in original image coordinates."""
 
     bounding_rect: BoundingRect
-    length: float
-    minor_length: float
-    endpoints: tuple[tuple[float, float], tuple[float, float]]
+
+    @property
+    def length(self) -> int:
+        return self.bounding_rect.height - 1
+
+    @property
+    def endpoints(self) -> tuple[tuple[float, int], tuple[float, int]]:
+        rect = self.bounding_rect
+        x = rect.x + (rect.width - 1) / 2
+        return (x, rect.y), (x, rect.y + self.length)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,7 +204,6 @@ def _masked_pixel_hue(
 
 def _body(
     candidates: list[int],
-    labels: NDArray[np.int32],
     stats: NDArray[np.int32],
     roi: BoundingRect,
 ) -> tuple[BodyMeasurement | None, str | None]:
@@ -215,27 +220,11 @@ def _body(
     x, y, width, height = (int(v) for v in stats[dominant, :4])
     if x == 0 or y == 0 or x + width == roi.width or y + height == roi.height:
         return None, "truncated_body"
-    if min(width, height) < 3:
+    # An 8-connected component with equal area, width and height is a straight
+    # one-pixel diagonal. Axis-aligned lines fail the minimum dimension check.
+    if min(width, height) < 3 or area == width == height:
         return None, "invalid_geometry"
-    # Reuse the full-ROI labels. Only boundary vertices enter minAreaRect; no
-    # per-pixel Python coordinates or visualization contours survive this call.
-    selected = cv2.inRange(labels[y : y + height, x : x + width], dominant, dominant)
-    contours, _ = cv2.findContours(selected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    points = contours[0] if len(contours) == 1 else np.concatenate(contours)
-    (cx, cy), (w, h), degrees = cv2.minAreaRect(points)
-    if min(w, h) <= 1e-6:
-        return None, "invalid_geometry"
-    angle = math.radians(degrees if w >= h else degrees + 90)
-    length = max(w, h)
-    dx, dy = math.cos(angle) * length / 2, math.sin(angle) * length / 2
-    cx, cy = cx + roi.x + x, cy + roi.y + y
-    first, second = sorted(((cx - dx, cy - dy), (cx + dx, cy + dy)))
-    return BodyMeasurement(
-        BoundingRect(roi.x + x, roi.y + y, width, height),
-        length,
-        min(w, h),
-        (first, second),
-    ), None
+    return BodyMeasurement(BoundingRect(roi.x + x, roi.y + y, width, height)), None
 
 
 def _geometry(
@@ -288,9 +277,7 @@ def _geometry(
             continue
         candidates[owner].append(i)
     return tuple(
-        (None, "ambiguous_body")
-        if ambiguous[index]
-        else _body(rows, labels, stats, roi)
+        (None, "ambiguous_body") if ambiguous[index] else _body(rows, stats, roi)
         for index, rows in enumerate(candidates)
     )
 
@@ -391,10 +378,11 @@ def judge_capsule(
                 )
             else:
                 rect = body.bounding_rect
+                length = body.length
                 values.append(
-                    Measurement(f"capsule.{view.name}.length", body.length, "px")
+                    Measurement(f"capsule.{view.name}.length", float(length), "px")
                 )
-                if abs(body.length - size.target_length) > size.length_tolerance:
+                if abs(length - size.target_length) > size.length_tolerance:
                     reasons.append(
                         Reason(
                             source,

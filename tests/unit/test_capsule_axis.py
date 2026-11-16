@@ -1,7 +1,6 @@
 """Whole-component Size ownership and length-only judgments, without hardware."""
 
 import json
-import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -38,9 +37,7 @@ def test_complete_crossing_body_has_exactly_one_owner(
     assert owner.body is not None and owner.invalid_reason is None
     assert owner.body.bounding_rect == BoundingRect(25, start, 10, 40)
     assert owner.body.length == 39
-    assert math.dist(*owner.body.endpoints) == pytest.approx(39)
-    assert min(p[1] for p in owner.body.endpoints) == start
-    assert max(p[1] for p in owner.body.endpoints) == start + 39
+    assert owner.body.endpoints == ((29.5, start), (29.5, start + 39))
     assert other.body is None and other.invalid_reason == "missing_body"
     # The other logical view still independently rejects missing required Size.
     result = judge_capsule(measured, SIZE)
@@ -115,6 +112,74 @@ def test_external_bottom_is_still_truncated() -> None:
     assert view.body is None and view.invalid_reason == "truncated_body"
 
 
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_diagonal_line_is_degenerate_and_noncollinear_body_is_valid(
+    direction: int,
+) -> None:
+    image = np.zeros((140, 120, 3), dtype=np.uint8)
+    cv2.line(image, (50, 20), (50 + 29 * direction, 49), (21, 0, 0), 1)
+    line = measure_capsule(image, ROI, SIZE).views[0]
+    assert line.body is None and line.invalid_reason == "invalid_geometry"
+    image[30, 51 + 10 * direction] = (21, 0, 0)
+    view = measure_capsule(image, ROI, SIZE).views[0]
+    assert view.invalid_reason is None and view.body is not None
+    assert view.body.bounding_rect == BoundingRect(
+        min(50, 50 + 29 * direction), 20, 30, 30
+    )
+    assert view.body.length == 29
+
+
+@pytest.mark.parametrize(
+    "target, tolerance, expected",
+    [
+        (29, 0, ProductJudgment.OK),
+        (28, 1, ProductJudgment.OK),
+        (30, 1, ProductJudgment.OK),
+        (31, 1, ProductJudgment.NG),
+    ],
+)
+def test_saved_size_values_apply_unchanged_to_tilted_bodies(
+    tmp_path: Path, target: int, tolerance: int, expected: ProductJudgment
+) -> None:
+    path = tmp_path / "capsule.json"
+    original = json.dumps(
+        {
+            "display_name": "Capsule",
+            "capsule": {
+                "size": {
+                    "enabled": True,
+                    "target_length": target,
+                    "length_tolerance": tolerance,
+                }
+            },
+        }
+    ).encode()
+    path.write_bytes(original)
+    settings = load_recipe(path).capsule
+    assert settings.size == SizeSettings(True, target, tolerance)
+    image = np.zeros((140, 120, 3), dtype=np.uint8)
+    for y in (15, 75):
+        points = np.array(
+            [(28, y), (37, y), (45, y + 29), (36, y + 29)], dtype=np.int32
+        )
+        cv2.fillConvexPoly(image, points, (21, 0, 0))
+    before = image.copy()
+    measured = measure_capsule(image, ROI, settings)
+    for view, y in zip(measured.views, (15, 75), strict=True):
+        assert view.body is not None and view.invalid_reason is None
+        assert view.body.bounding_rect == BoundingRect(28, y, 18, 30)
+        assert view.body.endpoints == ((36.5, y), (36.5, y + 29))
+        assert view.body.length == 29
+    result = judge_capsule(measured, settings)
+    assert result.assessment.judgment is expected
+    assert [(m.name, m.value, m.unit) for m in result.measurements] == [
+        ("capsule.upper.length", 29.0, "px"),
+        ("capsule.lower.length", 29.0, "px"),
+    ]
+    assert path.read_bytes() == original
+    np.testing.assert_array_equal(image, before)
+
+
 def test_one_segmentation_color_only_skips_size(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -133,6 +198,11 @@ def test_one_segmentation_color_only_skips_size(
         calls += 1
         return original(foreground, connectivity=connectivity)
 
+    def forbidden(*args: object) -> None:
+        pytest.fail("Size must use component statistics for body geometry")
+
+    monkeypatch.setattr(cv2, "findContours", forbidden)
+    monkeypatch.setattr(cv2, "minAreaRect", forbidden)
     monkeypatch.setattr(cv2, "connectedComponentsWithStats", observed)
     roi = BoundingRect(0, 0, 100, 120)
     color = CapsuleSettings(color=ColorSettings(True, 30, 0))
@@ -141,6 +211,9 @@ def test_one_segmentation_color_only_skips_size(
     both = measure_capsule(image, roi, replace(color, size=SIZE.size))
     assert calls == 1
     assert [v.color for v in both.views] == [v.color for v in only.views]
+    size_only = measure_capsule(image, roi, SIZE)
+    assert calls == 2
+    assert [v.body for v in both.views] == [v.body for v in size_only.views]
 
 
 @pytest.mark.parametrize(

@@ -961,11 +961,13 @@ skip. Occupancy is always on and has no persisted switch/threshold fields. Recip
 ROI, old presence/blob and old per-check color fields are rejected. There is no
 automatic Recipe migration or threshold fitting.
 
-Size compares the longer side of the selected body's minimum-area rotated
-rectangle with Target Length, inclusively within Length tolerance. Length spans
-pixel centers, not occupied-pixel counts. Both logical views independently require
-valid evidence. Body assignment uses the complete Channel ROI, allowing a small
-cross-divider tail while conservatively rejecting ambiguous ownership; see the
+Size measures the selected body's vertical span between its top and bottom
+pixel centers in the original image, equal to its bounding height minus one.
+Each logical view needs valid evidence and compares that span with Target Length,
+inclusively within Length tolerance. Existing saved `target_length` and
+`length_tolerance` values apply directly. Body
+assignment uses the complete Channel ROI, allowing a small cross-divider tail and
+rejecting ambiguous ownership. See the
 [inspection contract](architecture.md#inspection-and-results).
 Legacy `target_width`, `target_height`, `width_tolerance` and `height_tolerance`
 are rejected with explicit guidance, including on disabled Size definitions.
@@ -1288,7 +1290,7 @@ and cached-evidence preview. They leave tolerance, enablement and Size settings
 unchanged and never Save or activate the Recipe. Programmatic refresh, language
 changes and mode switches do not create draft edits or repeat measurement.
 
-Sample Length uses the median of finite positive major-axis lengths from valid
+Sample Length uses the median of vertical pixel-center spans from valid
 measured views of the current frozen reference, rounded to the nearest integer
 (ties to even), with a minimum target of one pixel. Failed rows and invalid or
 missing views contribute no sample; a valid view does not require its companion
@@ -1318,18 +1320,18 @@ Image tools reuse Vision's icons, whole-group wrapping, Fit and 1:1; Recipe
 management icons retain localized names/tooltips and the existing confirmations.
 
 Click an upper/lower view in the current image to select its camera, ChannelId
-and view. A single detail area beside the parameters shows actual major-axis Length with
-configured limits, or actual Hue with target/circular tolerance. View status uses
-the existing Size/Color judge's reasons for that capability and view; it is not
-the combined channel result or production acceptance. Image overlays keep compact
-selected Size or Color check judgments/body outlines and a selection highlight, without twelve repeated
-Length captions. Complete major-axis lines and endpoints use original image
-coordinates and remain visible across the logical divider; selection retains the
-owning view identity. The control row reserves enough height for both modes'
-current localized measurement explanations, keeping the shared viewport in place
-when switching Size/Color. Threshold edits rejudge cached evidence; mode switches retain the
-selection. New images/camera changes clear it; stale asynchronous evidence is
-never displayed as the selected view's measurements.
+and view. A single detail area beside the parameters shows the measured vertical
+Length in whole pixels with configured limits, or actual Hue with target/circular
+tolerance. View status uses the existing judge's reasons for the selected check
+and view. It provides advisory tuning evidence. Image overlays show compact check
+judgments, body outlines and a selection highlight without repeated Length
+captions. The vertical measurement line joins the top and bottom pixel centers at
+the body's horizontal midpoint. It remains visible across the logical divider
+while retaining the owning view identity. The control row reserves height for both
+modes' localized explanations so the shared viewport remains in place when
+switching Size/Color. Threshold edits rejudge cached evidence. Mode switches
+retain the selection, while new images or camera changes clear it. Details follow
+the selected view of the current frozen reference.
 Disabled checks, unavailable/pending evidence, execution ERROR and content NG are
 distinct; missing scalars display `—`, never ROI-derived measurements. Tune does
 not collect Occupancy evidence or infer EMPTY from a missing body. Routine

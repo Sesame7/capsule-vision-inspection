@@ -1,9 +1,8 @@
-"""Offline Size-body long-axis evaluation in original image coordinates."""
+"""Offline capsule Size evaluation using vertical pixel-center spans."""
 
 import argparse
 import csv
 import hashlib
-import math
 import platform
 import sys
 from collections import Counter
@@ -20,30 +19,20 @@ from visualize_inference import positive_int, save_png, write_json
 from capsule_vision.application.folder_replay import folder_images
 from capsule_vision.configuration import load_machine_layout
 from capsule_vision.inference import BoundingRect
-from capsule_vision.inference.models import Contour, Point
+from capsule_vision.inference.models import Point
 from capsule_vision.inspection import CameraId
 from capsule_vision.inspection.production import CameraLayout, ChannelId
 from capsule_vision.inspection.production.capsule import (
-    BodyMeasurement,
     CapsuleSettings,
     SizeSettings,
     ViewMeasurement,
     measure_capsule,
 )
 
-OUTPUT_ROOT = Path(__file__).resolve().parents[1] / "outputs" / "LAX-2"
+OUTPUT_ROOT = Path(__file__).resolve().parents[1] / "outputs" / "vertical-size"
 SIZE_ONLY = CapsuleSettings(size=SizeSettings(enabled=True))
-AXIS_COLOR = (255, 80, 255)
+LENGTH_COLOR = (255, 80, 255)
 ENDPOINT_COLOR = (0, 255, 255)
-
-
-@dataclass(frozen=True, slots=True)
-class LongAxis:
-    major: float
-    minor: float
-    endpoints: tuple[Point, Point]
-    corners: tuple[Point, ...]
-    orientation_degrees: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,55 +40,7 @@ class EvaluatedView:
     channel_id: ChannelId
     view_rect: BoundingRect
     size: ViewMeasurement
-    axis: LongAxis | None
-    axis_issue: str | None
-    contours: tuple[Contour, ...]
     size_pair_us: float
-    axis_us: float | None
-
-
-def body_axis(
-    image: NDArray[np.uint8], body: BodyMeasurement
-) -> tuple[LongAxis | None, str | None, tuple[Contour, ...]]:
-    """Present Production's authoritative scalar geometry; recover contours only here."""
-    rect = body.bounding_rect
-    crop = image[rect.y : rect.y + rect.height, rect.x : rect.x + rect.width]
-    # Visualization-only contour recovery; it never determines axis or validity.
-    foreground = cv2.bitwise_not(cv2.inRange(crop, (0, 0, 0), (20, 20, 20)))
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(
-        foreground, connectivity=8
-    )
-    if count < 2:
-        return None, "component_unavailable", ()
-    dominant = int(np.argmax(stats[1:, cv2.CC_STAT_AREA])) + 1
-    if tuple(int(v) for v in stats[dominant, :4]) != (0, 0, rect.width, rect.height):
-        return None, "component_mismatch", ()
-    selected = cv2.inRange(labels, dominant, dominant)
-    contours, _ = cv2.findContours(selected, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    original_contours = tuple(
-        tuple(
-            (float(p[0]) + rect.x, float(p[1]) + rect.y) for p in contour.reshape(-1, 2)
-        )
-        for contour in contours
-    )
-    start, end = body.endpoints
-    dx, dy = end[0] - start[0], end[1] - start[1]
-    nx, ny = (
-        -dy / body.length * body.minor_length / 2,
-        dx / body.length * body.minor_length / 2,
-    )
-    corners = (
-        (start[0] - nx, start[1] - ny),
-        (end[0] - nx, end[1] - ny),
-        (end[0] + nx, end[1] + ny),
-        (start[0] + nx, start[1] + ny),
-    )
-    orientation = math.degrees(math.atan2(dy, dx)) % 180
-    return (
-        LongAxis(body.length, body.minor_length, body.endpoints, corners, orientation),
-        None,
-        original_contours,
-    )
 
 
 def evaluate_frame(
@@ -118,12 +59,6 @@ def evaluate_frame(
             (middle, slot.rect.height - middle),
             strict=True,
         ):
-            axis, issue, elapsed = None, None, None
-            contours: tuple[Contour, ...] = ()
-            if view.body is not None:
-                started = perf_counter_ns()
-                axis, issue, contours = body_axis(image, view.body)
-                elapsed = (perf_counter_ns() - started) / 1000
             rows.append(
                 EvaluatedView(
                     slot.channel_id,
@@ -131,19 +66,16 @@ def evaluate_frame(
                         slot.rect.x, slot.rect.y + offset, slot.rect.width, height
                     ),
                     view,
-                    axis,
-                    issue,
-                    contours,
                     pair_us,
-                    elapsed,
                 )
             )
     return tuple(rows)
 
 
 def record(image_id: str, camera_id: CameraId, row: EvaluatedView) -> dict[str, object]:
-    body = row.size.body.bounding_rect if row.size.body is not None else None
-    axis = row.axis
+    body = row.size.body
+    box = body.bounding_rect if body is not None else None
+    start, end = body.endpoints if body is not None else ((None, None), (None, None))
     return {
         "image": image_id,
         "camera": camera_id,
@@ -155,20 +87,16 @@ def record(image_id: str, camera_id: CameraId, row: EvaluatedView) -> dict[str, 
         "view_height": row.view_rect.height,
         "body_valid": body is not None,
         "body_reason": row.size.invalid_reason,
-        "bbox_x": body.x if body else None,
-        "bbox_y": body.y if body else None,
-        "bbox_width": body.width if body else None,
-        "bbox_height": body.height if body else None,
-        "axis_reason": row.axis_issue,
-        "major_px": axis.major if axis else None,
-        "minor_px": axis.minor if axis else None,
-        "start_x": axis.endpoints[0][0] if axis else None,
-        "start_y": axis.endpoints[0][1] if axis else None,
-        "end_x": axis.endpoints[1][0] if axis else None,
-        "end_y": axis.endpoints[1][1] if axis else None,
-        "orientation_deg_clockwise": axis.orientation_degrees if axis else None,
+        "bbox_x": box.x if box else None,
+        "bbox_y": box.y if box else None,
+        "bbox_width": box.width if box else None,
+        "bbox_height": box.height if box else None,
+        "vertical_length_px": body.length if body else None,
+        "start_x": start[0],
+        "start_y": start[1],
+        "end_x": end[0],
+        "end_y": end[1],
         "size_pair_us": row.size_pair_us,
-        "axis_extra_us": row.axis_us,
     }
 
 
@@ -216,52 +144,38 @@ def render(
             cv2.LINE_AA,
         )
     for row in rows:
-        for contour in row.contours:
-            cv2.polylines(
-                canvas,
-                [np.rint(np.array(contour) * 256).astype(np.int32)],
-                True,
-                (80, 220, 80),
-                1,
-                cv2.LINE_AA,
-                shift=8,
-            )
-        axis = row.axis
-        if axis is None:
+        body = row.size.body
+        if body is None:
             continue
-        cv2.polylines(
+        box = body.bounding_rect
+        cv2.rectangle(
             canvas,
-            [np.rint(np.array(axis.corners) * 256).astype(np.int32)],
-            True,
+            (box.x, box.y),
+            (box.x + box.width - 1, box.y + box.height - 1),
             (0, 160, 255),
             1,
             cv2.LINE_AA,
-            shift=8,
         )
-        start, end = (fixed_point(point) for point in axis.endpoints)
-        cv2.line(canvas, start, end, AXIS_COLOR, 2, cv2.LINE_AA, shift=8)
+        start, end = (fixed_point(point) for point in body.endpoints)
+        cv2.line(canvas, start, end, LENGTH_COLOR, 2, cv2.LINE_AA, shift=8)
         for point in (start, end):
             cv2.circle(canvas, point, 3 * 256, ENDPOINT_COLOR, -1, cv2.LINE_AA, shift=8)
     lines = [
         f"{'SYNTHETIC' if synthetic else 'LOCAL IMAGE'}  {camera.camera_id}  {image.shape[1]}x{image.shape[0]}  Original pixel coordinates",
-        "Blue: ROI/views   Green: body contour   Orange: rotated box   Magenta/yellow: axis/endpoints",
-        "Each axis measures one view body. W/H count pixels; rotated lengths span pixel centers.",
+        "Blue: ROI/views   Orange: body bounds   Magenta/yellow: vertical length/endpoints",
+        "W/H count pixels. Vertical length spans the top and bottom pixel centers (H - 1).",
     ]
     for row in rows:
         prefix = f"CH{row.channel_id:02d} {row.size.name:5s}"
-        body, axis = row.size.body, row.axis
+        body = row.size.body
         if body is None:
             lines.append(f"{prefix}  UNAVAILABLE  {row.size.invalid_reason}")
-        elif axis is None:
-            lines.append(
-                f"{prefix}  W/H={body.bounding_rect.width}/{body.bounding_rect.height}  AXIS UNAVAILABLE  {row.axis_issue}"
-            )
         else:
-            a, b = axis.endpoints
+            a, b = body.endpoints
             lines.append(
                 f"{prefix}  W/H={body.bounding_rect.width}/{body.bounding_rect.height}"
-                f"  L/S={axis.major:.2f}/{axis.minor:.2f}  angle={axis.orientation_degrees:.2f}"
-                f"  ({a[0]:.2f},{a[1]:.2f})-({b[0]:.2f},{b[1]:.2f})"
+                f"  Vertical length={body.length} px"
+                f"  ({a[0]:.1f},{a[1]})-({b[0]:.1f},{b[1]})"
             )
     for i, line in enumerate(lines):
         cv2.putText(
@@ -304,46 +218,20 @@ def timing_summary(values: list[float]) -> dict[str, int | float]:
 def benchmark(
     image: NDArray[np.uint8], camera: CameraLayout, repeats: int
 ) -> dict[str, object]:
-    """Separate paired trials, alternating order; exclude decode, drawing and IO."""
+    """Time production Size over the frame's ROIs; exclude decode, drawing and IO."""
 
-    def baseline() -> None:
+    def measure_frame() -> None:
         for slot in camera.slots:
             measure_capsule(image, slot.rect, SIZE_ONLY)
 
     for _ in range(3):
-        baseline()
-        evaluate_frame(image, camera)
-    baseline_us: list[float] = []
-    augmented_us: list[float] = []
-    extra_view_us: list[float] = []
-    delta_us: list[float] = []
-    for iteration in range(repeats):
-        for augmented in (False, True) if iteration % 2 == 0 else (True, False):
-            started = perf_counter_ns()
-            if augmented:
-                measured = evaluate_frame(image, camera)
-                augmented_us.append((perf_counter_ns() - started) / 1000)
-                extra_view_us.extend(
-                    row.axis_us for row in measured if row.axis_us is not None
-                )
-            else:
-                baseline()
-                baseline_us.append((perf_counter_ns() - started) / 1000)
-        delta_us.append(augmented_us[-1] - baseline_us[-1])
-    return {
-        "baseline_frame": timing_summary(baseline_us),
-        "augmented_frame": timing_summary(augmented_us),
-        "paired_added_frame": timing_summary(delta_us),
-        "additional_valid_view": timing_summary(extra_view_us)
-        if extra_view_us
-        else None,
-        "trials_us": {
-            "baseline_frame": baseline_us,
-            "augmented_frame": augmented_us,
-            "paired_added_frame": delta_us,
-            "additional_valid_view": extra_view_us,
-        },
-    }
+        measure_frame()
+    trials_us: list[float] = []
+    for _ in range(repeats):
+        started = perf_counter_ns()
+        measure_frame()
+        trials_us.append((perf_counter_ns() - started) / 1000)
+    return {"size_frame": timing_summary(trials_us), "trials_us": trials_us}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -368,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--benchmark-repeats",
         type=positive_int,
-        help="Optional paired timing trials per image",
+        help="Optional production Size timing trials per image",
     )
     args = parser.parse_args(argv)
     machine = Path(args.machine)
@@ -442,13 +330,10 @@ def main(argv: list[str] | None = None) -> int:
             "machine_unchanged": machine_unchanged,
             "geometry": {
                 "coordinates": "Original image pixel centers, x right, y down",
-                "orientation": "Undirected degrees clockwise from +x in [0,180)",
-                "length": "Longer minAreaRect side over the selected component's pixel centers",
+                "vertical_length_px": "Selected component's bounding height minus one",
                 "bbox": "Complete component occupied-pixel W/H, inclusive pixel counts",
-                "endpoints": "Opposite shorter-edge midpoints, lexicographic order",
-                "drawing": "Reported floating geometry rounded only at draw time to 1/256 pixel",
+                "endpoints": "Top and bottom pixel centers at the horizontal midpoint of the bounds",
                 "size_pair_us": "One integrated Size call for both logical views, repeated in each view row",
-                "axis_extra_us": "Visualization-only component recovery and contour presentation; axis is already measured",
             },
             "selection": selections,
             "images": inventory,
@@ -456,13 +341,9 @@ def main(argv: list[str] | None = None) -> int:
             "body_rejections": dict(
                 Counter(str(r["body_reason"]) for r in records if not r["body_valid"])
             ),
-            "axis_rejections": dict(
-                Counter(str(r["axis_reason"]) for r in records if r["axis_reason"])
-            ),
             "benchmark": {
                 "repeats": args.benchmark_repeats,
-                "warmup_pairs": 3,
-                "order": "alternating",
+                "warmup_frames": 3,
                 "units": "microseconds",
             },
             "environment": {
