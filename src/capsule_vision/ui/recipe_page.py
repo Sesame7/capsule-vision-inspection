@@ -680,9 +680,12 @@ class RecipePage(QWidget):
         archive = self.labels["image_archive"]
         archive.setText(text("archive_save_images", language))
         archive.setToolTip(text("image_archive", language) + " · PNG")
+        archive.setAccessibleName(archive.text())
         archive.setAccessibleDescription(archive.toolTip())
         for key, line in self.metadata.items():
             line.setAccessibleName(text(key, language))
+        # The archive grid can keep its previous column widths while Tune is open.
+        self._archive_layout.invalidate()
         self._arrange_fields()
         self.show_draft()
 

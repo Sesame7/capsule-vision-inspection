@@ -162,6 +162,12 @@ def test_unchanged_persisted_vision_has_no_ui_save_or_audit(
     assert save.isEnabled()
     workspace.loop.click()
     assert not workspace.vision_dirty and not save.isEnabled()
+    for language in ("zh-TW", "de", "th", "hi", "ka", "ti"):
+        window.set_language(language)
+        assert save.accessibleName() == save.toolTip() == text("save", language)
+        assert workspace.status.accessibleName() == text("saved", language)
+        assert not workspace.vision_dirty and not save.isEnabled()
+    window.set_language("en")
     save.click()
     workspace.save_setup()
     assert not window.editing.busy and saved.count() == 0
@@ -258,6 +264,17 @@ def test_partial_save_invalidates_only_successfully_changed_dependencies(
     assert workspace.buttons["save"].isEnabled()
     assert "partial Save failure" in window.event_label.toolTip()
     assert not window.buttons["operation"].isEnabled()
+    key = "vision_sources_only_saved" if failed == "machine" else "source_partial_save"
+    for language in ("zh-TW", "de", "hi"):
+        window.set_language(language)
+        assert window.event_label.accessibleName() == text(key, language)
+        assert (
+            "isolated partial Save failure"
+            in window.event_label.accessibleDescription()
+        )
+        assert workspace.buttons["save"].isEnabled()
+        assert workspace.draft.dirty == (failed == "machine")
+        assert workspace.sources.dirty == (failed == "sources")
 
 
 def test_failed_same_id_preparation_cannot_clear_stale_candidate(

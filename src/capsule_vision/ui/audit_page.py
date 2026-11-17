@@ -30,7 +30,7 @@ from capsule_vision.application.identity_models import IdentityError, Role
 from capsule_vision.application.records_query import RecordsScope, scoped_audit_page
 from capsule_vision.localization.audit_wording import audit_text, has_approved_wording
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.languages import LANGUAGES, Language
 
 from .audit_accounts import AuditAccounts
 from .future_delivery import FutureDelivery
@@ -39,6 +39,16 @@ from .history_event_table import (
     audit_utc_bound,
     readable_value,
     record_time,
+)
+
+_OUTCOMES = (
+    "success",
+    "failed",
+    "stale",
+    "denied",
+    "uncertain",
+    "cancelled",
+    "unresolved",
 )
 
 
@@ -97,6 +107,10 @@ class AuditPage(HistoryEventTable):
         self.language = language
         self.navigation_language(language)
         self.accounts.set_language(language)
+        outcome = max(
+            (outcome_caption(code, lang) for code in _OUTCOMES for lang in LANGUAGES),
+            key=self.table.fontMetrics().horizontalAdvance,
+        )
         self.columns(
             language,
             (
@@ -109,12 +123,7 @@ class AuditPage(HistoryEventTable):
                     4,
                 ),
                 ("audit_target", "DEV-LOT-F", "DEV-Example-Trainee-1", 4),
-                (
-                    "audit_outcome",
-                    "Success",
-                    outcome_caption("unresolved", "en"),
-                    1,
-                ),
+                ("audit_outcome", outcome, outcome, 0),
             ),
         )
         self.table.setAccessibleName(text("audit_trail", language))

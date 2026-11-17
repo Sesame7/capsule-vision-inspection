@@ -658,6 +658,9 @@ class HistoryPage(QWidget):
         camera_header = self.channels.horizontalHeaderItem(0)
         assert camera_header is not None
         camera_header.setToolTip(text("history_camera", language))
+        camera_header.setData(
+            Qt.ItemDataRole.AccessibleTextRole, camera_header.toolTip()
+        )
         self.channel_detail.setAccessibleName(text("history_result", language))
         self.channel_detail.setPlaceholderText(text("history_select_channel", language))
         self._present()
@@ -949,10 +952,19 @@ class HistoryPage(QWidget):
                 if channel.camera == camera.camera and 0 <= channel.slot < 6:
                     if same_record and channel == old_channel:
                         selected = (row, channel.slot + 1)
+                    failed = channel.technical == "ERROR"
                     item = QTableWidgetItem(
                         f"CH{channel.channel:02d}\n{channel.business}"
-                        + (" · ERR" if channel.technical == "ERROR" else "")
+                        + (" · ERR" if failed else "")
                     )
+                    caption = (
+                        f"{text('history_channel', self.language)} "
+                        f"{channel.channel:02d} · {channel.business}"
+                    )
+                    if failed:
+                        caption += " · " + text("error", self.language)
+                        item.setToolTip(caption)
+                    item.setData(Qt.ItemDataRole.AccessibleTextRole, caption)
                     item.setData(Qt.ItemDataRole.UserRole, channel)
                     self.channels.setItem(row, channel.slot + 1, item)
         self.channels.setCurrentCell(*selected)

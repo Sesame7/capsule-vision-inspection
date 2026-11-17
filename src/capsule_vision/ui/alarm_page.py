@@ -11,7 +11,7 @@ from capsule_vision.application.identity_models import Role
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.configuration.alarm_definitions import CATEGORIES
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.languages import LANGUAGES, Language
 
 from .future_delivery import FutureDelivery
 from .history_event_table import (
@@ -20,6 +20,13 @@ from .history_event_table import (
     record_reason,
     record_time,
 )
+
+_STATE_CAPTIONS = {
+    "activated": "alarm_activated",
+    "recovered": "alarm_recovered",
+    "observed_active": "records_seen_active",
+    "observed_recovered": "records_seen_clear",
+}
 
 
 def _source_caption(event: AlarmEvent, language: Language) -> str:
@@ -88,6 +95,10 @@ class AlarmPage(HistoryEventTable):
             self.kind.addItem(text("alarm_" + category, language), category)
         self.kind.setCurrentIndex(max(0, self.kind.findData(selected)))
         self.kind.setAccessibleName(text("alarm_type", language))
+        state = max(
+            (text(key, lang) for key in _STATE_CAPTIONS.values() for lang in LANGUAGES),
+            key=self.table.fontMetrics().horizontalAdvance,
+        )
         self.columns(
             language,
             (
@@ -99,7 +110,7 @@ class AlarmPage(HistoryEventTable):
                     "Transfer valve actuation phase not set",
                     5,
                 ),
-                ("alarm_state", "Recovered", "Observed active", 2),
+                ("alarm_state", state, state, 0),
                 ("batch_id", "DEV-LOT-F", "LOT-20261020-003", 3),
             ),
         )
@@ -182,10 +193,7 @@ class AlarmPage(HistoryEventTable):
             e = record.event
             clock, full_time = record_time(e.observed)
             state_key = "alarm_" + e.state
-            short_state = {
-                "observed_active": "records_seen_active",
-                "observed_recovered": "records_seen_clear",
-            }.get(e.state, state_key)
+            short_state = _STATE_CAPTIONS.get(e.state, state_key)
             self.set_values(
                 row,
                 (

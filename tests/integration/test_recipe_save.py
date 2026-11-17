@@ -157,6 +157,22 @@ def test_changed_selected_save_blocks_start_until_explicit_reselection(
         assert window.event_label.accessibleName() == hint
         assert window.event_label.toolTip() == hint
         assert not window.event_label.text() and not window.event_icon.isVisible()
+        for language in ("zh-TW", "de", "th", "hi", "ka", "ti"):
+            window.set_language(language)
+            hint = text("recipe_reprepare_hint", language)
+            assert picker.recipes.currentIndex() == -1
+            assert picker.recipes.placeholderText() == text(
+                "select_saved_recipe", language
+            )
+            assert picker.recipes.toolTip() == hint
+            assert hint in picker.recipes.accessibleName()
+            assert operation.accessibleDescription() == hint
+            assert operation.geometry() == start_geometry and not operation.isEnabled()
+            assert (
+                not window.event_label.text() and window.event_label.toolTip() == hint
+            )
+            assert picker.recipes.itemText(index) == "Latest saved"
+            assert app.snapshot() == saved and not session.dirty
 
         class FailingArchive:
             def archive_snapshot(self) -> ArchiveSnapshot:

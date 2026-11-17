@@ -26,6 +26,7 @@ from capsule_vision.application.audit import (
     AuditQuery,
     AuditRecord,
 )
+from capsule_vision.application.audit_presentation import outcome_caption
 from capsule_vision.application.history import HistoryContext
 from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.localization.audit_wording import audit_text
@@ -655,6 +656,27 @@ def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
                 )
                 assert details.lstrip().startswith(incomplete)
                 assert page.details.horizontalScrollBar().maximum() == 0
+                for locale in ("zh-TW", "de", "hi", "ti"):
+                    page.set_language(locale)
+                    assert page.table.currentRow() == row
+                    value = page.table.item(row, 4)
+                    assert value and value.text() == outcome_caption("stale", locale)
+                    assert value.toolTip() == value.data(
+                        Qt.ItemDataRole.AccessibleTextRole
+                    )
+                    assert value.toolTip() == outcome_caption(
+                        "stale", locale, tooltip=True
+                    )
+                    details = page.details.toPlainText()
+                    assert text("audit_recorded_before", locale) in details
+                    assert text("audit_recorded_requested", locale) in details
+                    assert (
+                        audit_text("product_code", locale) in details
+                        and "Prior" in details
+                    )
+                    assert text("display_name", locale) in details and "New" in details
+                    assert page.details.horizontalScrollBar().maximum() == 0
+                page.set_language(language)
     finally:
         page.dispose()
         page.close()
@@ -775,6 +797,23 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                         assert title and title.toolTip() == title.data(
                             Qt.ItemDataRole.AccessibleTextRole
                         )
+                    if i == 2:
+                        outcome_width = table.columnWidth(4)
+                        for outcome in (
+                            "success",
+                            "failed",
+                            "stale",
+                            "denied",
+                            "uncertain",
+                            "cancelled",
+                            "unresolved",
+                        ):
+                            assert (
+                                table.fontMetrics().horizontalAdvance(
+                                    outcome_caption(outcome, language)
+                                )
+                                < outcome_width
+                            ), (language, outcome)
     finally:
         close_window(window)
         delivery.detach()

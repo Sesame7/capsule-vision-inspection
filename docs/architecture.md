@@ -1038,9 +1038,10 @@ Alarms its category.
 The lists size columns from Qt font metrics and representative business
 values. At a given viewport and font, selecting a row, paging, refreshing and
 switching languages keep the column boundaries stable. Longer captions and
-values can elide. If even the short samples exceed the viewport, columns share
-the available width down to Qt's minimum section size. Tooltips and accessible
-text provide their full meanings.
+values can elide. Audit outcomes and Alarm states reserve width for their
+longest shaped captions across supported languages. If the minimum width
+budget exceeds the viewport, columns share the available width down to Qt's
+minimum section size. Tooltips and accessible text provide their full meanings.
 
 Batches lists up to 50 named Batches per page. A date range matches any individual
 Run that started within the interval or continued into it. A Run ending exactly at midnight
@@ -1123,8 +1124,9 @@ and applies to the full defect-report scope, with paging reset on selection chan
 Page entry, filters and Refresh request data; the scalar warning refresh
 does not poll the database. The read-only detail matrix uses stored camera order
 and slot/ChannelId mappings, with one row per camera. Each channel shows its business
-status and an independent technical ERR when present. The selected channel shows
-one compact summary of recorded defect labels and localized reasons. Repeated
+status and an independent technical ERR when present. The cell tooltip and
+accessible text explain technical errors in the current language. The selected
+channel shows one compact summary of recorded defect labels and localized reasons. Repeated
 labels and matching reasons from both capsule views appear once, and the summary
 wraps when needed. The generic model-defect reason remains available for older
 details. Selecting a camera can show its recorded unassigned labels separately.

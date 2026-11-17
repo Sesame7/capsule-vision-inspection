@@ -1499,6 +1499,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
+    assert len(STRINGS) == 914
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (
@@ -1518,6 +1519,10 @@ def test_language_identities_and_current_catalog_coverage() -> None:
     exceptions = {"zh": "中文", "zh-TW": "繁中", "sr-Latn": "SR", "az-Latn": "AZ"}
     for language in LANGUAGES:
         assert LANGUAGE_LABELS[language] == exceptions.get(language, language.upper())
+        assert (
+            text("history_group", language).casefold()
+            != text("batch_id", language).casefold()
+        ), language
     for language, native_name in EXPECTED_LANGUAGE_NAMES.items():
         assert is_language(language) and LANGUAGE_NAMES[language] == native_name
         if language not in ("zh", "en"):

@@ -484,6 +484,16 @@ def test_model_cache_failure_is_presented_only_for_its_requested_model(
     assert not session.dirty and app.snapshot() == before and not runtimes
     assert page.status.text() == recipe_status
     assert page.buttons["cache_prepare"].isEnabled()
+    for locale in ("zh-TW", "de", "th", "hi", "ka", "ti"):
+        window.set_language(locale)
+        localized = text("cache_failed", locale)
+        assert footer.accessibleName() == localized
+        assert footer.accessibleDescription() == details
+        assert footer.text() == details
+        tooltip.setHtml(footer.toolTip())
+        assert tooltip.toPlainText() == f"{localized}\n{details}"
+    window.set_language(language)
+    assert app.preparation_snapshot() == failed and not session.dirty
 
     for destination in (0, 2, 3, 4):
         window.navigate(destination)

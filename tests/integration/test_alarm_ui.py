@@ -432,11 +432,13 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
         )
         assert page.table.fontMetrics().horizontalAdvance(long_label) > columns[2]
         assert columns == [page.table.columnWidth(col) for col in range(5)]
-        for language in ("pt-PT", "uk", "sw", "bn", "ti"):
+        for language in ("pt-PT", "uk", "sw", "bn", "ti", "ta"):
             window.set_language(language)
             state = page.table.item(0, 3)
             assert state and state.text() == text("records_seen_active", language)
             assert state.toolTip() == text("alarm_observed_active", language)
+            assert state.data(Qt.ItemDataRole.AccessibleTextRole) == state.toolTip()
+            assert page.table.fontMetrics().horizontalAdvance(state.text()) < columns[3]
             name = page.table.item(0, 2)
             assert name and name.text() == "Reciprocating axis stroke not set"
             assert page.rows == newer

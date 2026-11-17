@@ -336,6 +336,7 @@ class RecipeTuning(QWidget):
         self._job_load: int | None = None
         self._pending_read: tuple[int, Callable[[], _Reference]] | None = None
         self._reference_error = ""
+        self._sample_notice = ""
         self._close: Callable[[], None] | None = None
         self._loading = False
         self._selection_frame: DisplayFrame | None = None
@@ -517,6 +518,8 @@ class RecipeTuning(QWidget):
         self.select_camera()
 
     def set_mode(self, mode: PreviewMode) -> None:
+        if mode != self.mode:
+            self._sample_notice = ""
         self.mode = mode
         self.show_settings()
         self.mode_changed.emit()
@@ -753,9 +756,9 @@ class RecipeTuning(QWidget):
         )
         status, explanation = text("unavailable", self.language), ""
         if not enabled:
-            status = "DISABLED"
+            status = text("preview_disabled_short", self.language)
         elif row is not None and row.error:
-            status = "ERROR"
+            status = text("preview_error_short", self.language)
         elif available and measured is not None:
             result = judge_capsule(
                 measured,
@@ -797,7 +800,7 @@ class RecipeTuning(QWidget):
                 else None
             )
             actual = f"{hue:.2f}" if hue is not None else "—"
-            values = f"Hue {actual} · {text('target', self.language)} {settings.color.target_hue} ± {settings.color.hue_tolerance}"
+            values = f"H {actual} · {text('target', self.language)} {settings.color.target_hue} ± {settings.color.hue_tolerance}"
         return f"{header}\n{values}" + (f"\n{explanation}" if explanation else "")
 
     def update_settings(self) -> None:
@@ -823,6 +826,7 @@ class RecipeTuning(QWidget):
                 ),
             )
         self.session.draft.capsule = settings
+        self._sample_notice = ""
         self.changed()
         self.show_settings()
 
@@ -855,12 +859,14 @@ class RecipeTuning(QWidget):
             if view.invalid_reason is None and view.body is not None
         ]
         if not lengths:
-            self.show_message(text("length_sample_missing", self.language))
+            self._sample_notice = "length_sample_missing"
+            self.evaluate()
             return
         self.session.draft.capsule = replace(
             settings,
             size=replace(settings.size, target_length=max(1, round(median(lengths)))),
         )
+        self._sample_notice = ""
         self.changed()
         self.show_settings()
 
@@ -883,12 +889,14 @@ class RecipeTuning(QWidget):
         ]
         target = median_hue(np.array(hues, dtype=np.float64))
         if target is None:
-            self.show_message(text("preview_sample_missing", self.language))
+            self._sample_notice = "preview_sample_missing"
+            self.evaluate()
             return
         settings = self.session.draft.capsule
         self.session.draft.capsule = replace(
             settings, color=replace(settings.color, target_hue=round(target) % 180)
         )
+        self._sample_notice = ""
         self.changed()
         self.show_settings()
 
@@ -899,6 +907,7 @@ class RecipeTuning(QWidget):
         if flags == self._measurement_flags or self._close is not None:
             return
         self._measurement_flags = flags
+        self._sample_notice = ""
         self._revision += 1
         self.measurements, self.results = (), ()
         self.canvas.rows, self.canvas.results = (), ()
@@ -952,6 +961,7 @@ class RecipeTuning(QWidget):
 
     def _set_reference(self, reference: _Reference | None) -> None:
         self._revision += 1
+        self._sample_notice = ""
         self.measurements, self.results = (), ()
         self.canvas.rows, self.canvas.results = (), ()
         self.canvas.selection = None
@@ -1113,6 +1123,7 @@ class RecipeTuning(QWidget):
         self._load_revision += 1
         self._revision += 1
         self._reference_error = ""
+        self._sample_notice = ""
         self._pending_read = self._load_revision, read
         if not self.busy:
             self._start_read()
@@ -1288,6 +1299,8 @@ class RecipeTuning(QWidget):
             self.show_message("")  # The toolbar owns blank/schematic image status.
         elif self.busy:
             self.show_message(text("preview_measuring", self.language))
+        elif self._sample_notice:
+            self.show_message(text(self._sample_notice, self.language))
         else:
             errors = [
                 f"CH{row.slot.channel_id:02d}: {row.error}"

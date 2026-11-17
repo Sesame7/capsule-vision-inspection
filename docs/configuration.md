@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 737 maintained keys across 64 locales. This includes
+Qt interface covers 739 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report-export dialogs.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 102 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations, partial-group export limits and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 899-key
+Authored coverage does not imply native-speaker verification. The full 914-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -1324,9 +1324,9 @@ management icons retain localized names/tooltips and the existing confirmations.
 
 Click an upper/lower view in the current image to select its camera, ChannelId
 and view. A single detail area beside the parameters shows the measured vertical
-Length in whole pixels with configured limits, or actual Hue with target/circular
-tolerance. View status uses the existing judge's reasons for the selected check
-and view. It provides advisory tuning evidence. Image overlays show compact check
+Length in whole pixels with configured limits, or actual Hue (`H`) with target
+and circular tolerance. View status uses the existing judge's reasons for the
+selected check and view. It provides advisory tuning evidence. Image overlays show compact check
 judgments, body outlines and a selection highlight without repeated Length
 captions. The vertical measurement line joins the top and bottom pixel centers at
 the body's horizontal midpoint. It remains visible across the logical divider
@@ -1335,8 +1335,9 @@ modes' localized explanations so the shared viewport remains in place when
 switching Size/Color. Target and tolerance edits rejudge cached evidence. Mode
 switches retain the selection, while new images or camera changes clear it. Details follow
 the selected view of the current frozen reference.
-Disabled checks, unavailable/pending evidence, execution ERROR and content NG are
-distinct; missing scalars display `—`, never ROI-derived measurements. Tune does
+Tune distinguishes disabled checks, unavailable or pending evidence, localized
+execution errors and content NG. Scalars show measured values, with `—` marking
+missing measurements. Tune does
 not collect Occupancy evidence or infer EMPTY from a missing body. Routine
 always-on/unavailable explanations are omitted from Qt presentation; actual
 production Occupancy state/evidence and technical errors remain available. This
@@ -1345,7 +1346,8 @@ Routine tuning scope/success and selection-invitation prose is omitted; the scop
 and selection instructions remain in static parameter/canvas tooltips. The canvas
 does not aggregate changing per-channel diagnostic text. Selected-view judgment
 and localized reasons remain visible without raw measurement-error tooltips. Without a selected
-view, a disabled check shows `OFF` rather than unavailable measurements.
+view, a disabled check shows its localized short status. Unavailable sample
+feedback follows the current language and retains the selected reference and draft.
 Selected-view feedback translates existing missing-body, unusable-color
 and tolerance reasons; exact evidence remains in the existing preview results. Missing reference,
 pending measurement, technical ERROR and disabled checks remain distinct; a valid

@@ -1111,6 +1111,18 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
                 (text("records_model_defect", "zh"), text("execution_error", "zh"))
             )
             assert "NG · ERR" in content(page.channels, 0, 4)
+            for locale in ("zh-TW", "de", "th", "hi", "ka", "ti"):
+                page.set_language(locale)
+                item = page.channels.item(0, 4)
+                assert item and page.channels.currentItem() is item
+                assert "NG · ERR" in item.text()
+                assert item.toolTip() == item.data(Qt.ItemDataRole.AccessibleTextRole)
+                assert text("history_channel", locale) in item.toolTip()
+                assert item.toolTip().endswith(text("error", locale))
+                assert (
+                    page.channel_detail.accessibleDescription()
+                    == page.channel_detail.toPlainText()
+                )
         elif scenario in ("ok", "empty"):
             assert (
                 page.channel_detail.isHidden() and not page.channel_detail.toPlainText()
@@ -1290,7 +1302,15 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
                 )
                 cell = page.channels.item(row, position)
                 assert cell is not None
-                assert not cell.toolTip()
+                caption = cell.data(Qt.ItemDataRole.AccessibleTextRole)
+                assert caption.startswith(
+                    f"{text('history_channel', page.language)} {stored.channel:02d}"
+                )
+                if stored.technical == "ERROR":
+                    assert cell.toolTip() == caption
+                    assert caption.endswith(text("error", page.language))
+                else:
+                    assert not cell.toolTip()
                 assert (
                     page.channels.viewport()
                     .rect()

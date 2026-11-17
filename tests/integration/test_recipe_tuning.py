@@ -15,7 +15,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLabel
 from tests.support.capsule_images import SETTINGS, bodies
 from tests.support.cycles import image_result
-from tests.support.qt import until
+from tests.support.qt import assert_full_caption, until
 from tests.support.recipe_ui import Screen, assert_inside, edit
 from tests.support.recipe_ui import configured_screen as configured_screen
 
@@ -895,11 +895,30 @@ def test_length_sample_unavailable_disabled_and_denied_preserve_target(
     preview.length_sample.click()
     assert session.draft.capsule == before and session.dirty == dirty
     assert preview.message.text() == text("length_sample_missing", preview.language)
+    snapshot, frame = window.bridge.application.snapshot(), preview.frame
+    page = window.recipe_page
+    archive = page.labels["image_archive"]
+    for language in ("de", "zh-TW", "en"):
+        window.set_language(language)
+        assert preview.message.text() == text("length_sample_missing", language)
+        assert preview.message.isVisible() and preview.frame is frame
+        assert session.draft.capsule == before and session.dirty == dirty
+        assert window.bridge.application.snapshot() == snapshot
+        until(lambda: archive.width() >= archive.sizeHint().width())
+        assert archive.text() == archive.accessibleName()
+        for key, button in page.archive_checks.items():
+            assert_full_caption(button, key.upper())
+            assert (
+                button.toolTip()
+                == button.accessibleName()
+                == text(f"archive_{key}", language)
+            )
     window.recipe_page.capsule_enabled["size"].click()
     until(lambda: not preview.busy)
     disabled = session.draft.capsule
     preview.sample_length()
     assert not preview.length_sample.isEnabled() and session.draft.capsule == disabled
+    assert not preview.message.isVisible()
 
 
 @pytest.mark.parametrize("tolerance", (0, 1_500_001, 2**40))
@@ -1228,7 +1247,7 @@ def test_view_judgment_is_separate_from_other_view_and_check(
     preview.set_mode("color")
     assert (
         "Color NG" in preview.selection_detail.text()
-        and "Hue 45.00" in preview.selection_detail.text()
+        and "H 45.00" in preview.selection_detail.text()
     )
     assert not preview.selection_detail.toolTip()
     assert preview.results[0] is not None
@@ -1238,7 +1257,7 @@ def test_view_judgment_is_separate_from_other_view_and_check(
     preview.select_view(0, 0)
     assert (
         "Color OK" in preview.selection_detail.text()
-        and "Hue 30.00" in preview.selection_detail.text()
+        and "H 30.00" in preview.selection_detail.text()
     )
     preview.set_mode("size")
     preview.spins["target_length"].setValue(21)
@@ -1273,9 +1292,7 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     until(lambda: not preview.busy)
     preview.select_view(0, 0)
     assert f"{mode.title()} NG" in preview.selection_detail.text()
-    assert (
-        "Length —" if mode == "size" else "Hue —"
-    ) in preview.selection_detail.text()
+    assert ("Length —" if mode == "size" else "H —") in preview.selection_detail.text()
     assert (
         "No measurable body" if mode == "size" else "Insufficient usable color pixels"
     ) in preview.selection_detail.text()
@@ -1283,6 +1300,11 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     assert (
         "EMPTY" not in preview.selection_detail.text()
     )  # Missing body is not occupancy.
+    if mode == "color":
+        assert preview.sample.isEnabled()
+        preview.sample.click()
+        window.set_language("zh-TW")
+        assert preview.message.text() == text("preview_sample_missing", "zh-TW")
     window.bridge.frames.publish(
         Frame(
             FrameId(CycleId(3), CameraId("CAM1"), 3), 3, np.zeros((1, 1, 3), np.uint8)
@@ -1291,22 +1313,28 @@ def test_missing_error_and_disabled_measurements_are_not_invented(
     )
     preview.refresh_reference()
     until(lambda: not preview.busy)
+    assert preview.message.text() == text(
+        "preview_measurement_error", preview.language
+    ).format(count=len(preview.measurements))
     assert (
         preview.canvas.selection is None
         and "CH01" not in preview.selection_detail.text()
     )
     preview.select_view(0, 0)
+    for language in ("en", "zh-TW", "th"):
+        window.set_language(language)
+        assert text("preview_error_short", language) in preview.selection_detail.text()
     assert (
-        "ERROR" in preview.selection_detail.text()
+        preview.canvas.selection == (0, 0)
         and not preview.selection_detail.toolTip()
         and "ValueError" in preview.measurements[0].error
     )
     window.recipe_page.capsule_enabled[mode].click()
     until(lambda: not preview.busy)
-    assert "DISABLED" in preview.selection_detail.text()
-    assert (
-        "Length —" if mode == "size" else "Hue —"
-    ) in preview.selection_detail.text()
+    assert text("preview_disabled_short", "th") in preview.selection_detail.text()
+    window.set_language("en")
+    assert text("preview_disabled_short", "en") in preview.selection_detail.text()
+    assert ("Length —" if mode == "size" else "H —") in preview.selection_detail.text()
     assert not preview.canvas.check_enabled and not preview.message.isVisible()
     preview.canvas.selection = None
     preview.refresh_state()
@@ -1352,7 +1380,7 @@ def test_selection_clears_on_image_camera_change_and_while_evidence_pending(
     until(lambda: not preview.busy)
     preview.set_mode("color")
     assert (
-        "Hue 31.00" in preview.selection_detail.text()
+        "H 31.00" in preview.selection_detail.text()
         and "lower" in preview.selection_detail.text()
     )
 
@@ -1725,7 +1753,7 @@ def _assert_preview_zoom_selection(
         preview.canvas.selection == selected
         and "Color OK" in preview.selection_detail.text()
     )
-    assert "Hue 30.00" in preview.selection_detail.text()
+    assert "H 30.00" in preview.selection_detail.text()
     assert window.bridge.application.snapshot() == before and not runtimes
     assert session.draft.capsule == SETTINGS
 
