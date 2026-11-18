@@ -4,6 +4,7 @@ from .languages import Language
 
 EXTRA_STRINGS: dict[Language, dict[str, str]] = {
     "ja": {
+        "history_review_mode": "履歴の閲覧 · 読み取り専用",
         "identity_auto_login": "自動ログイン",
         "identity_set_auto_login": "自動ログインを設定",
         "identity_disable_auto_login": "自動ログインを無効化",
@@ -745,6 +746,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "エンジニア権限が必要です",
     },
     "ko": {
+        "history_review_mode": "이력 검토 · 읽기 전용",
         "identity_auto_login": "자동 로그인",
         "identity_set_auto_login": "자동 로그인 설정",
         "identity_disable_auto_login": "자동 로그인 해제",
@@ -1486,6 +1488,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "엔지니어 권한 필요",
     },
     "es": {
+        "history_review_mode": "Consulta del historial · Solo lectura",
         "identity_auto_login": "Inicio automático",
         "identity_set_auto_login": "Configurar inicio automático",
         "identity_disable_auto_login": "Desactivar inicio automático",
@@ -2227,6 +2230,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Se requiere el rol Ingeniero",
     },
     "pt-BR": {
+        "history_review_mode": "Consulta do histórico · Somente leitura",
         "identity_auto_login": "Login automático",
         "identity_set_auto_login": "Configurar login automático",
         "identity_disable_auto_login": "Desativar login automático",
@@ -2968,6 +2972,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Requer o papel Engenheiro",
     },
     "it": {
+        "history_review_mode": "Consultazione dello storico · Sola lettura",
         "identity_auto_login": "Accesso automatico",
         "identity_set_auto_login": "Imposta accesso automatico",
         "identity_disable_auto_login": "Disattiva accesso automatico",
@@ -3709,6 +3714,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Richiede il ruolo Ingegnere",
     },
     "id": {
+        "history_review_mode": "Tinjau riwayat · Hanya baca",
         "identity_auto_login": "Masuk otomatis",
         "identity_set_auto_login": "Atur masuk otomatis",
         "identity_disable_auto_login": "Nonaktifkan masuk otomatis",
@@ -4450,6 +4456,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Perlu peran Insinyur",
     },
     "fr": {
+        "history_review_mode": "Consultation de l’historique · Lecture seule",
         "identity_auto_login": "Connexion automatique",
         "identity_set_auto_login": "Régler la connexion auto",
         "identity_disable_auto_login": "Désactiver la connexion auto",
@@ -5191,6 +5198,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Rôle Ingénieur requis",
     },
     "de": {
+        "history_review_mode": "Verlauf einsehen · Schreibgeschützt",
         "identity_auto_login": "Auto-Anmeldung",
         "identity_set_auto_login": "Auto-Anmeldung festlegen",
         "identity_disable_auto_login": "Auto-Anmeldung deaktivieren",
@@ -5932,6 +5940,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Rolle Ingenieur erforderlich",
     },
     "ru": {
+        "history_review_mode": "Просмотр истории · Только чтение",
         "identity_auto_login": "Автовход",
         "identity_set_auto_login": "Настроить автовход",
         "identity_disable_auto_login": "Отключить автовход",
@@ -6673,6 +6682,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Требуется роль «Инженер»",
     },
     "tr": {
+        "history_review_mode": "Geçmişi görüntüle · Salt okunur",
         "identity_auto_login": "Otomatik oturum",
         "identity_set_auto_login": "Otomatik oturumu ayarla",
         "identity_disable_auto_login": "Otomatik oturumu kapat",
@@ -7414,6 +7424,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Mühendis yetkisi gerekli",
     },
     "zh-TW": {
+        "history_review_mode": "歷史記錄檢視 · 唯讀",
         "identity_auto_login": "自動登入",
         "identity_set_auto_login": "設定自動登入",
         "identity_disable_auto_login": "停用自動登入",
@@ -8158,6 +8169,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "需要工程師權限",
     },
     "nl": {
+        "history_review_mode": "Geschiedenis bekijken · Alleen-lezen",
         "identity_auto_login": "Automatisch inloggen",
         "identity_set_auto_login": "Stel auto-inlog in",
         "identity_disable_auto_login": "Schakel auto-inlog uit",
@@ -8906,6 +8918,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Engineerrechten vereist",
     },
     "pl": {
+        "history_review_mode": "Przegląd historii · Tylko do odczytu",
         "identity_auto_login": "Automatyczne logowanie",
         "identity_set_auto_login": "Ustaw autologowanie",
         "identity_disable_auto_login": "Wyłącz autologowanie",
@@ -9654,6 +9667,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Wymagana rola Inżynier",
     },
     "uk": {
+        "history_review_mode": "Перегляд історії · Лише читання",
         "account.change_password": "Змінити пароль",
         "account.create": "Створити користувача",
         "account.enabled": "Змінити стан облікового запису",
@@ -10402,6 +10416,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Вибрати збережений рецепт",
     },
     "ro": {
+        "history_review_mode": "Consultare istoric · Doar citire",
         "account.change_password": "Schimbă parola",
         "account.create": "Creează utilizator",
         "account.enabled": "Schimbă starea contului",
@@ -11150,6 +11165,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selectare rețetă salvată",
     },
     "cs": {
+        "history_review_mode": "Prohlížení historie · Pouze ke čtení",
         "account.change_password": "Změnit heslo",
         "account.create": "Vytvořit uživatele",
         "account.enabled": "Změnit stav účtu",
@@ -11898,6 +11914,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vybrat uloženou recepturu",
     },
     "hu": {
+        "history_review_mode": "Előzmények megtekintése · Csak olvasható",
         "account.change_password": "Jelszó módosítása",
         "account.create": "Felhasználó létrehozása",
         "account.enabled": "Fiókállapot módosítása",
@@ -12646,6 +12663,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Mentett recept kiválasztása",
     },
     "sv": {
+        "history_review_mode": "Visa historik · Skrivskyddad",
         "account.change_password": "Ändra lösenord",
         "account.create": "Skapa användare",
         "account.enabled": "Ändra kontostatus",
@@ -13394,6 +13412,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Välj sparat recept",
     },
     "da": {
+        "history_review_mode": "Vis historik · Skrivebeskyttet",
         "account.change_password": "Skift adgangskode",
         "account.create": "Opret bruger",
         "account.enabled": "Skift kontostatus",
@@ -14142,6 +14161,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vælg gemt recept",
     },
     "fi": {
+        "history_review_mode": "Historian tarkastelu · Vain luku",
         "account.change_password": "Vaihda salasana",
         "account.create": "Luo käyttäjä",
         "account.enabled": "Muuta tilin tilaa",
@@ -14890,6 +14910,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Valitse tallennettu resepti",
     },
     "nb": {
+        "history_review_mode": "Vis historikk · Skrivebeskyttet",
         "account.change_password": "Endre passord",
         "account.create": "Opprett bruker",
         "account.enabled": "Endre kontostatus",
@@ -15638,6 +15659,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Velg lagret oppskrift",
     },
     "sk": {
+        "history_review_mode": "Prehliadanie histórie · Len na čítanie",
         "account.change_password": "Zmeniť heslo",
         "account.create": "Vytvoriť používateľa",
         "account.enabled": "Zmeniť stav účtu",
@@ -16386,6 +16408,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vybrať uloženú receptúru",
     },
     "bg": {
+        "history_review_mode": "Преглед на историята · Само за четене",
         "account.change_password": "Смяна на парола",
         "account.create": "Създаване на потребител",
         "account.enabled": "Промяна на състоянието на акаунт",
@@ -17134,6 +17157,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Избор на запазена рецепта",
     },
     "hr": {
+        "history_review_mode": "Pregled povijesti · Samo za čitanje",
         "account.change_password": "Promijeni lozinku",
         "account.create": "Stvori korisnika",
         "account.enabled": "Promijeni status računa",
@@ -17882,6 +17906,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Odaberi spremljen recept",
     },
     "sr-Latn": {
+        "history_review_mode": "Pregled istorije · Samo za čitanje",
         "account.change_password": "Promeni lozinku",
         "account.create": "Kreiraj korisnika",
         "account.enabled": "Promeni status naloga",
@@ -18630,6 +18655,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Izaberi sačuvan recept",
     },
     "el": {
+        "history_review_mode": "Προβολή ιστορικού · Μόνο για ανάγνωση",
         "account.change_password": "Αλλαγή κωδικού",
         "account.create": "Δημιουργία χρήστη",
         "account.enabled": "Αλλαγή κατάστασης λογαριασμού",
@@ -19378,6 +19404,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Επιλογή αποθηκευμένης συνταγής",
     },
     "pt-PT": {
+        "history_review_mode": "Consulta do histórico · Só de leitura",
         "account.change_password": "Alterar palavra-passe",
         "account.create": "Criar utilizador",
         "account.enabled": "Alterar estado da conta",
@@ -20126,6 +20153,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selecionar receita guardada",
     },
     "vi": {
+        "history_review_mode": "Xem lịch sử · Chỉ đọc",
         "identity_auto_login": "Đăng nhập tự động",
         "identity_set_auto_login": "Đặt đăng nhập tự động",
         "identity_disable_auto_login": "Tắt đăng nhập tự động",
@@ -20874,6 +20902,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Cần quyền Kỹ sư",
     },
     "ms": {
+        "history_review_mode": "Semak sejarah · Baca sahaja",
         "account.change_password": "Tukar kata laluan",
         "account.create": "Cipta pengguna",
         "account.enabled": "Ubah status akaun",
@@ -21622,6 +21651,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pilih resipi tersimpan",
     },
     "fil": {
+        "history_review_mode": "Tingnan ang kasaysayan · Basahin lamang",
         "account.change_password": "Palitan ang password",
         "account.create": "Gumawa ng user",
         "account.enabled": "Baguhin ang katayuan ng account",
@@ -22370,6 +22400,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pumili ng naka-save na resipe",
     },
     "sw": {
+        "history_review_mode": "Angalia historia · Kusoma tu",
         "account.change_password": "Badili nenosiri",
         "account.create": "Unda mtumiaji",
         "account.enabled": "Badili hali ya akaunti",
@@ -23118,6 +23149,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Chagua fomula iliyohifadhiwa",
     },
     "th": {
+        "history_review_mode": "ดูประวัติ · อ่านอย่างเดียว",
         "identity_auto_login": "เข้าสู่ระบบอัตโนมัติ",
         "identity_set_auto_login": "ตั้งค่าเข้าสู่ระบบอัตโนมัติ",
         "identity_disable_auto_login": "ปิดการเข้าสู่ระบบอัตโนมัติ",
@@ -23866,6 +23898,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "ต้องมีสิทธิ์วิศวกร",
     },
     "hi": {
+        "history_review_mode": "इतिहास देखें · केवल पढ़ने के लिए",
         "identity_auto_login": "स्वचालित लॉगिन",
         "identity_set_auto_login": "स्वचालित लॉगिन सेट करें",
         "identity_disable_auto_login": "स्वचालित लॉगिन बंद करें",
@@ -24614,6 +24647,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "अभियंता की अनुमति ज़रूरी है",
     },
     "bn": {
+        "history_review_mode": "ইতিহাস দেখুন · শুধু পড়ার জন্য",
         "account.change_password": "পাসওয়ার্ড বদলান",
         "account.create": "ব্যবহারকারী তৈরি করুন",
         "account.enabled": "অ্যাকাউন্টের অবস্থা বদলান",
@@ -25362,6 +25396,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "সংরক্ষিত রেসিপি বাছুন",
     },
     "ta": {
+        "history_review_mode": "வரலாற்றைப் பார்க்கவும் · படிக்க மட்டும்",
         "account.change_password": "கடவுச்சொல்லை மாற்று",
         "account.create": "பயனரை உருவாக்கு",
         "account.enabled": "கணக்கு நிலையை மாற்று",
@@ -26110,6 +26145,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "சேமித்த செய்முறையைத் தேர்வு செய்",
     },
     "te": {
+        "history_review_mode": "చరిత్రను చూడండి · చదవడానికి మాత్రమే",
         "account.change_password": "పాస్‌వర్డ్ మార్చు",
         "account.create": "వినియోగదారుని సృష్టించు",
         "account.enabled": "ఖాతా స్థితిని మార్చండి",
@@ -26858,6 +26894,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "సేవ్ చేసిన రెసిపీ ఎంచుకో",
     },
     "mr": {
+        "history_review_mode": "इतिहास पहा · फक्त वाचनासाठी",
         "account.change_password": "पासवर्ड बदला",
         "account.create": "वापरकर्ता तयार करा",
         "account.enabled": "खात्याची स्थिती बदला",
@@ -27606,6 +27643,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "जतन केलेली रेसिपी निवडा",
     },
     "ne": {
+        "history_review_mode": "इतिहास हेर्नुहोस् · पढ्न मात्र",
         "account.change_password": "पासवर्ड बदल्नुहोस्",
         "account.create": "प्रयोगकर्ता सिर्जना गर्नुहोस्",
         "account.enabled": "खाताको स्थिति बदल्नुहोस्",
@@ -28354,6 +28392,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "सुरक्षित रेसिपी छान्नुहोस्",
     },
     "si": {
+        "history_review_mode": "ඉතිහාසය බැලීම · කියවීමට පමණි",
         "account.change_password": "මුරපදය වෙනස් කරන්න",
         "account.create": "පරිශීලකයෙකු සාදන්න",
         "account.enabled": "ගිණුම් තත්ත්වය වෙනස් කරන්න",
@@ -29082,6 +29121,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "සුරැකි වට්ටෝරුව තෝරන්න",
     },
     "am": {
+        "history_review_mode": "ታሪክ ይመልከቱ · ለንባብ ብቻ",
         "account.change_password": "የይለፍ ቃል ቀይር",
         "account.create": "ተጠቃሚ ፍጠር",
         "account.enabled": "የመለያ ሁኔታ ቀይር",
@@ -29818,6 +29858,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "የተቀመጠ አዘገጃጀት ምረጥ",
     },
     "km": {
+        "history_review_mode": "មើលប្រវត្តិ · សម្រាប់តែអាន",
         "account.change_password": "ប្តូរពាក្យសម្ងាត់",
         "account.create": "បង្កើតអ្នកប្រើ",
         "account.enabled": "ប្ដូរស្ថានភាពគណនី",
@@ -30554,6 +30595,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "ជ្រើសរូបមន្តដែលបានរក្សាទុក",
     },
     "lt": {
+        "history_review_mode": "Istorijos peržiūra · Tik skaityti",
         "account.change_password": "Keisti slaptažodį",
         "account.create": "Sukurti naudotoją",
         "account.enabled": "Keisti paskyros būseną",
@@ -31302,6 +31344,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pasirinkti įrašytą receptą",
     },
     "lv": {
+        "history_review_mode": "Vēstures pārskatīšana · Tikai lasīšanai",
         "account.change_password": "Mainīt paroli",
         "account.create": "Izveidot lietotāju",
         "account.enabled": "Mainīt konta statusu",
@@ -32050,6 +32093,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Atlasīt saglabātu recepti",
     },
     "et": {
+        "history_review_mode": "Ajaloo vaatamine · Kirjutuskaitstud",
         "account.change_password": "Muuda parooli",
         "account.create": "Loo kasutaja",
         "account.enabled": "Muuda konto olekut",
@@ -32798,6 +32842,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vali salvestatud retsept",
     },
     "sl": {
+        "history_review_mode": "Pregled zgodovine · Samo za branje",
         "account.change_password": "Spremeni geslo",
         "account.create": "Ustvari uporabnika",
         "account.enabled": "Spremeni stanje računa",
@@ -33546,6 +33591,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Izberi shranjen recept",
     },
     "sq": {
+        "history_review_mode": "Shikimi i historikut · Vetëm për lexim",
         "account.change_password": "Ndrysho fjalëkalimin",
         "account.create": "Krijo përdorues",
         "account.enabled": "Ndrysho gjendjen e llogarisë",
@@ -34294,6 +34340,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Zgjidh recetën e ruajtur",
     },
     "ca": {
+        "history_review_mode": "Consulta de l’historial · Només lectura",
         "account.change_password": "Canvia la contrasenya",
         "account.create": "Crea un usuari",
         "account.enabled": "Canvia l'estat del compte",
@@ -35042,6 +35089,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selecciona una recepta desada",
     },
     "af": {
+        "history_review_mode": "Bekyk geskiedenis · Leesalleen",
         "account.change_password": "Verander wagwoord",
         "account.create": "Skep gebruiker",
         "account.enabled": "Verander rekeningstatus",
@@ -35790,6 +35838,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Kies gestoorde resep",
     },
     "zu": {
+        "history_review_mode": "Buka umlando · Ukufunda kuphela",
         "account.change_password": "Shintsha iphasiwedi",
         "account.create": "Dala umsebenzisi",
         "account.enabled": "Shintsha isimo se-akhawunti",
@@ -36526,6 +36575,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Khetha iresiphi elondoloziwe",
     },
     "ha": {
+        "history_review_mode": "Duba tarihi · Karatu kawai",
         "account.change_password": "Canja kalmar sirri",
         "account.create": "Ƙirƙiri mai amfani",
         "account.enabled": "Canja matsayin asusu",
@@ -37262,6 +37312,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Zaɓi tsarin dubawa da aka ajiye",
     },
     "kk": {
+        "history_review_mode": "Тарихты қарау · Тек оқу",
         "account.change_password": "Құпиясөзді өзгерту",
         "account.create": "Пайдаланушы құру",
         "account.enabled": "Тіркелгі күйін өзгерту",
@@ -38010,6 +38061,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Сақталған рецептті таңдау",
     },
     "uz": {
+        "history_review_mode": "Tarixni koʻrish · Faqat oʻqish",
         "account.change_password": "Parolni oʻzgartirish",
         "account.create": "Foydalanuvchi yaratish",
         "account.enabled": "Hisob holatini oʻzgartirish",
@@ -38758,6 +38810,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saqlangan retseptni tanlash",
     },
     "mn": {
+        "history_review_mode": "Түүх харах · Зөвхөн унших",
         "account.change_password": "Нууц үг өөрчлөх",
         "account.create": "Хэрэглэгч үүсгэх",
         "account.enabled": "Бүртгэлийн төлөв өөрчлөх",
@@ -39506,6 +39559,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Хадгалсан жор сонгох",
     },
     "so": {
+        "history_review_mode": "Eeg taariikhda · Akhris keliya",
         "account.change_password": "Beddel erayga sirta",
         "account.create": "Abuur isticmaale",
         "account.enabled": "Beddel xaaladda akoonka",
@@ -40254,6 +40308,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Dooro habraac kaydsan",
     },
     "tk": {
+        "history_review_mode": "Taryhy görmek · Diňe okamak üçin",
         "account.change_password": "Paroly üýtget",
         "account.create": "Ulanyjy döret",
         "account.enabled": "Hasabyň ýagdaýyny üýtget",
@@ -40992,6 +41047,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saklanan resepti saýla",
     },
     "tg": {
+        "history_review_mode": "Дидани таърих · Танҳо барои хондан",
         "account.change_password": "Иваз кардани рамз",
         "account.create": "Эҷоди корбар",
         "account.enabled": "Тағйири ҳолати ҳисоб",
@@ -41740,6 +41796,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Интихоби дастури захирашуда",
     },
     "az-Latn": {
+        "history_review_mode": "Tarixçəyə baxış · Yalnız oxumaq üçün",
         "account.change_password": "Şifrəni dəyiş",
         "account.create": "İstifadəçi yarat",
         "account.enabled": "Hesabın vəziyyətini dəyiş",
@@ -42488,6 +42545,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saxlanmış resepti seç",
     },
     "mg": {
+        "history_review_mode": "Hijery ny tantara · Vakiana fotsiny",
         "account.change_password": "Ovay ny tenimiafina",
         "account.create": "Mamoròna mpampiasa",
         "account.enabled": "Ovay ny satan'ny kaonty",
@@ -43224,6 +43282,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Fidio ny raikipohy voatahiry",
     },
     "ky": {
+        "history_review_mode": "Тарыхты көрүү · Окуу үчүн гана",
         "account.change_password": "Сырсөздү өзгөртүү",
         "account.create": "Колдонуучу түзүү",
         "account.enabled": "Каттоо эсебинин абалын өзгөртүү",
@@ -43972,6 +44031,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Сакталган рецептти тандоо",
     },
     "ka": {
+        "history_review_mode": "ისტორიის ნახვა · მხოლოდ წაკითხვა",
         "account.change_password": "პაროლის შეცვლა",
         "account.create": "მომხმარებლის შექმნა",
         "account.enabled": "ანგარიშის სტატუსის შეცვლა",
@@ -44720,6 +44780,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "შენახული რეცეპტის არჩევა",
     },
     "hy": {
+        "history_review_mode": "Պատմության դիտում · Միայն ընթերցման համար",
         "account.change_password": "Փոխել գաղտնաբառը",
         "account.create": "Ստեղծել օգտատեր",
         "account.enabled": "Փոխել հաշվի վիճակը",
@@ -45468,6 +45529,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Ընտրել պահպանված բաղադրատոմսը",
     },
     "ti": {
+        "history_review_mode": "ታሪኽ ምርኣይ · ንንባብ ጥራይ",
         "account.change_password": "ቃል ምስጢር ቀይር",
         "account.create": "ተጠቃሚ ፍጠር",
         "account.enabled": "ኩነታት ሕሳብ ቀይር",

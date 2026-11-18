@@ -1161,6 +1161,35 @@ Camera and linked path across language and theme changes. A different image
 selection or a new open attempt clears that error. The native Close control and
 Esc dismiss the dialog. History has no Web API.
 
+The optional [`--history DIRECTORY`](configuration.md#portable-history-review)
+startup argument opens a separate read-only window with Batches, Inspection and
+Alarms. It uses the same Records tabs, shared filters and language selector as
+the normal window. Audit, Export and equipment sign-in are absent.
+Only a bounded SQLite reader is created. It verifies the supplied copy's version,
+review schema, integrity and foreign keys before opening the window. The reader
+uses an immutable, read-only connection and the same Records queries and stored
+evidence decoding as the production owner. It does not create the normal
+Application, identity, History writer or equipment and Web services. No
+recovery, retention or checkpoints run; still-present old Cycles and Alarms are browsable
+and a recorded open Run stays open in the evidence. The window detaches query
+delivery on Close, and the reader releases SQLite outside Qt dispatch.
+
+Portable Alarms uses the stored row labels, states and details with the same
+date/category/Batch filters and 50-record pages. It reads all retained dates
+without the normal 30-day query cutoff. A copy with no alarm table or rows shows
+an empty Alarms page; a bilingual table is read without adding translations.
+The shared Batch picker also accepts exact Alarm associations to stored Batches
+with no overlapping Run, and offers unassociated Alarm observations where
+present. No live monitor or storage status is inferred. Normal Alarm review
+still requires Operator or higher and keeps its existing query cutoff and retention.
+
+For archived images in this mode, Records displays and opens the path beneath
+the supplied root using the date, matching archive CameraId directory and exact
+PNG filename from the stored absolute link. Invalid suffixes, missing files and
+destinations resolving outside the root are unavailable. Records does not use
+the original location, search for alternative files or reconstruct links.
+Stored finding evidence and the production archive writer are unchanged.
+
 On the same History writer and in the Cycle transaction, new records capture
 distinct effective ViMo labels and traditional NG reasons per channel. ViMo
 identity includes its saved Model and artifact digest. The pipeline has already

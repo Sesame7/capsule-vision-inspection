@@ -47,12 +47,14 @@ from PySide6.QtWidgets import (
 
 from capsule_vision.application import ProductionApplication
 from capsule_vision.application.alarm_report import AlarmReportRequest
+from capsule_vision.application.archive_links import relocated_image_path
 from capsule_vision.application.audit_report import AuditReportRequest
 from capsule_vision.application.history import (
     HistoryCamera,
     HistoryChannel,
     HistoryPageData,
     HistoryQuery,
+    HistoryReader,
     HistoryRecord,
     ProductionHistory,
 )
@@ -305,12 +307,15 @@ class _ChannelDelegate(QStyledItemDelegate):
 class HistoryPage(QWidget):
     def __init__(
         self,
-        owner: ProductionHistory | None,
+        owner: HistoryReader | None,
         application: ProductionApplication | None = None,
+        *,
+        image_root: Path | None = None,
     ) -> None:
         super().__init__()
         self.owner = owner
         self.application = application
+        self._image_root = image_root.absolute() if image_root is not None else None
         self.export_available = True
         self.export_batch: tuple[str, str] | None = None
         self.export_audit: AuditReportRequest | None = None
@@ -445,7 +450,8 @@ class HistoryPage(QWidget):
         self.timer.timeout.connect(
             self._observe
         )  # Scalar diagnostics only, no DB polling.
-        self.timer.start()
+        if application is not None or isinstance(owner, ProductionHistory):
+            self.timer.start()
         self.set_language("zh")
 
     @staticmethod
@@ -1046,13 +1052,25 @@ class HistoryPage(QWidget):
     @Slot()
     def _image_selection_changed(self) -> None:
         source = self._selected_camera()
-        path = source[1].image_path if source is not None and not self.busy else None
-        self.image_button.setEnabled(path is not None)
+        camera = source[1] if source is not None and not self.busy else None
+        linked = camera is not None and camera.image_path is not None
+        self.image_button.setEnabled(linked)
+        path = self._image_path(camera) if camera is not None else None
         description = (
-            str(path) if path is not None else text("history_no_image", self.language)
+            str(path)
+            if path is not None
+            else text(
+                "history_image_missing" if linked else "history_no_image", self.language
+            )
         )
         self.image_button.setToolTip(description)
         self.image_button.setAccessibleDescription(description)
+
+    def _image_path(self, camera: HistoryCamera) -> Path | None:
+        path = camera.image_path
+        if path is None or self._image_root is None:
+            return path
+        return relocated_image_path(path, camera.camera, self._image_root)
 
     def _selected_record(self) -> HistoryRecord | None:
         cycle = self.cycles.currentRow()
@@ -1075,16 +1093,34 @@ class HistoryPage(QWidget):
         if source is None or self.busy or self.image_dialog is not None:
             return
         record, camera = source
-        path = camera.image_path
-        if path is None:
+        linked = camera.image_path
+        if linked is None:
             return
         self._image_issue = None
         self._channel_selected()
-        if not path.is_absolute() or path.suffix.lower() != ".png":
+        path = self._image_path(camera)
+        if path is None or not path.is_absolute() or path.suffix.lower() != ".png":
             self._image_error(
-                record.record_id, camera.camera, path, "history_image_missing"
+                record.record_id, camera.camera, linked, "history_image_missing"
             )
             return
+        if self._image_root is not None:
+            try:
+                root = self._image_root.resolve(strict=True)
+                path = path.resolve(strict=True)
+            except (OSError, ValueError) as exc:
+                issue = (
+                    "history_image_missing"
+                    if isinstance(exc, (FileNotFoundError, NotADirectoryError))
+                    else "history_image_open_failed"
+                )
+                self._image_error(record.record_id, camera.camera, linked, issue)
+                return
+            if not path.is_relative_to(root):
+                self._image_error(
+                    record.record_id, camera.camera, linked, "history_image_missing"
+                )
+                return
         reader = QImageReader(str(path), b"png")
         reader.setAutoDetectImageFormat(False)
         reader.setAutoTransform(False)
@@ -1097,7 +1133,7 @@ class HistoryPage(QWidget):
                 issue = "history_image_missing"
             except OSError:
                 pass
-            self._image_error(record.record_id, camera.camera, path, issue)
+            self._image_error(record.record_id, camera.camera, linked, issue)
             return
         evidence = camera.image_evidence
         if (
@@ -1106,7 +1142,7 @@ class HistoryPage(QWidget):
             and evidence.size != (image.width(), image.height())
         ):
             self._image_error(
-                record.record_id, camera.camera, path, "history_image_size_mismatch"
+                record.record_id, camera.camera, linked, "history_image_size_mismatch"
             )
             return
         language = self.language
@@ -1142,7 +1178,9 @@ class HistoryPage(QWidget):
 
     @Slot()
     def _observe(self) -> None:
-        observation = self.owner.snapshot() if self.owner else None
+        observation = (
+            self.owner.snapshot() if isinstance(self.owner, ProductionHistory) else None
+        )
         warning = observation is not None and (
             observation.dropped or observation.failed or observation.error
         )

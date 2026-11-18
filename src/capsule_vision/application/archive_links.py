@@ -1,8 +1,51 @@
-"""Published PNG paths on the existing History SQLite owner; never pixels or file I/O."""
+"""Published PNG links and archive path conventions; never pixels or file I/O."""
 
 import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
+from datetime import date
+from ntpath import isreserved
+from pathlib import Path, PurePath
+
+
+def archive_component(value: str) -> str:
+    # Reversible byte escaping preserves arbitrary CameraId identity and prevents
+    # traversal, Windows reserved names and collisions with literal '%' characters.
+    encoded = "".join(
+        chr(byte)
+        if chr(byte).isascii() and (chr(byte).isalnum() or chr(byte) in "-_")
+        else f"%{byte:02X}"
+        for byte in value.encode("utf-8")
+    )
+    if encoded.upper() in {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }:
+        encoded = f"%{ord(encoded[0]):02X}" + encoded[1:]
+    return encoded
+
+
+def relocated_image_path(stored: PurePath, camera_id: str, root: Path) -> Path | None:
+    """Map an archive link without inspecting or resolving its original path."""
+    if not stored.is_absolute() or len(stored.parts) < 4:
+        return None
+    day, camera, filename = stored.parts[-3:]
+    if (
+        camera != archive_component(camera_id)
+        or stored.suffix.lower() != ".png"
+        or "\\" in filename
+        or isreserved(filename)
+    ):
+        return None
+    try:
+        if date.fromisoformat(day).isoformat() != day:
+            return None
+    except ValueError:
+        return None
+    return root / day / camera / filename
 
 
 @dataclass(frozen=True, slots=True)

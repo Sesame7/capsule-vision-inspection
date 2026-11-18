@@ -34,6 +34,7 @@ from capsule_vision.application.batch_review import (
     BatchRow,
     RunRow,
 )
+from capsule_vision.application.history import HistoryReader
 from capsule_vision.application.models import PilotCounters
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.localization.catalog import text
@@ -126,9 +127,12 @@ class _BatchTree(QTreeWidget):
 class BatchesPage(RecordsPage):
     selection_changed = Signal()
 
-    def __init__(self, app: ProductionApplication) -> None:
+    def __init__(
+        self, app: ProductionApplication | None, *, history: HistoryReader | None = None
+    ) -> None:
         super().__init__("batch")
         self.app = app
+        self.history = app.history if app is not None else history
         self.language: Language = "zh"
         self._delivery = FutureDelivery()
         self._delivery.emitter.completed.connect(
@@ -253,7 +257,7 @@ class BatchesPage(RecordsPage):
             self._load_list()
 
     def _load_list(self) -> None:
-        if self.app.history is None:
+        if self.history is None:
             self._render()
             return
         self._listing = True
@@ -261,7 +265,7 @@ class BatchesPage(RecordsPage):
         self.older.setEnabled(False)
         self._delivery.watch(
             f"list/{self._list_version}",
-            self.app.history.batch_page(
+            self.history.batch_page(
                 "",
                 self._cursor,
                 self._newer,
@@ -327,12 +331,12 @@ class BatchesPage(RecordsPage):
     def _load_detail(self) -> None:
         # One queued read at a time. Pages share the existing Run anchor; only the
         # expanded Batch accumulates children. Selection never changes that scope.
-        if self._disposed or self._reading is not None or self.app.history is None:
+        if self._disposed or self._reading is not None or self.history is None:
             return
         for uid in (self._selected, self._expanded):
             if uid is not None and uid not in self._cache and uid not in self._errors:
                 self._reading = self._version, uid, 0
-                self._delivery.watch("detail", self.app.history.batch_detail(uid))
+                self._delivery.watch("detail", self.history.batch_detail(uid))
                 return
         data = self._cache.get(self._expanded) if self._expanded is not None else None
         if (
@@ -344,7 +348,7 @@ class BatchesPage(RecordsPage):
             self._reading = self._version, data.batch.uuid, offset
             self._delivery.watch(
                 "detail",
-                self.app.history.batch_detail(data.batch.uuid, offset, data.run_anchor),
+                self.history.batch_detail(data.batch.uuid, offset, data.run_anchor),
             )
 
     @Slot(str, object, object)
@@ -507,7 +511,7 @@ class BatchesPage(RecordsPage):
             or read_errors
             or (
                 unavailable
-                if self.app.history is None
+                if self.history is None
                 else text("report_no_batches", self.language)
                 if not self._page.rows and not self._listing
                 else ""
@@ -537,6 +541,8 @@ class BatchesPage(RecordsPage):
         self, snapshot: ProductionApplicationSnapshot | None = None
     ) -> None:
         if snapshot is None:
+            if self.app is None:
+                return
             snapshot = self.app.snapshot()
         if snapshot.run_id != self._observed_run:
             self._observed_run = snapshot.run_id

@@ -1,4 +1,4 @@
-"""Read-only, session-fenced Alarm History inside the existing History destination."""
+"""Shared Alarm Records presentation for production and portable review."""
 
 from dataclasses import replace
 from typing import cast
@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, Slot
 
 from capsule_vision.application import ProductionApplication
 from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
+from capsule_vision.application.history_review import HistoryReview
 from capsule_vision.application.identity_models import Role
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.configuration.alarm_definitions import CATEGORIES
@@ -41,9 +42,9 @@ def _source_caption(event: AlarmEvent, language: Language) -> str:
 
 
 class AlarmPage(HistoryEventTable):
-    def __init__(self, application: ProductionApplication) -> None:
+    def __init__(self, source: ProductionApplication | HistoryReview) -> None:
         super().__init__("alarm")
-        self.application = application
+        self._source = source
         self.scope = RecordsScope()
         self.search.hide()
         self.language: Language = "zh"
@@ -143,13 +144,22 @@ class AlarmPage(HistoryEventTable):
     def _read(self, query: AlarmQuery) -> None:
         self._token += 1
         self._query = query
-        self._revision = self.application.session_revision
+        source = self._source
+        self._revision = (
+            source.session_revision
+            if isinstance(source, ProductionApplication)
+            else None
+        )
         self._reading = True
         self.newer.setEnabled(False)
         self.older.setEnabled(False)
         self.refresh_status()
         try:
-            future = self.application.alarm_page(query, self._revision)
+            future = (
+                source.alarm_page(query, self._revision)
+                if isinstance(source, ProductionApplication)
+                else source.alarm_page(query)
+            )
         except RuntimeError as exc:
             self.clear()
             self._error = str(exc)
@@ -161,15 +171,16 @@ class AlarmPage(HistoryEventTable):
     def _completed(self, token: str, value: object, error: object) -> None:
         if token != str(self._token):
             return
-        identity = self.application.identity
-        session = identity.snapshot() if identity else None
-        if (
-            session is None
-            or session.role < Role.OPERATOR
-            or self._revision != session.revision
-        ):
-            self.clear()
-            return
+        if isinstance(self._source, ProductionApplication):
+            identity = self._source.identity
+            session = identity.snapshot() if identity else None
+            if (
+                session is None
+                or session.role < Role.OPERATOR
+                or self._revision != session.revision
+            ):
+                self.clear()
+                return
         self._reading = False
         self._error = str(error) if error else ""
         records = (
@@ -211,7 +222,11 @@ class AlarmPage(HistoryEventTable):
         self.refresh_status()
 
     def refresh_status(self) -> None:
-        history = self.application.history
+        history = (
+            self._source.history
+            if isinstance(self._source, ProductionApplication)
+            else None
+        )
         lost, issue = history.alarm_storage() if history else (0, "")
         msg = text("alarm_lost", self.language).format(count=lost) if lost else ""
         if self._reading:

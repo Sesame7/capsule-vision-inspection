@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from capsule_vision.application.history import ProductionHistory
+from capsule_vision.application.history import HistoryReader
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import Role
 from capsule_vision.application.records_query import (
@@ -147,7 +147,7 @@ class RecordsFilters(QWidget):
     changed = Signal()
 
     def __init__(
-        self, history: ProductionHistory | None, identity: LocalIdentity | None = None
+        self, history: HistoryReader | None, identity: LocalIdentity | None = None
     ) -> None:
         super().__init__()
         self.history = history

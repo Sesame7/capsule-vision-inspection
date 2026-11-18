@@ -23,7 +23,7 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 
-from .archive_links import PublishedImage
+from .archive_links import PublishedImage, archive_component
 
 
 def camera_archive_status(camera: CameraInspectionResult) -> int | None:
@@ -51,27 +51,6 @@ def camera_archive_status(camera: CameraInspectionResult) -> int | None:
     return None
 
 
-def _component(value: str) -> str:
-    # Reversible byte escaping preserves arbitrary CameraId identity and prevents
-    # traversal, Windows reserved names and collisions with literal '%' characters.
-    encoded = "".join(
-        chr(byte)
-        if chr(byte).isascii() and (chr(byte).isalnum() or chr(byte) in "-_")
-        else f"%{byte:02X}"
-        for byte in value.encode("utf-8")
-    )
-    if encoded.upper() in {
-        "CON",
-        "PRN",
-        "AUX",
-        "NUL",
-        *(f"COM{i}" for i in range(1, 10)),
-        *(f"LPT{i}" for i in range(1, 10)),
-    }:
-        encoded = f"%{ord(encoded[0]):02X}" + encoded[1:]
-    return encoded
-
-
 @dataclass(frozen=True, slots=True)
 class ArchiveImage:
     generation: int
@@ -84,12 +63,12 @@ class ArchiveImage:
 def write_png(root: Path, item: ArchiveImage) -> Path:
     """Encode off the critical path, publish atomically without replacing evidence."""
     stamp = item.observed_at
-    camera = _component(item.frame.id.camera_id)
+    camera = archive_component(item.frame.id.camera_id)
     directory = root.absolute() / stamp.strftime("%Y-%m-%d") / camera
     directory.mkdir(parents=True, exist_ok=True)
     name = f"{item.status}_{stamp:%H%M%S}{stamp.microsecond // 1000:03d}_{item.frame.id.cycle_id}_{camera}"
     if item.run_id is not None:
-        name += "_" + _component(item.run_id)
+        name += "_" + archive_component(item.run_id)
     ok, encoded = cv2.imencode(".png", item.frame.image)
     if not ok:
         raise OSError("PNG encoding failed")

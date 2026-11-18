@@ -364,6 +364,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "audit_inspection": ("检测历史", "Inspection History"),
     "records_inspection": ("检测", "Inspection"),
     "records_batches": ("批次", "Batches"),
+    "history_review_mode": ("历史记录查看 · 只读", "History review · Read-only"),
     "records_from": ("开始日期", "Start Date"),
     "records_all_batches": ("所有批次", "All Batches"),
     "records_to": ("结束日期", "End Date"),

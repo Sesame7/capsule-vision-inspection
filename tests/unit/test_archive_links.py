@@ -3,7 +3,7 @@
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from threading import Event
 
 import pytest
@@ -11,8 +11,77 @@ from tests.support.application import WAIT, production
 from tests.unit.test_history import context, finish
 
 from capsule_vision.application import archive_links
-from capsule_vision.application.archive_links import PublishedImage
+from capsule_vision.application.archive_links import (
+    PublishedImage,
+    relocated_image_path,
+)
 from capsule_vision.application.history import ProductionHistory
+
+
+@pytest.mark.parametrize(
+    "stored,camera,relative",
+    [
+        (
+            r"D:\2026-11-18\CAM2\0_123456000_1_CAM2_run.png",
+            "CAM2",
+            ("2026-11-18", "CAM2", "0_123456000_1_CAM2_run.png"),
+        ),
+        (
+            r"X:\plant\line\archive\2026-11-18\CAM2\0_123456000_1_CAM2_run.png",
+            "CAM2",
+            ("2026-11-18", "CAM2", "0_123456000_1_CAM2_run.png"),
+        ),
+        (
+            r"\\server\share\line\2024-02-29\Cell%201\1_capture_1.PNG",
+            "Cell 1",
+            ("2024-02-29", "Cell%201", "1_capture_1.PNG"),
+        ),
+        (
+            r"D:\archive\2026-11-18\%43ON\capture.png",
+            "CON",
+            ("2026-11-18", "%43ON", "capture.png"),
+        ),
+    ],
+)
+def test_relocate_archive_suffix(
+    tmp_path: Path, stored: str, camera: str, relative: tuple[str, str, str]
+) -> None:
+    root = tmp_path / "copied archive"
+    assert relocated_image_path(PureWindowsPath(stored), camera, root) == root.joinpath(
+        *relative
+    )
+    assert not root.exists()
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        r"2026-11-18\CAM2\image.png",
+        r"D:archive\2026-11-18\CAM2\image.png",
+        r"\archive\2026-11-18\CAM2\image.png",
+        r"D:\CAM2\image.png",
+        r"D:\archive\2026-02-29\CAM2\image.png",
+        r"D:\archive\20261118\CAM2\image.png",
+        r"D:\archive\2026-11-18\CAM1\image.png",
+        r"D:\archive\2026-11-18\cam2\image.png",
+        r"D:\archive\2026-11-18\CAM2\nested\image.png",
+        r"D:\archive\2026-11-18\..\image.png",
+        r"D:\archive\2026-11-18\CAM2\..\image.png",
+        r"D:\archive\2026-11-18\CAM2\image.jpg",
+        r"D:\archive\2026-11-18\CAM2\.png",
+        r"D:\archive\2026-11-18\CAM2\CON.png",
+        r"D:\archive\2026-11-18\CAM2\image:stream.png",
+        r"D:\archive\2026-11-18\CAM2\image?.png",
+        r"D:\archive\2026-11-18\CAM2\image.png ",
+    ],
+)
+def test_reject_malformed_archive_links(tmp_path: Path, stored: str) -> None:
+    assert relocated_image_path(PureWindowsPath(stored), "CAM2", tmp_path) is None
+
+
+def test_reject_archive_filename_with_alternate_separator(tmp_path: Path) -> None:
+    stored = PurePosixPath(r"/archive/2026-11-18/CAM2/..\image.png")
+    assert relocated_image_path(stored, "CAM2", tmp_path) is None
 
 
 def test_exact_links_both_orders_unlinked_rows_and_restart(tmp_path: Path) -> None:

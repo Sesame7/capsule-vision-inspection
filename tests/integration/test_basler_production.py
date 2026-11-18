@@ -370,6 +370,7 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
     requests: list[ArchiveImage] = []
 
     def writer(directory: Path, item: ArchiveImage) -> Path:
+        assert directory == root
         owners.append(get_ident())
         requests.append(item)
         entered.set()

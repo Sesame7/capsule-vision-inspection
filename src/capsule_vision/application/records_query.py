@@ -4,7 +4,7 @@ import sqlite3
 from concurrent.futures import CancelledError, Future
 from dataclasses import dataclass, replace
 from threading import Event
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .audit import AuditQuery, AuditRecord
 from .identity_models import Role
@@ -50,6 +50,9 @@ RUN_OVERLAP = """(:until IS NULL OR r.started<:until)
     AND (:since IS NULL OR r.started>=:since OR r.terminated>:since
          OR (r.outcome='open' AND :now>=:since))"""
 
+_ALARM_DATES = """(:since IS NULL OR observed>=:since)
+    AND (:until IS NULL OR observed<:until)"""
+
 
 def batch_choices(
     db: sqlite3.Connection,
@@ -57,7 +60,8 @@ def batch_choices(
     search: str,
     cursor: tuple[float, str] | None,
     now: float,
-    alarms: bool = False,
+    *,
+    alarms: Literal["recent", "retained"] | None = None,
 ) -> BatchChoices:
     args: dict[str, object] = {
         "since": scope.since,
@@ -74,16 +78,28 @@ def batch_choices(
         return BatchChoices((), False, False, False)
     # Closed Runs supply an end observation. Open Runs supply only recorded
     # activity, not a fabricated last-inspection timestamp or the query clock.
-    sql = (
-        """WITH matching AS (
+    matching_runs = (
+        """
         SELECT b.uuid,b.label,max(coalesce(r.terminated,
             max(r.started,
                 coalesce((SELECT max(c.completed_at) FROM cycles c WHERE c.run_id=r.uuid),r.started),
                 coalesce((SELECT max(g.observed) FROM plc_groups g WHERE g.run=r.uuid),r.started)))) AS activity
         FROM batches b JOIN runs r ON r.batch=b.uuid WHERE """
         + RUN_OVERLAP
-        + " GROUP BY b.uuid) "
+        + " GROUP BY b.uuid"
     )
+    sql = f"WITH matching AS ({matching_runs}) "
+    if alarms == "retained":
+        # A copied alarm can refer to a stored Batch even when no Run
+        # overlaps the filter. Use only its exact recorded Batch identity.
+        sql = f"""WITH run_matches AS ({matching_runs}), matching AS (
+            SELECT uuid,label,activity FROM run_matches
+            UNION ALL
+            SELECT b.uuid,b.label,max(a.observed) AS activity
+            FROM alarm_events a JOIN batches b ON b.uuid=a.batch_id
+            WHERE {_ALARM_DATES} AND NOT EXISTS (
+                SELECT 1 FROM run_matches r WHERE r.uuid=b.uuid)
+            GROUP BY b.uuid) """
     clauses = ["instr(lower(label),lower(:search))>0"]
     if cursor is not None:
         clauses.append("(activity,uuid)<(:activity,:uuid)")
@@ -103,6 +119,15 @@ def batch_choices(
         ).fetchone()
         is not None
     )
+    if not selected and alarms == "retained":
+        selected = (
+            db.execute(
+                f"""SELECT 1 FROM alarm_events a JOIN batches b ON b.uuid=a.batch_id
+                WHERE b.uuid=:batch AND {_ALARM_DATES} LIMIT 1""",
+                args,
+            ).fetchone()
+            is not None
+        )
     unbatched = (
         db.execute(
             "SELECT 1 FROM runs r WHERE r.batch IS NULL AND "
@@ -119,12 +144,11 @@ def batch_choices(
         ).fetchone()
         is not None
     )
-    if alarms and not unbatched:
+    if alarms is not None and not unbatched:
+        cutoff = "AND observed>=:cutoff " if alarms == "recent" else ""
         unbatched = (
             db.execute(
-                """SELECT 1 FROM alarm_events WHERE batch_id IS NULL
-            AND observed>=:cutoff AND (:since IS NULL OR observed>=:since)
-            AND (:until IS NULL OR observed<:until) LIMIT 1""",
+                f"SELECT 1 FROM alarm_events WHERE batch_id IS NULL {cutoff}AND {_ALARM_DATES} LIMIT 1",
                 args | {"cutoff": now - 30 * 86400},
             ).fetchone()
             is not None

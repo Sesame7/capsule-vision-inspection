@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOptionButton,
     QStylePainter,
-    QTabWidget,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -94,6 +93,7 @@ from .production_presentation import (
 from .production_recipes import ProductionRecipes
 from .recipe_page import ModelLabelReader, RecipePage
 from .records_filters import RecordsFilters
+from .records_tabs import RecordsTabs
 from .shell import PAGES, NavigationBar, StatusBar
 from .style import (
     Style,
@@ -451,15 +451,14 @@ class MainWindow(QMainWindow):
         self.alarm_page.kind.activated.connect(self._report_context)
         self.history.timer.timeout.connect(self.alarm_page.refresh_status)
         self.history.timer.timeout.connect(self.audit_page.refresh_status)
-        self.history_tabs = QTabWidget()
-        self.history_tabs.setObjectName("historyTabs")
-        self.history_tabs.tabBar().setObjectName("recordTypes")
-        self.history_tabs.setIconSize(QSize(20, 20))
-        self.history_tabs.setElideMode(Qt.TextElideMode.ElideRight)
-        self.history_tabs.addTab(self.batches_page, "")
-        self.history_tabs.addTab(self.history, "")
-        self.history_tabs.addTab(self.audit_page, "")
-        self.history_tabs.addTab(self.alarm_page, "")
+        self.history_tabs = RecordsTabs(
+            (
+                ("batches", self.batches_page),
+                ("inspection", self.history),
+                ("audit", self.audit_page),
+                ("alarms", self.alarm_page),
+            )
+        )
         # QTabWidget reserves its corner from sizeHint(). A bare button's
         # language-specific hint can be smaller than its fixed touch area.
         report_corner = QWidget()
@@ -633,19 +632,9 @@ class MainWindow(QMainWindow):
         page = (self.batches_page, self.history, self.audit_page, self.alarm_page)[
             index
         ]
-        # One set of controls/state occupies the same first row in each tab.
-        # Reparenting preserves QTabWidget's native tabs and Export corner.
-        page.filter_bar.insertWidget(0, self.records_filters)
-        self.records_filters.show()
+        self.history_tabs.place_filters(index, self.records_filters)
         self._report_context()
-        if index == 0:
-            self.batches_page.refresh()
-        elif index == 2:
-            self.audit_page.refresh()
-        elif index == 3:
-            self.alarm_page.refresh()
-        else:
-            self.history.refresh()
+        page.refresh()
 
     def _report_context(self) -> None:
         index = self.history_tabs.currentIndex()
@@ -685,44 +674,7 @@ class MainWindow(QMainWindow):
 
     def _history_language(self) -> None:
         self.records_filters.set_language(self.language)
-        colors = theme_colors(self)
-        for index, (caption, destination, icon) in enumerate(
-            (
-                (
-                    "records_batches",
-                    "records_batches",
-                    shell_icon("folder", colors.primary),
-                ),
-                (
-                    "records_inspection",
-                    "audit_inspection",
-                    shell_icon("brand", colors.primary),
-                ),
-                (
-                    "records_audit",
-                    "audit_trail",
-                    production_icon("cycles", colors.primary),
-                ),
-                (
-                    "records_alarms",
-                    "alarm_history",
-                    production_icon("FAULT", colors.primary),
-                ),
-            )
-        ):
-            name = text(destination, self.language)
-            label = text(caption, self.language)
-            self.history_tabs.setTabText(index, label)
-            # The long destination may use English fallback. Keep an elided
-            # tab's full native caption available in that case.
-            tip = (
-                label
-                if self.language != "en" and name == text(destination, "en")
-                else name
-            )
-            self.history_tabs.setTabToolTip(index, tip)
-            self.history_tabs.tabBar().setAccessibleTabName(index, label)
-            self.history_tabs.setTabIcon(index, icon)
+        self.history_tabs.set_language(self.language)
         self.batches_page.set_language(self.language)
         self.alarm_page.set_language(self.language)
         self.audit_page.set_language(self.language)

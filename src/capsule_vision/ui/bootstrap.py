@@ -42,6 +42,13 @@ from .style import Style
 class _Arguments(argparse.Namespace):
     window_size: tuple[int, int] | None = None
     diagnostics: DiagnosticLevel | None = None
+    history: Path | None = None
+
+
+def _parse_history_directory(value: str) -> Path:
+    if not value:
+        raise argparse.ArgumentTypeError("expected a directory path")
+    return Path(value)
 
 
 def parse_window_size(value: str) -> tuple[int, int]:
@@ -205,7 +212,17 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
         choices=("standard", "detailed"),
         help="write process-lifetime runtime diagnostics under data/logs",
     )
+    parser.add_argument(
+        "--history",
+        type=_parse_history_directory,
+        metavar="DIRECTORY",
+        help="review copied History and PNGs in read-only mode",
+    )
     args = parser.parse_args(argv, namespace=_Arguments())
+    if args.history is not None:
+        if args.diagnostics is not None:
+            parser.error("--diagnostics is not available with --history")
+        return _run_history_review(args.history, args.window_size, parser)
     data = ApplicationData.at_entry(entry_directory)
     diagnostics = (
         RuntimeDiagnostics(data.root / "logs", args.diagnostics)
@@ -227,6 +244,38 @@ def main(entry_directory: Path, argv: Sequence[str] | None = None) -> int:
         return code
     finally:
         diagnostics.close()
+
+
+def _run_history_review(
+    directory: Path,
+    window_size: tuple[int, int] | None,
+    parser: argparse.ArgumentParser,
+) -> int:
+    from capsule_vision.application.history_review import (
+        HistoryReviewError,
+        open_history_review,
+    )
+
+    from .history_review_window import HistoryReviewWindow
+
+    try:
+        with open_history_review(directory) as reader:
+            QLoggingCategory.setFilterRules("qt.text.font.db.info=false")
+            qt = QApplication(sys.argv[:1])
+            window = HistoryReviewWindow(reader)
+            try:
+                if window_size is None:
+                    window.showMaximized()
+                else:
+                    try:
+                        show_sized_window(window, window_size)
+                    except ValueError as exc:
+                        parser.error(str(exc))
+                return qt.exec()
+            finally:
+                window.dispose()
+    except HistoryReviewError as exc:
+        parser.error(f"--history: {exc}")
 
 
 def _run(

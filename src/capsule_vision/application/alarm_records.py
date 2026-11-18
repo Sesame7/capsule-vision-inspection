@@ -51,9 +51,14 @@ class AlarmQuery:
     batch_id: str | None = None
     unbatched: bool = False
 
-    def conditions(self, cutoff: float) -> tuple[list[str], list[float | int | str]]:
-        clauses = ["observed >= ?"]
-        args: list[float | int | str] = [cutoff]
+    def conditions(
+        self, cutoff: float | None
+    ) -> tuple[list[str], list[float | int | str]]:
+        clauses: list[str] = []
+        args: list[float | int | str] = []
+        if cutoff is not None:
+            clauses.append("observed >= ?")
+            args.append(cutoff)
         for expression, value in (
             ("observed >= ?", self.since),
             ("observed < ?", self.until),
@@ -75,14 +80,14 @@ class AlarmQuery:
         return clauses, args
 
 
-_EVENT_COLUMNS = "observed,signal,state,category,zh,en,source,station,address,bit,definition,batch_id,batch_label,detail"
+EVENT_COLUMNS = "observed,signal,state,category,zh,en,source,station,address,bit,definition,batch_id,batch_label,detail"
 
 
 def create(db: sqlite3.Connection, *, legacy: bool) -> None:
     # Additive and lazy. Existing v2/v3 Run and Cycle schemas keep their identity.
     if legacy:
         # Check that this is the original alarm table before extending it.
-        db.execute(f"SELECT id,{_EVENT_COLUMNS} FROM alarm_events LIMIT 0")
+        db.execute(f"SELECT id,{EVENT_COLUMNS} FROM alarm_events LIMIT 0")
         db.execute("ALTER TABLE alarm_events ADD COLUMN translations TEXT")
         return
     db.execute("""CREATE TABLE IF NOT EXISTS alarm_events (
@@ -96,7 +101,7 @@ def create(db: sqlite3.Connection, *, legacy: bool) -> None:
 
 def append(db: sqlite3.Connection, events: tuple[AlarmEvent, ...]) -> None:
     db.executemany(
-        f"INSERT INTO alarm_events({_EVENT_COLUMNS},translations) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        f"INSERT INTO alarm_events({EVENT_COLUMNS},translations) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             (
                 e.observed,
@@ -125,7 +130,7 @@ def append(db: sqlite3.Connection, events: tuple[AlarmEvent, ...]) -> None:
 
 
 def page(
-    db: sqlite3.Connection, query: AlarmQuery, cutoff: float, *, translated: bool
+    db: sqlite3.Connection, query: AlarmQuery, cutoff: float | None, *, translated: bool
 ) -> tuple[AlarmRecord, ...]:
     clauses, args = query.conditions(cutoff)
     if query.cursor is not None:
@@ -133,10 +138,9 @@ def page(
         args.append(query.cursor)
     order = "ASC" if query.newer else "DESC"
     column = "translations" if translated else "NULL"
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
     rows = db.execute(
-        f"SELECT id,{_EVENT_COLUMNS},{column} FROM alarm_events WHERE "
-        + " AND ".join(clauses)
-        + f" ORDER BY id {order} LIMIT 51",
+        f"SELECT id,{EVENT_COLUMNS},{column} FROM alarm_events{where} ORDER BY id {order} LIMIT 51",
         args,
     )
     result: list[AlarmRecord] = []

@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 739 maintained keys across 64 locales. This includes
+Qt interface covers 740 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report-export dialogs.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 102 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations, partial-group export limits and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 914-key
+Authored coverage does not imply native-speaker verification. The full 915-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -517,6 +517,50 @@ History has no retention settings or JSON preferences. Isolated demonstration
 compositions may omit persistence. See
 [ownership and bounds](architecture.md#production-history) for shutdown, loss
 observations and query limits.
+
+### Portable History review
+
+To review copied equipment records on another Windows computer, supply the
+package directory to either application entry point:
+
+```powershell
+uv run --no-sync python app.py --history "E:\Copied History"
+uv run --no-sync capsule-vision --history "E:\Copied History"
+```
+
+The package layout keeps the database and image date directories together:
+
+```text
+Copied History/
+  history.sqlite3
+  2026-11-18/
+    CAM2/
+      0_123456000_1_CAM2_run.png
+```
+
+Use a complete, closed History copy with the supported schema (version 4) and
+no SQLite `-wal`, `-shm` or `-journal` sidecars. Keep the package unchanged while
+reviewing it. The viewer does not recover incomplete copies or reconstruct
+transactions that were never copied. It reports missing files, unsupported
+schemas and SQLite integrity problems without opening local application data.
+
+The window identifies the directory and read-only mode. It uses the normal
+Records presentation for Batches and Runs, Inspection with archived images and
+stored findings, and Alarms. Alarms shows the stored observation time, source,
+label, state, Batch and available detail, with date, category and Batch filters.
+Cycle and Alarm rows still in the copy are visible beyond 30 days. A copy with
+no stored alarms shows an empty Alarms page. Sign-in, Audit, report export and
+production controls are absent; access is governed by access to the package
+files. Language changes apply only to the window. `--diagnostics` is unavailable
+in this mode.
+
+Keep the exact `YYYY-MM-DD/<CameraId>/<filename>.png` suffix from the archive,
+including any filename collision suffix. For example, a stored link to
+`D:\Archive\2026-11-18\CAM2\0_123456000_1_CAM2_run.png` opens the corresponding
+PNG under `E:\Copied History`, regardless of the old drive or directory depth.
+Unlinked, missing or invalid images cannot be recovered through the viewer.
+Without `--history`, startup uses the ordinary local History store and linked
+image paths.
 
 ## Communication preferences
 

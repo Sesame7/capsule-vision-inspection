@@ -2,7 +2,7 @@
 
 from math import ceil
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QFontMetricsF, QPaintEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -63,7 +63,43 @@ class _StatusLabel(QLabel):
         )
 
 
-class _LanguageSelector(QComboBox):
+class LanguageSelector(QComboBox):
+    """The shell's native-language picker, also used in portable review."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("language")
+        self.setMinimumHeight(Style.touch)
+        self.setIconSize(QSize(20, 20))
+        for language in language_identity.LANGUAGE_DISPLAY_ORDER:
+            self.addItem(language_identity.LANGUAGE_NAMES[language], language)
+        self.setMaxVisibleItems(len(language_identity.LANGUAGES))
+        self._size_caption()
+
+    def _size_caption(self) -> None:
+        self.ensurePolished()
+        self.setFixedWidth(
+            max(
+                self.fontMetrics().horizontalAdvance(name)
+                for name in language_identity.LANGUAGE_LABELS.values()
+            )
+            + 70
+        )
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange:
+            self._size_caption()
+
+    def present(self, language: language_identity.Language) -> None:
+        self.setCurrentIndex(self.findData(language))
+        icon = shell_icon("globe", theme_colors(self).primary)
+        for index in range(self.count()):
+            self.setItemIcon(index, icon)
+        caption = text("interface_language", language)
+        self.setToolTip(f"{caption} · {language_identity.LANGUAGE_NAMES[language]}")
+        self.setAccessibleName(caption)
+
     def showPopup(self) -> None:
         # The closed control is deliberately narrower than the native names.
         # Keep the native view/model and its keyboard/scroll behavior.
@@ -211,18 +247,9 @@ class NavigationBar(QFrame):
         self.theme.setIconSize(QSize(22, 22))
         self.theme.clicked.connect(self._request_theme)
         row.addWidget(self.theme)
-        self.language = _LanguageSelector()
-        self.language.setObjectName("language")
-        self.language.setMinimumHeight(Style.touch)
-        self.language.setIconSize(QSize(20, 20))
-        for language in language_identity.LANGUAGE_DISPLAY_ORDER:
-            self.language.addItem(language_identity.LANGUAGE_NAMES[language], language)
-        # Use the screen's available height before Qt falls back to scrolling.
-        self.language.setMaxVisibleItems(len(language_identity.LANGUAGES))
+        self.language = LanguageSelector()
         self.language.activated.connect(self._select_language)
         row.addWidget(self.language)
-        self.language.installEventFilter(self)
-        self._size_language_selector()
 
     @Slot(int)
     def _select_page(self, index: int) -> None:
@@ -267,13 +294,7 @@ class NavigationBar(QFrame):
         target = text("theme_light" if theme == "dark" else "theme_dark", language)
         self.theme.setToolTip(target)
         self.theme.setAccessibleName(target)
-        self.language.setCurrentIndex(self.language.findData(language))
-        for index in range(self.language.count()):
-            self.language.setItemIcon(index, shell_icon("globe", colors.primary))
-        self.language.setToolTip(
-            f"{text('interface_language', language)} · {language_identity.LANGUAGE_NAMES[language]}"
-        )
-        self.language.setAccessibleName(text("interface_language", language))
+        self.language.present(language)
         self.present_user(self._username, self._user_detail)
 
     def present_user(self, username: str | None, detail: str) -> None:
@@ -294,21 +315,6 @@ class NavigationBar(QFrame):
         self.user.setToolTip(full)
         self.user.setAccessibleName(full)
         self.user.setIcon(shell_icon("user", theme_colors(self).primary))
-
-    def _size_language_selector(self) -> None:
-        self.language.ensurePolished()
-        self.language.setFixedWidth(
-            max(
-                self.language.fontMetrics().horizontalAdvance(name)
-                for name in language_identity.LANGUAGE_LABELS.values()
-            )
-            + 70
-        )
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self.language and event.type() == QEvent.Type.FontChange:
-            self._size_language_selector()
-        return super().eventFilter(watched, event)
 
 
 class StatusBar(QFrame):

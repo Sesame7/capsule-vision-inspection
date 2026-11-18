@@ -3,11 +3,13 @@
 import json
 import sqlite3
 import zlib
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import Event
+from threading import enumerate as threads
 from time import time
 from uuid import uuid4
 
@@ -29,7 +31,14 @@ from PySide6.QtWidgets import (
 from tests.support.application import WAIT, production
 from tests.support.business import channel as business_channel
 from tests.support.business import history_review, mixed_result
-from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
+from tests.support.portable_history import copied_history
+from tests.support.qt import (
+    assert_full_caption,
+    close_window,
+    delete_widget,
+    ensure_test_fonts,
+    until,
+)
 from tests.support.startup import saved_data
 
 from capsule_vision.application import ConfigurationIdentity
@@ -42,8 +51,9 @@ from capsule_vision.application.history import (
     HistoryRecord,
     ProductionHistory,
 )
+from capsule_vision.application.history_review import HistoryReview
 from capsule_vision.application.image_archive import ArchiveImage, write_png
-from capsule_vision.application.startup import load_startup
+from capsule_vision.application.startup import ApplicationData, load_startup
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection import CycleStatus, Frame
 from capsule_vision.inspection.production import (
@@ -57,10 +67,12 @@ from capsule_vision.inspection.production import (
 )
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.ui import bootstrap, history_review_window
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.history_image import HistoryImageDialog
 from capsule_vision.ui.history_page import HistoryPage
+from capsule_vision.ui.history_review_window import HistoryReviewWindow
 from capsule_vision.ui.records_filters import RecordsFilters
 from capsule_vision.ui.style import Style, Theme, apply_theme, theme_colors
 
@@ -85,6 +97,114 @@ def cycle_record(page: HistoryPage, row: int = 0) -> HistoryRecord:
     record = item.data(Qt.ItemDataRole.UserRole)
     assert isinstance(record, HistoryRecord)
     return record
+
+
+def _choose_portable_batch(window: HistoryReviewWindow, label: str) -> None:
+    filters = window.filters
+    filters.batch.click()
+    matches = Qt.MatchFlag.MatchExactly
+    until(
+        lambda: (
+            filters.choices.isEnabled()
+            and bool(filters.choices.findItems(label, matches))
+        )
+    )
+    filters.choices.setCurrentItem(filters.choices.findItems(label, matches)[0])
+    QTest.keyClick(filters.choices, Qt.Key.Key_Return)
+    assert not filters.popup.isVisible()
+
+
+def _review_portable_alarms(window: HistoryReviewWindow, batch_id: str) -> None:
+    page = window.alarms
+    filters = window.filters
+    window.tabs.setCurrentIndex(2)
+    until(lambda: len(page.rows) == 50 and page.older.isEnabled())
+    assert window.tabs.tabText(2) == "Alarms"
+    assert window.tabs.tabToolTip(2) == text("alarm_history", "en")
+    assert page.table.columnCount() == 5
+    assert page.table.horizontalScrollBar().maximum() == 0
+    assert page.scope.batch == batch_id
+    first = page.rows
+    assert all(row.event.batch_id == batch_id for row in first)
+    assert {row.event.state for row in first} == {
+        "activated",
+        "recovered",
+        "observed_active",
+        "observed_recovered",
+    }
+    observed = first[0].event.observed
+    assert observed < time() - 30 * 86400
+    assert content(page.table, 0, 0) == datetime.fromtimestamp(observed).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    assert content(page.table, 0, 1) == "PLC · W118.5"
+    assert content(page.table, 0, 4) == "Copied lot"
+    assert content(page.table, 0, 3) == text("records_seen_active", "en")
+    state = page.table.item(0, 3)
+    assert state is not None
+    assert (
+        state.toolTip()
+        == state.data(Qt.ItemDataRole.AccessibleTextRole)
+        == text("alarm_observed_active", "en")
+    )
+    page.table.selectRow(0)
+    assert page.details.toPlainText() == text("records_after_gap", "en")
+    assert content(page.table, 0, 2) == "Low air pressure"
+    captions: tuple[tuple[Language, str], ...] = (
+        ("zh", "气压低"),
+        ("de", "Niedriger Luftdruck"),
+        ("zh-TW", "Low air pressure"),  # No stored translation; use recorded English.
+        ("en", "Low air pressure"),
+    )
+    for language, label in captions:
+        picker = window.language_selector
+        picker.activated.emit(picker.findData(language))
+        assert picker.accessibleName() == text("interface_language", language)
+        assert content(page.table, 0, 2) == label
+        assert page.rows == first and page.details.toPlainText() == text(
+            "records_after_gap", language
+        )
+
+    page.older.click()
+    until(lambda: len(page.rows) == 3 and page.newer.isEnabled())
+    assert page.rows[-1].cursor < first[-1].cursor
+    assert not page.older.isEnabled()
+    page.newer.click()
+    until(lambda: page.rows == first)
+
+    # Select an old day with an alarm for a stored Batch that never ran.
+    filters.select_batch(None)
+    idle_date = datetime.fromtimestamp(observed - 86400).date()
+    idle = QDate(idle_date.year, idle_date.month, idle_date.day)
+    filters.start.set_date(idle)
+    filters.end.set_date(idle)
+    page.kind.setCurrentIndex(page.kind.findData("interlock"))
+    page.kind.activated.emit(page.kind.currentIndex())
+    until(lambda: len(page.rows) == 1 and page.rows[0].event.signal == "feed_latch")
+    _choose_portable_batch(window, "Idle lot")
+    assert filters.scope.batch == page.rows[0].event.batch_id
+    until(lambda: not page.message.text())
+    assert content(page.table, 0, 4) == "Idle lot"
+    assert content(page.table, 0, 3) == text("records_seen_clear", "en")
+
+    # This day contains unassociated Alarm evidence, but no unbatched Run or Cycle.
+    page.kind.setCurrentIndex(page.kind.findData("software"))
+    page.kind.activated.emit(page.kind.currentIndex())
+    until(lambda: not page.rows and page.message.text() == text("history_none", "en"))
+    _choose_portable_batch(window, text("records_no_batch", "en"))
+    assert filters.scope.unbatched
+    until(
+        lambda: len(page.rows) == 1 and page.rows[0].event.signal == "application_fault"
+    )
+    assert content(page.table, 0, 1) == text("records_software", "en")
+    assert content(page.table, 0, 4) == "—"
+    assert content(page.table, 0, 3) == text("alarm_activated", "en")
+    page.table.selectRow(0)
+    assert page.details.toPlainText() == "Runtime fault · Timeout"
+    filters.start.set_date(QDate.currentDate())
+    filters.end.set_date(None)
+    until(lambda: not page.rows and page.message.text() == text("history_none", "en"))
+    assert not page.newer.isEnabled() and not page.older.isEnabled()
 
 
 def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
@@ -218,6 +338,162 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
         history.request_stop()
         assert history.join(WAIT)
         page.deleteLater()
+
+
+def test_portable_history_browses_old_batch_run_cycle_and_archived_evidence(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ensure_test_fonts()
+    package = copied_history(tmp_path)
+    pixels = QImage(str(package.image))
+    assert not pixels.isNull()
+    other_pixels = pixels.copy()
+    other_pixels.fill(Qt.GlobalColor.magenta)
+    assert other_pixels.save(str(package.original_image))
+    entry = tmp_path / "entry"
+    (entry / "data").mkdir(parents=True)
+    local = entry / "data" / "history.sqlite3"
+    local.write_bytes(b"unrelated local History")
+    assets = {
+        path: path.read_bytes()
+        for path in (
+            local,
+            package.database,
+            package.original_database,
+            package.image,
+            package.original_image,
+        )
+    }
+    files = set(package.root.rglob("*"))
+    initial_threads = set(threads())
+    windows: list[HistoryReviewWindow] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Portable review reached normal application startup")
+
+    def create(reader: HistoryReview) -> HistoryReviewWindow:
+        window = HistoryReviewWindow(reader)
+        windows.append(window)
+        return window
+
+    def execute() -> int:
+        (window,) = windows
+        assert window.isVisible() and window.tabs.count() == 3
+        assert window.mode.text() == "历史记录查看 · 只读"
+        assert window.directory.accessibleDescription() == str(package.root)
+        assert window.directory.text().endswith(package.root.name)
+        window.set_language("hy")
+        qapp.processEvents()
+        assert window.directory.text().endswith(package.root.name)
+        window.set_language("zh")
+        window.resize(1080, 1920)
+        assert {t.name for t in set(threads()) - initial_threads} == {"HistoryReview_0"}
+        batch = window.batches
+        until(lambda: batch.table.topLevelItemCount() == 2)
+        row = batch.table.topLevelItem(0)
+        assert row is not None and row.text(0) == "Copied lot"
+        batch.table.setCurrentItem(row)
+        row.setExpanded(True)
+        until(lambda: row.childCount() == 2)
+        assert "Training capsules" in batch.metadata_labels[0].text()
+        open_run, closed_run = row.child(0), row.child(1)
+        assert open_run is not None and closed_run is not None
+        assert closed_run.text(3) == "Recorded operator"
+        assert open_run.text(2) == "—"  # An open Run was not recovered.
+
+        _choose_portable_batch(window, "Copied lot")
+        assert window.filters.scope.batch == package.batch
+        window.tabs.setCurrentIndex(1)
+        page = window.inspection
+        assert not page.export_button.isVisible() and not page.timer.isActive()
+        until(lambda: not page.busy)
+        assert page.cycles.rowCount() == 50
+        assert cycle_record(page).context.completed_at < time() - 30 * 86400
+        window.filters.start.set_date(QDate.currentDate())
+        until(lambda: not page.busy)
+        assert page.cycles.rowCount() == 0
+        window.filters.start.set_date(None)
+        page.result.set_selected(frozenset({"NG"}))
+        until(lambda: not page.busy)
+        assert page.cycles.rowCount() == 50 and page.older.isEnabled()
+        page.older.click()
+        until(lambda: not page.busy)
+        assert page.cycles.rowCount() == 3 and page.newer.isEnabled()
+        page.cycles.selectRow(2)
+        until(lambda: not page.busy)
+        page.channels.setCurrentCell(1, 2)
+        assert cycle_record(page, 2).cameras[1].image_path == package.original_image
+        assert "Scratch" in page.channel_detail.toPlainText()
+        assert text("preview_length", "zh") in page.channel_detail.toPlainText()
+        button = page.image_button
+        assert button.isEnabled()
+        assert button.toolTip() == button.accessibleDescription() == str(package.image)
+        button.click()
+        viewer = page.image_dialog
+        assert viewer is not None and viewer.isVisible()
+        assert viewer.viewport.image == pixels and viewer.viewport.image != other_pixels
+        assert len(viewer.viewport.overlays) == 3
+        assert "Scratch · CH08, CH09" in viewer.viewport.accessibleDescription()
+        assert viewer.close()
+
+        absent = package.image.rename(package.image.with_suffix(".held"))
+        button.click()
+        assert page.image_dialog is None and package.original_image.is_file()
+        assert text("history_image_missing", "zh") in page.channel_detail.toPlainText()
+        window.set_language("en")
+        assert window.mode.text() == window.windowTitle().split(" · ", 1)[1]
+        assert window.mode.text() == "History review · Read-only"
+        assert (
+            text("history_image_missing", "en")
+            in page.channel_detail.accessibleDescription()
+        )
+        assert button.toolTip() == str(package.image)
+        absent.rename(package.image)
+        button.click()
+        viewer = page.image_dialog
+        assert viewer is not None and viewer.close()
+        assert (
+            text("history_image_missing", "en") not in page.channel_detail.toPlainText()
+        )
+
+        page.channels.setCurrentCell(2, 0)
+        assert button.toolTip() == text("history_image_missing", "en")
+        button.click()
+        assert page.image_dialog is None
+        assert text("history_image_missing", "en") in page.channel_detail.toPlainText()
+        page.channels.setCurrentCell(1, 2)
+        assert (
+            text("history_image_missing", "en") not in page.channel_detail.toPlainText()
+        )
+        _review_portable_alarms(window, package.batch)
+        assert window.close()
+        return 0
+
+    def application(_arguments: Sequence[str]) -> QApplication:
+        return qapp
+
+    monkeypatch.setattr(ApplicationData, "at_entry", forbidden)
+    monkeypatch.setattr(bootstrap, "load_startup", forbidden)
+    monkeypatch.setattr(bootstrap, "create_web_runtime", forbidden)
+    monkeypatch.setattr(bootstrap, "RuntimeDiagnostics", forbidden)
+    monkeypatch.setattr(ProductionHistory, "__init__", forbidden)
+    monkeypatch.setattr(bootstrap, "QApplication", application)
+    monkeypatch.setattr(history_review_window, "HistoryReviewWindow", create)
+    monkeypatch.setattr(qapp, "exec", execute)
+    try:
+        assert (
+            bootstrap.main(
+                entry, ["--history", str(package.root), "--window-size", "880x900"]
+            )
+            == 0
+        )
+        assert not {t for t in threads() if t.name.startswith("HistoryReview")}
+    finally:
+        for window in windows:
+            delete_widget(window)
+    assert {path: path.read_bytes() for path in assets} == assets
+    assert set(package.root.rglob("*")) == files
+    assert list((entry / "data").iterdir()) == [local]
 
 
 @pytest.mark.parametrize(

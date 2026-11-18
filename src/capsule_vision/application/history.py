@@ -12,7 +12,7 @@ from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Condition, Event, Thread
 from time import time
-from typing import cast
+from typing import Protocol, cast
 
 from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
@@ -62,6 +62,8 @@ from .report_scope import (
 )
 from .report_scope import HistoryQuery as HistoryQuery
 from .report_scope import ResultFilter as ResultFilter
+
+HISTORY_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +132,37 @@ class HistoryPageData:
     # Recent segments in date scope, with earliest retained completion per segment.
     batches: tuple[tuple[str, str | None, float], ...]
     more: bool
+
+
+class HistoryReader(Protocol):
+    """The bounded Records queries shared by production and portable review."""
+
+    def query(self, query: HistoryQuery | None = None) -> Future[HistoryPageData]: ...
+
+    def batch_page(
+        self,
+        prefix: str = "",
+        cursor: tuple[float, str] | None = None,
+        newer: bool = False,
+        *,
+        since: int | None = None,
+        until: int | None = None,
+        batch: str | None = None,
+        unbatched: bool = False,
+    ) -> Future[BatchList]: ...
+
+    def batch_detail(
+        self, batch: str, offset: int = 0, run_anchor: int | None = None
+    ) -> Future[BatchDetail]: ...
+
+    def batch_choices(
+        self,
+        scope: RecordsScope,
+        search: str = "",
+        cursor: tuple[float, str] | None = None,
+        *,
+        alarm_revision: int | None = None,
+    ) -> Future[BatchChoices]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +288,141 @@ def _image_evidence(value: object, ng_channels: set[int]) -> HistoryImageEvidenc
             HistoryFinding(label, rect, cast(tuple[int, ...], tuple(channels)))
         )
     return HistoryImageEvidence(size, tuple(decoded))
+
+
+def read_history_page(
+    connection: sqlite3.Connection,
+    query: HistoryQuery,
+    *,
+    has_images: bool,
+    on_image_failure: Callable[[sqlite3.Error], None] | None = None,
+) -> HistoryPageData:
+    """Read persisted Cycle evidence on the caller's SQLite owner."""
+    clauses: list[str] = []
+    args: list[object] = []
+    for field, op, value in (
+        ("completed_at", ">=", query.since),
+        ("completed_at", "<", query.until),
+    ):
+        if value is not None:
+            clauses.append(f"{field} {op} ?")
+            args.append(value)
+    date_where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    batches = cast(
+        list[tuple[str, str | None, float]],
+        connection.execute(
+            "SELECT batch_segment,batch_label,(SELECT MIN(first.completed_at) "
+            "FROM cycles AS first WHERE first.batch_segment=cycles.batch_segment) FROM cycles"
+            + date_where
+            + " GROUP BY batch_segment ORDER BY MAX(completed_at) DESC LIMIT 100",
+            args,
+        ).fetchall(),
+    )
+    clauses, args = query.conditions()
+    if query.cursor is not None:
+        clauses.append("(completed_at,id) " + (">" if query.newer else "<") + " (?,?)")
+        args.extend(query.cursor)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    order = "ASC" if query.newer else "DESC"
+    rows = cast(
+        list[tuple[object, ...]],
+        connection.execute(
+            "SELECT id,completed_at,batch_segment,batch_label,run_id,cycle_id,recipe_id,model_id,model_sha,"
+            "status,technical,judgment,detail,m.first_cycle,m.slot,"
+            "CASE WHEN m.run IS NULL THEN NULL WHEN r.reporting_mode='single_cycle' THEN 1 ELSE 4 END FROM cycles "
+            "LEFT JOIN group_members m ON m.run=cycles.run_id AND m.cycle=cycles.cycle_id "
+            "LEFT JOIN runs r ON r.uuid=m.run"
+            + where
+            + f" ORDER BY completed_at {order},id {order} LIMIT ?",
+            [*args, query.limit + 1],
+        ).fetchall(),
+    )
+    visible = rows[: query.limit]
+    images: dict[tuple[int, str], Path] = {}
+    if has_images and visible:
+        try:
+            images = archive_links.for_page(
+                connection, tuple(cast(int, row[0]) for row in visible)
+            )
+        except sqlite3.Error as exc:
+            if on_image_failure is None:
+                raise
+            on_image_failure(exc)
+    records = tuple(_decode_history_record(row, images) for row in visible)
+    return HistoryPageData(
+        tuple(reversed(records)) if query.newer else records,
+        tuple(batches),
+        len(rows) > query.limit,
+    )
+
+
+def _decode_history_record(
+    row: tuple[object, ...], images: dict[tuple[int, str], Path]
+) -> HistoryRecord:
+    # Typed boundary for our versioned SQLite payload; corrupt data fails the
+    # query instead of becoming fabricated judgments or affecting Production.
+    detail: object = json.loads(zlib.decompress(cast(bytes, row[12])))
+    payload = _items(detail)
+    if len(payload) != 3:
+        raise ValueError("Invalid History detail payload")
+    recipe_name = payload[2]
+    if recipe_name is not None and not isinstance(recipe_name, str):
+        raise ValueError("Invalid History Recipe name")
+    channels = tuple(
+        HistoryChannel(
+            str(r[0]),
+            int(cast(int, r[1])),
+            int(cast(int, r[2])),
+            str(r[3]),
+            str(r[4]),
+            str(r[5]),
+            _strings(r[6]),
+        )
+        for r in (_items(v) for v in _items(payload[0]))
+    )
+    record_id = int(cast(int, row[0]))
+    cameras = tuple(
+        HistoryCamera(
+            str(r[0]),
+            str(r[1]),
+            str(r[2]),
+            _strings(r[3]),
+            _strings(r[4]),
+            images.get((record_id, str(r[0]))),
+            _image_evidence(
+                r[5],
+                {
+                    c.channel
+                    for c in channels
+                    if c.camera == r[0] and c.business == "NG"
+                },
+            )
+            if len(r) > 5
+            else None,
+        )
+        for r in (_items(v) for v in _items(payload[1]))
+    )
+    context = HistoryContext(
+        float(cast(float, row[1])),
+        str(row[2]),
+        cast(str | None, row[3]),
+        str(row[4]),
+        ConfigurationIdentity(str(row[6]), str(row[7]), str(row[8])),
+        recipe_name,
+    )
+    return HistoryRecord(
+        record_id,
+        context,
+        int(cast(str, row[5])),
+        str(row[9]),
+        str(row[10]),
+        str(row[11]),
+        channels,
+        cameras,
+        int(str(row[13])) if row[13] is not None else None,
+        cast(int | None, row[14]),
+        cast(int | None, row[15]),
+    )
 
 
 class ProductionHistory:
@@ -498,7 +666,9 @@ class ProductionHistory:
                 search,
                 cursor,
                 self.clock(),
-                alarm_revision is not None and self._alarm_translations is not None,
+                alarms="recent"
+                if alarm_revision is not None and self._alarm_translations is not None
+                else None,
             )
             if alarm_revision is not None and authorize is not None:
                 authorize(alarm_revision)
@@ -825,7 +995,7 @@ class ProductionHistory:
         register_result_filter(connection)
         try:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 4) or (
+            if version not in (0, HISTORY_SCHEMA_VERSION) or (
                 version == 0
                 and connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1"
@@ -854,7 +1024,7 @@ class ProductionHistory:
             """
                     + batch_records.SCHEMA
                     + run_configuration.SCHEMA
-                    + "PRAGMA user_version=4; COMMIT;"
+                    + f"PRAGMA user_version={HISTORY_SCHEMA_VERSION}; COMMIT;"
                 )
             connection.execute(
                 "SELECT run,effective,complete,revision_lookup FROM run_configurations LIMIT 0"
@@ -1054,130 +1224,11 @@ class ProductionHistory:
     def _read(
         self, connection: sqlite3.Connection, query: HistoryQuery
     ) -> HistoryPageData:
-        clauses: list[str] = []
-        args: list[object] = []
-        for field, op, value in (
-            ("completed_at", ">=", query.since),
-            ("completed_at", "<", query.until),
-        ):
-            if value is not None:
-                clauses.append(f"{field} {op} ?")
-                args.append(value)
-        date_where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        batches = cast(
-            list[tuple[str, str | None, float]],
-            connection.execute(
-                "SELECT batch_segment,batch_label,(SELECT MIN(first.completed_at) "
-                "FROM cycles AS first WHERE first.batch_segment=cycles.batch_segment) FROM cycles"
-                + date_where
-                + " GROUP BY batch_segment ORDER BY MAX(completed_at) DESC LIMIT 100",
-                args,
-            ).fetchall(),
-        )
-        clauses, args = query.conditions()
-        if query.cursor is not None:
-            clauses.append(
-                "(completed_at,id) " + (">" if query.newer else "<") + " (?,?)"
-            )
-            args.extend(query.cursor)
-        where = " WHERE " + " AND ".join(clauses) if clauses else ""
-        order = "ASC" if query.newer else "DESC"
-        rows = cast(
-            list[tuple[object, ...]],
-            connection.execute(
-                "SELECT id,completed_at,batch_segment,batch_label,run_id,cycle_id,recipe_id,model_id,model_sha,"
-                "status,technical,judgment,detail,m.first_cycle,m.slot,"
-                "CASE WHEN m.run IS NULL THEN NULL WHEN r.reporting_mode='single_cycle' THEN 1 ELSE 4 END FROM cycles "
-                "LEFT JOIN group_members m ON m.run=cycles.run_id AND m.cycle=cycles.cycle_id "
-                "LEFT JOIN runs r ON r.uuid=m.run"
-                + where
-                + f" ORDER BY completed_at {order},id {order} LIMIT ?",
-                [*args, query.limit + 1],
-            ).fetchall(),
-        )
-        visible = rows[: query.limit]
-        images: dict[tuple[int, str], Path] = {}
-        if self._has_images and visible:
-            try:
-                images = archive_links.for_page(
-                    connection, tuple(cast(int, row[0]) for row in visible)
-                )
-            except sqlite3.Error as exc:
-                self._image_failure(exc)
-        records = tuple(self._decode(row, images) for row in visible)
-        return HistoryPageData(
-            tuple(reversed(records)) if query.newer else records,
-            tuple(batches),
-            len(rows) > query.limit,
-        )
-
-    @staticmethod
-    def _decode(
-        row: tuple[object, ...], images: dict[tuple[int, str], Path]
-    ) -> HistoryRecord:
-        # Typed boundary for our versioned SQLite payload; corrupt data fails the
-        # query instead of becoming fabricated judgments or affecting Production.
-        detail: object = json.loads(zlib.decompress(cast(bytes, row[12])))
-        payload = _items(detail)
-        if len(payload) != 3:
-            raise ValueError("Invalid History detail payload")
-        recipe_name = payload[2]
-        if recipe_name is not None and not isinstance(recipe_name, str):
-            raise ValueError("Invalid History Recipe name")
-        channels = tuple(
-            HistoryChannel(
-                str(r[0]),
-                int(cast(int, r[1])),
-                int(cast(int, r[2])),
-                str(r[3]),
-                str(r[4]),
-                str(r[5]),
-                _strings(r[6]),
-            )
-            for r in (_items(v) for v in _items(payload[0]))
-        )
-        record_id = int(cast(int, row[0]))
-        cameras = tuple(
-            HistoryCamera(
-                str(r[0]),
-                str(r[1]),
-                str(r[2]),
-                _strings(r[3]),
-                _strings(r[4]),
-                images.get((record_id, str(r[0]))),
-                _image_evidence(
-                    r[5],
-                    {
-                        c.channel
-                        for c in channels
-                        if c.camera == r[0] and c.business == "NG"
-                    },
-                )
-                if len(r) > 5
-                else None,
-            )
-            for r in (_items(v) for v in _items(payload[1]))
-        )
-        context = HistoryContext(
-            float(cast(float, row[1])),
-            str(row[2]),
-            cast(str | None, row[3]),
-            str(row[4]),
-            ConfigurationIdentity(str(row[6]), str(row[7]), str(row[8])),
-            recipe_name,
-        )
-        return HistoryRecord(
-            record_id,
-            context,
-            int(cast(str, row[5])),
-            str(row[9]),
-            str(row[10]),
-            str(row[11]),
-            channels,
-            cameras,
-            int(str(row[13])) if row[13] is not None else None,
-            cast(int | None, row[14]),
-            cast(int | None, row[15]),
+        return read_history_page(
+            connection,
+            query,
+            has_images=self._has_images,
+            on_image_failure=self._image_failure,
         )
 
     def _run(self) -> None:
