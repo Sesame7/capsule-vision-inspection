@@ -22,7 +22,6 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QFontMetrics,
-    QImageReader,
     QPainter,
     QPainterPath,
     QRegion,
@@ -46,9 +45,7 @@ from PySide6.QtWidgets import (
 )
 
 from capsule_vision.application import ProductionApplication
-from capsule_vision.application.alarm_report import AlarmReportRequest
 from capsule_vision.application.archive_links import relocated_image_path
-from capsule_vision.application.audit_report import AuditReportRequest
 from capsule_vision.application.history import (
     HistoryCamera,
     HistoryChannel,
@@ -58,7 +55,6 @@ from capsule_vision.application.history import (
     HistoryRecord,
     ProductionHistory,
 )
-from capsule_vision.application.identity_models import Role
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.report_scope import ALL_RESULTS
 from capsule_vision.localization.catalog import CAPSULE_REASON_KEYS, text
@@ -70,11 +66,9 @@ from .history_event_table import (
     readable_value,
     record_time,
 )
-from .history_image import HistoryImageDialog
+from .history_image import HistoryImageDialog, read_archived_png
 from .history_result_filter import HistoryResultFilter
 from .image_tools import image_icon
-from .permissions import permits
-from .report_dialog import ReportDialog
 from .style import Style, button_width, theme_colors
 
 _COUNT_SEPARATOR = "\u2009·\u2009"
@@ -97,7 +91,7 @@ _CYCLE_COLUMNS = (
 )
 
 
-def _inspection_reason(code: str, language: Language) -> str:
+def inspection_reason(code: str, language: Language) -> str:
     keys = {
         "defect_region": "records_model_defect",
         "execution_error": "execution_error",
@@ -314,17 +308,9 @@ class HistoryPage(QWidget):
     ) -> None:
         super().__init__()
         self.owner = owner
+        self.scope = RecordsScope()
         self.application = application
         self._image_root = image_root.absolute() if image_root is not None else None
-        self.export_available = True
-        self.export_batch: tuple[str, str] | None = None
-        self.export_audit: AuditReportRequest | None = None
-        self.export_audit_label = ""
-        self.export_alarm: AlarmReportRequest | None = None
-        self.export_alarm_label = ""
-        self.export_requires_batch = False
-        self.scope = RecordsScope()
-        self.report_dialog: ReportDialog | None = None
         self.image_dialog: HistoryImageDialog | None = None
         self.language: Language = "zh"
         self.busy = False
@@ -383,10 +369,6 @@ class HistoryPage(QWidget):
             button.setMinimumHeight(Style.touch)
             actions.addWidget(button)
         actions.addWidget(self.refresh_button)
-        self.export_button = QPushButton(self)
-        self.export_button.setMinimumHeight(Style.touch)
-        self.export_button.clicked.connect(self._open_export)
-        self.export_button.hide()  # The Records tab widget hosts this shared action.
         root.addWidget(self.toolbar)
         self.warning = QLabel()
         self.warning.setTextFormat(Qt.TextFormat.PlainText)
@@ -629,15 +611,8 @@ class HistoryPage(QWidget):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.result.set_language(language)
-        self.export_button.setText(text("report_export", language))
-        self.export_button.setFixedWidth(
-            button_width(self.export_button, ("report_export",))
-        )
         self.image_button.setText(text("history_open_image", language))
         self.image_button.setAccessibleName(self.image_button.text())
-        self.identity_changed()
-        if self.report_dialog is not None:
-            self.report_dialog.set_language(language)
         full_headers = (
             "history_time",
             "history_cycle",
@@ -681,70 +656,6 @@ class HistoryPage(QWidget):
         with QSignalBlocker(self.result):
             self.result.set_selected(ALL_RESULTS)
         self.refresh()
-
-    def identity_changed(self) -> None:
-        app = self.application
-        audit = self.export_audit is not None
-        allowed = app is not None and permits(
-            app, Role.ENGINEER if audit else Role.OPERATOR
-        )
-        available = (
-            (app is not None and app.identity is not None)
-            if audit
-            else self.owner is not None
-        )
-        self.export_button.setEnabled(
-            available
-            and allowed
-            and self.export_available
-            and (not self.export_requires_batch or self.export_batch is not None)
-        )
-        self.export_button.setToolTip(
-            text(
-                "history_unavailable"
-                if not available or app is None
-                else "customer_deferred"
-                if not self.export_available and allowed
-                else "customer_select_batch"
-                if self.export_requires_batch and self.export_batch is None and allowed
-                else "report_export"
-                if allowed
-                else "permission_engineer"
-                if audit
-                else "permission_operator",
-                self.language,
-            )
-        )
-        if (
-            self.report_dialog is not None
-            and app is not None
-            and self.report_dialog.revision != app.session_revision
-        ):
-            self.report_dialog.reject()
-
-    def _open_export(self) -> None:
-        if self.application is None or not self.export_button.isEnabled():
-            return
-        if self.report_dialog is None:
-            self.report_dialog = ReportDialog(
-                self.application,
-                self.language,
-                self,
-                self._filters(),
-                self.export_batch,
-                audit=self.export_audit,
-                audit_label=self.export_audit_label,
-                alarm=self.export_alarm,
-                alarm_label=self.export_alarm_label,
-            )
-            self.report_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-            self.report_dialog.finished.connect(self._report_closed)
-        self.report_dialog.show()
-        self.report_dialog.raise_()
-        self.report_dialog.activateWindow()
-
-    def _report_closed(self) -> None:
-        self.report_dialog = None
 
     @Slot()
     def refresh(self) -> None:
@@ -992,7 +903,7 @@ class HistoryPage(QWidget):
                     )
             reasons.extend(labels)
             reasons.extend(
-                _inspection_reason(code, self.language)
+                inspection_reason(code, self.language)
                 for code in selected.reasons
                 if code != "defect_region" or not labels
             )
@@ -1098,52 +1009,12 @@ class HistoryPage(QWidget):
             return
         self._image_issue = None
         self._channel_selected()
-        path = self._image_path(camera)
-        if path is None or not path.is_absolute() or path.suffix.lower() != ".png":
-            self._image_error(
-                record.record_id, camera.camera, linked, "history_image_missing"
-            )
-            return
-        if self._image_root is not None:
-            try:
-                root = self._image_root.resolve(strict=True)
-                path = path.resolve(strict=True)
-            except (OSError, ValueError) as exc:
-                issue = (
-                    "history_image_missing"
-                    if isinstance(exc, (FileNotFoundError, NotADirectoryError))
-                    else "history_image_open_failed"
-                )
-                self._image_error(record.record_id, camera.camera, linked, issue)
-                return
-            if not path.is_relative_to(root):
-                self._image_error(
-                    record.record_id, camera.camera, linked, "history_image_missing"
-                )
-                return
-        reader = QImageReader(str(path), b"png")
-        reader.setAutoDetectImageFormat(False)
-        reader.setAutoTransform(False)
-        image = reader.read()
-        if image.isNull():
-            issue = "history_image_open_failed"
-            try:
-                path.stat()
-            except FileNotFoundError:
-                issue = "history_image_missing"
-            except OSError:
-                pass
-            self._image_error(record.record_id, camera.camera, linked, issue)
-            return
         evidence = camera.image_evidence
-        if (
-            evidence is not None
-            and evidence.size is not None
-            and evidence.size != (image.width(), image.height())
-        ):
-            self._image_error(
-                record.record_id, camera.camera, linked, "history_image_size_mismatch"
-            )
+        image, issue = read_archived_png(
+            linked, camera.camera, self._image_root, evidence.size if evidence else None
+        )
+        if issue:
+            self._image_error(record.record_id, camera.camera, linked, issue)
             return
         language = self.language
         title = (
@@ -1225,7 +1096,5 @@ class HistoryPage(QWidget):
     def dispose(self) -> None:
         if self.image_dialog is not None:
             self.image_dialog.reject()
-        if self.report_dialog is not None:
-            self.report_dialog.reject()
         self.timer.stop()
         self._delivery.detach()

@@ -16,7 +16,7 @@ from tests.unit.test_production_report import FOUR_CYCLE
 from capsule_vision.application.history import HistoryContext, ProductionHistory
 from capsule_vision.application.models import PilotCounters
 from capsule_vision.application.report_content import ReportData
-from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
+from capsule_vision.application.report_scope import ReportRequest
 from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
     FirstStationReport,
@@ -67,33 +67,6 @@ def test_mixed_run_memberships_classification_reports_and_retention(
             3,
             4,
         ]
-        scope = history.defect_report_scope(HistoryQuery()).result(WAIT)
-        assert scope.attributable and (
-            scope.cycles,
-            scope.groups,
-            scope.covered_cycles,
-        ) == (5, 2, 5)
-        # One entire single-member group is valid; a single retained member of
-        # a four-member Run remains partial even with identical CycleId/status.
-        single = HistoryQuery(since=NOW + 100)
-        assert history.defect_report_scope(single).result(WAIT).attributable
-        partial = HistoryQuery(until=NOW + 12)
-        assert not history.defect_report_scope(partial).result(WAIT).attributable
-        with pytest.raises(ValueError, match="Detection Count"):
-            history.capture_report(
-                ReportRequest("defects", "capsule", filters=partial),
-                tmp_path / "partial.db",
-                Event(),
-            ).result(WAIT)
-        filtered = tmp_path / "scope.db"
-        history.capture_report(
-            ReportRequest("defects", "capsule"), filtered, Event()
-        ).result(WAIT)
-        with closing(sqlite3.connect(filtered)) as db:
-            report = ReportData(db, "en", Event())
-            assert report.group_count == report.covered == 2
-            assert report.ng == 8 and report.explained == 4
-            assert report.categories.total() == 8
         assert history.snapshot().failed == 0
     finally:
         finish(history)
@@ -120,7 +93,7 @@ def test_mixed_run_memberships_classification_reports_and_retention(
         for scope_name in ("batch", "defects"):
             target = tmp_path / f"{scope_name}.db"
             history.capture_report(
-                ReportRequest(scope_name, "capsule", batch.uuid), target, Event()
+                ReportRequest(scope_name, batch=batch.uuid), target, Event()
             ).result(WAIT)
             with closing(sqlite3.connect(target)) as db:
                 for language in ("zh", "en"):
@@ -128,7 +101,17 @@ def test_mixed_run_memberships_classification_reports_and_retention(
                     assert report.positions == expected
                     if scope_name == "defects":
                         assert report.batch_complete and report.categories.total() == 8
-                    assert len(list(report.runs())) == 2
+                        total, first, second = report.batch_category_rows()
+                        assert total[1:3] == (expected.inspected, expected.channel_ng)
+                        assert first[1:3] == second[1:3] == (expected.inspected // 2, 4)
+                    else:
+                        total, first, second = report.production_rows()
+                        assert total[-4:-1] == (
+                            expected.inspected,
+                            expected.channel_ok,
+                            expected.channel_ng,
+                        )
+                        assert first[-4:-1] == second[-4:-1]
     finally:
         finish(history)
 

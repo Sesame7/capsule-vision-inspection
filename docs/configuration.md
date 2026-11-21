@@ -86,25 +86,25 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 740 maintained keys across 64 locales. This includes
+Qt interface covers 737 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
-diagnostics, Records, Batch, Audit, Alarms and report-export dialogs.
+diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
 recovery caption are authored for every locale. General save/select/prepare
 guidance applies before selecting a saved Recipe. An incomplete selection shows
 the next setup and reselection step in Production, including in the Start tooltip
 and on the empty canvas when there are no camera cards.
-The 102 English fallback entries cover specific technical explanations in
+The 94 English fallback entries cover specific technical explanations in
 `am`, `ha`, `km`, `mg`, `si`, `ti`, `tk` and `zu`, and Sinhala
 phase/compensation captions. They include group timing, History clock
-observations, partial-group export limits and proven Batch/Audit association.
+observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 915-key
+Authored coverage does not imply native-speaker verification. The full 904-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
-The export dialog uses the interface language. PDF and Excel reports keep their
-independent Simplified Chinese or English output selection.
+The UI language at Export determines the PDF language. `zh` selects Simplified
+Chinese and every other supported locale selects English.
 
 UI language codes are exact: `zh` (Simplified Chinese), `zh-TW` (Traditional Chinese),
 `en` (English), `ja` (Japanese),
@@ -439,8 +439,8 @@ optional Recipe name. The three-element payload also supports an optional
 per-camera extension containing original image dimensions and effective ViMo
 labels, rectangles and channel associations. Existing camera entries without
 this extension remain readable with their stored reasons. Former two-element
-payloads follow the existing corrupt-record query error behavior. A null Recipe
-name displays as a dash with the stored Recipe ID in its tooltip.
+payloads follow the existing corrupt-record query error behavior. Inspection
+displays a null Recipe name as a dash with the stored Recipe ID in its tooltip.
 
 The same database stores the selected Production Batch, Run lifecycle and cumulative
 totals. Startup restores the selection by UUID. Labels are unique per IPC after
@@ -477,42 +477,38 @@ ViMo labels keep their historical Model and artifact identity. Legacy Run recove
 requires complete retained group classification reconciled to an independently
 known durable Run summary. Missing coverage stays unavailable, without deriving
 Run categories from Batch aggregates or current Models. The manual
-[production report](architecture.md#production-history) writes a selected
-Batch production summary or Inspection defect-category summary to an
-operator-selected `.pdf` (default) or `.xlsx` file. Whole-Batch totals ignore
-discovery filters. Inspection with an exact selected Batch exports its entire
-durable classification and all associated Runs in one table. Without a named
-Batch selection, Inspection uses its effective filters across all matching pages;
-position counting requires a complete attributable group scope, otherwise only
-Detection Count is available. Format, basis and independently selected
-Chinese/English report language apply to that export only. The existing save dialog
-suggests the localized report type, known selected Batch label when available and
-local time at dialog opening; unsafe filename characters are replaced and long
-suggestions are bounded without modifying stored labels. The operator can change
-the filename/path, and the existing overwrite confirmation and atomic publication
-rules remain. PDF-only export workstation/reference metadata has no saved setting
-or separate identity store; see the [report contract](architecture.md#production-history).
+[production report](architecture.md#production-history) covers the selected
+Batch. NG exports the durable defect classification for every Run belonging to
+the selected capsule's persisted Batch UUID. Both reports cover the complete
+Batch regardless of the gallery dates, Batch filter or page. An unbatched NG
+capsule has no export. Cycles is review-only.
+
+Export opens the native PDF Save dialog with a suggested filename containing
+the report title in the output language, the selected Batch label when available
+and the local time. The suggestion bounds its length and replaces unsafe
+filename characters. Operators can change the destination and confirm an
+overwrite. Export captures the scope, session and UI language when clicked.
+Workstation and reference metadata use the existing
+[report identification rules](architecture.md#production-history).
 The first-page **System Generated** mark is fixed presentation. The engineering
 renderer can explicitly mark sample PDFs; normal application exports never enable
 SAMPLE and there is no customer watermark preference.
 Reports do not append
 Cycle/group/channel detail or change persisted accounting.
-The Audit tab uses the same compact export dialog, with Engineer-level service
-authorization. Its PDF/Excel report contains every operation matching the effective
+Audit uses the shared PDF action with Engineer-level service authorization.
+Its report contains every operation matching the effective
 date, exact Batch-association and historical-account filters, not just the visible
 page. Audit and necessary History association evidence are frozen by their existing
 owners. Empty results do not publish a file; cancellation or a superseded session
-cannot replace an existing destination. Output choices are not saved preferences
-and export does not change Audit evidence. See the
+cannot replace an existing destination. Export leaves Audit evidence unchanged. See the
 [Audit contract](architecture.md#audit-trail) and
 [report contract](architecture.md#production-history) for association and publication
 limits. The Alarms tab exports every retained event matching its shared dates,
 exact persisted Batch association and category filter, with Operator-level
-authorization. Its PDF/Excel content preserves observed states, transitions and
+authorization. Its PDF content preserves observed states, transitions and
 meaningful recorded details without inferring alarm durations or missing recoveries.
 The existing History owner freezes this scope; the same session/cancellation and
-safe-publication checks apply. Output choices do not change alarm preferences or
-stored events. See the [Alarm contract](architecture.md#alarm-monitoring-and-history).
+safe-publication checks apply. See the [Alarm contract](architecture.md#alarm-monitoring-and-history).
 History has no retention settings or JSON preferences. Isolated demonstration
 compositions may omit persistence. See
 [ownership and bounds](architecture.md#production-history) for shutdown, loss
@@ -545,10 +541,14 @@ transactions that were never copied. It reports missing files, unsupported
 schemas and SQLite integrity problems without opening local application data.
 
 The window identifies the directory and read-only mode. It uses the normal
-Records presentation for Batches and Runs, Inspection with archived images and
-stored findings, and Alarms. Alarms shows the stored observation time, source,
+Records presentation for Batches and Runs, NG, Cycles and Alarms.
+The NG tab shows each stored member's full channel ROI from its linked PNG,
+using the copied Run layout. The gallery's Recipe names and Channel camera
+tooltips come from the copied History evidence. Each of the four numbered
+images preserves both optical views. A missing PNG leaves that image unavailable.
+Its tooltip shows the recorded channel status when present. Alarms shows the stored observation time, source,
 label, state, Batch and available detail, with date, category and Batch filters.
-Cycle and Alarm rows still in the copy are visible beyond 30 days. A copy with
+Cycle, group and Alarm rows still in the copy are visible beyond 30 days. A copy with
 no stored alarms shows an empty Alarms page. Sign-in, Audit, report export and
 production controls are absent; access is governed by access to the package
 files. Language changes apply only to the window. `--diagnostics` is unavailable

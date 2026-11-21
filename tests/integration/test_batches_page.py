@@ -37,6 +37,7 @@ from capsule_vision.application.batch_review import (
 from capsule_vision.application.history import HistoryContext, ProductionHistory
 from capsule_vision.application.identity_models import Role
 from capsule_vision.application.records_query import RecordsScope
+from capsule_vision.application.report_scope import ReportRequest
 from capsule_vision.localization.catalog import text
 from capsule_vision.ui.batches_page import BatchesPage
 from capsule_vision.ui.bootstrap import create_window
@@ -174,16 +175,22 @@ def test_public_readonly_batch_metadata_and_export_context(
         window.navigate(3)
         tabs, page = window.history_tabs, window.batches_page
         assert tabs.currentWidget() is page
-        assert [tabs.tabText(i) for i in range(4)] == [
+        assert [tabs.tabText(i) for i in range(5)] == [
             "Batches",
-            "Inspection",
+            "NG",
+            "Cycles",
             "Audit",
             "Alarms",
         ]
-        assert [tabs.isTabEnabled(i) for i in range(4)] == [True, True, False, False]
+        assert [tabs.isTabEnabled(i) for i in range(5)] == [
+            True,
+            True,
+            True,
+            False,
+            False,
+        ]
         assert (
-            window.history.export_button.isVisible()
-            and not window.history.export_button.isEnabled()
+            window.records_export.isVisible() and not window.records_export.isEnabled()
         )
         until(lambda: page.detail is not None)
         assert page.detail is not None and page.detail.batch.uuid == other.uuid
@@ -243,14 +250,14 @@ def test_public_readonly_batch_metadata_and_export_context(
 
         identity.login("Shift", TEST_PASSWORD).result(WAIT)
         window.identity_controls.refresh()
-        until(window.history.export_button.isEnabled)
+        until(window.records_export.isEnabled)
         page.table.setCurrentItem(child(parent(page)))
         assert page.selected_batch == (batch.uuid, batch.label)
-        assert window.history.export_batch == (batch.uuid, batch.label)
-        window.history.export_button.click()
-        report = window.history.report_dialog
-        assert report and report.batch == (batch.uuid, batch.label)
-        report.reject()
+        assert window.records_export.request == ReportRequest("batch", batch=batch.uuid)
+        window.records_export.click()
+        chooser = window.records_export.chooser
+        assert chooser and batch.label in chooser.selectedFiles()[0]
+        chooser.reject()
         assert app.history is not None
         app.update_batch_information(
             batch.uuid,

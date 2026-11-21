@@ -690,13 +690,12 @@ def test_unsupported_detail_shape_is_observable(
         assert connection.execute("SELECT count(*) FROM cycles").fetchone()[0] == 1
 
 
-def test_any_status_filter_uses_persisted_channels_before_paging_and_export(
+def test_any_status_filter_uses_persisted_channels_before_paging(
     tmp_path: Path,
 ) -> None:
     from capsule_vision.application.report_scope import (
         ALL_RESULTS,
         HistoryQuery,
-        ReportRequest,
     )
 
     owner = ProductionHistory(tmp_path / "history.sqlite3", clock=lambda: 1000.0)
@@ -761,22 +760,6 @@ def test_any_status_filter_uses_persisted_channels_before_paging_and_export(
             .result(WAIT)
             .records
         )
-        # Export captures the same ANY query over the full scope, ignoring its page.
-        target = tmp_path / "snapshot.sqlite3"
-        owner.capture_report(
-            ReportRequest(
-                "defects",
-                "detections",
-                filters=HistoryQuery(
-                    result=frozenset(("OK", "ERROR")), limit=2, cursor=(1000, 40)
-                ),
-            ),
-            target,
-            Event(),
-        ).result(WAIT)
-        with closing(sqlite3.connect(target)) as db:
-            assert db.execute("SELECT count(*) FROM cycles").fetchone() == (54,)
-            assert db.execute("SELECT result FROM meta").fetchone() == ("OK, ERR",)
     finally:
         finish(owner)
     # The same legacy payload read path works across restart without a migration.

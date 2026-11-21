@@ -20,6 +20,7 @@ from capsule_vision.localization.languages import Language, is_language
 from .alarm_page import AlarmPage
 from .batches_page import BatchesPage
 from .history_page import HistoryPage
+from .ng_capsules_page import NgCapsulesPage
 from .records_filters import RecordsFilters
 from .records_tabs import RecordsTabs
 from .shell import LanguageSelector
@@ -74,12 +75,14 @@ class HistoryReviewWindow(QMainWindow):
 
         self.batches = BatchesPage(None, history=reader)
         self.inspection = HistoryPage(reader, image_root=reader.root)
+        self.ng_capsules = NgCapsulesPage(reader, image_root=reader.root)
         self.alarms = AlarmPage(reader)
         self.filters = RecordsFilters(reader)
         self.tabs = RecordsTabs(
             (
                 ("batches", self.batches),
-                ("inspection", self.inspection),
+                ("ng_capsules", self.ng_capsules),
+                ("cycles", self.inspection),
                 ("alarms", self.alarms),
             )
         )
@@ -107,12 +110,13 @@ class HistoryReviewWindow(QMainWindow):
         self.tabs.set_language(language)
         self.batches.set_language(language)
         self.inspection.set_language(language)
+        self.ng_capsules.set_language(language)
         self.alarms.set_language(language)
         self.filters.set_language(language)
 
     @Slot(int)
     def _refresh_tab(self, index: int) -> None:
-        page = (self.batches, self.inspection, self.alarms)[index]
+        page = (self.batches, self.ng_capsules, self.inspection, self.alarms)[index]
         page.scope = self.filters.scope
         self.tabs.place_filters(index, self.filters)
         page.refresh()
@@ -124,6 +128,7 @@ class HistoryReviewWindow(QMainWindow):
         self.filters.dispose()
         self.batches.dispose()
         self.inspection.dispose()
+        self.ng_capsules.dispose()
         self.alarms.dispose()
 
     def closeEvent(self, event: QCloseEvent) -> None:

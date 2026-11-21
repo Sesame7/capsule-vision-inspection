@@ -28,7 +28,7 @@ accuracy remain separate commissioning responsibilities.
 | Recipe | Edit and save Recipe definitions, models and inspection rules |
 | Vision | Configure sources, camera layouts and channel ROIs |
 | Communication | Configure PLC diagnostics, reporting, auxiliary software-status/alarm communication and the Web observer |
-| Records | All roles can browse named Batches, their read-only information, Runs and inspection records. Operators and above can review Alarm History and export customer Batch and filtered defect reports. Engineers and Administrators can review the local Audit Trail. |
+| Records | All roles can browse named Batches, their read-only information, Runs and inspection records. NG Capsules shows the available archived views for each rejected channel of an attributed four-exposure group. Operators and above can export a Production PDF from Batches, a Batch Defect PDF from NG, and filtered Alarm records. Engineers and Administrators can review and export the local Audit Trail. |
 
 ## Quick Start
 

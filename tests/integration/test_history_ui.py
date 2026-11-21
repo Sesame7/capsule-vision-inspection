@@ -73,6 +73,7 @@ from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.history_image import HistoryImageDialog
 from capsule_vision.ui.history_page import HistoryPage
 from capsule_vision.ui.history_review_window import HistoryReviewWindow
+from capsule_vision.ui.records_export import RecordsExport
 from capsule_vision.ui.records_filters import RecordsFilters
 from capsule_vision.ui.style import Style, Theme, apply_theme, theme_colors
 
@@ -117,10 +118,10 @@ def _choose_portable_batch(window: HistoryReviewWindow, label: str) -> None:
 def _review_portable_alarms(window: HistoryReviewWindow, batch_id: str) -> None:
     page = window.alarms
     filters = window.filters
-    window.tabs.setCurrentIndex(2)
+    window.tabs.setCurrentWidget(window.alarms)
     until(lambda: len(page.rows) == 50 and page.older.isEnabled())
-    assert window.tabs.tabText(2) == "Alarms"
-    assert window.tabs.tabToolTip(2) == text("alarm_history", "en")
+    assert window.tabs.tabText(3) == "Alarms"
+    assert window.tabs.tabToolTip(3) == text("alarm_history", "en")
     assert page.table.columnCount() == 5
     assert page.table.horizontalScrollBar().maximum() == 0
     assert page.scope.batch == batch_id
@@ -378,7 +379,7 @@ def test_portable_history_browses_old_batch_run_cycle_and_archived_evidence(
 
     def execute() -> int:
         (window,) = windows
-        assert window.isVisible() and window.tabs.count() == 3
+        assert window.isVisible() and window.tabs.count() == 4
         assert window.mode.text() == "历史记录查看 · 只读"
         assert window.directory.accessibleDescription() == str(package.root)
         assert window.directory.text().endswith(package.root.name)
@@ -403,9 +404,9 @@ def test_portable_history_browses_old_batch_run_cycle_and_archived_evidence(
 
         _choose_portable_batch(window, "Copied lot")
         assert window.filters.scope.batch == package.batch
-        window.tabs.setCurrentIndex(1)
+        window.tabs.setCurrentWidget(window.inspection)
         page = window.inspection
-        assert not page.export_button.isVisible() and not page.timer.isActive()
+        assert window.findChild(RecordsExport) is None and not page.timer.isActive()
         until(lambda: not page.busy)
         assert page.cycles.rowCount() == 50
         assert cycle_record(page).context.completed_at < time() - 30 * 86400

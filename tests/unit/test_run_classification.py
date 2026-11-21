@@ -6,12 +6,10 @@ from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
-from typing import cast
 
 import pytest
-from openpyxl import load_workbook
-from openpyxl.styles import Alignment, Font
 from tests.support.application import WAIT
+from tests.support.reports import pdf_text
 from tests.unit.test_defect_reports import MARK, NOW, classified
 from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_history import finish
@@ -21,8 +19,6 @@ from capsule_vision.application.history import HistoryContext, ProductionHistory
 from capsule_vision.application.production_report import write_report
 from capsule_vision.application.report_content import ReportData
 from capsule_vision.application.report_scope import (
-    HistoryQuery,
-    ReportBasis,
     ReportRequest,
 )
 from capsule_vision.communication.reporting import (
@@ -34,6 +30,7 @@ from capsule_vision.inspection.production import (
     ProductionInspectionResult,
     Reason,
 )
+from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
 
@@ -153,19 +150,8 @@ def test_run_categories_reconcile_survive_restart_expiry_and_duplicate_delivery(
     owner = ProductionHistory(path, clock=lambda: NOW + 31 * 86400)
     try:
         snap = tmp_path / "batch.db"
-        # Exact selected Batch ignores the now-empty discovery date and result scope.
         owner.capture_report(
-            ReportRequest(
-                "defects",
-                "capsule",
-                filters=HistoryQuery(
-                    since=NOW + 100,
-                    until=NOW + 101,
-                    batch_segment=batch,
-                    result=frozenset(),
-                    limit=1,
-                ),
-            ),
+            ReportRequest("defects", batch=batch),
             snap,
             Event(),
         ).result(WAIT)
@@ -184,15 +170,16 @@ def test_run_categories_reconcile_survive_restart_expiry_and_duplicate_delivery(
                 and "Length (ViMo 2)" in names.values()
             )
             rows = list(data.batch_category_rows())
-            assert [r[1] for r in rows] == [12, 8, 4]
+            assert [r[1:3] for r in rows] == [(87, 12), (58, 8), (29, 4)]
+            assert sum(data.categories.values()) > data.positions.channel_ng
             assert rows[0][0] == "Batch Total" and str(rows[1][0]).startswith("Run 1\n")
-            assert rows[0][2:4] == (3, 3)
-            for column, key in enumerate(names, 2):
+            assert rows[0][3:5] == (3, 3)
+            for column, key in enumerate(names, 3):
                 assert rows[0][column] == data.categories[key]
                 assert rows[1][column] == data.run_categories["first"][key]
                 assert rows[2][column] == data.run_categories["second"][key]
             assert (
-                0 in rows[1][2:]
+                0 in rows[1][3:]
             )  # The other Run's Model categories are confirmed zero.
             assert "capsule." not in str(rows) and RECIPE.model_id not in str(rows)
     finally:
@@ -257,7 +244,7 @@ def test_legacy_run_backfill_never_allocates_residual_batch_categories(
         try:
             snap = tmp_path / f"legacy-{index}.db"
             owner.capture_report(
-                ReportRequest("defects", "capsule", batch), snap, Event()
+                ReportRequest("defects", batch=batch), snap, Event()
             ).result(WAIT)
             with closing(sqlite3.connect(snap)) as db:
                 data = ReportData(db, "en", Event())
@@ -268,8 +255,8 @@ def test_legacy_run_backfill_never_allocates_residual_batch_categories(
                 }
                 rows = list(data.batch_category_rows())
                 if not complete:
-                    assert all(v is None for v in rows[0][2:] + rows[1][2:])
-                    assert rows[2][2] == 1
+                    assert all(v is None for v in rows[0][3:] + rows[1][3:])
+                    assert rows[2][3] == 1
                 assert data.positions.channel_ng == 12
         finally:
             finish(owner)
@@ -314,60 +301,29 @@ def test_group_category_failure_rolls_back_eligible_fact_and_all_aggregates(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_actual_batch_classification_workbook_and_pdf(
-    tmp_path: Path, language: Language
-) -> None:
+def test_actual_batch_classification_pdf(tmp_path: Path, language: Language) -> None:
     path = tmp_path / "history.sqlite3"
     batch = populate(path)
     owner = ProductionHistory(path, clock=lambda: NOW)
     try:
-        for ext in ("xlsx", "pdf"):
-            output = tmp_path / ("defects." + ext)
-            write_report(
-                owner,
-                ReportRequest("defects", "capsule", batch),
-                output,
-                language,
-                Event(),
-                lambda: None,
-            )
-            if ext == "pdf":
-                assert output.read_bytes().startswith(b"%PDF-")
-                continue
-            with closing(load_workbook(output)) as book:
-                sheet = book.worksheets[0]
-                values = list(sheet.values)
-                first = next(
-                    i
-                    for i, row in enumerate(values)
-                    if row[0] in ("Batch Total", "整批合计")
-                )
-                assert [row[1] for row in values[first : first + 3]] == [12, 8, 4]
-                assert sheet.cell(first + 1, 2).data_type == "n"
-                assert len(book.sheetnames) == 1
-                assert "capsule." not in str(values) and "Source" not in str(values)
-                assert (
-                    "ViMo 1" in str(values)
-                    if language == "en"
-                    else "Length" in str(values)
-                )
-                assert sheet.freeze_panes == f"C{first + 1}"
-                assert sheet.print_title_rows == f"${first}:${first}"
-                assert cast(Font, sheet.cell(first + 1, 1).font).b
-                for row in sheet.iter_rows(
-                    min_row=first + 1, max_row=first + 3, min_col=2
-                ):
-                    assert all(
-                        c.data_type == "n"
-                        and cast(Alignment, c.alignment).horizontal == "right"
-                        for c in row
-                    )
-                assert values[first][2:4] == (3, 3)
+        output = tmp_path / "defects.pdf"
+        write_report(
+            owner,
+            ReportRequest("defects", batch=batch),
+            output,
+            language,
+            Event(),
+            lambda: None,
+        )
+        content = pdf_text(output)
+        assert text("customer_batch_total", language) in content
+        assert "capsule." not in content and "Source" not in content
+        assert "Dent" in content and "12" in content
     finally:
         finish(owner)
 
 
-def test_unbatched_categories_and_detection_basis_remain_independent(
+def test_unbatched_groups_still_persist_classification(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "history.sqlite3"
@@ -379,20 +335,6 @@ def test_unbatched_categories_and_detection_basis_remain_independent(
         group = submit(
             owner, HistoryContext(NOW, "unbatched", None, "unbatched", RECIPE), 11
         )
-        cases: tuple[tuple[ReportBasis, int], ...] = (("capsule", 1), ("detections", 4))
-        for basis, multiplier in cases:
-            snapshot = tmp_path / (basis + ".db")
-            owner.capture_report(
-                ReportRequest("defects", basis), snapshot, Event()
-            ).result(WAIT)
-            with closing(sqlite3.connect(snapshot)) as db:
-                data = ReportData(db, "en", Event())
-                assert data.batch is None
-                assert data.categories["traditional", "", "", "length"] == multiplier
-                assert data.categories["traditional", "", "", "color"] == multiplier
-                assert data.categories.total() == 7 * multiplier
-        owner.finish_run("unbatched", "stopped", False).result(WAIT)
-        owner.select_batch("Later named batch").result(WAIT)
     finally:
         finish(owner)
     owner = ProductionHistory(path, clock=lambda: NOW + 31 * 86400)

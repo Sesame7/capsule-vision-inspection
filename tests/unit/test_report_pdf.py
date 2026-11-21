@@ -154,7 +154,9 @@ def test_landscape_print_bounds_and_finalized_localized_footers(
     assert body and all(m[4] >= 9.5 for m in body)
     if scope == "batch":
         assert captions[text("report_signature_date", language)] == 2
-        assert sum(m[4] == 21 for m in marks) == 4
+        assert captions[text("customer_batch_total", language)] == 1
+        assert captions[text("report_summary", language)] >= 1
+        assert max(m[4] for m in body) == 12
         # Counts and rates share the right-aligned numeric table columns.
         assert any(
             m[1] == pytest.approx(width - 14 * mm - 6) and m[3].endswith("%")
@@ -276,7 +278,7 @@ def test_event_change_details_stay_together_or_split_without_losing_lines(
     monkeypatch.setattr(Canvas, "drawString", record)
     monkeypatch.setattr(Canvas, "showPage", page)
     with closing(sqlite3.connect(":memory:")) as db:
-        db.execute("""CREATE TABLE meta AS SELECT 'audit' AS scope,'' AS basis,
+        db.execute("""CREATE TABLE meta AS SELECT 'audit' AS scope,
             1000000000 AS observed,NULL AS since,NULL AS until,NULL AS filter_label,
             0 AS unbatched,0 AS scoped_segment,NULL AS account""")
         write_pdf(db, tmp_path / "events.pdf", "en", Event())
@@ -342,7 +344,7 @@ def test_audit_comparison_repeats_aligned_columns_across_page_breaks(
     monkeypatch.setattr(ReportData, "tables", tables)
     monkeypatch.setattr(Canvas, "drawString", record)
     with closing(sqlite3.connect(":memory:")) as db:
-        db.execute("""CREATE TABLE meta AS SELECT 'audit' AS scope,'' AS basis,
+        db.execute("""CREATE TABLE meta AS SELECT 'audit' AS scope,
             1000000000 AS observed,NULL AS since,NULL AS until,NULL AS filter_label,
             0 AS unbatched,0 AS scoped_segment,NULL AS account""")
         write_pdf(db, tmp_path / "comparison.pdf", "en", Event())

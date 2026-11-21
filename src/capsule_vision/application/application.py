@@ -34,7 +34,7 @@ from .alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
 from .alarm_report import AlarmReportRequest
 from .audit import AuditOperation, error_outcome
 from .audit_report import AuditReportRequest
-from .batch_records import BatchSelection, ReportBatches
+from .batch_records import BatchSelection
 from .batch_review import BatchInformation, BatchSetup, StartAccount
 from .history import HistoryContext, ProductionHistory
 from .identity import LocalIdentity
@@ -64,7 +64,7 @@ from .models import (
 )
 from .process_application import apply_process, process_target
 from .recipe_dependencies import RecipePreparationRequired
-from .report_scope import DefectScope, HistoryQuery, ReportRequest
+from .report_scope import ReportRequest, batch_report_request
 from .run_configuration import RunConfiguration, capture_run
 from .session import (
     ProductionCycle,
@@ -646,27 +646,6 @@ class ProductionApplication:
             self._restoring = False
             self._condition.notify_all()
 
-    def report_batches(
-        self,
-        prefix: str = "",
-        cursor: str | None = None,
-        previous: bool = False,
-        *,
-        revision: int | None = None,
-    ) -> Future[ReportBatches]:
-        with self._condition, self._admission(Role.OPERATOR, revision):
-            if self.history is None:
-                raise ApplicationStateError("History unavailable")
-            return self.history.report_batches(prefix, cursor, previous)
-
-    def defect_report_scope(
-        self, filters: HistoryQuery, *, revision: int | None = None
-    ) -> Future[DefectScope]:
-        with self._condition, self._admission(Role.OPERATOR, revision):
-            if self.history is None:
-                raise ApplicationStateError("History unavailable")
-            return self.history.defect_report_scope(filters)
-
     def export_report(
         self,
         batch: str | ReportRequest | AuditReportRequest | AlarmReportRequest,
@@ -690,8 +669,10 @@ class ProductionApplication:
                 raise ApplicationStateError(
                     "A production report is already being exported"
                 )
-            if path.suffix.lower() not in (".xlsx", ".pdf"):
-                raise ValueError("Select an .xlsx or .pdf file")
+            if path.suffix.lower() != ".pdf":
+                raise ValueError("Select a .pdf file")
+            if not isinstance(batch, (AuditReportRequest, AlarmReportRequest)):
+                batch = batch_report_request(batch)
             actor_revision = actor.revision if actor else None
             stop = cancel if cancel is not None else Event()
             future = _promise(Future[Path]())

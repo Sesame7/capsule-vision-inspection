@@ -1,4 +1,4 @@
-"""Inspect real workbooks written from isolated live History owners."""
+"""Inspect published PDFs and their durable content from isolated History owners."""
 
 import sqlite3
 from concurrent.futures import CancelledError
@@ -7,15 +7,13 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import Event
-from zipfile import ZipFile
 
 import pytest
-from openpyxl import load_workbook
-from openpyxl.worksheet._writer import ALL_TEMP_FILES
 from reportlab.pdfgen.canvas import Canvas
 from scripts.development_records import Shift, cycle_result
 from tests.support.application import WAIT, FakeSession, close, prepared
 from tests.support.business import mixed_result
+from tests.support.reports import pdf_text
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 from tests.unit.test_configured_occupancy import configuration
 from tests.unit.test_durable_batches import RECIPE
@@ -30,6 +28,7 @@ from capsule_vision.application import (
 from capsule_vision.application.batch_review import BatchInformation, StartAccount
 from capsule_vision.application.history import HistoryContext, ProductionHistory
 from capsule_vision.application.identity_models import StaleSessionError
+from capsule_vision.application.report_content import ReportData
 from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
 from capsule_vision.communication.reporting import (
@@ -65,14 +64,14 @@ def record_group(
 
 
 @pytest.mark.parametrize("cameras,language", [(5, "zh"), (6, "en")])
-def test_workbook_uses_only_selected_batch_and_persisted_physical_outcomes(
+def test_pdf_uses_only_selected_batch_and_persisted_physical_outcomes(
     tmp_path: Path, cameras: int, language: Language
 ) -> None:
     now = 1_800_000_000.0
     history = ProductionHistory(tmp_path / "history.sqlite3", clock=lambda: now)
     app = ProductionApplication(lambda _p, _g: FakeSession(), history=history)
     try:
-        # A label that looks like a formula and a long numeric ID must survive Excel exactly.
+        # Preserve the literal business label and omit internal inspection identities.
         batch = history.select_batch("=LOT-005").result(WAIT)
         assert batch
         first = 9_007_199_254_740_993
@@ -111,40 +110,50 @@ def test_workbook_uses_only_selected_batch_and_persisted_physical_outcomes(
             6,
             4,
         )
-        path = app.export_report(batch.uuid, tmp_path / "report.xlsx", language).result(
+        path = app.export_report(batch.uuid, tmp_path / "report.pdf", language).result(
             WAIT
         )
-        with closing(load_workbook(path)) as book:
-            assert book.sheetnames == [text("customer_batch", language)]
-            summary = book.worksheets[0]
-            rows = list(summary.values)
-            assert (text("batch_input", language), batch.label) == rows[2][:2]
-            assert summary["B3"].data_type == "s"
-            metrics = next(
-                i
-                for i, r in enumerate(rows)
-                if r[0] == text("report_inspected", language)
+        body = pdf_text(path)
+        assert text("customer_batch", language) in body and batch.label in body
+        assert text("identity_status", language) not in body
+        assert text("report_stopped", language) not in body
+        assert "Other" not in body and str(first) not in body and "CH01" not in body
+        assert context.run_id not in body and RECIPE.model_sha256 not in body
+        snapshot = tmp_path / "summary.db"
+        history.capture_report(batch.uuid, snapshot, Event()).result(WAIT)
+        with closing(sqlite3.connect(snapshot)) as db:
+            data = ReportData(db, language, Event())
+            (table,) = data.tables()
+            assert table.headers == tuple(
+                text(key, language)
+                for key in (
+                    "batch_run",
+                    "report_started",
+                    "customer_end",
+                    "batch_start_account",
+                    "report_inspected",
+                    "ok",
+                    "ng",
+                    "report_pass_rate",
+                )
             )
-            assert tuple(rows[metrics + 1][col] for col in (0, 2, 4, 6)) == (
+            assert table.emphasize_first and table.numeric_columns == (4, 5, 6, 7)
+            total, *runs = data.production_rows()
+            assert list(table.rows) == [total, *runs]
+            assert total[:4] == (text("customer_batch_total", language), "", "", "")
+            assert total[4:] == (
                 5 * cameras,
                 cameras,
                 4 * cameras,
                 0.2,
             )
-            assert summary.cell(metrics + 2, 7).number_format == "0.00%"
-            assert isinstance(summary["B2"].value, datetime)
-            runs = [r for r in rows if type(r[0]) is int and isinstance(r[1], datetime)]
-            assert [r[0] for r in runs] == [1, 2, 3]
-            assert runs[0][5:] == (5 * cameras, cameras, 4 * cameras, 0.2)
-            assert all(r[5:] == (None,) * 4 for r in runs[1:])
-            assert runs[1][4] == text("report_stopped", language)
-            flat = str(rows)
-            assert "Other" not in flat and str(first) not in flat and "CH01" not in flat
-            assert context.run_id not in flat and RECIPE.model_sha256 not in flat
-            assert text("run_statistics_unavailable", language) in flat
-            assert text("customer_batch_basis", language) not in flat
+            labels = [f"{text('export_run', language)} {i}" for i in (1, 2, 3)]
             if cameras == 6:
-                assert text("run_uncertain_totals", language) in flat
+                labels[-1] += "\n" + text("run_uncertain_totals", language)
+            assert [row[0] for row in runs] == labels
+            assert runs[0][4:] == (5 * cameras, cameras, 4 * cameras, 0.2)
+            assert all(row[4:] == (None,) * 4 for row in runs[1:])
+            assert text("run_statistics_unavailable", language) in tuple(data.notes())
     finally:
         close(app)
 
@@ -174,39 +183,31 @@ def test_expiry_interruption_and_empty_batch_do_not_invent_detail(
     try:
         empty = history.select_batch("No Runs").result(WAIT)
         assert empty
-        with closing(
-            load_workbook(
-                app.export_report(empty.uuid, tmp_path / "empty.xlsx", "ja").result(
-                    WAIT
-                )
-            )
-        ) as book:
-            summary = book.worksheets[0]
-            assert (
-                summary.title == "Batch Production Report" and len(book.worksheets) == 1
-            )
-            rows = list(summary.values)
-            metrics = next(i for i, r in enumerate(rows) if r[0] == "Inspected")
-            assert rows[metrics + 1][:4] == ("—", "—", "—", "—")
-            assert "Production statistics unavailable" in str(rows)
-            assert not any(type(r[0]) is int for r in rows)
-        with closing(
-            load_workbook(
-                app.export_report(batch.uuid, tmp_path / "expired.xlsx", "en").result(
-                    WAIT
-                )
-            )
-        ) as book:
-            rows = list(book.worksheets[0].values)
-            metrics = next(i for i, r in enumerate(rows) if r[0] == "Inspected")
-            assert rows[metrics + 1][:4] == (25, 5, 20, 0.2)
-            assert (
-                "First inspection",
-                datetime.fromtimestamp(1_800_000_000.0),
-            ) in [r[i : i + 2] for r in rows for i in range(len(r) - 1)]
-            assert "Interrupted: 1 Runs" in str(rows)
-            assert "Records may be incomplete" in str(rows)
-            assert len(book.worksheets) == 1
+        empty_text = pdf_text(
+            app.export_report(empty.uuid, tmp_path / "empty.pdf", "ja").result(WAIT)
+        )
+        assert (
+            "Batch Production Report" in empty_text
+            and "Production statistics unavailable" in empty_text
+        )
+        assert "Batch Total" in empty_text and "Run 1" not in empty_text
+        assert empty_text.count("—") == 4
+        empty_matrix = pdf_text(
+            app.export_report(
+                ReportRequest("defects", batch=empty.uuid),
+                tmp_path / "no-runs.pdf",
+                "en",
+            ).result(WAIT)
+        )
+        assert "Batch Total" in empty_matrix and "Run 1" not in empty_matrix
+        assert "Inspected" in empty_matrix and empty_matrix.count("—") == 2
+        expired = pdf_text(
+            app.export_report(batch.uuid, tmp_path / "expired.pdf", "en").result(WAIT)
+        )
+        assert "20.00%" in expired and "First inspection" in expired
+        assert (
+            "Interrupted: 1 Runs" in expired and "Records may be incomplete" in expired
+        )
     finally:
         close(app)
 
@@ -221,7 +222,7 @@ def test_active_export_is_a_consistent_snapshot_and_releases_actual_worker(
         lambda _p, _g: session, history=history, initial_candidate=prepared(tmp_path)
     )
     entered, release, cancel = Event(), Event(), Event()
-    write = production_report.write_workbook
+    write = report_pdf.write_pdf
 
     def held(
         db: sqlite3.Connection, staged: Path, language: Language, stop: Event
@@ -233,8 +234,8 @@ def test_active_export_is_a_consistent_snapshot_and_releases_actual_worker(
             raise OSError("Controlled file failure")
         write(db, staged, language, stop)
 
-    monkeypatch.setattr(production_report, "write_workbook", held)
-    target = tmp_path / "report.xlsx"
+    monkeypatch.setattr(report_pdf, "write_pdf", held)
+    target = tmp_path / "report.pdf"
     target.write_bytes(b"previous report")
     try:
         app.start_batch("Running").result(WAIT)
@@ -258,12 +259,8 @@ def test_active_export_is_a_consistent_snapshot_and_releases_actual_worker(
             cancel.set()
         release.set()
         if ending == "complete":
-            with closing(load_workbook(export.result(WAIT))) as book:
-                summary = book.worksheets[0]
-                rows = list(summary.values)
-                assert "In progress" in str(rows)
-                assert "Inspection span" not in str(rows)
-                assert "First inspection" not in str(rows)
+            body = pdf_text(export.result(WAIT))
+            assert "In progress" in body and "First inspection" not in body
         else:
             with pytest.raises(OSError if ending == "error" else CancelledError):
                 export.result(WAIT)
@@ -274,19 +271,14 @@ def test_active_export_is_a_consistent_snapshot_and_releases_actual_worker(
         close(app)
 
 
-@pytest.mark.parametrize("extension", ["xlsx", "pdf"])
 def test_session_replacement_prevents_unpublished_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extension: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = authenticated_startup(saved_data(tmp_path)).application
     identity = app.identity
     assert identity is not None
     entered, release = Event(), Event()
-    write = (
-        production_report.write_workbook
-        if extension == "xlsx"
-        else report_pdf.write_pdf
-    )
+    write = report_pdf.write_pdf
 
     def hold_after_write(
         db: sqlite3.Connection, staged: Path, language: Language, stop: Event
@@ -295,11 +287,8 @@ def test_session_replacement_prevents_unpublished_report(
         entered.set()
         assert release.wait(WAIT)
 
-    if extension == "xlsx":
-        monkeypatch.setattr(production_report, "write_workbook", hold_after_write)
-    else:
-        monkeypatch.setattr(report_pdf, "write_pdf", hold_after_write)
-    target = tmp_path / f"existing.{extension}"
+    monkeypatch.setattr(report_pdf, "write_pdf", hold_after_write)
+    target = tmp_path / "existing.pdf"
     target.write_bytes(b"original")
     try:
         app.start_batch("Selected").result(WAIT)
@@ -343,32 +332,20 @@ def test_compact_export_omits_exposure_rows_and_releases_spools_on_disk_failure(
         db.execute("UPDATE group_members SET cycle='116' WHERE run='run-5' AND slot=2")
     history = ProductionHistory(path)
     app = ProductionApplication(lambda _p, _g: FakeSession(), history=history)
-    target = tmp_path / "combined.xlsx"
+    target = tmp_path / "combined.pdf"
     try:
-        with closing(
-            load_workbook(app.export_report(batch.uuid, target, "en").result(WAIT))
-        ) as book:
-            assert len(book.worksheets) == 1
-            rows = list(book.worksheets[0].values)
-            metrics = next(i for i, r in enumerate(rows) if r[0] == "Inspected")
-            assert tuple(rows[metrics + 1][col] for col in (0, 2, 4, 6)) == (
-                55,
-                11,
-                44,
-                0.2,
-            )
-            assert "116" not in str(rows) and "CH01" not in str(rows)
+        body = pdf_text(app.export_report(batch.uuid, target, "en").result(WAIT))
+        assert "20.00%" in body and "CH01" not in body and "116" not in body
         before = target.read_bytes()
-        spools = set(ALL_TEMP_FILES)
 
         def disk_full(*args: object, **kwargs: object) -> None:
             raise OSError("Archive full")
 
         with monkeypatch.context() as patch:
-            patch.setattr(ZipFile, "write", disk_full)
+            patch.setattr(Canvas, "save", disk_full)
             with pytest.raises(OSError, match="Archive full"):
                 app.export_report(batch.uuid, target, "en").result(WAIT)
-        assert target.read_bytes() == before and set(ALL_TEMP_FILES) == spools
+        assert target.read_bytes() == before
         assert not list(tmp_path.glob("*.tmp"))
     finally:
         close(app)
@@ -402,7 +379,6 @@ def test_high_volume_report_length_business_fields_and_entire_batch_scope(
             batch.uuid, "volume", RECIPE, FOUR_CYCLE, StartAccount("operator-id", "Lin")
         ).result(WAIT)
         ctx = HistoryContext(now, batch.uuid, batch.label, "volume", RECIPE)
-        lengths: list[int] = []
         for group in range(200):
             observed = now + group * 4 + 4
             results = [
@@ -430,50 +406,34 @@ def test_high_volume_report_length_business_fields_and_entire_batch_scope(
                 WAIT
             )  # Drain bounded test handoffs.
             if group in (0, 199):
-                request = ReportRequest(
-                    "batch",
-                    "capsule",
-                    batch.uuid,
-                    HistoryQuery(since=now + 999999, result=frozenset(("ERROR",))),
-                )
-                xlsx = tmp_path / f"{group}.xlsx"
+                request = ReportRequest("batch", batch=batch.uuid)
+                output = tmp_path / f"{group}.pdf"
                 production_report.write_report(
-                    owner, request, xlsx, "en", Event(), lambda: None
+                    owner, request, output, "en", Event(), lambda: None
                 )
-                production_report.write_report(
-                    owner,
-                    request,
-                    tmp_path / f"{group}.pdf",
-                    "en",
-                    Event(),
-                    lambda: None,
+                body = pdf_text(output)
+                assert (
+                    "Lin" in body
+                    and "First inspection" in body
+                    and "Latest inspection" in body
                 )
-                with closing(load_workbook(xlsx)) as book:
-                    sheet = book.worksheets[0]
-                    lengths.append(sheet.max_row)
-                    rows = list(sheet.values)
-                    assert (
-                        next(r[1] for r in rows if r[0] == text("batch_product", "en"))
-                        == info.product
-                    )
-                    pairs = [r[i : i + 2] for r in rows for i in range(len(r) - 1)]
-                    assert ("Start Account", "Lin") in pairs
-                    assert (
-                        "First inspection",
-                        datetime.fromtimestamp(now + 1),
-                    ) in pairs
-                    assert (
-                        "Latest inspection",
-                        datetime.fromtimestamp(now + group * 4 + 4),
-                    ) in pairs
-                    assert not any(r[0] == "Runs" for r in rows)
+                assert info.product in body and "Exposure cycles" not in body
+                snap = tmp_path / f"{group}.db"
+                owner.capture_report(request, snap, Event()).result(WAIT)
+                with closing(sqlite3.connect(snap)) as db:
+                    summary = ReportData(db, "en", Event())
+                    (table,) = summary.tables()
+                    total, run = summary.production_rows()
+                    assert list(table.rows) == [total, run]
+                    assert total[4:] == run[4:] and run[2] is None
+                    assert run[0] == "Run 1 · In progress"
+                    assert "Batch Total" in body and "Run 1 · In progress" in body
+                    assert dict(summary.field_groups()[1])[
+                        "Latest inspection"
+                    ] == datetime.fromtimestamp(now + group * 4 + 4)
                     if group == 199:
-                        metrics = next(
-                            i for i, r in enumerate(rows) if r[0] == "Inspected"
-                        )
-                        inspected = rows[metrics + 1][0]
-                        assert isinstance(inspected, int) and inspected > 5000
-        assert lengths[0] == lengths[1] < 30 and pages == [1, 1]
+                        assert summary.positions.inspected > 5000
+        assert pages == [1, 1]
     finally:
         finish(owner)
 
@@ -483,7 +443,8 @@ def test_hundred_run_customer_report_keeps_every_row_and_factual_exceptions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, language: Language
 ) -> None:
     owner = ProductionHistory(tmp_path / "hundred.sqlite3")
-    numbers: list[int] = []
+    run_labels: list[str] = []
+    run_prefix = text("export_run", language) + " "
     drawn: list[str] = []
     pages: list[int] = []
     draw, page = Canvas.drawString, Canvas.showPage
@@ -491,8 +452,8 @@ def test_hundred_run_customer_report_keeps_every_row_and_factual_exceptions(
     def record_text(canvas: Canvas, x: float, y: float, value: str) -> None:
         drawn.append(value)
         # The approved 14 mm margin and 6 pt cell inset locate the Run column.
-        if x == pytest.approx(14 * 72 / 25.4 + 6) and value.isdecimal():
-            numbers.append(int(value))
+        if x == pytest.approx(14 * 72 / 25.4 + 6) and value.startswith(run_prefix):
+            run_labels.append(value)
         draw(canvas, x, y, value)
 
     def record_page(canvas: Canvas) -> None:
@@ -508,27 +469,18 @@ def test_hundred_run_customer_report_keeps_every_row_and_factual_exceptions(
             owner.start_run(
                 batch.uuid, f"run-{n}", RECIPE, FOUR_CYCLE, StartAccount("actor", "Lin")
             ).result(WAIT)
-            owner.finish_run(
-                f"run-{n}", "interrupted" if n == 0 else "stopped", n == 0
-            ).result(WAIT)
-        request = ReportRequest("batch", "capsule", batch.uuid)
-        for suffix in ("xlsx", "pdf"):
-            production_report.write_report(
-                owner,
-                request,
-                tmp_path / f"hundred.{suffix}",
-                language,
-                Event(),
-                lambda: None,
-            )
-        with closing(load_workbook(tmp_path / "hundred.xlsx")) as book:
-            rows = list(book.worksheets[0].values)
-            runs = [r for r in rows if type(r[0]) is int and isinstance(r[1], datetime)]
-            assert [r[0] for r in runs] == list(range(1, 101))
-            assert all(r[5:8] == (0, 0, 0) and r[8] is None for r in runs)
-            assert text("run_uncertain_totals", language) in str(rows)
-            assert text("customer_batch_basis", language) not in str(rows)
-        assert numbers == list(range(1, 101))
+            outcome = {0: "interrupted", 1: "fault"}.get(n, "stopped")
+            owner.finish_run(f"run-{n}", outcome, n == 0).result(WAIT)
+        request = ReportRequest("batch", batch=batch.uuid)
+        production_report.write_report(
+            owner, request, tmp_path / "hundred.pdf", language, Event(), lambda: None
+        )
+        assert run_labels == [
+            f"{run_prefix}1 · {text('report_interrupted', language)}",
+            f"{run_prefix}2 · {text('state_FAULT', language)}",
+            *(f"{run_prefix}{n}" for n in range(3, 101)),
+        ]
+        assert drawn.count(text("customer_batch_total", language)) == 1
         assert len(pages) > 1 and pages == list(range(1, len(pages) + 1))
         assert text("report_interrupted", language) in " ".join(drawn)
         assert text("run_uncertain_totals", language) in " ".join(drawn)

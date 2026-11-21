@@ -1,4 +1,4 @@
-"""Compact, persistent multi-selection popup for recorded Cycle states."""
+"""Records filter captions and the multi-selection popup for recorded Cycle states."""
 
 from PySide6.QtCore import (
     QEvent,
@@ -95,7 +95,28 @@ class _StateDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class HistoryResultFilter(QComboBox):
+class RecordsFilterCombo(QComboBox):
+    def _caption(self) -> str:
+        return self.currentText()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        painter = QStylePainter(self)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        field = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            option,
+            QStyle.SubControl.SC_ComboBoxEditField,
+            self,
+        )
+        option.currentText = option.fontMetrics.elidedText(
+            self._caption(), Qt.TextElideMode.ElideRight, field.width()
+        )
+        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)
+
+
+class HistoryResultFilter(RecordsFilterCombo):
     changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -184,17 +205,9 @@ class HistoryResultFilter(QComboBox):
         # once through Qt, rather than invoking QComboBox's filter a second time.
         return False
 
-    def paintEvent(self, event: QPaintEvent) -> None:
-        option = QStyleOptionComboBox()
-        self.initStyleOption(option)
-        caption = (
+    def _caption(self) -> str:
+        return (
             text("history_all", self.language)
             if self.selected == ALL_RESULTS
             else result_code(self.selected)
         )
-        option.currentText = self.fontMetrics().elidedText(
-            caption, Qt.TextElideMode.ElideRight, max(0, self.width() - 40)
-        )
-        painter = QStylePainter(self)
-        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
-        painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, option)

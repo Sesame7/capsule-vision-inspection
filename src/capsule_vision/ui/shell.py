@@ -39,8 +39,8 @@ PAGES = tuple(PAGE_CAPTIONS)
 _PAGE_WIDTHS = {"page_recipe": 128, "page_history": 132, "page_vision": 132}
 
 
-class _StatusLabel(QLabel):
-    """Keep full status text accessible while fitting its stable shell column."""
+class ElidedLabel(QLabel):
+    """Keep the full caption accessible while fitting the allocated width."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -351,7 +351,7 @@ class StatusBar(QFrame):
         icon = QLabel()
         icon.setFixedSize(20, 20)
         content.addWidget(icon)
-        label = QLabel() if flexible else _StatusLabel()
+        label = QLabel() if flexible else ElidedLabel()
         label.setTextFormat(Qt.TextFormat.PlainText)
         # Translation length must not redistribute the icon/text groups.
         label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)

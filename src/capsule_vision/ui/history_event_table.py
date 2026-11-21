@@ -36,6 +36,7 @@ from capsule_vision.localization.languages import Language
 from capsule_vision.localization.record_text import readable_value as readable_value
 from capsule_vision.localization.record_text import record_reason as record_reason
 
+from .history_result_filter import RecordsFilterCombo
 from .image_tools import image_icon
 from .style import Style, theme_colors
 
@@ -102,9 +103,10 @@ def fit_record_columns(
     columns: tuple[RecordColumn, ...],
     *,
     padding: int = 2 * Style.space,
-) -> None:
+) -> int:
+    """Fit the visible columns and return the table width needed for the short samples."""
     if not columns:
-        return
+        return 0
     body = table.fontMetrics()
     header = (
         table.header() if isinstance(table, QTreeWidget) else table.horizontalHeader()
@@ -144,6 +146,11 @@ def fit_record_columns(
         used += weight
         if table.columnWidth(col) != width:
             table.setColumnWidth(col, width)
+    return (
+        sum(minimums)
+        + 2 * table.frameWidth()
+        + table.verticalScrollBar().sizeHint().width()
+    )
 
 
 class RecordsPage(QWidget):
@@ -159,7 +166,7 @@ class RecordsPage(QWidget):
         root.addLayout(bar)
         self.search = QLineEdit()
         self.search.setClearButtonEnabled(True)
-        self.kind = QComboBox()
+        self.kind = RecordsFilterCombo()
         self.kind.setObjectName("recordFilter")
         self.kind.currentTextChanged.connect(self.kind.setToolTip)
         for w in (self.search, self.kind):
@@ -227,7 +234,7 @@ class HistoryEventTable(RecordsPage):
         root.addWidget(self.details)
         self.details.hide()
 
-    def columns(self, language: Language, columns: tuple[RecordColumn, ...]) -> None:
+    def columns(self, language: Language, columns: tuple[RecordColumn, ...]) -> int:
         self._columns = columns
         for col, (key, _, _, _) in enumerate(columns):
             caption = text(key, language)
@@ -240,7 +247,7 @@ class HistoryEventTable(RecordsPage):
             item.setToolTip(full)
             item.setData(Qt.ItemDataRole.AccessibleTextRole, full)
             self.table.setHorizontalHeaderItem(col, item)
-        fit_record_columns(self.table, columns)
+        return fit_record_columns(self.table, columns)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if (

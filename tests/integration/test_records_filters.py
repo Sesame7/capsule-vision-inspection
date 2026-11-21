@@ -6,11 +6,21 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QDate, QPoint, QRect, Qt, QTimeZone
+from PySide6.QtGui import QColor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QCalendarWidget, QCheckBox, QTableView
+from PySide6.QtWidgets import (
+    QApplication,
+    QCalendarWidget,
+    QCheckBox,
+    QStyle,
+    QStyleOption,
+    QStyleOptionComboBox,
+    QStylePainter,
+    QTableView,
+)
 from tests.support.application import WAIT, close
 from tests.support.business import mixed_result
-from tests.support.qt import close_window, until
+from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.startup import authenticated_startup, saved_data
 from tests.unit.test_durable_batches import RECIPE
 
@@ -22,10 +32,89 @@ from capsule_vision.application.records_query import (
     BatchChoices,
     RecordsScope,
 )
+from capsule_vision.localization.catalog import text
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.history_event_table import local_day_bounds
 from capsule_vision.ui.records_filters import OptionalDate, RecordsFilters
+from capsule_vision.ui.style import Theme, theme_colors
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+def test_tab_gutters_and_closed_filter_captions(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, theme: Theme
+) -> None:
+    ensure_test_fonts()
+    startup = authenticated_startup(saved_data(tmp_path), select_basler_batch=False)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        window.set_theme(theme)
+        window.set_language("so")  # Both default captions exceed the text field.
+        window.show()
+        window.navigate(3)
+        tabs = window.history_tabs
+        bar = tabs.tabBar()
+        assert not bar.drawBase()
+        image = bar.grab().toImage()
+        dpr = image.devicePixelRatio()
+        colors = theme_colors(bar)
+        for i in range(bar.count()):
+            rect = bar.tabRect(i)
+            gap = round((rect.right() - 1) * dpr)
+            assert all(
+                image.pixel(gap, y) == image.pixel(gap, image.height() // 2)
+                for y in range(image.height())
+            )
+            edge = colors.accent if i == tabs.currentIndex() else colors.border
+            assert image.pixelColor(round(rect.center().x() * dpr), 0) == QColor(edge)
+
+        captions: list[str] = []
+        original = QStylePainter.drawControl
+
+        def draw(
+            painter: QStylePainter, element: QStyle.ControlElement, option: QStyleOption
+        ) -> None:
+            if element == QStyle.ControlElement.CE_ComboBoxLabel and isinstance(
+                option, QStyleOptionComboBox
+            ):
+                captions.append(option.currentText)
+            original(painter, element, option)
+
+        monkeypatch.setattr(QStylePainter, "drawControl", draw)
+        for page, combo, key, name in (
+            (window.history, window.history.result, "history_all", "history_result"),
+            (
+                window.alarm_page,
+                window.alarm_page.kind,
+                "alarm_all_types",
+                "alarm_type",
+            ),
+        ):
+            tabs.setCurrentWidget(page)
+            qapp.processEvents()
+            option = QStyleOptionComboBox()
+            combo.initStyleOption(option)
+            field = combo.style().subControlRect(
+                QStyle.ComplexControl.CC_ComboBox,
+                option,
+                QStyle.SubControl.SC_ComboBoxEditField,
+                combo,
+            )
+            assert 10 <= field.x() <= 12 and combo.width() == 176
+            full = text(key, "so")
+            expected = option.fontMetrics.elidedText(
+                full, Qt.TextElideMode.ElideRight, field.width()
+            )
+            captions.clear()
+            combo.grab()
+            assert expected.endswith("…") and captions == [expected]
+            assert combo.toolTip() == full and combo.accessibleName() == text(
+                name, "so"
+            )
+    finally:
+        close_window(window)
+        delivery.detach()
 
 
 def test_nullable_calendar_keyboard_clear_and_dst(
@@ -263,10 +352,11 @@ def test_shared_scope_search_tabs_exact_association_and_pager_geometry(
         until(lambda: not filters.popup.isVisible())
         assert filters.scope.batch == batch.uuid
         pager_positions: set[tuple[int, int, int, int]] = set()
-        for index in range(4):
+        for index in range(5):
             window.history_tabs.setCurrentIndex(index)
             page = (
                 window.batches_page,
+                window.ng_capsules,
                 window.history,
                 window.audit_page,
                 window.alarm_page,
@@ -283,10 +373,10 @@ def test_shared_scope_search_tabs_exact_association_and_pager_geometry(
         until(lambda: len(window.alarm_page.rows) == 1)
         assert window.alarm_page.rows[0].event.signal == "alarm-0"
         assert len(pager_positions) == 1
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         until(lambda: len(window.audit_page.rows) == 1)
         assert window.audit_page.rows[0].operation.action == "production.start"
-        window.history_tabs.setCurrentIndex(1)
+        window.history_tabs.setCurrentWidget(window.history)
         until(lambda: not window.history.busy)
         assert window.history.cycles.rowCount() == 1, (
             window.history.warning.text(),
@@ -310,8 +400,12 @@ def test_shared_scope_search_tabs_exact_association_and_pager_geometry(
         assert filters.start.value == filters.end.value == today.addDays(1)
         until(
             lambda: (
-                not window.history_tabs.isTabEnabled(2)
-                and not window.history_tabs.isTabEnabled(3)
+                not window.history_tabs.isTabEnabled(
+                    window.history_tabs.indexOf(window.audit_page)
+                )
+                and not window.history_tabs.isTabEnabled(
+                    window.history_tabs.indexOf(window.alarm_page)
+                )
             )
         )
     finally:

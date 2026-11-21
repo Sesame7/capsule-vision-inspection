@@ -86,7 +86,7 @@ def capture(
                 ).fetchone()
                 label = row[0] if row else None
             db.execute(
-                """CREATE TABLE report.meta AS SELECT 'alarm' AS scope,'' AS basis,
+                """CREATE TABLE report.meta AS SELECT 'alarm' AS scope,
                 ? AS observed,? AS since,? AS until,? AS filter_label,? AS unbatched,
                 ? AS scoped_segment,? AS category""",
                 (

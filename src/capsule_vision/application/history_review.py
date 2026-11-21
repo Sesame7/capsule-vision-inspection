@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import BoundedSemaphore
 from time import time
 
-from . import alarm_records, batch_review, records_query
+from . import alarm_records, batch_review, ng_capsules, records_query
 from .alarm_records import AlarmQuery, AlarmRecord
 from .batch_review import BatchDetail, BatchList
 from .history import (
@@ -17,6 +17,8 @@ from .history import (
     HistoryPageData,
     HistoryQuery,
     read_history_page,
+    read_ng_capsule,
+    read_ng_capsule_page,
 )
 from .records_query import BatchChoices, RecordsScope
 from .report_scope import register_result_filter
@@ -29,7 +31,7 @@ _REVIEW_COLUMNS = {
     ),
     "batches": "uuid label created positions",
     "runs": "uuid batch started terminated outcome uncertain detail_expired reporting_mode",
-    "plc_groups": "run first_cycle observed",
+    "plc_groups": "run first_cycle observed final_channels",
     "group_members": "run cycle first_cycle slot",
     "batch_inspection_times": "batch first last",
     "batch_information": "batch product specification notes",
@@ -158,6 +160,21 @@ class HistoryReview:
             lambda db: read_history_page(
                 db, query or HistoryQuery(), has_images=self._schema.has_images
             )
+        )
+
+    def ng_capsule_page(
+        self,
+        scope: RecordsScope,
+        cursor: ng_capsules.CapsuleRow | None = None,
+        newer: bool = False,
+    ) -> Future[ng_capsules.CapsulePage]:
+        return self._submit(lambda db: read_ng_capsule_page(db, scope, cursor, newer))
+
+    def ng_capsule_detail(
+        self, key: ng_capsules.CapsuleKey
+    ) -> Future[ng_capsules.CapsuleDetail | None]:
+        return self._submit(
+            lambda db: read_ng_capsule(db, key, has_images=self._schema.has_images)
         )
 
     def batch_page(

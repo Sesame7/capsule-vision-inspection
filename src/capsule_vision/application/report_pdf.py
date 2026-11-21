@@ -3,7 +3,6 @@
 import os
 import sqlite3
 from collections.abc import Mapping
-from dataclasses import replace
 from datetime import datetime
 from functools import cache
 from itertools import zip_longest
@@ -37,27 +36,39 @@ _BOTTOM = _MARGIN + 26
 def _matrix_columns(
     data: ReportData, body: float
 ) -> list[tuple[tuple[Category, ...], list[float]]]:
-    """Keep readable category columns; repeat Run/NG for each horizontal group."""
-    names = data.category_names()
+    """Repeat Run, Inspected and NG in every group of readable category columns."""
     groups: list[tuple[tuple[Category, ...], list[float]]] = []
     keys: list[Category] = []
     widths: list[float] = []
-    available = body - 144 - 48
+    inspected, ng = data.positions.inspected, data.positions.channel_ng
+    fixed = [
+        144.0,
+        max(66.0, pdfmetrics.stringWidth(str(inspected), _FONT, _SIZE) + 2 * _PAD),
+        max(54.0, pdfmetrics.stringWidth(str(ng), _FONT, _SIZE) + 2 * _PAD),
+    ]
+    available = body - sum(fixed)
+    category_widths = {
+        key: max(68, min(118, pdfmetrics.stringWidth(name, _FONT, _SIZE) + 2 * _PAD))
+        for key, name in data.category_names().items()
+    }
+    if sum(category_widths.values()) <= available:
+        # Share spare width across the whole table when all categories fit.
+        columns = [*fixed, *category_widths.values()]
+        extra = (body - sum(columns)) / len(columns)
+        return [(tuple(category_widths), [width + extra for width in columns])]
 
     def finish() -> None:
-        if widths:
-            extra = (available - sum(widths)) / len(widths)
-            groups.append((tuple(keys), [144, 48, *(w + extra for w in widths)]))
+        extra = (available - sum(widths)) / len(widths)
+        groups.append((tuple(keys), [*fixed, *(w + extra for w in widths)]))
 
-    for key, name in names.items():
-        width = max(68, min(118, pdfmetrics.stringWidth(name, _FONT, _SIZE) + 2 * _PAD))
+    for key, width in category_widths.items():
         if widths and sum(widths) + width > available:
             finish()
             keys, widths = [], []
         keys.append(key)
         widths.append(width)
     finish()
-    return groups or [((), [body - 48, 48])]
+    return groups
 
 
 @cache
@@ -277,32 +288,6 @@ class _Pages:
                 self.y -= _LINE
             self.y -= 4
         self.y -= 8
-        metrics = self.data.metrics()
-        if not metrics:
-            return
-        if self.y - 80 < _BOTTOM:
-            self.page()
-        width = self.body / len(metrics)
-        c = self.canvas
-        c.setStrokeColorRGB(0.78, 0.80, 0.82)
-        c.line(_MARGIN, self.y, self.width - _MARGIN, self.y)
-        c.line(_MARGIN, self.y - 62, self.width - _MARGIN, self.y - 62)
-        for i, (label, value) in enumerate(metrics):
-            x = _MARGIN + i * width + 10
-            c.setFillColorRGB(0.38, 0.40, 0.43)
-            c.setFont(_FONT, 10)
-            c.drawString(x, self.y - 18, label)
-            c.setFillColorRGB(0.16, 0.25, 0.34)
-            c.setFont(_FONT, 21)
-            caption = (
-                f"{value:.2%}"
-                if isinstance(value, float)
-                else f"{value:,}"
-                if isinstance(value, int)
-                else "—"
-            )
-            c.drawString(x, self.y - 48, caption)
-        self.y -= 80
 
     def band(
         self,
@@ -488,15 +473,13 @@ def write_pdf(
     data = ReportData(db, language, cancel)
     pages = _Pages(data, path, sample=sample)
     pages.summary()
-    if data.batch is not None and data.scope == "defects":
+    if data.scope == "defects":
         for i, (keys, widths) in enumerate(_matrix_columns(data, pages.body)):
             if i:
                 pages.page()
             pages.table(data.matrix_table(keys), widths)
     else:
         for table in data.tables():
-            if data.scope == "batch":
-                table = replace(table, numeric_columns=(5, 6, 7, 8))
             pages.table(table)
     for note in data.notes():
         pages.paragraph(note, gap=4)

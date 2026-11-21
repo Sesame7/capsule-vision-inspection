@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Callable
 from concurrent.futures import Future
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Condition, Event, Thread
@@ -33,6 +33,7 @@ from . import (
     batch_records,
     batch_review,
     defect_records,
+    ng_capsules,
     records_query,
     run_configuration,
 )
@@ -41,7 +42,7 @@ from .alarm_report import AlarmReportRequest
 from .alarm_report import capture as capture_alarm
 from .archive_links import PublishedImage
 from .audit import AuditRecord, AuditUnavailable
-from .batch_records import BatchSelection, ReportBatches
+from .batch_records import BatchSelection
 from .batch_review import (
     BatchDetail,
     BatchInformation,
@@ -53,14 +54,13 @@ from .batch_review import (
 from .identity_models import IdentityError
 from .models import ApplicationStateError, ConfigurationIdentity
 from .records_query import BatchChoices, RecordsScope
+from .report_scope import HistoryQuery as HistoryQuery
 from .report_scope import (
-    DefectScope,
     ReportRequest,
+    batch_report_request,
     capture_report,
-    defect_scope,
     register_result_filter,
 )
-from .report_scope import HistoryQuery as HistoryQuery
 from .report_scope import ResultFilter as ResultFilter
 
 HISTORY_SCHEMA_VERSION = 4
@@ -138,6 +138,17 @@ class HistoryReader(Protocol):
     """The bounded Records queries shared by production and portable review."""
 
     def query(self, query: HistoryQuery | None = None) -> Future[HistoryPageData]: ...
+
+    def ng_capsule_page(
+        self,
+        scope: RecordsScope,
+        cursor: ng_capsules.CapsuleRow | None = None,
+        newer: bool = False,
+    ) -> Future[ng_capsules.CapsulePage]: ...
+
+    def ng_capsule_detail(
+        self, key: ng_capsules.CapsuleKey
+    ) -> Future[ng_capsules.CapsuleDetail | None]: ...
 
     def batch_page(
         self,
@@ -356,15 +367,20 @@ def read_history_page(
     )
 
 
-def _decode_history_record(
-    row: tuple[object, ...], images: dict[tuple[int, str], Path]
-) -> HistoryRecord:
-    # Typed boundary for our versioned SQLite payload; corrupt data fails the
-    # query instead of becoming fabricated judgments or affecting Production.
-    detail: object = json.loads(zlib.decompress(cast(bytes, row[12])))
+def _cycle_payload(blob: bytes) -> list[object]:
+    detail: object = json.loads(zlib.decompress(blob))
     payload = _items(detail)
     if len(payload) != 3:
         raise ValueError("Invalid History detail payload")
+    return payload
+
+
+def _cycle_evidence(
+    blob: bytes, record_id: int, images: dict[tuple[int, str], Path]
+) -> tuple[tuple[HistoryChannel, ...], tuple[HistoryCamera, ...], str | None]:
+    # Typed boundary for our versioned SQLite payload; corrupt data fails the
+    # query instead of becoming fabricated judgments or affecting Production.
+    payload = _cycle_payload(blob)
     recipe_name = payload[2]
     if recipe_name is not None and not isinstance(recipe_name, str):
         raise ValueError("Invalid History Recipe name")
@@ -380,7 +396,6 @@ def _decode_history_record(
         )
         for r in (_items(v) for v in _items(payload[0]))
     )
-    record_id = int(cast(int, row[0]))
     cameras = tuple(
         HistoryCamera(
             str(r[0]),
@@ -401,6 +416,16 @@ def _decode_history_record(
             else None,
         )
         for r in (_items(v) for v in _items(payload[1]))
+    )
+    return channels, cameras, recipe_name
+
+
+def _decode_history_record(
+    row: tuple[object, ...], images: dict[tuple[int, str], Path]
+) -> HistoryRecord:
+    record_id = int(cast(int, row[0]))
+    channels, cameras, recipe_name = _cycle_evidence(
+        cast(bytes, row[12]), record_id, images
     )
     context = HistoryContext(
         float(cast(float, row[1])),
@@ -423,6 +448,127 @@ def _decode_history_record(
         cast(int | None, row[14]),
         cast(int | None, row[15]),
     )
+
+
+def _member_labels(
+    db: sqlite3.Connection, run: str, first: str
+) -> ng_capsules.GalleryLabels:
+    names: set[str] = set()
+    cameras: dict[int, set[str]] = {}
+    for (blob,) in db.execute(
+        """SELECT c.detail FROM group_members m JOIN cycles c
+           ON (c.run_id,c.cycle_id)=(m.run,m.cycle) WHERE m.run=? AND m.first_cycle=?""",
+        (run, first),
+    ):
+        try:
+            payload = _cycle_payload(blob)
+        except TypeError, ValueError, zlib.error:
+            continue  # An unreadable optional label cannot remove a stored NG capsule.
+        name = payload[2]
+        if isinstance(name, str) and name.strip():
+            names.add(name)
+        if not isinstance(payload[0], list):
+            continue
+        for entry in cast(list[object], payload[0]):
+            if not isinstance(entry, list):
+                continue
+            fields = cast(list[object], entry)
+            if len(fields) >= 3:
+                camera, channel = fields[0], fields[2]
+                if isinstance(camera, str) and camera.strip() and type(channel) is int:
+                    cameras.setdefault(channel, set()).add(camera)
+    return next(iter(names)) if len(names) == 1 else None, ng_capsules.unique_cameras(
+        cameras
+    )
+
+
+def read_ng_capsule_page(
+    db: sqlite3.Connection,
+    scope: RecordsScope,
+    cursor: ng_capsules.CapsuleRow | None,
+    newer: bool,
+) -> ng_capsules.CapsulePage:
+    """Attach recorded labels without exposing the Run configuration or Cycle payloads."""
+    page = ng_capsules.page(db, scope, cursor, newer)
+    # Read each visible Run once. Older copies may retain labels only on member Cycles.
+    runs = {
+        run: ng_capsules.run_labels(db, run) for run in {r.key.run for r in page.rows}
+    }
+    members: dict[tuple[str, str], ng_capsules.GalleryLabels] = {}
+    rows: list[ng_capsules.CapsuleRow] = []
+    for row in page.rows:
+        key = row.key
+        name, cameras = runs[key.run]
+        camera = cameras.get(key.channel)
+        if name is None or camera is None:
+            group = (key.run, key.first_cycle)
+            if group not in members:
+                members[group] = _member_labels(db, *group)
+            member_name, member_cameras = members[group]
+            name = name or member_name
+            camera = camera or member_cameras.get(key.channel)
+        rows.append(replace(row, recipe_name=name, camera=camera))
+    return ng_capsules.CapsulePage(tuple(rows), page.more)
+
+
+def read_ng_capsule(
+    db: sqlite3.Connection, key: ng_capsules.CapsuleKey, *, has_images: bool
+) -> ng_capsules.CapsuleDetail | None:
+    """Expose only one persisted rejected channel and its four actual members."""
+    if not ng_capsules.eligible(db, key):
+        return None
+    roi = ng_capsules.frozen_roi(db, key)
+    image_join = (
+        "LEFT JOIN archive_images i ON (i.run_id,i.cycle_id,i.camera_id)=(m.run,m.cycle,:camera)"
+        if has_images
+        else ""
+    )
+    rows = db.execute(
+        f"""SELECT m.cycle,c.id,c.detail,{"i.path" if has_images else "NULL"}
+        FROM group_members m LEFT JOIN cycles c ON (c.run_id,c.cycle_id)=(m.run,m.cycle)
+        {image_join} WHERE m.run=:run AND m.first_cycle=:first ORDER BY m.slot""",
+        {
+            "run": key.run,
+            "first": key.first_cycle,
+            "camera": roi.camera if roi else None,
+        },
+    )
+    exposures: list[ng_capsules.CapsuleExposure] = []
+    for cycle, record_id, blob, link in rows:
+        channel = None
+        evidence = None
+        path = Path(link) if link else None
+        if blob is not None:
+            channels, cameras, _ = _cycle_evidence(blob, record_id, {})
+            matches = [ch for ch in channels if ch.channel == key.channel]
+            channel = matches[0] if len(matches) == 1 else None
+            camera_id = roi.camera if roi else channel.camera if channel else None
+            observed = [camera for camera in cameras if camera.camera == camera_id]
+            if matches and (
+                channel is None
+                or roi is not None
+                and (channel.camera, channel.slot) != (roi.camera, roi.slot)
+            ):
+                path = None
+            elif len(observed) > 1:
+                path = None
+            elif observed:
+                evidence = observed[0].image_evidence
+        findings = (
+            tuple(
+                HistoryFinding(f.label, f.bounding_rect, (key.channel,))
+                for f in evidence.findings
+                if key.channel in f.channels
+            )
+            if evidence is not None
+            else ()
+        )
+        exposures.append(
+            ng_capsules.CapsuleExposure(
+                cycle, channel, path, evidence.size if evidence else None, findings
+            )
+        )
+    return ng_capsules.CapsuleDetail(key, roi, tuple(exposures))
 
 
 class ProductionHistory:
@@ -617,11 +763,21 @@ class ProductionHistory:
 
         return self._command(read, read_only=True)
 
-    def report_batches(
-        self, prefix: str, cursor: str | None, previous: bool
-    ) -> Future[ReportBatches]:
+    def ng_capsule_page(
+        self,
+        scope: RecordsScope,
+        cursor: ng_capsules.CapsuleRow | None = None,
+        newer: bool = False,
+    ) -> Future[ng_capsules.CapsulePage]:
         return self._command(
-            lambda db: batch_records.report_batches(db, prefix, cursor, previous),
+            lambda db: read_ng_capsule_page(db, scope, cursor, newer), read_only=True
+        )
+
+    def ng_capsule_detail(
+        self, key: ng_capsules.CapsuleKey
+    ) -> Future[ng_capsules.CapsuleDetail | None]:
+        return self._command(
+            lambda db: read_ng_capsule(db, key, has_images=self._has_images),
             read_only=True,
         )
 
@@ -718,20 +874,17 @@ class ProductionHistory:
 
         return self._command(write, reserved=False)
 
-    def defect_report_scope(self, filters: HistoryQuery) -> Future[DefectScope]:
-        return self._command(lambda db: defect_scope(db, filters), read_only=True)
-
     def capture_report(
         self, batch: str | ReportRequest, snapshot: Path, cancel: Event
     ) -> Future[None]:
+        request = batch_report_request(batch)
+
         def capture(db: sqlite3.Connection) -> None:
             with self._lock:
                 loss_run = self._loss_run
             capture_report(
                 db,
-                ReportRequest("batch", "capsule", batch)
-                if isinstance(batch, str)
-                else batch,
+                request,
                 snapshot,
                 self.clock(),
                 loss_run,

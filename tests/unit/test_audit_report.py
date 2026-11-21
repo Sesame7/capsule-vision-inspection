@@ -9,14 +9,16 @@ from pathlib import Path
 from threading import Event
 
 import pytest
-from openpyxl import load_workbook
-from openpyxl.styles import Alignment
 from reportlab.pdfgen.canvas import Canvas
 from tests.support.application import WAIT, FakeSession, close
+from tests.support.reports import pdf_text
 from tests.support.startup import TEST_PASSWORD, provision_account
 from tests.unit.test_durable_batches import RECIPE
 
-from capsule_vision.application import ProductionApplication, production_report
+from capsule_vision.application import (
+    ProductionApplication,
+    report_pdf,
+)
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.audit import (
     AUDIT_CHANGE_LIMIT,
@@ -52,7 +54,6 @@ from capsule_vision.application.identity_models import (
 )
 from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.report_content import AuditReportRow, ReportData
-from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import AUDIT_ACTIONS, text
 from capsule_vision.localization.languages import LANGUAGES, Language
 
@@ -377,7 +378,7 @@ def test_export_permission_at_application_boundary(
     elif role != Role.ADMINISTRATOR:
         provision_account(identity, role.name, role, TEST_PASSWORD)
         identity.login(role.name, TEST_PASSWORD).result(WAIT)
-    destination = tmp_path / "report.xlsx"
+    destination = tmp_path / "report.pdf"
     if role < Role.ENGINEER:
         with pytest.raises(AuthorizationError):
             app.export_report(AuditReportRequest(), destination, "en")
@@ -430,46 +431,6 @@ def test_actual_reports_include_all_rows_and_paginate(
     assert not any(
         "batch.information" in s or "observed-" in s or "actual-run" in s for s in drawn
     )
-    output = tmp_path / "audit.xlsx"
-    app.export_report(request, output, language).result(WAIT)
-    with closing(load_workbook(output)) as book:
-        sheet = book.worksheets[0]
-        rows = list(sheet.values)
-        observations = [r for r in rows if isinstance(r[0], datetime)]
-        assert len(observations) == len(expected)
-        assert [r[0] for r in observations] == [
-            datetime.fromtimestamp(STAMP + i) for i in range(146, -1, -1)
-        ]
-        assert sheet.page_setup.orientation == "landscape"
-        assert sheet.freeze_panes == "A8"
-        assert len(book.worksheets) == 1 and sheet.max_column == 5
-        last_event = next(
-            r
-            for r in range(8, sheet.max_row + 1)
-            if sheet.cell(r, 1).value == datetime.fromtimestamp(STAMP)
-        )
-        heading, change, failure = last_event + 1, last_event + 2, last_event + 3
-        assert tuple(sheet.cell(heading, c).value for c in (1, 2, 4)) == (
-            text("audit_field", language),
-            text("audit_before", language),
-            text("audit_requested", language),
-        )
-        assert tuple(sheet.cell(change, c).value for c in (1, 2, 4)) == (
-            text("batch_product", language),
-            "Previous",
-            "Product 000",
-        )
-        assert all(sheet.cell(change, c).data_type == "s" for c in (1, 2, 4))
-        top = Alignment(wrap_text=True, vertical="top")
-        assert all(sheet.cell(change, c).alignment == top for c in (1, 2, 4))
-        assert {
-            f"B{change}:C{change}",
-            f"D{change}:E{change}",
-            f"A{failure}:E{failure}",
-        } <= {str(region) for region in sheet.merged_cells.ranges}
-        assert sheet.cell(failure, 1).value == (
-            f"{audit_text('reasons', language)}: {text('records_config_io', language)}"
-        )
 
 
 @pytest.mark.parametrize(
@@ -487,7 +448,7 @@ def test_pending_export_rechecks_publication_and_cleans_up(
     actor = identity.snapshot().account
     assert actor
     entered, release, cancel = Event(), Event(), Event()
-    write = production_report.write_workbook
+    write = report_pdf.write_pdf
 
     def held(db: sqlite3.Connection, path: Path, lang: Language, stop: Event) -> None:
         entered.set()
@@ -497,8 +458,8 @@ def test_pending_export_rechecks_publication_and_cleans_up(
             raise OSError("Controlled export failure")
         write(db, path, lang, stop)
 
-    monkeypatch.setattr(production_report, "write_workbook", held)
-    destination = tmp_path / "audit.xlsx"
+    monkeypatch.setattr(report_pdf, "write_pdf", held)
+    destination = tmp_path / "audit.pdf"
     destination.write_bytes(b"previous")
     future = app.export_report(AuditReportRequest(), destination, "en", cancel=cancel)
     try:
@@ -554,17 +515,13 @@ def test_empty_scope_and_disabled_historical_actor(
         "success",
     )
     identity.set_enabled(account.account_id, False).result(WAIT)
-    output = tmp_path / "former.xlsx"
+    output = tmp_path / "former.pdf"
     app.export_report(
         AuditReportRequest(account=AuditAccount(account.account_id, account.username)),
         output,
         "en",
     ).result(WAIT)
-    with closing(load_workbook(output)) as book:
-        assert any(
-            r[1] == account.username and r[3] == "Former Batch"
-            for r in book.worksheets[0].values
-        )
+    assert account.username in pdf_text(output) and "Former Batch" in pdf_text(output)
     output.write_bytes(b"preserved")
     with pytest.raises(NoAuditRecords):
         app.export_report(
@@ -584,15 +541,15 @@ def test_private_snapshot_does_not_adopt_later_events_or_completions(
     )
     identity.audit.intent(op).result(WAIT)
     entered, release = Event(), Event()
-    write = production_report.write_workbook
+    write = report_pdf.write_pdf
 
     def held(db: sqlite3.Connection, path: Path, lang: Language, stop: Event) -> None:
         entered.set()
         assert release.wait(WAIT)
         write(db, path, lang, stop)
 
-    monkeypatch.setattr(production_report, "write_workbook", held)
-    output = tmp_path / "snapshot.xlsx"
+    monkeypatch.setattr(report_pdf, "write_pdf", held)
+    output = tmp_path / "snapshot.pdf"
     future = app.export_report(
         AuditReportRequest(account=AuditAccount("retired", "Former Operator")),
         output,
@@ -606,10 +563,8 @@ def test_private_snapshot_does_not_adopt_later_events_or_completions(
         )
         release.set()
         future.result(WAIT)
-        with closing(load_workbook(output)) as book:
-            rows = list(book.worksheets[0].values)
-            assert "Later Batch" not in str(rows)
-            assert any(r[4] == "No completion recorded" for r in rows)
+        body = " ".join(pdf_text(output).split())
+        assert "Later Batch" not in body and "No completion recorded" in body
     finally:
         release.set()
 
@@ -992,20 +947,16 @@ def test_unbatched_scope_and_missing_batch_never_broaden_to_all_records(
         )
     ):
         identity.audit.record(operation(action, target, n), outcome)
-    output = tmp_path / "unbatched.xlsx"
+    output = tmp_path / "unbatched.pdf"
     app.export_report(
         AuditReportRequest(RecordsScope(unbatched=True)), output, "en"
     ).result(WAIT)
-    with closing(load_workbook(output)) as book:
-        observations = [
-            r for r in book.worksheets[0].values if isinstance(r[0], datetime)
-        ]
-        assert len(observations) == 3
-        assert observations[-1][3] == "Production Run"
+    body = pdf_text(output)
+    assert "Production Run" in body
     with pytest.raises(ValueError, match="Batch is unavailable"):
         app.export_report(
             AuditReportRequest(RecordsScope(batch="missing")),
-            tmp_path / "missing.xlsx",
+            tmp_path / "missing.pdf",
             "en",
         ).result(WAIT)
 
@@ -1035,24 +986,19 @@ def test_export_keeps_literal_names_and_manual_write_evidence(
     )
     (record,) = identity.audit_page(AuditQuery(action=selection.action)).result(WAIT)
     assert target_caption(record, "en") == oversized_name
-    path = tmp_path / "details.xlsx"
+    path = tmp_path / "details.pdf"
     app.export_report(
         AuditReportRequest(RecordsScope(STAMP + 700, STAMP + 704)), path, "en"
     ).result(WAIT)
-    with closing(load_workbook(path)) as book:
-        values = list(book.worksheets[0].values)
-        assert "PLC · W100 × 2" in str(values) and "5, 6" in str(values)
-        assert ("Field", "Before", None, "After", None) in values
-        assert ("Enabled setting", "Disabled", None, "Enabled", None) in values
-        assert "PLC acknowledged the write" in str(values)
-        assert [row[3] for row in values if row[2] == "Select Production Recipe"] == [
-            "Recipe"
-        ]
-        assert "127.0.0.1" not in str(values) and "opaque-account" not in str(values)
-        named = [
-            c
-            for row in book.worksheets[0]
-            for c in row
-            if c.value == "=Original username"
-        ]
-        assert len(named) == 1 and named[0].data_type == "s"
+    body = pdf_text(path)
+    for value in (
+        "PLC · W100 × 2",
+        "5, 6",
+        "Enabled setting",
+        "PLC acknowledged the write",
+        "Recipe",
+        "=Original username",
+    ):
+        assert value in body
+    for private in ("127.0.0.1", "opaque-account", oversized_name):
+        assert private not in body

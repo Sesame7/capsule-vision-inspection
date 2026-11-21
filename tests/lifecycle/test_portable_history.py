@@ -215,11 +215,11 @@ def test_portable_alarms_show_an_empty_page_without_creating_storage(
         window = HistoryReviewWindow(reader)
         try:
             window.show()
-            window.tabs.setCurrentIndex(2)
+            window.tabs.setCurrentWidget(window.alarms)
             window.set_language("en")
             page = window.alarms
             until(lambda: page.message.text() == text("history_none", "en"))
-            assert window.tabs.isTabEnabled(2)
+            assert window.tabs.isTabEnabled(3)
             assert page.message.isVisible() and not page.message.toolTip()
             assert page.table.rowCount() == 0 and page.details.isHidden()
             assert not page.newer.isEnabled() and not page.older.isEnabled()

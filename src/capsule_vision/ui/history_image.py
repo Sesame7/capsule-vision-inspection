@@ -1,30 +1,67 @@
 """Read-only presentation of one linked archive image and its stored evidence."""
 
+from pathlib import Path
+
 from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import (
     QColor,
     QImage,
+    QImageReader,
     QPainter,
     QPaintEvent,
     QPen,
     QRegion,
     QResizeEvent,
     QShowEvent,
+    QTextOption,
 )
 from PySide6.QtWidgets import QDialog, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
+from capsule_vision.application.archive_links import relocated_image_path
 from capsule_vision.application.history import HistoryFinding
 from capsule_vision.inference import BoundingRect
 
 from .production_presentation import image_transform
-from .style import Style
+from .style import Style, theme_colors
 
 
-class _ImageViewport(QWidget):
+def read_archived_png(
+    linked: Path, camera: str, root: Path | None, size: tuple[int, int] | None
+) -> tuple[QImage, str]:
+    """Use the exact linked PNG, confined to the supplied package in portable mode."""
+    path = linked if root is None else relocated_image_path(linked, camera, root)
+    if path is None or not path.is_absolute() or path.suffix.lower() != ".png":
+        return QImage(), "history_image_missing"
+    try:
+        if root is not None:
+            path = path.resolve(strict=True)
+            if not path.is_relative_to(root.resolve(strict=True)):
+                return QImage(), "history_image_missing"
+        reader = QImageReader(str(path), b"png")
+        reader.setAutoDetectImageFormat(False)
+        reader.setAutoTransform(False)
+        image = reader.read()
+        if image.isNull():
+            path.stat()
+            return image, "history_image_open_failed"
+        if size is not None and size != (image.width(), image.height()):
+            return QImage(), "history_image_size_mismatch"
+    except FileNotFoundError, NotADirectoryError:
+        return QImage(), "history_image_missing"
+    except OSError, ValueError:
+        return QImage(), "history_image_open_failed"
+    return image, ""
+
+
+class HistoryImageViewport(QWidget):
     def __init__(
         self, image: QImage, findings: tuple[HistoryFinding, ...], parent: QWidget
     ) -> None:
         super().__init__(parent)
+        self.empty_text = ""
+        self.set_image(image, findings)
+
+    def set_image(self, image: QImage, findings: tuple[HistoryFinding, ...]) -> None:
         self.image = image
         labels: dict[BoundingRect, list[str]] = {}
         for finding in findings:
@@ -39,11 +76,19 @@ class _ImageViewport(QWidget):
                 for finding in findings
             )
         )
+        self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#0d0f12"))
-        if min(self.width(), self.height()) > 0:
+        if self.image.isNull():
+            colors = theme_colors(self)
+            painter.fillRect(self.rect(), QColor(colors.raised))
+            painter.setPen(QColor(colors.secondary))
+            options = QTextOption(Qt.AlignmentFlag.AlignCenter)
+            options.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+            painter.drawText(QRectF(self.rect()), self.empty_text, options)
+        elif min(self.width(), self.height()) > 0:
             transform = image_transform(
                 self.image.width(), self.image.height(), self.width(), self.height()
             )
@@ -107,7 +152,7 @@ class HistoryImageDialog(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self._positioned = False
         self._caption = caption
-        self.viewport = _ImageViewport(image, findings, self)
+        self.viewport = HistoryImageViewport(image, findings, self)
         self.viewport.setAccessibleName(title)
         self.caption = QLabel()
         self.caption.setTextFormat(Qt.TextFormat.PlainText)

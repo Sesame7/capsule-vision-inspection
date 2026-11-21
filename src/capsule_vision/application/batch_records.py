@@ -27,36 +27,6 @@ class BatchSelection:
     detail_expired: bool
 
 
-@dataclass(frozen=True, slots=True)
-class ReportBatches:
-    choices: tuple[tuple[str, str], ...]  # UUID and operator label
-    more: bool
-    attributable: frozenset[str] = frozenset()
-
-
-def report_batches(
-    db: sqlite3.Connection, prefix: str, cursor: str | None, previous: bool
-) -> ReportBatches:
-    where = ["label >= ? AND substr(label, 1, length(?)) = ?"]
-    args = [prefix, prefix, prefix]
-    if cursor is not None:
-        where.append("label < ?" if previous else "label > ?")
-        args.append(cursor)
-    order = "DESC" if previous else "ASC"
-    rows = db.execute(
-        "SELECT uuid,label,json_extract(positions,'$.batches_completed') FROM batches WHERE "
-        + " AND ".join(where)
-        + f" ORDER BY label {order} LIMIT 51",
-        args,
-    ).fetchall()
-    page = rows[:50]
-    return ReportBatches(
-        tuple((r[0], r[1]) for r in (reversed(page) if previous else page)),
-        len(rows) > 50,
-        frozenset(r[0] for r in page if r[2]),
-    )
-
-
 SCHEMA = """
 CREATE TABLE batches (
     uuid TEXT PRIMARY KEY, label TEXT NOT NULL UNIQUE COLLATE BINARY,

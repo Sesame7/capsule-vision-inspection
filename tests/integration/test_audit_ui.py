@@ -91,7 +91,7 @@ def test_historical_account_popup_search_disabled_accounts_and_late_delivery(
         window.show()
         window.set_language("en")
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         until(lambda: len(page.rows) == 50)
         assert all(row.operation.username == "Current" for row in page.rows)
         assert not any(control.isVisible() for control in page.findChildren(QComboBox))
@@ -152,7 +152,7 @@ def test_historical_account_popup_search_disabled_accounts_and_late_delivery(
         identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
         window.identity_controls.refresh()
         late = Future()
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         picker.click()
         close_window(window)
         closed = True
@@ -191,8 +191,8 @@ def test_audit_tab_filters_pages_and_revokes_pending_delivery(
             identity.audit.record(op, "success")
         window.show()
         window.navigate(3)
-        assert window.pages.count() == 5 and window.history_tabs.count() == 4
-        window.history_tabs.setCurrentIndex(2)
+        assert window.pages.count() == 5 and window.history_tabs.count() == 5
+        window.history_tabs.setCurrentWidget(window.audit_page)
         until(lambda: len(page.rows) == 50)
         identity.login("Shift", TEST_PASSWORD).result(WAIT)
         window.identity_controls.refresh()
@@ -266,7 +266,9 @@ def test_audit_tab_filters_pages_and_revokes_pending_delivery(
             if role == Role.OPERATOR:
                 identity.login("Line", TEST_PASSWORD).result(WAIT)
                 window.identity_controls.refresh()
-            assert not window.history_tabs.isTabEnabled(2)
+            assert not window.history_tabs.isTabEnabled(
+                window.history_tabs.indexOf(window.audit_page)
+            )
             assert window.history_tabs.currentIndex() == 0 and not page.rows
             assert not page.details.toPlainText() and page.table.rowCount() == 0
             with pytest.raises(AuthorizationError):
@@ -375,7 +377,7 @@ def test_local_date_filters_use_recorded_instants_and_keep_full_details(
         for row, expected in enumerate(("3", "2")):
             cycle = inspection.cycles.item(row, 1)
             assert cycle and cycle.text() == expected
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         select_account(audit, "Boundary")
         audit.refresh()
         until(lambda: len(audit.rows) == 2)
@@ -399,7 +401,7 @@ def test_local_date_filters_use_recorded_instants_and_keep_full_details(
         assert all(v not in audit_text for v in ("Recipe", "Boundary", target))
         assert audit.rows[0].operation.target == target
 
-        window.history_tabs.setCurrentIndex(3)
+        window.history_tabs.setCurrentWidget(window.alarm_page)
         alarms.refresh()
         until(lambda: len(alarms.rows) == 2)
         assert [r.event.signal for r in alarms.rows] == ["fault-3", "fault-2"]
@@ -495,7 +497,7 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
         window.show()
         window.set_language("en")
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         select_account(page, "Reviewer")
         page.refresh()
         until(lambda: len(page.rows) == len(cases))
@@ -698,9 +700,10 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
         bar = tabs.tabBar()
         for width, height in ((1080, 1920), (1920, 1080)):
             window.resize(width, height)
+            window.set_theme("dark" if width < height else "light")
             qapp.processEvents()
-            slots = tuple(bar.tabRect(i) for i in range(4))
-            assert all(r.size() == slots[0].size() and r.height() >= 44 for r in slots)
+            slots = tuple(bar.tabRect(i) for i in range(5))
+            assert all(r.width() == 132 and r.height() == 44 for r in slots)
             base_filters: dict[int, tuple[QRect, ...]] = {}
             base_columns: dict[int, tuple[int, ...]] = {}
             common_pagers: set[tuple[tuple[int, int, int, int], ...]] = set()
@@ -709,7 +712,8 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                 for i, key in enumerate(
                     (
                         "records_batches",
-                        "records_inspection",
+                        "records_ng_capsules",
+                        "short_cycles",
                         "records_audit",
                         "records_alarms",
                     )
@@ -719,12 +723,14 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                     )
                     qapp.processEvents()
                     assert tabs.currentIndex() == i and slots[i] == bar.tabRect(i)
-                    assert (
-                        tabs.tabText(i) == bar.accessibleTabName(i) == text(key, lang)
+                    assert tabs.tabText(i) == ("NG" if i == 1 else text(key, lang))
+                    assert bar.accessibleTabName(i) == text(
+                        "audit_inspection" if i == 2 else key, lang
                     )
                     assert not tabs.tabIcon(i).isNull() and tabs.tabToolTip(i)
                     destination = (
                         "records_batches",
+                        "records_ng_capsules",
                         "audit_inspection",
                         "audit_trail",
                         "alarm_history",
@@ -732,12 +738,14 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                     assert tabs.tabToolTip(i) == text(destination, lang)
                     page = (
                         window.batches_page,
+                        window.ng_capsules,
                         window.history,
                         window.audit_page,
                         window.alarm_page,
                     )[i]
                     table = (
                         window.batches_page.table,
+                        window.ng_capsules.table,
                         window.history.cycles,
                         window.audit_page.table,
                         window.alarm_page.table,
@@ -773,17 +781,20 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                         tuple((r.x(), r.y(), r.width(), r.height()) for r in rectangles)
                     )
                     assert len(common_pagers) == 1
-                    report = window.history.export_button
+                    report = window.records_export
+                    if page is window.history:
+                        assert report.isHidden() and not report.isEnabled()
+                        continue
                     assert (
                         report.parentWidget() is tabs.cornerWidget()
                         and report.isVisible()
                     )
                     header = QRect(report.mapTo(tabs, QPoint()), report.size())
-                    assert header.left() > bar.tabRect(3).right()
+                    assert header.left() > bar.tabRect(4).right()
                     assert header.intersects(QRect(0, 0, tabs.width(), bar.height()))
                     assert header.right() == rectangles[-1].right()
                     assert header.bottom() < rectangles[-1].top()
-            for i, event_page in enumerate((window.audit_page, window.alarm_page), 2):
+            for i, event_page in enumerate((window.audit_page, window.alarm_page), 3):
                 tabs.setCurrentIndex(i)
                 qapp.processEvents()
                 for language in LANGUAGES:
@@ -797,7 +808,7 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                         assert title and title.toolTip() == title.data(
                             Qt.ItemDataRole.AccessibleTextRole
                         )
-                    if i == 2:
+                    if i == 3:
                         outcome_width = table.columnWidth(4)
                         for outcome in (
                             "success",

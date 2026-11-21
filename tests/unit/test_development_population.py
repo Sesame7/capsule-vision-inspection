@@ -1,4 +1,4 @@
-"""Commissioning examples use the same History, physical outcomes and workbook as app.py."""
+"""Commissioning examples use the same History, physical outcomes and PDF as app.py."""
 
 import json
 import sqlite3
@@ -12,8 +12,8 @@ from time import time
 
 import pytest
 from development_records import SAMPLE, example_id, populate
-from openpyxl import load_workbook
 from populate_development_data import provision_accounts, review_records
+from tests.support.reports import pdf_text
 from tests.support.startup import saved_data
 
 from capsule_vision.application._security_lock import SecurityLease
@@ -22,6 +22,7 @@ from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import Role, SecurityBusyError
 from capsule_vision.application.production_report import write_report
+from capsule_vision.application.report_content import ReportData
 from capsule_vision.application.startup import ApplicationData
 from capsule_vision.configuration.alarm_definitions import (
     TEMPLATE,
@@ -69,7 +70,7 @@ def test_interactive_example_accounts_keep_credentials_on_rerun(
 
 
 @pytest.mark.parametrize("cameras", [5, 6])
-def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
+def test_review_history_and_PDF(tmp_path: Path, cameras: int) -> None:
     data = saved_data(tmp_path, camera_count=cameras)
     # Keep a pre-existing business row and an actual audit event.
     owner = ProductionHistory(data.history)
@@ -252,31 +253,24 @@ def test_review_history_and_workbook(tmp_path: Path, cameras: int) -> None:
     try:
         batch = owner.initial_selection.result()
         assert batch and batch.label == "DEV-LOT-F"
-        path = tmp_path / "report.xlsx"
+        path = tmp_path / "report.pdf"
         write_report(owner, batch.uuid, path, "en", Event(), lambda: None)
-        with closing(load_workbook(path)) as book:
-            (summary,) = book.worksheets
-            rows = list(summary.values)
-            metrics = next(i for i, row in enumerate(rows) if row[0] == "Inspected")
+        content = pdf_text(path)
+        assert "Batch Production Report" in content and "DEV-LOT-F" in content
+        assert "DEV-Example-Operator" in content and "DEV-Example-Engineer" in content
+        assert batch.groups.batches_completed == 16
+        snapshot = tmp_path / "report.db"
+        owner.capture_report(batch.uuid, snapshot, Event()).result()
+        with closing(sqlite3.connect(snapshot)) as db:
             group = batch.groups
-            assert group.batches_completed == 16
-            assert tuple(rows[metrics][col] for col in (0, 2, 4, 6)) == (
-                "Inspected",
-                "OK",
-                "NG",
-                "Pass Rate",
-            )
-            assert tuple(rows[metrics + 1][col] for col in (0, 2, 4, 6)) == (
+            total = next(ReportData(db, "en", Event()).production_rows())
+            assert total[0] == "Batch Total"
+            assert total[-4:] == (
                 group.inspected,
                 group.channel_ok,
                 group.channel_ng,
                 group.channel_ok / group.inspected,
             )
-            assert summary.title == "Batch Production Report"
-            assert summary.max_row < 30 and summary.max_column == 9
-            assert not any(row[0] == "EMPTY" for row in rows)
-            assert "DEV-Example-Operator" in str(rows)
-            assert "DEV-Example-Engineer" in str(rows)
         owner.select_batch(None).result()
     finally:
         owner.request_stop()

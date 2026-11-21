@@ -1,28 +1,36 @@
 """History's retained detections and durable attributed categories are different units."""
 
+import json
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
+from typing import cast
 
 import numpy as np
 import pytest
 from numpy.typing import NDArray
-from openpyxl import load_workbook
-from tests.support.application import WAIT
+from tests.support.application import WAIT, FakeSession, close
 from tests.support.business import mixed_result
 from tests.support.production import inferred
+from tests.support.reports import pdf_text
 from tests.unit.test_configured_occupancy import configuration, cycle, scene
 from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_history import finish
 from tests.unit.test_production_report import FOUR_CYCLE
 
-from capsule_vision.application import ConfiguredProductionPipeline
+from capsule_vision.application import (
+    ConfiguredProductionPipeline,
+    ProductionApplication,
+)
 from capsule_vision.application.history import HistoryContext, ProductionHistory
 from capsule_vision.application.production_report import write_report
-from capsule_vision.application.report_content import ReportData
-from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
+from capsule_vision.application.report_scope import (
+    HistoryQuery,
+    ReportRequest,
+    ReportType,
+)
 from capsule_vision.communication.reporting import (
     CompletedReportingBatch,
     FirstStationReport,
@@ -58,7 +66,7 @@ def test_pdf_unrenderable_business_name_preserves_existing_destination(
         with pytest.raises(ValueError, match="PDF font cannot display"):
             write_report(
                 owner,
-                ReportRequest("batch", "capsule", batch.uuid),
+                ReportRequest("batch", batch=batch.uuid),
                 target,
                 "en",
                 Event(),
@@ -113,21 +121,18 @@ def test_persisted_categories_follow_effective_configured_pipeline(
             owner.start_run(None, run, model, None).result(WAIT)
             assert owner.offer(HistoryContext(NOW, run, None, run, model), result)
             owner.finish_run(run, "stopped", False).result(WAIT)
-        target = tmp_path / "snapshot"
-        owner.capture_report(
-            ReportRequest("defects", "detections"), target, Event()
-        ).result(WAIT)
-        with closing(sqlite3.connect(target)) as db:
-            data = ReportData(db, "en", Event())
-            assert {
-                (data.category(*key), n)
-                for key, n in data.categories.items()
-                if key[0] == "vimo"
-            } == {(("ViMo 1", "Surface"), 6), (("ViMo 2", "Surface"), 6)}
-            assert len(result.unassigned_findings) == 6
-            assert data.cycles == data.complete == 2
     finally:
         finish(owner)
+    with closing(sqlite3.connect(tmp_path / "history.sqlite3")) as db:
+        facts = db.execute(
+            "SELECT findings,complete FROM cycle_classification"
+        ).fetchall()
+    assert len(facts) == 2
+    for findings, complete in facts:
+        entries = json.loads(findings)
+        hits = {(ch, name) for ch, source, name in entries if source == "vimo"}
+        assert complete and len(hits) == 6 and {name for _, name in hits} == {"Surface"}
+    assert len(result.unassigned_findings) == 6
 
 
 def classified(cycle: int, cameras: int) -> ProductionInspectionResult:
@@ -246,29 +251,18 @@ def test_group_categories_survive_retention_once_and_preserve_missing_coverage(
     owner = ProductionHistory(path, clock=lambda: now)
     try:
         owner.offer_group(ctx.run_id, group)
-        assert not owner.defect_report_scope(HistoryQuery()).result(WAIT).attributable
-        snap = tmp_path / "detections.db"
-        owner.capture_report(
-            ReportRequest("defects", "detections"), snap, Event()
-        ).result(WAIT)
-        with closing(sqlite3.connect(snap)) as db:
-            data = ReportData(db, "en", Event())
-            assert data.cycles == 7 and data.categories.total() == 7 * 4
         now += 31 * 86400
-        report = tmp_path / "retained.xlsx"
+        report = tmp_path / "retained.pdf"
         write_report(
             owner,
-            ReportRequest("batch", "capsule", batch.uuid),
+            ReportRequest("batch", batch=batch.uuid),
             report,
             "en",
             Event(),
             lambda: None,
         )
-        with closing(load_workbook(report)) as book:
-            assert book.sheetnames == ["Batch Production Report"]
-            rows = list(book.worksheets[0].values)
-            metrics = next(i for i, r in enumerate(rows) if r[0] == "Inspected")
-            assert rows[metrics + 1][2] == 8
+        assert "Batch Production Report" in pdf_text(report)
+        assert batch.label in pdf_text(report)
     finally:
         finish(owner)
     with closing(sqlite3.connect(path)) as db:
@@ -283,224 +277,33 @@ def test_group_categories_survive_retention_once_and_preserve_missing_coverage(
         )
 
 
-def test_filtered_detection_export_includes_every_retained_cycle_and_only_observed_hits(
+def test_export_admission_rejects_unsupported_formats_and_scopes(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "history.sqlite3"
-    owner = ProductionHistory(path, clock=lambda: NOW)
-    ctx = HistoryContext(NOW, "shift", None, "unbatched", RECIPE, "白色 A")
-    try:
-        owner.start_run(None, ctx.run_id, RECIPE, None).result(WAIT)
-        for i in range(56):
-            assert owner.offer(replace(ctx, completed_at=NOW + i), classified(i + 1, 5))
-        owner.finish_run(ctx.run_id, "stopped", False).result(WAIT)
-        assert owner.snapshot().persisted == 56
-    finally:
-        finish(owner)
-    # Supported pre-classification records coexist with new ones (no inferred labels).
-    with closing(sqlite3.connect(path)) as db, db:
-        db.execute("DELETE FROM cycle_classification WHERE cycle='2'")
-    owner = ProductionHistory(path, clock=lambda: NOW + 56)
-    try:
-        query = HistoryQuery(
-            since=NOW + 1,
-            until=NOW + 55,
-            batch_segment="shift",
-            result=frozenset(("ERROR",)),
-            limit=1,
-            cursor=(NOW + 2, 1),
-        )
-        path_out = tmp_path / "cycles.xlsx"
-        write_report(
-            owner,
-            ReportRequest("defects", "detections", filters=query),
-            path_out,
-            "en",
-            Event(),
-            lambda: None,
-        )
-        with closing(load_workbook(path_out)) as book:
-            assert book.sheetnames == ["Defect Classification Report"]
-            rows = list(book.worksheets[0].values)
-            assert (MARK, None, None, None, 106) in rows
-            assert "53 / 54" in str(rows)
-            assert "Background" not in str(rows)
-            assert len(rows) < 30  # No individual Cycle/channel rows.
-            assert any(
-                book.worksheets[0].cell(i, 1).data_type == "s"
-                for i, r in enumerate(rows, 1)
-                if r[0] == MARK
-            )
-        # Even a database with no optional classification tables remains exportable.
-    finally:
-        finish(owner)
-    with closing(sqlite3.connect(path)) as db, db:
-        for table in (
-            "cycle_classification",
-            "group_classification",
-            "batch_coverage",
-            "batch_categories",
-        ):
-            db.execute(f"DROP TABLE {table}")
-    owner = ProductionHistory(path, clock=lambda: NOW + 56)
-    try:
-        snap = tmp_path / "legacy.sqlite3"
-        owner.capture_report(
-            ReportRequest("defects", "detections", filters=query), snap, Event()
-        ).result(WAIT)
-        with closing(sqlite3.connect(snap)) as db:
-            data = ReportData(db, "en", Event())
-            assert not data.categories and data.cycles == 54
-            assert "0 / 54" in " ".join(data.notes())
-    finally:
-        finish(owner)
-
-
-@pytest.mark.parametrize(
-    "case",
-    [
-        "complete",
-        "partial_date",
-        "partial_result",
-        "unattributed",
-        "bad_slots",
-        "historical",
-        "empty",
-    ],
-)
-def test_capsule_basis_requires_whole_filtered_group_scope(
-    tmp_path: Path, case: str
-) -> None:
-    path = tmp_path / "scope.sqlite3"
-    owner = ProductionHistory(path, clock=lambda: NOW + 20)
-    batch = owner.select_batch("Scoped lot").result(WAIT)
-    assert batch
-    ctx = HistoryContext(NOW, batch.uuid, batch.label, "grouped", RECIPE)
-    try:
-        owner.start_run(batch.uuid, ctx.run_id, RECIPE, FOUR_CYCLE).result(WAIT)
-        for first in (1, 5):
-            results = [classified(first + n, 5) for n in range(4)]
-            reports = tuple(FirstStationReport.from_result(1, r) for r in results)
-            owner.offer_group(
-                ctx.run_id,
-                CompletedReportingBatch(
-                    reports[0].identity, first, reports, reports[0].reject_words, 1.0
-                ),
-            )
-            for r in results:
-                assert owner.offer(replace(ctx, completed_at=NOW + r.cycle_id), r)
-        owner.finish_run(ctx.run_id, "stopped", False).result(WAIT)
-        if case == "unattributed":
-            owner.select_batch(None).result(WAIT)
-            owner.start_run(None, "solo", RECIPE, None).result(WAIT)
-            assert owner.offer(
-                replace(ctx, run_id="solo", batch_label=None, batch_segment="solo"),
-                classified(1, 5),
-            )
-            owner.finish_run("solo", "stopped", False).result(WAIT)
-    finally:
-        finish(owner)
-    with closing(sqlite3.connect(path)) as db, db:
-        if case == "bad_slots":
-            db.execute("UPDATE group_members SET slot=1 WHERE cycle='2'")
-        elif case == "historical":
-            db.execute("DELETE FROM group_classification WHERE first_cycle='5'")
-            db.execute("DELETE FROM cycle_classification WHERE cycle='5'")
-        elif case == "partial_result":
-            db.execute("UPDATE cycles SET technical='SUCCESS' WHERE cycle_id='2'")
-    owner = ProductionHistory(path, clock=lambda: NOW + 20)
-    query = HistoryQuery(
-        since=NOW + 2
-        if case == "partial_date"
-        else NOW + 100
-        if case == "empty"
-        else None,
-        result=frozenset(("ERROR",))
-        if case == "partial_result"
-        else frozenset(("OK", "NG", "EMPTY", "UNKNOWN", "ERROR")),
+    app = ProductionApplication(
+        lambda _p, _g: FakeSession(),
+        history=ProductionHistory(tmp_path / "history.sqlite3"),
     )
     try:
-        eligibility = owner.defect_report_scope(query).result(WAIT)
-        expected = case in ("complete", "historical")
-        assert eligibility.attributable is expected
-        request = ReportRequest("defects", "capsule", filters=query)
-        snapshot = tmp_path / "snapshot.db"
-        if expected:
-            owner.capture_report(request, snapshot, Event()).result(WAIT)
-            with closing(sqlite3.connect(snapshot)) as db:
-                data = ReportData(db, "en", Event())
-                assert data.ng == 8 and data.group_count == 2
-                factor = 1 if case == "historical" else 2
-                assert (
-                    data.categories[
-                        ("vimo", RECIPE.model_id, RECIPE.model_sha256, MARK)
-                    ]
-                    == 2 * factor
-                )
-                assert data.categories.total() == 4 * factor
-                assert (
-                    data.explained == 2 * factor
-                )  # overlapping categories do not inflate total NG
-                assert data.covered == factor
-                if case == "historical":
-                    assert "Incomplete classification records" in " ".join(data.notes())
-                    assert "NG with incomplete classification records: 4" in " ".join(
-                        data.notes()
-                    )
-        else:
-            with pytest.raises(ValueError, match="Detection Count"):
-                owner.capture_report(request, snapshot, Event()).result(WAIT)
-        detection = tmp_path / "detections.db"
-        owner.capture_report(
-            ReportRequest("defects", "detections", filters=query), detection, Event()
-        ).result(WAIT)
-        with closing(sqlite3.connect(detection)) as db:
-            data = ReportData(db, "en", Event())
-            assert data.cycles == eligibility.cycles
-            if case == "complete":
-                assert (
-                    data.categories[
-                        ("vimo", RECIPE.model_id, RECIPE.model_sha256, MARK)
-                    ]
-                    == 16
-                )
-                assert data.categories.total() == 32
+        request = ReportRequest("defects", batch="explicit")
+        for suffix in ("xlsx", "xls", "csv", "tmp"):
+            dest = tmp_path / f"report.{suffix}"
+            dest.write_bytes(b"original")
+            with pytest.raises(ValueError, match="pdf"):
+                app.export_report(request, dest, "en")
+            assert dest.read_bytes() == b"original"
+        for removed in ({"basis": "detections"}, {"filters": HistoryQuery(since=10)}):
+            with pytest.raises(TypeError):
+                replace(request, **removed)
+        for kind in ("cycles", "detections"):
+            with pytest.raises(ValueError, match="Unsupported"):
+                ReportRequest(cast(ReportType, kind), batch="explicit")
+        with pytest.raises(ValueError, match="Batch identity"):
+            replace(request, batch="")
+        with pytest.raises(ValueError, match="Unsupported"):
+            app.export_report(cast(ReportRequest, object()), tmp_path / "bad.pdf", "en")
+        with pytest.raises(ValueError, match="Batch unavailable"):
+            app.export_report(request, tmp_path / "missing.pdf", "en").result(WAIT)
+        assert not (tmp_path / "missing.pdf").exists()
     finally:
-        finish(owner)
-
-
-def test_export_rechecks_scope_after_preview_without_silent_basis_change(
-    tmp_path: Path,
-) -> None:
-    owner = ProductionHistory(tmp_path / "history.sqlite3", clock=lambda: NOW)
-    try:
-        batch = owner.select_batch("Lot").result(WAIT)
-        assert batch
-        owner.start_run(batch.uuid, "run", RECIPE, FOUR_CYCLE).result(WAIT)
-        results = [classified(n, 5) for n in range(1, 5)]
-        reports = tuple(FirstStationReport.from_result(1, r) for r in results)
-        owner.offer_group(
-            "run",
-            CompletedReportingBatch(
-                reports[0].identity, 7, reports, reports[0].reject_words, 1.0
-            ),
-        )
-        ctx = HistoryContext(NOW, batch.uuid, batch.label, "run", RECIPE)
-        for result in results:
-            assert owner.offer(ctx, result)
-        assert owner.defect_report_scope(HistoryQuery()).result(WAIT).attributable
-        assert owner.offer(ctx, classified(5, 5))
-        target = tmp_path / "existing.xlsx"
-        target.write_bytes(b"previous")
-        with pytest.raises(ValueError, match="Detection Count"):
-            write_report(
-                owner,
-                ReportRequest("defects", "capsule"),
-                target,
-                "en",
-                Event(),
-                lambda: None,
-            )
-        assert target.read_bytes() == b"previous" and not list(tmp_path.glob("*.tmp"))
-    finally:
-        finish(owner)
+        close(app)

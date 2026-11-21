@@ -58,6 +58,7 @@ from capsule_vision.application.identity_models import Role
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
+from capsule_vision.application.report_scope import ReportRequest
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.communication.reporting import ReportOutcome
 from capsule_vision.display import DisplayFrame, DisplaySnapshot
@@ -80,6 +81,7 @@ from .communication_page import CommunicationPage
 from .editing import EditingCoordinator
 from .history_page import HistoryPage
 from .identity_controls import IdentityControls
+from .ng_capsules_page import NgCapsulesPage
 from .permissions import failure_key, permits
 from .production_bridge import QtProductionBridge
 from .production_presentation import (
@@ -92,6 +94,7 @@ from .production_presentation import (
 )
 from .production_recipes import ProductionRecipes
 from .recipe_page import ModelLabelReader, RecipePage
+from .records_export import RecordsExport
 from .records_filters import RecordsFilters
 from .records_tabs import RecordsTabs
 from .shell import PAGES, NavigationBar, StatusBar
@@ -440,21 +443,21 @@ class MainWindow(QMainWindow):
         self.communication.preferences_validated.connect(self._communication_validated)
         self.identity_controls.session_changed.connect(self._session_changed)
         self.history = HistoryPage(bridge.application.history, bridge.application)
+        self.ng_capsules = NgCapsulesPage(bridge.application.history)
         self.batches_page = BatchesPage(bridge.application)
-        self.history.export_requires_batch = True
-        self.batches_page.selection_changed.connect(self._report_context)
+        self.records_export = RecordsExport(bridge.application)
+        self.records_export.feedback_changed.connect(self._render)
         self.audit_page = AuditPage(
             bridge.application.identity, bridge.application.history
         )
-        self.audit_page.accounts.changed.connect(self._report_context)
         self.alarm_page = AlarmPage(bridge.application)
-        self.alarm_page.kind.activated.connect(self._report_context)
         self.history.timer.timeout.connect(self.alarm_page.refresh_status)
         self.history.timer.timeout.connect(self.audit_page.refresh_status)
         self.history_tabs = RecordsTabs(
             (
                 ("batches", self.batches_page),
-                ("inspection", self.history),
+                ("ng_capsules", self.ng_capsules),
+                ("cycles", self.history),
                 ("audit", self.audit_page),
                 ("alarms", self.alarm_page),
             )
@@ -464,14 +467,18 @@ class MainWindow(QMainWindow):
         report_corner = QWidget()
         report_layout = QHBoxLayout(report_corner)
         report_layout.setContentsMargins(0, 0, 0, 0)
-        report_layout.addWidget(self.history.export_button)
+        report_layout.addWidget(self.records_export)
         self.history_tabs.setCornerWidget(report_corner, Qt.Corner.TopRightCorner)
-        self.history.export_button.show()
+        self.records_export.show()
         self.history_tabs.currentChanged.connect(self._history_tab_changed)
         self.records_filters = RecordsFilters(
             bridge.application.history, bridge.application.identity
         )
         self.records_filters.changed.connect(self._records_filter_changed)
+        self.ng_capsules.selection_changed.connect(self._report_context)
+        self.batches_page.selection_changed.connect(self._report_context)
+        self.audit_page.accounts.changed.connect(self._report_context)
+        self.alarm_page.kind.activated.connect(self._report_context)
         self.batches_page.filter_bar.insertWidget(0, self.records_filters)
         self._history_access()
         if self.communication.reporting_panel is not None:
@@ -599,7 +606,7 @@ class MainWindow(QMainWindow):
         if self.vision_workspace is not None:
             self.vision_workspace.identity_changed()
         self.communication.identity_changed()
-        self.history.identity_changed()
+        self.records_export.present()
         self._history_access()
         self._render()
 
@@ -611,71 +618,86 @@ class MainWindow(QMainWindow):
         role = identity.snapshot().role if identity else Role.GUEST
         allowed = role >= Role.ENGINEER
         alarms = role >= Role.OPERATOR
-        index = self.history_tabs.currentIndex()
-        if (index == 2 and not allowed) or (index == 3 and not alarms):
-            self.history_tabs.setCurrentIndex(0)
-        self.history_tabs.setTabEnabled(2, allowed)
-        self.history_tabs.setTabEnabled(3, alarms)
-        if allowed and self.history_tabs.currentIndex() == 2:
+        tabs = self.history_tabs
+        page = tabs.currentWidget()
+        if (page is self.audit_page and not allowed) or (
+            page is self.alarm_page and not alarms
+        ):
+            tabs.setCurrentWidget(self.batches_page)
+        tabs.setTabEnabled(tabs.indexOf(self.audit_page), allowed)
+        tabs.setTabEnabled(tabs.indexOf(self.alarm_page), alarms)
+        if allowed and page is self.audit_page:
             self.audit_page.refresh()
-        if alarms and self.history_tabs.currentIndex() == 3:
+        if alarms and page is self.alarm_page:
             self.alarm_page.refresh()
 
     def _records_filter_changed(self) -> None:
-        if self.history.report_dialog is not None:
-            self.history.report_dialog.reject()
-        for page in (self.batches_page, self.history, self.audit_page, self.alarm_page):
+        for page in (
+            self.batches_page,
+            self.ng_capsules,
+            self.history,
+            self.audit_page,
+            self.alarm_page,
+        ):
             page.scope = self.records_filters.scope
         self._history_tab_changed(self.history_tabs.currentIndex())
 
     def _history_tab_changed(self, index: int) -> None:
-        page = (self.batches_page, self.history, self.audit_page, self.alarm_page)[
-            index
-        ]
+        page = (
+            self.batches_page,
+            self.ng_capsules,
+            self.history,
+            self.audit_page,
+            self.alarm_page,
+        )[index]
         self.history_tabs.place_filters(index, self.records_filters)
         self._report_context()
         page.refresh()
 
     def _report_context(self) -> None:
-        index = self.history_tabs.currentIndex()
-        selected = self.batches_page.selected_batch if index == 0 else None
-        audit = (
-            AuditReportRequest(
+        page = self.history_tabs.currentWidget()
+        action = self.records_export
+        action.setVisible(page is not self.history)
+        action.batch_label = (
+            self.records_filters.label if self.records_filters.scope.batch else ""
+        )
+        action.missing = "customer_select_batch"
+        if page is self.audit_page:
+            action.request = AuditReportRequest(
                 self.records_filters.scope, self.audit_page.accounts.selected
             )
-            if index == 2
-            else None
-        )
-        alarm = (
-            AlarmReportRequest(
+        elif page is self.alarm_page:
+            action.request = AlarmReportRequest(
                 self.records_filters.scope,
                 str(self.alarm_page.kind.currentData() or ""),
             )
-            if index == 3
-            else None
-        )
-        changed = (
-            self.history.export_requires_batch != (index == 0)
-            or self.history.export_available != (index in (0, 1, 2, 3))
-            or self.history.export_batch != selected
-            or self.history.export_audit != audit
-            or self.history.export_alarm != alarm
-        )
-        if changed and self.history.report_dialog is not None:
-            self.history.report_dialog.reject()
-        self.history.export_available = index in (0, 1, 2, 3)
-        self.history.export_requires_batch = index == 0
-        self.history.export_batch = selected
-        self.history.export_audit = audit
-        self.history.export_audit_label = self.records_filters.label
-        self.history.export_alarm = alarm
-        self.history.export_alarm_label = self.records_filters.label
-        self.history.identity_changed()
+        elif page is self.batches_page and (batch := self.batches_page.selected_batch):
+            action.request = ReportRequest("batch", batch=batch[0])
+            action.batch_label = batch[1]
+        elif (
+            page is self.ng_capsules
+            and (row := self.ng_capsules.selected_capsule) is not None
+            and row.batch_uuid
+        ):
+            action.request = ReportRequest("defects", batch=row.batch_uuid)
+            action.batch_label = row.batch_label or ""
+        else:
+            action.request = None
+            if page is self.ng_capsules:
+                action.missing = (
+                    "records_no_batch"
+                    if self.ng_capsules.selected_capsule
+                    else "unavailable"
+                )
+        action.present()
 
     def _history_language(self) -> None:
+        self.records_export.language = self.language
+        self.records_export.present()
         self.records_filters.set_language(self.language)
         self.history_tabs.set_language(self.language)
         self.batches_page.set_language(self.language)
+        self.ng_capsules.set_language(self.language)
         self.alarm_page.set_language(self.language)
         self.audit_page.set_language(self.language)
 
@@ -1590,6 +1612,14 @@ class MainWindow(QMainWindow):
         if not (warning or fault or self._closing) and service_issue is not None:
             message, detail = service_issue
             warning = True
+        if (
+            page == 3
+            and self.records_export.feedback
+            and not (warning or fault or self._closing)
+        ):
+            key, detail = self.records_export.feedback
+            message = text(key, language)
+            warning = key not in ("report_writing", "report_saved", "report_cancelled")
         self._operational_message = message or reselection_help
         cache_caption = ""
         if (
@@ -2183,6 +2213,7 @@ class MainWindow(QMainWindow):
             self.batches_page.dispose()
             self.records_filters.dispose()
             self.history.dispose()
+            self.ng_capsules.dispose()
             self.audit_page.dispose()
             self.alarm_page.dispose()
             self.recipe_page.dispose()
@@ -2236,6 +2267,7 @@ class MainWindow(QMainWindow):
 
     def _begin_close(self) -> None:
         self._closing = True
+        self.records_export.dispose()
         self.identity_controls.begin_close()
         self.editing.closing = True
         self._render()

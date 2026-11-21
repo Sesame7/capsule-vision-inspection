@@ -5,17 +5,18 @@ from collections.abc import Iterator
 from concurrent.futures import CancelledError
 from contextlib import closing
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 from threading import Event
 
 import pytest
-from openpyxl import load_workbook
 from reportlab.pdfgen.canvas import Canvas
 from tests.support.application import WAIT, FakeSession, close
 from tests.support.startup import TEST_PASSWORD, provision_account
 
-from capsule_vision.application import ProductionApplication, production_report
+from capsule_vision.application import (
+    ProductionApplication,
+    report_pdf,
+)
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery
 from capsule_vision.application.alarm_report import (
@@ -198,7 +199,7 @@ def test_permissions(
     elif role != Role.ADMINISTRATOR:
         provision_account(identity, role.name, role, TEST_PASSWORD)
         identity.login(role.name, TEST_PASSWORD).result(WAIT)
-    path = tmp_path / "alarm.xlsx"
+    path = tmp_path / "alarm.pdf"
     if role < Role.OPERATOR:
         with pytest.raises(AuthorizationError):
             app.export_report(AlarmReportRequest(), path, "en")
@@ -212,7 +213,7 @@ def test_permissions(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_pdf_excel_complete_and_paginated(
+def test_pdf_complete_and_paginated(
     tmp_path: Path,
     owners: tuple[ProductionApplication, LocalIdentity, ProductionHistory],
     monkeypatch: pytest.MonkeyPatch,
@@ -241,19 +242,6 @@ def test_pdf_excel_complete_and_paginated(
     assert captions.count("State" if language == "en" else "状态") == len(pages)
     assert captions.count("PLC") == len(events)
     assert not any("fins_tcp" in v or "signal-" in v or "W18" in v for v in captions)
-    path = tmp_path / "alarm.xlsx"
-    app.export_report(request, path, language).result(WAIT)
-    with closing(load_workbook(path)) as book:
-        sheet = book.worksheets[0]
-        records = [r for r in sheet.values if isinstance(r[0], datetime)]
-        assert len(records) == 147 and sheet.max_column == 4
-        assert [r[0] for r in records] == sorted(
-            [datetime.fromtimestamp(e.observed) for e in events], reverse=True
-        )
-        assert (
-            sheet.page_setup.orientation == "landscape" and sheet.freeze_panes == "A8"
-        )
-        assert not any(c.data_type == "f" for row in sheet for c in row)
 
 
 def test_details_unknown_state_and_missing_fields(
@@ -322,7 +310,7 @@ def test_failed_or_cancelled_publication(
     account = provision_account(identity, "Operator", Role.OPERATOR, TEST_PASSWORD)
     identity.login("Operator", TEST_PASSWORD).result(WAIT)
     entered, release, cancel = Event(), Event(), Event()
-    write = production_report.write_workbook
+    write = report_pdf.write_pdf
 
     def held(db: sqlite3.Connection, path: Path, lang: Language, stop: Event) -> None:
         entered.set()
@@ -332,8 +320,8 @@ def test_failed_or_cancelled_publication(
             raise OSError("Controlled failure")
         write(db, path, lang, stop)
 
-    monkeypatch.setattr(production_report, "write_workbook", held)
-    path = tmp_path / "alarm.xlsx"
+    monkeypatch.setattr(report_pdf, "write_pdf", held)
+    path = tmp_path / "alarm.pdf"
     path.write_bytes(b"preserved")
     future = app.export_report(AlarmReportRequest(), path, "en", cancel=cancel)
     try:

@@ -156,7 +156,6 @@ def test_export_reference_uses_one_timestamp_and_fresh_suffix(
     assert first.workstation is second.workstation is None
 
 
-@pytest.mark.parametrize("extension", ["pdf", "xlsx"])
 @pytest.mark.parametrize(
     "title",
     [
@@ -168,14 +167,12 @@ def test_export_reference_uses_one_timestamp_and_fresh_suffix(
 )
 @pytest.mark.parametrize("batch", [None, "GC261026-04"])
 def test_suggested_filename_type_optional_business_batch_and_timestamp(
-    extension: str, title: str, batch: str | None
+    title: str, batch: str | None
 ) -> None:
     name = identification.suggested_report_filename(
-        title, batch, extension, stamp=datetime(2026, 11, 9, 8, 7, 6)
+        title, batch, stamp=datetime(2026, 11, 9, 8, 7, 6)
     )
-    assert (
-        name == title + ("_" + batch if batch else "") + "_20261109-080706." + extension
-    )
+    assert name == title + ("_" + batch if batch else "") + "_20261109-080706.pdf"
 
 
 @pytest.mark.parametrize(
@@ -183,7 +180,7 @@ def test_suggested_filename_type_optional_business_batch_and_timestamp(
 )
 def test_filename_suggestion_is_one_bounded_windows_component(label: str) -> None:
     name = identification.suggested_report_filename(
-        "Alarm Records Report", label, "pdf", stamp=datetime(2026, 11, 9)
+        "Alarm Records Report", label, stamp=datetime(2026, 11, 9)
     )
     assert PureWindowsPath(name).name == name
     assert not re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
@@ -191,8 +188,3 @@ def test_filename_suggestion_is_one_bounded_windows_component(label: str) -> Non
     assert name.startswith("Alarm Records Report_") and name.endswith(
         "_20261109-000000.pdf"
     )
-
-
-def test_unsupported_filename_extension_rejected() -> None:
-    with pytest.raises(ValueError, match="extension"):
-        identification.suggested_report_filename("Report", None, "../file")

@@ -182,7 +182,7 @@ def capture(
         if not db.execute("SELECT 1 FROM audit_records LIMIT 1").fetchone():
             raise NoAuditRecords()
         db.execute(
-            """CREATE TABLE meta AS SELECT 'audit' AS scope,'' AS basis,? AS observed,
+            """CREATE TABLE meta AS SELECT 'audit' AS scope,? AS observed,
                 ? AS since,? AS until,? AS filter_label,? AS unbatched,? AS account,? AS scoped_segment""",
             (
                 observed,
@@ -255,10 +255,8 @@ def _target(entry: AuditRecord, language: Language) -> str:
         return text("model", language)
     caption = _business_text(target_caption(entry, language, customer=True))
     if op.action == "production.recipe":
-        from .report_content import EXCEL_CELL_TEXT_LIMIT
-
-        # Keep the PDF and Excel target consistent when a name cannot fit a cell.
-        if len(caption.encode("utf-16-le")) > 2 * EXCEL_CELL_TEXT_LIMIT:
+        # Preserve the published customer target limit for recorded Recipe names.
+        if len(caption.encode("utf-16-le")) > 2 * 32_767:
             return text("page_recipe", language)
     return caption or "—"
 

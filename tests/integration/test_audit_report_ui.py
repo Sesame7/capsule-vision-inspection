@@ -1,23 +1,21 @@
 """Audit uses the existing compact, context-only Records export dialog."""
 
-from concurrent.futures import Future
-from contextlib import closing
+from concurrent.futures import CancelledError, Future
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 
 import pytest
-from openpyxl import load_workbook
-from openpyxl.styles import Alignment
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QTextDocument, QTextTable
-from PySide6.QtWidgets import QApplication, QComboBox
+from PySide6.QtWidgets import QApplication
 from reportlab.pdfgen.canvas import Canvas
 from tests.integration.test_audit_ui import select_account
 from tests.integration.test_history_report import choose_file
 from tests.support.application import WAIT
 from tests.support.qt import close_window, until
+from tests.support.reports import pdf_text
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 from tests.unit.test_audit_report import fill
 
@@ -30,8 +28,6 @@ from capsule_vision.application.audit import (
 from capsule_vision.application.audit_report import AuditReportRequest
 from capsule_vision.application.identity_models import AuthenticationError
 from capsule_vision.application.manual_plc import execute_manual, manual_target
-from capsule_vision.application.records_query import RecordsScope
-from capsule_vision.application.report_scope import HistoryQuery, ReportRequest
 from capsule_vision.communication.endpoints import FinsUdpEndpoint
 from capsule_vision.communication.fins import MAX_WRITE_WORDS, FinsAddress
 from capsule_vision.communication.operations import (
@@ -42,11 +38,11 @@ from capsule_vision.communication.operations import (
 from capsule_vision.configuration import load_recipe, save_recipe
 from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.audit_page import AuditPage
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
-from capsule_vision.ui.report_dialog import ReportDialog
+from capsule_vision.ui.records_export import CustomerReport
 
 
 def audit_report_texts(
@@ -54,7 +50,7 @@ def audit_report_texts(
     directory: Path,
     language: Language,
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[str, str]:
+) -> str:
     drawn: list[str] = []
     draw = Canvas.drawString
 
@@ -63,23 +59,12 @@ def audit_report_texts(
         draw(canvas, x, y, value)
 
     request = AuditReportRequest()
-    pdf, excel = (
-        directory / f"audit-{language}.pdf",
-        directory / f"audit-{language}.xlsx",
-    )
+    pdf = directory / f"audit-{language}.pdf"
     with monkeypatch.context() as capture_pdf:
         capture_pdf.setattr(Canvas, "drawString", capture)
         app.export_report(request, pdf, language).result(WAIT)
     assert pdf.read_bytes().startswith(b"%PDF") and drawn
-    app.export_report(request, excel, language).result(WAIT)
-    with closing(load_workbook(excel)) as book:
-        cells = "\n".join(
-            str(value)
-            for row in book.worksheets[0].values
-            for value in row
-            if value is not None
-        )
-    return "\n".join(drawn), cells
+    return "\n".join(drawn)
 
 
 @pytest.mark.parametrize("language", ("zh", "en"))
@@ -287,46 +272,46 @@ def test_audit_wording_follows_recorded_evidence_in_qt_and_customer_exports(
                 assert "Former private candidate" in detail
             if row_id == "activated":
                 assert ("配方 ID" if zh else "Recipe ID") in detail
-        for rendered in audit_report_texts(app, tmp_path, language, monkeypatch):
-            assert f"{requested}: D108–D109 = 320\n{matched}" in rendered
-            assert f"{requested}: D108–D109 = 420" in rendered.splitlines()
-            assert f"{'变更后' if zh else 'After'}: D108–D109" not in rendered
-            assert rendered.splitlines().count(matched) == 1
-            packed = "".join(rendered.split())
-            for value in (
-                pending,
-                uncertain,
-                denied,
-                protection,
-                acknowledgement,
-                unknown,
-                rejection,
-                matched,
-                verified,
-                requested,
-                "Former Engineer",
-                run,
-                "保存通讯设置" if zh else "Save communication settings",
-            ):
-                assert "".join(value.split()) in packed
-            for private in (
-                "192.0.2.43",
-                private_name,
-                "PrivateParameterSentinel",
-                "recipe-internal",
-                "Former private candidate",
-                "recorded-recipe-id",
-                "d3" * 16,
-                "Operation incomplete",
-                "FinsTcpEnvelopeError",
-                "W301",
-                "W302",
-                "未发送",
-                "not sent",
-                "Manual write overlaps",
-                "no ladder-consumption confirmation",
-            ):
-                assert "".join(private.split()) not in packed
+        rendered = audit_report_texts(app, tmp_path, language, monkeypatch)
+        assert f"{requested}: D108–D109 = 320\n{matched}" in rendered
+        assert f"{requested}: D108–D109 = 420" in rendered.splitlines()
+        assert f"{'变更后' if zh else 'After'}: D108–D109" not in rendered
+        assert rendered.splitlines().count(matched) == 1
+        packed = "".join(rendered.split())
+        for value in (
+            pending,
+            uncertain,
+            denied,
+            protection,
+            acknowledgement,
+            unknown,
+            rejection,
+            matched,
+            verified,
+            requested,
+            "Former Engineer",
+            run,
+            "保存通讯设置" if zh else "Save communication settings",
+        ):
+            assert "".join(value.split()) in packed
+        for private in (
+            "192.0.2.43",
+            private_name,
+            "PrivateParameterSentinel",
+            "recipe-internal",
+            "Former private candidate",
+            "recorded-recipe-id",
+            "d3" * 16,
+            "Operation incomplete",
+            "FinsTcpEnvelopeError",
+            "W301",
+            "W302",
+            "未发送",
+            "not sent",
+            "Manual write overlaps",
+            "no ladder-consumption confirmation",
+        ):
+            assert "".join(private.split()) not in packed
         assert identity.audit_page(query).result(WAIT) == stored
     finally:
         page.dispose()
@@ -405,7 +390,7 @@ def test_recipe_selection_reports_the_installed_historical_name(
         picker.reload()
 
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         page = window.audit_page
         until(lambda: expected.keys() <= {r.operation.id for r in page.rows})
         for language in ("zh", "en"):
@@ -432,31 +417,18 @@ def test_recipe_selection_reports_the_installed_historical_name(
                 else:
                     assert failed not in detail
 
-            for rendered in audit_report_texts(app, tmp_path, language, monkeypatch):
-                packed = "".join(rendered.split())
-                for shown in (earlier, renamed, literal):
-                    assert packed.count("".join(shown.split())) == 1
-                for hidden in (
-                    recipe_id,
-                    legacy_id,
-                    recipe.display_name,
-                    private,
-                    failed,
-                ):
-                    assert "".join(hidden.split()) not in packed
-            with closing(load_workbook(tmp_path / f"audit-{language}.xlsx")) as book:
-                action = (
-                    "选择生产配方" if language == "zh" else "Select Production Recipe"
-                )
-                targets = [
-                    row[3]
-                    for row in book.worksheets[0].iter_rows(min_col=1, max_col=5)
-                    if row[2].value == action
-                ]
-                assert [cell.value for cell in targets] == [
-                    expected[record.operation.id] or fallback for record in observed
-                ]
-                assert all(cell.data_type == "s" for cell in targets)
+            rendered = audit_report_texts(app, tmp_path, language, monkeypatch)
+            packed = "".join(rendered.split())
+            for shown in (earlier, renamed, literal):
+                assert packed.count("".join(shown.split())) == 1
+            for hidden in (
+                recipe_id,
+                legacy_id,
+                recipe.display_name,
+                private,
+                failed,
+            ):
+                assert "".join(hidden.split()) not in packed
         assert not path.exists()
         assert identity.audit_page(query).result(WAIT) == observed
     finally:
@@ -507,7 +479,7 @@ def test_misplaced_login_credential_and_historical_payloads_are_private(
         window.show()
         window.set_language("en")
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         page = window.audit_page
         expected = {row.operation.id for row in evidence}
         until(lambda: expected <= {row.operation.id for row in page.rows})
@@ -541,10 +513,10 @@ def test_misplaced_login_credential_and_historical_payloads_are_private(
                 secret not in "\n".join(presented)
                 for secret in (historical, TEST_PASSWORD)
             )
-        for output in audit_report_texts(app, tmp_path, "en", monkeypatch):
-            assert "TestAdmin" in output and "Sign in" in output
-            assert "Invalid credentials or account unavailable." in output
-            assert historical not in output and TEST_PASSWORD not in output
+        output = audit_report_texts(app, tmp_path, "en", monkeypatch)
+        assert "TestAdmin" in output and "Sign in" in output
+        assert "Invalid credentials or account unavailable." in output
+        assert historical not in output and TEST_PASSWORD not in output
         assert identity.audit_page(query).result(WAIT) == evidence
         assert identity.audit.path.read_bytes() == database
     finally:
@@ -605,7 +577,7 @@ def test_customer_exports_of_actual_saves_omit_internal_configuration(
             assert content == path.read_bytes() and private.encode() in content
 
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         page = window.audit_page
         until(
             lambda: (
@@ -628,47 +600,20 @@ def test_customer_exports_of_actual_saves_omit_internal_configuration(
                 )
 
         for language in ("en", "zh"):
-            for output in audit_report_texts(app, tmp_path, language, monkeypatch):
-                # Long column labels can wrap onto another PDF line.
-                compact = "".join(output.split())
-                assert "".join(name.split()) in compact
-                assert "".join(text("archive_ng", language).split()) in compact
-                assert "".join(text("comm_timeout", language).split()) in compact
-                assert (
-                    "".join(text("audit_config_missing_file", language).split())
-                    in compact
-                )
-                assert (
-                    "".join(text("audit_recorded_after", language).split()) in compact
-                )
-                assert "2.5" in compact
-                for private in (archive, host):
-                    assert "".join(private.split()) not in compact
-                assert {str(port), str(route)}.isdisjoint(output.splitlines())
-            with closing(load_workbook(tmp_path / f"audit-{language}.xlsx")) as book:
-                (sheet,) = book.worksheets
-                rows = list(sheet.iter_rows(max_col=5))
-                heading = (
-                    text("audit_field", language),
-                    None,
-                    text("audit_recorded_after", language),
-                    None,
-                    None,
-                )
-                index = next(
-                    i
-                    for i, row in enumerate(rows)
-                    if tuple(c.value for c in row) == heading
-                )
-                timeout = next(
-                    row for row in rows[index + 1 :] if row[2].value == "2.5"
-                )
-                assert text("comm_timeout", language) in str(timeout[0].value)
-                assert timeout[2].data_type == "s"
-                assert timeout[2].alignment == Alignment(
-                    horizontal="left", wrap_text=True, vertical="top"
-                )
-                assert timeout[1].value is timeout[3].value is timeout[4].value is None
+            output = audit_report_texts(app, tmp_path, language, monkeypatch)
+            # Long column labels can wrap onto another PDF line.
+            compact = "".join(output.split())
+            assert "".join(name.split()) in compact
+            assert "".join(text("archive_ng", language).split()) in compact
+            assert "".join(text("comm_timeout", language).split()) in compact
+            assert (
+                "".join(text("audit_config_missing_file", language).split()) in compact
+            )
+            assert "".join(text("audit_recorded_after", language).split()) in compact
+            assert "2.5" in compact
+            for private in (archive, host):
+                assert "".join(private.split()) not in compact
+            assert {str(port), str(route)}.isdisjoint(output.splitlines())
     finally:
         close_window(window)
         delivery.detach()
@@ -724,7 +669,7 @@ def test_manual_write_audit_shows_complete_qt_values_and_bounded_customer_summar
         window.show()
         window.set_language("en")
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         page = window.audit_page
         record_ids = {row.operation.id for row in evidence}
         until(lambda: record_ids <= {row.operation.id for row in page.rows})
@@ -751,30 +696,30 @@ def test_manual_write_audit_shows_complete_qt_values_and_bounded_customer_summar
             assert str(endpoint.destination) not in displayed
 
         for language in ("en", "zh"):
-            for output in audit_report_texts(app, tmp_path, language, monkeypatch):
-                visible = " ".join(output.split())
-                assert f"PLC · D200 × {MAX_WRITE_WORDS}" in visible
-                assert text("audit_requested", language) in visible
-                assert ", ".join(map(str, values[:16])) in visible
-                assert f", {values[16]}" not in visible
-                assert ", 1248" not in visible
-                assert audit_text("identity_audit_incomplete", language) in visible
-                omitted = text("audit_plc_values_omitted", language)
-                assert omitted.format(count=MAX_WRITE_WORDS - 16) in visible
-                assert omitted.format(count=len(legacy_values) - 1 - 16) in visible
-                for private in (
-                    endpoint.host,
-                    f":{endpoint.port}",
-                    str(endpoint.destination),
-                ):
-                    assert private not in output
+            output = audit_report_texts(app, tmp_path, language, monkeypatch)
+            visible = " ".join(output.split())
+            assert f"PLC · D200 × {MAX_WRITE_WORDS}" in visible
+            assert text("audit_requested", language) in visible
+            assert ", ".join(map(str, values[:16])) in visible
+            assert f", {values[16]}" not in visible
+            assert ", 1248" not in visible
+            assert audit_text("identity_audit_incomplete", language) in visible
+            omitted = text("audit_plc_values_omitted", language)
+            assert omitted.format(count=MAX_WRITE_WORDS - 16) in visible
+            assert omitted.format(count=len(legacy_values) - 1 - 16) in visible
+            for private in (
+                endpoint.host,
+                f":{endpoint.port}",
+                str(endpoint.destination),
+            ):
+                assert private not in output
         assert identity.audit.path.read_bytes() == database
     finally:
         close_window(window)
         delivery.detach()
 
 
-def test_audit_context_dialog_scope_export_and_empty_feedback(
+def test_audit_direct_pdf_scope_export_and_empty_feedback(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     startup = authenticated_startup(saved_data(tmp_path))
@@ -789,65 +734,27 @@ def test_audit_context_dialog_scope_export_and_empty_feedback(
         window.set_language("en")
         window.navigate(3)
         window.records_filters.select_batch(batch, "LOT-A · Yellow")
-        window.history_tabs.setCurrentIndex(2)
+        window.history_tabs.setCurrentWidget(window.audit_page)
         select_account(window.audit_page, "Former Operator")
-        until(lambda: len(window.audit_page.rows) == 50)
-        assert window.history.export_button.isEnabled()
-        window.history.export_button.click()
-        dialog = window.history.report_dialog
-        assert dialog and dialog.windowTitle() == "Audit Records Report"
-        assert dialog.audit and dialog.audit.account
-        assert dialog.audit.account.username == "Former Operator"
-        assert dialog.audit.filters.batch == batch
-        assert "Batch-linked records: LOT-A · Yellow" in dialog.scope_label.text()
-        assert dialog.format.currentData() == "pdf"
-        assert len([w for w in dialog.findChildren(QComboBox) if w.isVisible()]) == 2
-        assert not dialog.basis.isVisible() and not dialog.hint.isVisible()
-        dialog.output_language.setCurrentIndex(0)
-        for language in LANGUAGES:
-            window.set_language(language)
-            assert dialog.windowTitle() == text("customer_audit", language)
-            assert "LOT-A · Yellow" in dialog.scope_label.text()
-            assert "Former Operator" in dialog.scope_label.text()
-            assert dialog.audit.account.username == "Former Operator"
-            assert dialog.audit.filters.batch == batch
-            assert dialog.format.currentData() == "pdf"
-            assert dialog.output_language.currentData() == "zh"
-            assert [dialog.output_language.itemData(i) for i in range(2)] == [
-                "zh",
-                "en",
-            ]
-        window.set_language("en")
-        output = tmp_path / "audit.pdf"
-        choose_file(dialog, output)
-        until(
-            lambda: (
-                output.exists() and dialog.feedback.text().startswith("Report saved")
-            )
+        action = window.records_export
+        request = action.request
+        assert (
+            isinstance(request, AuditReportRequest) and request.filters.batch == batch
         )
-        dialog.close()
-        until(lambda: window.history.report_dialog is None)
-        empty = ReportDialog(
-            app,
-            "en",
-            window,
-            HistoryQuery(),
-            audit=AuditReportRequest(RecordsScope(until=1)),
-        )
-        empty.show()
-        target = tmp_path / "empty.pdf"
-        choose_file(empty, target)
-        until(lambda: empty.feedback.text() == "No matching audit records")
-        assert not target.exists() and empty.export.isEnabled()
-        empty.close()
-        empty.deleteLater()
-        app.identity.logout()
-        window.identity_controls.refresh()
-        assert not window.history_tabs.isTabEnabled(2)
-        app.identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
-        window.identity_controls.refresh()
-        window.history_tabs.setCurrentIndex(3)
-        assert window.history.export_button.isEnabled()
+        assert request.account and request.account.username == "Former Operator"
+        action.click()
+        chooser = action.chooser
+        assert chooser and "LOT-A" in chooser.selectedFiles()[0]
+        target = tmp_path / "audit.pdf"
+        choose_file(action, target)
+        until(lambda: action.feedback == ("report_saved", str(target)), 12000)
+        assert "Former Operator" in pdf_text(target)
+        window.records_filters.start.set_date(QDate.currentDate().addYears(10))
+        action.click()
+        empty = tmp_path / "empty.pdf"
+        choose_file(action, empty)
+        until(lambda: action.feedback == ("audit_no_matches", ""))
+        assert not empty.exists()
     finally:
         close_window(window)
         delivery.detach()
@@ -864,7 +771,7 @@ def test_audit_dialog_cancellation_and_late_delivery(
     stops: list[Event] = []
 
     def held(
-        batch: str | ReportRequest | AuditReportRequest,
+        batch: str | CustomerReport,
         path: Path,
         language: Language,
         *,
@@ -880,18 +787,15 @@ def test_audit_dialog_cancellation_and_late_delivery(
     try:
         window.show()
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(2)
-        window.history.export_button.click()
-        dialog = window.history.report_dialog
-        assert dialog
-        choose_file(dialog, tmp_path / "pending.pdf")
-        assert dialog.cancel.isVisible() and not dialog.export.isEnabled()
-        dialog.close()
-        until(lambda: window.history.report_dialog is None)
+        window.history_tabs.setCurrentWidget(window.audit_page)
+        action = window.records_export
+        action.click()
+        choose_file(action, tmp_path / "pending.pdf")
+        assert action.text() == text("cancel", window.language)
+        action.click()
         assert stops[0].is_set()
-        pending.set_result(tmp_path / "late.pdf")
-        qapp.processEvents()
-        assert window.history.report_dialog is None
+        pending.set_exception(CancelledError())
+        until(lambda: action.feedback == ("report_cancelled", ""))
     finally:
         close_window(window)
         delivery.detach()

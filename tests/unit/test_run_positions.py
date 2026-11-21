@@ -90,13 +90,13 @@ def test_run_and_batch_counts_share_dedup_restart_and_expiry(
         )
         snapshot = tmp_path / "report.db"
         owner.capture_report(
-            ReportRequest("batch", "capsule", batch.uuid), snapshot, Event()
+            ReportRequest("batch", batch=batch.uuid), snapshot, Event()
         ).result(WAIT)
         with closing(sqlite3.connect(snapshot)) as db:
-            rows = list(ReportData(db, "en", Event()).runs())
-            assert len(rows) == 2
+            total, *rows = ReportData(db, "en", Event()).production_rows()
+            assert len(rows) == 2 and total[-4] == 2 * expected.inspected
             assert all(
-                row[5:]
+                row[-4:]
                 == (
                     expected.inspected,
                     expected.channel_ok,

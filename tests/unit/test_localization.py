@@ -172,7 +172,6 @@ ENGLISH_FALLBACK_KEYS = {
     "customer_classification_unavailable",
     "customer_classified_ng",
     "customer_color",
-    "customer_cycle_coverage",
     "customer_end",
     "customer_errors",
     "customer_first",
@@ -191,7 +190,6 @@ ENGLISH_FALLBACK_KEYS = {
     "export_all",
     "export_batch",
     "export_before",
-    "export_capsule",
     "export_category",
     "export_category_totals",
     "export_channel_detail",
@@ -201,31 +199,25 @@ ENGLISH_FALLBACK_KEYS = {
     "export_count",
     "export_cycle_categories",
     "export_cycles",
-    "export_defects",
     "export_durable",
     "export_evidence",
     "export_explained",
-    "export_filtered_hint",
     "export_from",
     "export_group_categories",
     "export_groups",
     "export_items",
-    "export_measured_cycles",
     "export_member_cycles",
     "export_no_evidence",
     "export_no_groups",
     "export_none",
     "export_note_capsule",
     "export_note_defects",
-    "export_note_detections",
-    "export_occurrences",
     "export_page",
     "export_period",
     "export_retained",
     "export_source",
     "export_total",
     "export_traditional",
-    "export_type",
     "export_unknown_ng",
     "pilot_unknown",
     "plc_four_cycle_hint",
@@ -371,14 +363,8 @@ PRIORITY_UI_KEYS = {
     "customer_batch",
     "customer_defects",
     "customer_deferred",
-    "customer_detection_only",
-    "customer_entire_batch",
     "customer_positions",
     "customer_select_batch",
-    "export_basis",
-    "export_detections",
-    "export_format",
-    "export_language",
     "export_run",
     "export_value",
     "fault_reset_available",
@@ -895,14 +881,8 @@ RECORDS_WORKFLOW_KEYS = {
     "customer_batch",
     "customer_defects",
     "customer_deferred",
-    "customer_detection_only",
-    "customer_entire_batch",
     "customer_positions",
     "customer_select_batch",
-    "export_basis",
-    "export_detections",
-    "export_format",
-    "export_language",
     "export_run",
     "export_value",
     "history.storage",
@@ -989,49 +969,41 @@ RECORDS_WORKFLOW_KEYS = {
 RECORDS_REVIEW_BY_LANGUAGE: dict[Language, set[str]] = {
     "am": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
     "ha": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
     "km": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
     "mg": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
     "si": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
     "ti": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
     "tk": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
     "zu": {
         "batch_duration_help",
-        "customer_detection_only",
         "history_clock",
         "records_audit_scope",
     },
@@ -1045,11 +1017,12 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 740
+    assert len(maintained) == 737
+    assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
         (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 60),
-        (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 159),
+        (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 153),
     )
     covered: set[str] = set()
     for keys, _, count in groups:
@@ -1499,7 +1472,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 915
+    assert len(STRINGS) == 904
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (
@@ -1964,9 +1937,6 @@ def test_record_captions_distinguish_witnessed_transitions_and_audit_outcomes() 
             assert len({text(key, language) for key in keys}) == len(keys), language
         assert "Chip · Black spot" in text("records_unassigned", language).format(
             labels="Chip · Black spot"
-        )
-        assert "LOT-A · 海蓝" in text("customer_entire_batch", language).format(
-            batch="LOT-A · 海蓝"
         )
         assert "YYYY-MM-DD" in text("records_invalid_date", language)
         assert "PLC" in text("batch_no_groups", language)

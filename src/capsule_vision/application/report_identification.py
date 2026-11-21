@@ -6,7 +6,10 @@ import secrets
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
+
+from capsule_vision.localization.languages import Language
 
 
 def workstation_label() -> str | None:
@@ -54,16 +57,17 @@ class ExportIdentification:
         return cls(exported, workstation_label(), reference)
 
 
+def pdf_language(ui_language: Language) -> Literal["zh", "en"]:
+    return "zh" if ui_language == "zh" else "en"
+
+
 def suggested_report_filename(
     title: str,
     batch_label: str | None,
-    extension: str,
     *,
     stamp: datetime | None = None,
 ) -> str:
     """A safe suggestion only; the operator's selected destination remains final."""
-    if extension not in ("pdf", "xlsx"):
-        raise ValueError("Unsupported report extension")
 
     def component(value: str, limit: int) -> str:
         value = re.sub(r'[<>:"/\\|?*]', "_", value)
@@ -76,4 +80,4 @@ def suggested_report_filename(
     if batch_label and (label := component(batch_label, 64)):
         parts.append(label)
     parts.append((stamp or datetime.now().astimezone()).strftime("%Y%m%d-%H%M%S"))
-    return "_".join(parts) + "." + extension
+    return "_".join(parts) + ".pdf"

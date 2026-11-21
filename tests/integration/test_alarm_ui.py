@@ -106,7 +106,9 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
             english_width = bar.alarm.width()
             assert (
                 not page.alarm_enabled.isEnabled()
-                and not window.history_tabs.isTabEnabled(3)
+                and not window.history_tabs.isTabEnabled(
+                    window.history_tabs.indexOf(window.alarm_page)
+                )
             )
             for command in (app.create_alarm_definitions, app.alarm_definitions_path):
                 with pytest.raises(AuthorizationError):
@@ -127,11 +129,15 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
             assert app.alarm_snapshot().active[0].id == "emergency_stop"
             assert (
                 not page.alarm_enabled.isEnabled()
-                and window.history_tabs.isTabEnabled(3)
+                and window.history_tabs.isTabEnabled(
+                    window.history_tabs.indexOf(window.alarm_page)
+                )
             )
             with pytest.raises(AuthorizationError):
                 app.create_alarm_definitions()
-            assert not window.history_tabs.isTabEnabled(2)
+            assert not window.history_tabs.isTabEnabled(
+                window.history_tabs.indexOf(window.audit_page)
+            )
             app.start_batch("Batch P").result(WAIT)
             identity.login("Tech", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
@@ -211,7 +217,9 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
             assert load_communication_preferences(data.communication).status.enabled
             assert (
                 app.alarm_snapshot().state == "online"
-                and not window.history_tabs.isTabEnabled(3)
+                and not window.history_tabs.isTabEnabled(
+                    window.history_tabs.indexOf(window.alarm_page)
+                )
             )
             identity.login("Tech", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
@@ -369,7 +377,7 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
     try:
         window.show()
         window.navigate(3)
-        window.history_tabs.setCurrentIndex(3)
+        window.history_tabs.setCurrentWidget(window.alarm_page)
         until(lambda: len(page.rows) == 50)
         page.kind.setCurrentIndex(page.kind.findData("startup"))
         window.records_filters.start.set_date(QDate(today.year, today.month, today.day))
@@ -462,7 +470,9 @@ def test_alarm_review_scoped_filters_pagination_and_stale_delivery(
             not page.rows
             and not page.details.toPlainText()
             and page.details.isHidden()
-            and not window.history_tabs.isTabEnabled(3)
+            and not window.history_tabs.isTabEnabled(
+                window.history_tabs.indexOf(window.alarm_page)
+            )
         )
     finally:
         close_window(window)

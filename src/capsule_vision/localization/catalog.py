@@ -3,7 +3,7 @@
 from .languages import Language
 from .translations import EXTRA_STRINGS
 
-# Reports use Chinese/English output; the Qt export dialog uses the UI language.
+# Customer PDFs use Simplified Chinese for zh and English for every other UI locale.
 STRINGS: dict[str, tuple[str, str]] = {
     "process_parameters": ("工艺参数", "Process Parameters"),
     "process_title": ("工艺参数", "Process"),
@@ -127,10 +127,6 @@ STRINGS: dict[str, tuple[str, str]] = {
         "分类记录不完整。",
         "Incomplete classification records.",
     ),
-    "customer_cycle_coverage": (
-        "分类记录完整数：{covered} / {total}。",
-        "Complete classification records: {covered} / {total}.",
-    ),
     "customer_unclassified": (
         "未记录类别的 NG：{count}。",
         "NG without a recorded category: {count}.",
@@ -139,30 +135,14 @@ STRINGS: dict[str, tuple[str, str]] = {
         "分类记录不完整的 NG：{count}。",
         "NG with incomplete classification records: {count}.",
     ),
-    "customer_detection_only": (
-        "范围含部分组合或无归属曝光，仅可统计检测次数；空范围不支持位置计数。",
-        "Partial groups, unattributed exposures or an empty scope permit Detection Count only.",
-    ),
-    "customer_entire_batch": ("整批 · {batch}", "Entire Batch · {batch}"),
     "customer_deferred": (
         "此记录类型暂不支持导出",
         "Export is not available for this record type",
     ),
     "customer_select_batch": ("请选择一个批次", "Select a Batch"),
-    "export_filtered_hint": (
-        "包含检测页当前筛选条件下的所有页。",
-        "Includes every page matching the Inspection filters.",
-    ),
-    "export_type": ("报表类型", "Report type"),
     "export_batch": ("批次汇总", "Batch summary"),
     "export_groups": ("PLC 分组明细", "PLC group details"),
     "export_cycles": ("筛选的检测周期", "Filtered inspection cycles"),
-    "export_basis": ("统计口径", "Counting basis"),
-    "export_capsule": ("胶囊计数", "Capsule count"),
-    "export_defects": ("缺陷分类", "Defect classification"),
-    "export_detections": ("检测次数", "Detection count"),
-    "export_format": ("文件格式", "File format"),
-    "export_language": ("报表语言", "Report language"),
     "export_run": ("运行", "Run"),
     "export_evidence": ("分类覆盖", "Classification coverage"),
     "export_classified_groups": (
@@ -182,14 +162,9 @@ STRINGS: dict[str, tuple[str, str]] = {
     "export_source": ("检测来源", "Check"),
     "export_traditional": ("传统检测", "Traditional checks"),
     "export_affected": ("受影响通道位置", "Affected channel positions"),
-    "export_occurrences": ("已记录通道检出次数", "Recorded channel detections"),
     "export_note_defects": (
         "同一组的一个通道可有多个类别。各类别之和可能超过 NG 数。",
         "A channel can have several categories in one group. Their counts may exceed NG positions.",
-    ),
-    "export_note_detections": (
-        "每个周期内同一通道的同一类别计一次。各次曝光分开统计。",
-        "Each category counts once per channel per cycle. Exposures are counted separately.",
     ),
     "export_note_capsule": (
         "每个可归属 PLC 分组的每个通道计一次，以最终结果为准。",
@@ -197,10 +172,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "export_durable": ("批次累计", "Accumulated Batch totals"),
     "export_retained": ("留存明细", "Retained detail"),
-    "export_measured_cycles": (
-        "分类证据完整的周期",
-        "Cycles with complete category evidence",
-    ),
     "export_no_evidence": ("分类证据不全", "Incomplete category evidence"),
     "export_no_groups": (
         "此批次没有可归属的 PLC 分组。",
@@ -363,6 +334,9 @@ STRINGS: dict[str, tuple[str, str]] = {
     "audit_trail": ("审计追踪", "Audit Trail"),
     "audit_inspection": ("检测历史", "Inspection History"),
     "records_inspection": ("检测", "Inspection"),
+    "records_ng_capsules": ("NG 胶囊", "NG Capsules"),
+    "previous_capsule": ("上一粒胶囊", "Previous capsule"),
+    "next_capsule": ("下一粒胶囊", "Next capsule"),
     "records_batches": ("批次", "Batches"),
     "history_review_mode": ("历史记录查看 · 只读", "History review · Read-only"),
     "records_from": ("开始日期", "Start Date"),

@@ -984,8 +984,8 @@ totals or reconstructs physical groups from Cycle observations.
 Recipe display names come from the application's immutable resolved configuration:
 Production presents the active name separately from the prepared candidate, and
 each History submission freezes that active name without changing its Recipe ID.
-Older records without a captured name show a dash in the Recipe column. Its
-tooltip includes the stored Recipe ID. Rendering uses only historical evidence.
+In Inspection, older records without a captured name show a dash in the Recipe
+column. Its tooltip includes the stored Recipe ID. Rendering uses only historical evidence.
 
 Only committed inserts increment the owner's persisted count. Overflow rejects
 the record explicitly; storage failures and dropped/failed counts remain visible
@@ -1002,13 +1002,18 @@ incrementally. This uses recorded host wall-clock times, so clock adjustments
 affect ordering and retention. SQLite can reuse deleted space; there is no
 automatic VACUUM or image deletion.
 
-Records opens on **Batches**, followed by **Inspection**, **Audit** and **Alarms**.
-All roles can browse Batches and Inspection. Operators and above use the shared
-Export action: Batches exports the selected Batch's production summary. Inspection
-exports the entire exact selected Batch's defect classification, or its effective
-filtered defect summary when no named Batch is selected. Engineers and above export
-Audit Records; Operators and above export Alarm Records using each tab's effective
-filters.
+Records opens on **Batches**, followed by **NG**, **Cycles**, **Audit** and
+**Alarms**. The NG tab pairs a capsule outline with the same caption in every
+language. Its tooltip and accessible name give the full localized name for NG
+Capsules. Both normal and portable Records center each icon and caption in a
+132-logical-pixel tab slot, including a four-pixel gutter. Each rounded tab has
+its own border, with the page background visible in the gutters. The slots
+share a smaller width when space is tight, and long captions elide.
+All roles can browse the first three tabs. Cycles identifies Inspection History
+in its tooltip and accessible name. The shared Export action uses the selected
+Batch on Batches and the selected capsule's recorded Batch on NG. It is disabled
+for an unbatched capsule or an empty selection. Cycles has no Export action.
+Audit and Alarms export their effective record filters at their respective roles.
 Each tab keeps paging and Refresh together at the right of its filter row.
 A single shared filter bar contains two clearable dates and a searchable Batch
 selector. Both dates start empty (no bounds), with Start Date / End Date
@@ -1018,8 +1023,9 @@ date shows the current calendar month without selecting a query bound. Invalid
 typed dates mark the field and describe its retained effective date or unset
 bound in the tooltip and accessibility text. Start-only
 and end-only ranges are valid. Bounds use host-local calendar days: inclusive start midnight and exclusive
-midnight after the inclusive end date, including DST changes. Inspection uses
-Cycle completion, Audit operation time, and Alarms event observation time. Selections
+midnight after the inclusive end date, including DST changes. Cycles uses
+Cycle completion, NG Capsules uses PLC group observation, Audit uses operation
+time and Alarms uses event observation time. Selections
 persist across tabs and filter changes reset paging. Time cells expose the full
 local timestamp and UTC offset.
 
@@ -1032,9 +1038,11 @@ change clears an excluded selection after the owning query confirms exclusion.
 An unavailable query shows failure rather than guessing membership. A no-associated-
 Batch choice is offered only from stored unbatched Run/Cycle evidence or, for an
 authorized alarm reviewer, unassociated alarm observations. It does not synthesize
-a Batch or cumulative totals. Batches has no separate search, Inspection retains
+a Batch or cumulative totals. Batches has no separate search, Cycles retains
 its result filter, Audit retains its compact historical-account selector, and
-Alarms its category.
+Alarms its category. The closed Cycle result and Alarm type filters use the
+shell's 10-logical-pixel horizontal padding. Long captions elide inside the
+text field, and tooltips retain the full selection descriptions.
 The lists size columns from Qt font metrics and representative business
 values. At a given viewport and font, selecting a row, paging, refreshing and
 switching languages keep the column boundaries stable. Longer captions and
@@ -1096,7 +1104,7 @@ recorded totals retain their warning. The date filter applies to discovery;
 both totals and Run children cover the whole Batch. All roles review metadata
 read-only here; editing belongs to Production Batch setup. There is no separate
 information dialog or View inspections action. Shared dates/Batch selection still
-filter Inspection. Reviewing a Batch never selects it for Production. Loss/expiry
+filter Cycles. Reviewing a Batch never selects it for Production. Loss/expiry
 feedback remains in the stored-evidence tooltips. Unspecified information stays
 empty, without fabricated product values.
 
@@ -1104,9 +1112,9 @@ Inspection queries run on the Production History owner. The Qt page retains at m
 50 cycles with keyset Newer/Older navigation. Named Batch filtering uses the exact
 persisted Batch association across its Runs. No-associated-Batch filtering uses an
 absent persisted Batch label, without combining those observations into Batch totals.
-The Inspection table shows time to milliseconds, Cycle, attributed group, Batch,
+The Cycles table shows time to milliseconds, Cycle, attributed group, Batch,
 Recipe and result. Cycles without an established group show a dash. Date and
-record-specific filters precede paging and refresh controls. The Inspection
+record-specific filters precede paging and refresh controls. The Cycles
 toolbar wraps when space is limited.
 Full Cycle/Run/Batch/Recipe identities remain in the stored record rather than a
 repeated detail row. The compact result dropdown toggles OK, NG, EMPTY, UNKNOWN
@@ -1161,18 +1169,56 @@ Camera and linked path across language and theme changes. A different image
 selection or a new open attempt clears that error. The native Close control and
 Esc dismiss the dialog. History has no Web API.
 
+NG Capsules lists one row per stored final-NG ChannelId in an attributed
+four-member PLC group. The Run, group and channel together identify the row.
+History requires four distinct member Cycles in slots 1–4, with the group's first
+Cycle in slot 1 and a complete 30- or 36-channel final outcome. Retained four-member
+facts from trusted Runs without a reporting selection also qualify. The list uses
+the Run's exact Batch association and shows up to 50 capsules per page, newest
+group observation first and channels ascending within each group. A capsule stays
+listed even when all four photos are unavailable. The table shows Time, Batch,
+Recipe, Channel and Group. Batch displays the associated historical label or a
+dash, and Group displays the group's first Cycle. Recipe uses the display name
+frozen at Run start. The Channel tooltip includes the camera mapped to that
+channel in the frozen layout. If either field is unavailable, History uses the
+group's retained member Cycles when their recorded values agree. An unavailable
+Recipe name displays as an em dash. Batch and Recipe share the spare column
+width and expose their complete values in tooltips and accessibility text.
+
+Selecting a row reads the channel's camera, slot and ROI from its frozen Run
+layout. This limited History query is available to Guest. Full Run configuration
+review requires Engineer or Administrator. Each numbered exposure shows the whole
+channel ROI from its member's linked PNG, with both mirror views in their original
+orientation and aspect ratio. Effective ViMo rectangles assigned to the channel
+are clipped to the ROI and translated to its origin when image dimensions match.
+A conservative final NG supplies no additional findings. A missing ROI, unusable
+link or incompatible image leaves that exposure unavailable.
+
+The four photographs fit side by side at their frozen ROI proportions. A single
+row of numbers 1–4 sits directly below them, each centered beneath its exposure.
+In portrait the table fills the space below the photos. In landscape it fills
+the space to their right. Arrows at the edges of the group select the adjacent
+capsule in filtered table order, crossing a page boundary when needed and
+scrolling the selected row into view. At the first or last capsule the
+corresponding arrow is disabled.
+
+Exposure tooltips and accessibility text retain Cycle identity, recorded channel status,
+reasons and missing-image details. With the table focused, Shift+F1 shows those
+details for all four exposures of the selected capsule. The shared Qt worker pool
+decodes one selection at a time and the page discards superseded results.
+
 The optional [`--history DIRECTORY`](configuration.md#portable-history-review)
-startup argument opens a separate read-only window with Batches, Inspection and
-Alarms. It uses the same Records tabs, shared filters and language selector as
-the normal window. Audit, Export and equipment sign-in are absent.
+startup argument opens a separate read-only window with Batches, NG,
+Cycles and Alarms. It shares their presentation, filters and language
+selector with the normal window. Audit, Export and equipment sign-in are absent.
 Only a bounded SQLite reader is created. It verifies the supplied copy's version,
 review schema, integrity and foreign keys before opening the window. The reader
 uses an immutable, read-only connection and the same Records queries and stored
 evidence decoding as the production owner. It does not create the normal
-Application, identity, History writer or equipment and Web services. No
-recovery, retention or checkpoints run; still-present old Cycles and Alarms are browsable
-and a recorded open Run stays open in the evidence. The window detaches query
-delivery on Close, and the reader releases SQLite outside Qt dispatch.
+Application, identity, History writer or equipment and Web services. The reader
+skips recovery, retention and checkpoints. Retained Cycles, groups and Alarms of
+any age are browsable, and an open Run stays open in the evidence. The window
+detaches query delivery on Close, and the reader releases SQLite outside Qt dispatch.
 
 Portable Alarms uses the stored row labels, states and details with the same
 date/category/Batch filters and 50-record pages. It reads all retained dates
@@ -1224,58 +1270,44 @@ expired or missing group evidence, or incomplete classification leave coverage
 unavailable. Raw Batch categories cannot establish per-Run attribution or collapse
 overlapping traditional reasons after detail expiry; no residual counts are assigned.
 
-Operators and higher roles manually export Batch, Defect and Alarm customer reports;
-Audit export requires Engineer or Administrator. PDF is the default, with Excel
-and independently selected Simplified Chinese or English also available. One Export
-action beside the Records tabs uses the selected tab's context; its compact
-dialog does not repeat the report type or Batch picker. Inspection offers counting
-bases only when no named Batch is selected. Audit exports only Audit Records;
-its dialog shows the effective dates, Batch association scope and account, with
-no counting-basis choice. Alarms exports only Alarm Records, showing effective dates,
-Batch scope and signal category without another report or Batch selector.
+Operators and higher roles can export Production, Defect and Alarm PDFs. Audit
+requires Engineer or Administrator. Export opens the native PDF Save dialog
+directly. The action captures the report identity or effective event filters,
+initiating session and UI language before opening Save. Simplified Chinese
+(`zh`) produces a Simplified Chinese PDF. All other UI languages produce English.
 
-- **Batch production report:** the entire selected Batch, independent of Records
-  discovery filters. The report uses durable attributable position totals for
-  Inspected (= OK + NG), OK, NG and Pass Rate (OK / Inspected). A zero denominator
-  shows `—`; a Batch without any attributable groups shows unavailable position
-  metrics, never quantities inferred from exposure counts. There is no standalone
-  EMPTY metric. Recorded product/specification/notes are included only when present.
-  The recorded inspection span and Run-start account names come from persisted
-  evidence, not Batch creation, Run termination or the exporting account. Multiple
-  Runs add a compact start/end-observation, account and outcome table with the
-  same durable Run Inspected/OK/NG/Pass Rate as Batch review. Missing legacy
-  summaries remain unavailable even when Batch cumulative totals are known. Recorded
-  uncertainty, interrupted/faulted/active Runs, missing accounts, unavailable Run
-  statistics and technical errors can qualify the summary. Blank paper signature fields
-  do not represent electronic approvals.
-- **Defect classification report, exact selected Batch:** one table shows Batch
-  Total followed by every associated Run in start order, with concise Run/start
-  identification, authoritative NG count and one numeric column per recorded
-  category. Batch Total is emphasized; numbers align right. Complete coverage
-  shows numeric zero for an absent category, while incomplete coverage shows an
-  unavailable marker. It uses durable Run categories, independent of discovery dates, ANY result
-  selections, pagination and detail retention. Batch category totals sum complete
+- **Batch production report.** One statistics table covers the selected Batch,
+  independent of Records discovery filters. Its emphasized Batch Total row uses
+  the persisted Batch position summary. Every associated Run follows in start
+  order with its own durable summary. A Batch with no Runs still has a total row.
+  Each row shows Inspected (OK + NG), OK, NG and Pass Rate (OK / Inspected) from
+  attributed group outcomes. Empty positions are excluded. A zero denominator
+  leaves Pass Rate unavailable (`—`).
+  A Batch without attributable groups or a Run with a missing historical summary
+  shows unavailable statistics. Only Run rows have a start time, observed end,
+  and recorded start account. The Batch / Run cell normally shows just the Run
+  number. In-progress, interrupted and faulted Runs show their outcome beside the
+  number. Any recorded uncertainty appears directly beneath it.
+  The header retains the recorded inspection span, known Run-start accounts and
+  available product, specification and notes.
+  Recorded uncertainty, interrupted, faulted or active Runs, missing accounts or
+  statistics and technical errors can qualify the summary. The report includes
+  paper signature and date fields.
+- **Defect classification report.** NG resolves the selected capsule's Run to its
+  persisted Batch UUID. The matrix starts with an emphasized Batch Total and lists
+  every associated Run in start order. Inspected and NG precede the recorded
+  category columns and come from the corresponding Batch or Run position summary.
+  With complete recorded coverage for zero groups, Batch NG is zero and Batch
+  Inspected is unavailable. The Run column includes the recorded start time.
+  Complete coverage shows numeric zero for an absent category. Incomplete coverage
+  shows an unavailable marker. The matrix uses durable Run categories, independent
+  of gallery filters, pagination and detail retention. Batch category totals sum complete
   Run coverage only when all Run position summaries reconcile to the independent
   Batch totals. Missing coverage is unavailable, never zero. Interrupted, active
   and uncertain Runs remain identified. Production OK/NG/Inspected totals are not
   recomputed from classifications.
-- **Defect classification report, no selected Batch:** all retained Cycles matching
-  the effective shared Records date/unbatched and Inspection result filters,
-  ignoring pagination.
-  Affected capsule-position counting is offered and defaults only when the entire
-  nonempty scope is a union of complete, valid, attributable PLC groups.
-  Every group must have exactly one or four distinct stored members and slots, as
-  required by its Run's persisted mode, and valid
-  stored channel outcomes; a partial group or an unattributed Cycle makes the
-  entire scope Detection Count only. This rule is checked again in the export
-  snapshot; a changed scope fails explicitly instead of silently changing basis.
-  Position counts use persisted per-group classification of final NG channels.
-  Detection Count counts each recorded channel/category once per Cycle, collapsing
-  traditional reason variants within that Cycle, never across exposures.
-  Classification completeness remains separate from physical attribution: missing
-  historical classification is disclosed, never reconstructed. A position can
-  contribute to multiple categories, so category sums are not total NG. ViMo labels
-  retain their recorded spelling; Length/Color use short Chinese/English captions.
+  A final NG position can contribute to multiple categories. ViMo labels keep
+  their recorded spelling, and Length/Color use short Chinese or English captions.
 - **Audit Records report:** all recorded operations matching the effective shared
   local-date bounds, Batch selection and exact historical account selection,
   independent of UI pagination. Date bounds apply to the operation's recorded UTC
@@ -1300,8 +1332,8 @@ Batch scope and signal category without another report or Batch selector.
   with the action and result available for other changes. Reports omit credentials,
   internal IDs and hashes, network endpoints and routes, camera serials and file
   paths. Approved business names retain their recorded spelling. Recipe selection
-  targets use the approved recorded name when it fits an Excel text cell. Both
-  customer formats use the generic Recipe caption for names beyond that limit.
+  targets use the approved recorded name up to 32,767 UTF-16 code units. Longer
+  names use the generic Recipe caption.
   A manual PLC write shows its recorded register range and up to the first 16 requested values
   with an explicit count of any additional recorded values omitted. A successful
   manual write identifies the PLC acknowledgment. Manual write and individual
@@ -1312,9 +1344,7 @@ Batch scope and signal category without another report or Batch selector.
   Local Engineer review shows the full recorded request and retains engineering details
   subject to the unsuccessful login rule. Both views flag incomplete historical
   write evidence and omit any potentially cut final value. PDF uses landscape A4
-  and repeats event and continuing detail-table headings. Excel keeps typed local
-  timestamps, literal aligned field and value cells and a frozen event table header.
-  Neither format changes Audit evidence.
+  and repeats event and continuing detail-table headings.
 
 - **Alarm Records report:** every retained event matching the shared local-date
   bounds, exact stored Batch UUID (or no associated Batch) and signal category,
@@ -1330,34 +1360,27 @@ Batch scope and signal category without another report or Batch selector.
   pairing, duration or missing timestamp is synthesized. Connection URIs, PLC addresses,
   bit numbers, definition hashes and internal IDs are not customer fields.
   An empty scope gives short feedback without publishing a file. PDF uses landscape
-  A4 with repeated headings. Excel uses one sortable row per event, typed local
-  timestamps and a frozen header. Neither format acknowledges or clears alarms.
+  A4 with repeated headings. Export leaves alarm state and acknowledgment unchanged.
 
-Classification tables use a consistent category order, with no Source, View,
-Camera or Channel column. Without an exact Batch, a compact Category/Count table
-retains the effective-filter scope. Visible label collisions retain distinct
-internal identities and use a short ViMo suffix where needed.
-Neither classification scope consults the currently installed Model or treats
-EMPTY, UNKNOWN or technical ERROR as a defect category.
+Classification columns follow a consistent category order. Distinct categories
+with colliding display names use a short ViMo suffix when needed. Only recorded
+customer defect categories contribute to the matrix.
 
-Both formats share this content and statistical basis. Business headers use two
-balanced label/value groups and omit unavailable optional metadata; required
-scope fields remain. Excel has one worksheet with typed counts, dates and rates;
-the defect matrix keeps all category columns, freezes the header and Run/NG
-columns, and never concatenates counts into text. All four PDF reports use landscape
+Business headers use two balanced label/value groups and retain required scope
+fields. They omit unavailable optional metadata. All four reports use landscape
 A4, approximately 14 mm margins, embedded Windows Chinese TrueType fonts, 17 pt
 titles and 10 pt body/table text. A compact product name and report title repeat
 on each page; the footer carries the actual local export time with UTC offset and localized
 Page X of Y. The snapshot's data-as-of time remains in the information header.
 White backgrounds, subtle grey separators and restrained dark-blue text keep
-printing readable. Production metrics remain prominent, numeric columns align
-right, and blank signature/review lines include room for handwritten dates.
+printing readable. Numeric columns align right, and blank signature/review lines
+include room for handwritten dates.
 Table headings repeat on continuation pages. Audit events and their change details
 stay together when they fit on a page. A comparison row stays together when it
 fits below the repeated headings. Oversized details continue without losing
-lines or reducing the font size. Many
-categories split into consecutive column groups repeating Run/NG; each group
-paginates the full Run list at readable size. Ordinary reports fit approximately
+lines or reducing the font size. Wide defect matrices split into consecutive
+column groups. Each group repeats Run, Inspected and NG and paginates the full
+Run list at the same text size. Ordinary reports fit approximately
 one page. Numerous Runs, categories or long business
 content can add pages; all Runs are retained without shrinking the report to one
 page. Customer wording uses concise headings, count units and factual exceptions;
@@ -1409,8 +1432,7 @@ The same single cancellable export worker reads these private copies; it does no
 read live configuration or infer missing evidence. Audit and Alarm reads are revision-fenced,
 and the initiating session must still authorize atomic replacement at the report's
 required role. Failure/cancellation preserves an
-existing destination. Close cancels and joins the actual export worker. Report
-format, language and counting-basis choices do not alter stored facts.
+existing destination. Close cancels and joins the actual export worker.
 
 ## Image archiving
 

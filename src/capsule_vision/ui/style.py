@@ -366,13 +366,12 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton#productionBatch {{ background: transparent; border-color: transparent; }}
     QFrame#productionMetrics {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: 8px; }}
     QFrame#navigation QComboBox {{ padding: 5px 8px; }}
-    QComboBox#recordFilter {{ padding: 5px 4px; }}
     QComboBox::drop-down {{ border: none; width: 22px; }}
     QComboBox {{ combobox-popup: 0; qproperty-maxVisibleItems: 24; }}
     QComboBox#language {{ qproperty-maxVisibleItems: {len(language_identity.LANGUAGES)}; }}
     QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
-    QComboBox#reportChoice::drop-down, QComboBox#webAddress::drop-down, QComboBox#reportingMerge::drop-down {{ width: {Style.touch}px; }}
-    QComboBox#reportChoice::down-arrow, QComboBox#webAddress::down-arrow, QComboBox#reportingMerge::down-arrow {{ image: none; }}
+    QComboBox#webAddress::drop-down, QComboBox#reportingMerge::drop-down {{ width: {Style.touch}px; }}
+    QComboBox#webAddress::down-arrow, QComboBox#reportingMerge::down-arrow {{ image: none; }}
     QComboBox#reportingMerge QAbstractItemView::item:disabled {{ color: {c.secondary}; }}
     QPushButton#webPower, QPushButton#reportingPower, QPushButton#alarmPower,
     QPushButton#reportingPower:checked, QPushButton#alarmPower:checked {{ color: {c.primary}; border-color: {c.border}; background: {c.raised}; }}
@@ -403,7 +402,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QTableWidget#accounts::item, QListWidget#reportBatches::item {{ min-height: 32px; }}
     QTableWidget#accounts::item:selected, QListWidget#reportBatches::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QTableWidget#historyCycles, QTableWidget#historyChannels {{ border-radius: {Style.radius}px; }}
-    QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected, QTableWidget#auditRecords::item:selected, QTableWidget#alarmRecords::item:selected, QTreeWidget#batchRecords::item:selected {{ background: {c.selected}; color: {c.primary}; }}
+    QTableWidget#commWatchTable::item:selected, QTableWidget#historyCycles::item:selected, QTableWidget#historyChannels::item:selected, QTableWidget#ngCapsulesRecords::item:selected, QTableWidget#auditRecords::item:selected, QTableWidget#alarmRecords::item:selected, QTreeWidget#batchRecords::item:selected {{ background: {c.selected}; color: {c.primary}; }}
     QHeaderView::section {{ background: {c.raised}; color: {c.secondary}; padding: 6px; border: none; }}
     QTableWidget#historyCycles QHeaderView, QTableWidget#historyChannels QHeaderView {{ background: {c.raised}; }}
     QTableWidget#historyCycles QScrollBar:horizontal, QTableWidget#historyChannels QScrollBar:horizontal {{ background: {c.background}; height: 14px; }}
@@ -415,7 +414,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QCheckBox::indicator {{ width: 20px; height: 20px; }}
     QTabBar::tab {{ padding: 12px 10px; min-height: 20px; color: {c.primary}; background: {c.surface}; border: none; }}
     QTabBar::tab:selected {{ color: {c.accent}; background: {c.selected}; }}
-    QTabBar#recordTypes::tab {{ width: 132px; min-height: 30px; padding: 6px 8px; margin-right: 4px; border: 1px solid {c.border}; border-radius: 7px; }}
+    QTabBar#recordTypes::tab {{ min-height: 30px; padding: 6px 8px; margin-right: 4px; border: 1px solid {c.border}; border-radius: 7px; }}
     QTabBar#recordTypes::tab:!selected:hover:enabled {{ background: {c.raised}; }}
     QTabBar#recordTypes::tab:selected {{ border-color: {c.accent}; color: {c.accent}; background: {c.selected}; }}
     QTabBar#recordTypes::tab:disabled {{ color: {c.secondary}; background: {c.background}; }}
@@ -706,6 +705,11 @@ def shell_icon(kind: str, color: str = Style.secondary) -> QIcon:
             p.drawEllipse(QRectF(2, 6, 20, 12))
             p.setBrush(QColor(color))
             p.drawEllipse(QRectF(8, 8, 8, 8))
+        elif kind == "capsule":
+            p.translate(12, 12)
+            p.rotate(-45)
+            p.drawRoundedRect(QRectF(-11, -5, 22, 10), 5, 5)
+            p.drawLine(QPointF(0, -5), QPointF(0, 5))
         elif kind == "sun":
             p.drawEllipse(QRectF(8, 8, 8, 8))
             for x, y, dx, dy in (

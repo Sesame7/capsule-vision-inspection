@@ -34,7 +34,7 @@ they are not a release checklist claiming completion.
 | PLC group | An attributable physical group of one or four Cycles according to the selected reporting mode, established by the reporting owner under the equipment phase/counter contract; not the operator's production Batch |
 | PLC counter | W48/W148 value used in attribution; wraps/repeats and is not a globally unique group identity |
 | Final group outcome | One OK/NG/EMPTY product outcome per channel in a completed attributable PLC group; distinct from per-Cycle business/technical evidence |
-| PLC reporting / production export | Respectively, protocol result delivery to the PLC / a manually requested Excel or PDF production report |
+| PLC reporting / production export | Respectively, protocol result delivery to the PLC / a manually requested PDF production report |
 
 Inspection retains ownership of per-Cycle evidence and judgments. Reporting owns
 PLC-group membership, progress, completion timing and the authoritative reject
@@ -219,30 +219,28 @@ for an explicitly approved change. The product requirements are:
 ### 6.3 Manual production export
 
 - **Manual export only**. Stop and Batch changes do not write reports automatically.
-- Operator and higher roles use one Export action whose meaning follows the
-  Records tab. Batches exports the entire selected Batch regardless of discovery
-  dates. Inspection exports a defect-category summary for the effective shared
-  dates/Batch and result filter. The implemented Alarm and Audit tabs also
-  provide customer exports: Alarms requires Operator or higher authorization,
-  while Audit requires Engineer or Administrator authorization. The dialog offers
-  PDF (default), Excel and independently selected Simplified Chinese/English;
-  it does not repeat a report-type or Batch chooser.
+- A single Export action opens the native PDF Save dialog. On Batches it uses
+  the selected Batch. On NG it uses the selected capsule's persisted Batch UUID.
+  Both reports cover the whole Batch across all associated Runs. An empty NG
+  selection or missing Batch association disables Export. Cycles and portable
+  History are review-only.
+- Operator and higher roles can export Production, Defect and Alarm reports.
+  Audit requires Engineer or Administrator. Audit and Alarm exports retain the
+  selected dates, exact Batch association and account or alarm category.
+  Export captures the initiating session, scope and UI language when clicked.
+  Use Simplified Chinese for `zh` and English for all other UI languages.
 - The customer Batch report presents trustworthy product information, recorded
   inspection span, Run-start accounts, Inspected, OK, NG and Pass Rate. Omit absent
   optional fields and a standalone EMPTY metric. Multiple Runs use a compact
   operator/start/end-observation table including the same Run production counts.
   Show material recorded exceptions and
   blank paper signature/review fields, without implying electronic approval.
-- Defect reports summarize effective ViMo labels and traditional NG categories.
-  Default affected capsule-position counting requires the entire selected scope
-  to comprise complete trustworthy one-/four-cycle groups according to each Run's saved mode. Partial groups, unattributed
-  Cycles or an empty scope permit Detection Count only, with an explanation.
-  Detection Count is also available for a complete group scope. Category overlap
-  is distinct from total NG; missing historical classification is never inferred.
+- The Defect report uses durable Batch and Run classification of final NG
+  positions. A position may contribute to multiple effective ViMo and
+  traditional categories. Show missing coverage as unavailable.
 - Ordinary customer reports should fit approximately one landscape A4 page. More
   Runs, categories or genuine business content may require additional pages;
-  individual Cycle/group/channel rows are not included. PDF and Excel share scope
-  and basis; Excel retains typed numeric values. Preserve user-defined business
+  individual Cycle/group/channel rows are not included. Preserve user-defined business
   names and labels, while excluding opaque IDs, hashes and internal diagnostics.
 - Preserve durable Batch/Run identity and cumulative counts, evidence coverage,
   consistent dated snapshots, cancellation, authorization and safe publication.
@@ -251,9 +249,9 @@ for an explicitly approved change. The product requirements are:
 
 ## 7. Audit Trail and alarms
 
-- Records contains **Batches**, **Inspection**, **Audit** and **Alarms** within the existing five primary navigation destinations.
+- Records contains **Batches**, **NG**, **Cycles**, **Audit** and **Alarms** within the existing five primary navigation destinations.
 - Audit Trail records meaningful human/security events: important account/session actions, Production Start/Stop/new/continued Batch/Recipe selection, Recipe/Model/Vision/Communication changes, manual PLC writes, and necessary failures/authorization rejections. Do **not** record navigation clicks, routine refreshes, every photo, or other trivial interactions.
-- Each audit entry should have time, actor, action, target, result, and a short informative description. For material configuration changes, use meaningful before/after values when affordable; never record passwords or sensitive secrets. Audit is locally persistent, and Engineer or Administrator can export matching records as customer PDF or Excel reports.
+- Each audit entry should have time, actor, action, target, result, and a short informative description. For material configuration changes, use meaningful before/after values when affordable; never record passwords or sensitive secrets. Audit is locally persistent, and Engineer or Administrator can export matching records as customer PDFs.
 - Alarm monitoring is **independent of PLC detection-result reporting**. When configured and enabled, it can run after software startup while Production is READY, RUNNING, or stopped; unavailable communication is an **unknown/unavailable monitor state**, not proof that all PLC alarms cleared.
 - PLC retains responsibility for equipment/mechanical safety response. Software displays actual PLC alarm signals and important software faults, recording alarm occurrence and recovery transitions rather than every poll. Preserve current application FAULT/cleanup semantics for serious software failures. Do not add alarm acknowledgment, complex severity editors, sound systems, or remote notifications in the first implementation.
 - PLC alarm reads must preserve the timing and ownership of critical four-Cycle reporting reads and writes. Enabling both on the same PLC requires field confirmation that it can serve two independent FINS/TCP connections concurrently and meet reporting deadlines.
