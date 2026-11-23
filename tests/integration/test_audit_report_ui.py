@@ -9,12 +9,13 @@ from threading import Event
 import pytest
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QTextDocument, QTextTable
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from reportlab.pdfgen.canvas import Canvas
 from tests.integration.test_audit_ui import select_account
 from tests.integration.test_history_report import choose_file
 from tests.support.application import WAIT
-from tests.support.qt import close_window, until
+from tests.support.qt import assert_full_caption, close_window, until
 from tests.support.reports import pdf_text
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 from tests.unit.test_audit_report import fill
@@ -38,7 +39,7 @@ from capsule_vision.communication.operations import (
 from capsule_vision.configuration import load_recipe, save_recipe
 from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import Language
+from capsule_vision.localization.languages import LANGUAGES, Language
 from capsule_vision.ui.audit_page import AuditPage
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -742,6 +743,16 @@ def test_audit_direct_pdf_scope_export_and_empty_feedback(
             isinstance(request, AuditReportRequest) and request.filters.batch == batch
         )
         assert request.account and request.account.username == "Former Operator"
+        for description in (action.toolTip(), action.accessibleName()):
+            assert all(
+                value in description
+                for value in (
+                    "Audit Records Report",
+                    "All dates",
+                    "LOT-A · Yellow",
+                    "Former Operator",
+                )
+            )
         action.click()
         chooser = action.chooser
         assert chooser and "LOT-A" in chooser.selectedFiles()[0]
@@ -749,7 +760,12 @@ def test_audit_direct_pdf_scope_export_and_empty_feedback(
         choose_file(action, target)
         until(lambda: action.feedback == ("report_saved", str(target)), 12000)
         assert "Former Operator" in pdf_text(target)
-        window.records_filters.start.set_date(QDate.currentDate().addYears(10))
+        start = QDate.currentDate().addYears(10)
+        end = start.addDays(2)
+        window.records_filters.start.set_date(start)
+        window.records_filters.end.set_date(end)
+        assert f"Start Date {start.toString('yyyy-MM-dd')}" in action.toolTip()
+        assert f"End Date {end.toString('yyyy-MM-dd')}" in action.toolTip()
         action.click()
         empty = tmp_path / "empty.pdf"
         choose_file(action, empty)
@@ -789,13 +805,36 @@ def test_audit_dialog_cancellation_and_late_delivery(
         window.navigate(3)
         window.history_tabs.setCurrentWidget(window.audit_page)
         action = window.records_export
-        action.click()
+        window.set_language("en")
+        slot = action.geometry()
+        assert_full_caption(action, "PDF")
+        action.setFocus(Qt.FocusReason.TabFocusReason)
+        QTest.keyClick(action, Qt.Key.Key_Space)
         choose_file(action, tmp_path / "pending.pdf")
-        assert action.text() == text("cancel", window.language)
-        action.click()
-        assert stops[0].is_set()
+        assert_full_caption(action, "Cancel")
+        window.history_tabs.setCurrentWidget(window.alarm_page)
+        window.records_filters.select_batch(None, "", unbatched=True)
+        for language in LANGUAGES:
+            action.language = language
+            action.present()
+            assert_full_caption(action, text("cancel", language))
+            assert action.geometry() == slot
+        window.set_language("de")
+        assert_full_caption(action, text("cancel", "de"))
+        assert action.geometry() == slot
+        for description in (action.accessibleName(), action.toolTip()):
+            assert text("customer_audit", "de") in description
+            assert text("records_all_batches", "de") in description
+            assert text("customer_alarm", "de") not in description
+        action.setFocus(Qt.FocusReason.TabFocusReason)
+        QTest.keyClick(action, Qt.Key.Key_Space)
+        assert stops[0].is_set() and not action.isEnabled()
+        assert action.geometry() == slot
         pending.set_exception(CancelledError())
         until(lambda: action.feedback == ("report_cancelled", ""))
+        assert_full_caption(action, "PDF")
+        assert text("customer_alarm", "de") in action.accessibleName()
+        assert text("records_no_batch", "de") in action.toolTip()
     finally:
         close_window(window)
         delivery.detach()

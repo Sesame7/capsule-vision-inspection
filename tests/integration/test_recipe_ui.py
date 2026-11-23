@@ -654,10 +654,21 @@ def test_model_cache_footer_yields_to_operational_warnings_fault_and_close(
     bridge.snapshot_changed.emit(
         replace(ready, state=ApplicationState.FAULT, last_issue=issue)
     )
-    assert (
-        footer.accessibleName() == f"{text('shutdown_error', page.language)} · OSError"
-    )
+    assert footer.accessibleName() == text("shutdown_error", page.language)
+    assert "OSError" in footer.accessibleDescription()
     assert message not in footer.toolTip()
+    with monkeypatch.context() as held:
+        retained = replace(app.preparation_snapshot(), owns_resources=True)
+        held.setattr(app, "preparation_snapshot", lambda: retained)
+        bridge.snapshot_changed.emit(
+            replace(
+                ready,
+                state=ApplicationState.FAULT,
+                last_issue=replace(issue, stage="model_preparation"),
+            )
+        )
+        assert footer.text() == text("cache_failed", page.language)
+        assert text("fault_reset_available", page.language) not in footer.toolTip()
     bridge.snapshot_changed.emit(ready)
     assert footer.accessibleDescription() == details
 
@@ -1165,15 +1176,20 @@ def test_mask_area_edits_are_per_label_drafts_until_save_and_preparation(
     page.show_draft()
     name, other = tuple(page.area_fields)[:2]
     field = page.area_fields[name]
-    caption = text("recipe_min_mask_area", page.language)
-    assert all(
-        caption not in label.text() for label in page.model_section.findChildren(QLabel)
-    )
-    assert field.accessibleName() in field.toolTip()
-    assert (
-        field.accessibleName()
-        == f"{name} · {text('recipe_min_mask_area', page.language)} (px²)"
-    )
+    caption = page.labels["recipe_min_area"]
+    captions: dict[Language, str] = {"en": "Min area · px²", "zh": "最小面积 · px²"}
+    for language, wording in captions.items():
+        window.set_language(language)
+        assert [
+            label
+            for label in page.model_section.findChildren(QLabel)
+            if label.isVisible() and label.text() == wording
+        ] == [caption]
+        assert caption.accessibleName() == wording
+        assert caption.focusPolicy() == Qt.FocusPolicy.NoFocus
+        for label, area in page.area_fields.items():
+            full = f"{label} · {text('recipe_min_mask_area', language)} (px²)"
+            assert area.accessibleName() == full and area.toolTip() == f"{full} · 0"
     QTest.keyClicks(field, "4294967297")
     QTest.keyClicks(field, "x-")
     QTest.keyClicks(page.area_fields[other], "8")
@@ -1223,6 +1239,7 @@ def test_model_reselection_restores_labels_and_preserves_exclusions(
     page.model.setCurrentIndex(model_ids.index(None))
     page.model.activated.emit(model_ids.index(None))
     assert not page.label_checks and not page.label_choices.isVisible()
+    assert not page.labels["recipe_min_area"].isVisible()
     page.model.setCurrentIndex(model_ids.index(before.model_id))
     page.model.activated.emit(model_ids.index(before.model_id))
     until(lambda: not page.labels_loading and tuple(page.label_checks) == catalog)
@@ -1353,6 +1370,7 @@ def test_label_catalog_failure_or_stale_model_keeps_draft(
     else:
         assert not page.label_checks
         assert page.status.text() == text("recipe_labels_error", page.language)
+    assert page.labels["recipe_min_area"].isVisible() == bool(page.area_fields)
     assert session.draft.defaults == before.defaults
     assert window.bridge.application.snapshot().active is None
 
@@ -1392,8 +1410,25 @@ def test_inline_labels_wrap_and_cards_follow_content(
             )
             > 1
         )
-        for check in page.label_checks.values():
+        caption = page.labels["recipe_min_area"]
+        first = next(iter(page.label_checks.values()))
+        assert_inside(caption, page.label_choices)
+        assert (
+            caption.mapTo(page.label_choices, caption.rect().center()).y()
+            == first.mapTo(page.label_choices, first.rect().center()).y()
+        )
+        assert (
+            caption.mapTo(page.label_choices, QPoint(caption.width(), 0)).x()
+            <= first.mapTo(page.label_choices, QPoint()).x()
+        )
+        for name, check in page.label_checks.items():
             assert_inside(check, page.label_choices)
+            field = page.area_fields[name]
+            assert_inside(field, page.label_choices)
+            end = check.mapTo(page.label_choices, QPoint(check.width(), 0))
+            start = field.mapTo(page.label_choices, QPoint())
+            assert end.y() == start.y() and 0 <= start.x() - end.x() <= Style.small
+        assert (window.width(), window.height()) == (width, 1200)
         heights.append(page.model_section.height())
         for card in (page.recipe_section, page.model_section, page.inspection_section):
             assert card.minimumHeight() == 0 and card.maximumHeight() > card.height()
@@ -1457,6 +1492,7 @@ def test_inline_labels_recheck_runtime_lock_and_metadata_close_is_observed(
     window.navigate(0)
     window.navigate(1)
     until(entered.is_set)
+    assert not page.labels["recipe_min_area"].isVisible()
     # Catalog IO does not claim readiness or block the unrelated setup slot.
     assert not page.busy and page.editable()
     try:

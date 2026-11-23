@@ -9,6 +9,7 @@ tag, push, add features or redesign architecture without authorization.
 
 - Architecture, Configuration and Communication describe current implementation
   contracts; [field UI validation](docs/field-ui-validation.md) governs field evidence.
+- Follow the [UI design standard](docs/ui-design-standard.md) for presentation changes.
 - [Product scope](docs/product-scope.md) records reviewed PRODUCT-0 target
   requirements and explicitly open decisions. It is not evidence of implemented
   capability or authorization to implement the whole target.

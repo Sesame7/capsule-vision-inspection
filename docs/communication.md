@@ -684,8 +684,8 @@ Generation, queue, failure and cleanup observations stay with the reporting owne
 The retained commit in the global strip never replaces the card's lifecycle label.
 There is no separate ACK row or routine endpoint summary.
 
-The initial editing endpoint is 127.0.0.1:8765 at 500 ms, disabled without a saved
-configuration. Saved enablement is restored on the next application launch.
+The Web card provides IPv4 and Port fields. The initial endpoint is 127.0.0.1:8765.
+Web starts disabled unless the saved configuration enables it.
 The observer remains read-only and unauthenticated;
 use only trusted networks. See
 [configuration](configuration.md#communication-preferences) for validation/recovery.

@@ -18,6 +18,8 @@ from capsule_vision.display import (
 )
 from capsule_vision.inspection import CameraId
 
+REFRESH_INTERVAL_MS = 500
+
 
 class SnapshotSource(Protocol):
     def snapshot(self) -> ProductionApplicationSnapshot: ...
@@ -80,8 +82,6 @@ class SnapshotPublisher:
         source: SnapshotSource,
         frames: LatestDisplayFrameStore,
         cameras: tuple[CameraId, ...] | None = None,
-        *,
-        refresh_interval_ms: float = 500,
     ) -> None:
         configured = cameras
         cameras = frames.cameras if cameras is None else cameras
@@ -92,7 +92,6 @@ class SnapshotPublisher:
         ):
             raise ValueError("Expected at most six unique configured display cameras")
         self.source, self.frames, self._cameras = source, frames, configured
-        self.refresh_interval_ms = refresh_interval_ms
         self.publisher_id = uuid4().hex
         self._lock = Lock()
         self._latest: Publication | None = None
@@ -272,7 +271,7 @@ class SnapshotPublisher:
         result = snapshot.latest_production_result
         value: dict[str, object] = {
             "schema_version": 1,
-            "refresh_interval_ms": self.refresh_interval_ms,
+            "refresh_interval_ms": REFRESH_INTERVAL_MS,
             "publisher_id": self.publisher_id,
             "revision": revision,
             "observed_at": observed_at,

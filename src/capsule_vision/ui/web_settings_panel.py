@@ -110,15 +110,9 @@ class WebSettingsPanel(QFrame):
         address_row.addWidget(self.address_refresh)
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
-        self.interval = QComboBox()
-        self.interval.addItems(("500 ms", "1000 ms", "2000 ms"))
         self._captions: list[tuple[str, QLabel]] = []
         for column, (key, widget) in enumerate(
-            (
-                ("web_bind", self.addresses),
-                ("comm_port", self.port),
-                ("web_refresh", self.interval),
-            )
+            (("web_bind", self.addresses), ("comm_port", self.port))
         ):
             label = QLabel()
             self._captions.append((key, label))
@@ -142,7 +136,6 @@ class WebSettingsPanel(QFrame):
         self.set_preferences(WebPreferences())
         self.host.textChanged.connect(self.refresh)
         self.port.valueChanged.connect(self.refresh)
-        self.interval.currentIndexChanged.connect(self.refresh)
         self.set_language("zh")
         self.refresh_addresses()
 
@@ -193,14 +186,12 @@ class WebSettingsPanel(QFrame):
         self.saved = value
         self.host.setText(value.host)
         self.port.setValue(value.port)
-        self.interval.setCurrentIndex((500, 1000, 2000).index(value.interval_ms))
 
     def preferences(self) -> WebPreferences:
         return WebPreferences(
             self.saved.enabled,
             self.host.text().strip(),
             self.port.value(),
-            (500, 1000, 2000)[self.interval.currentIndex()],
         )
 
     def set_language(self, language: Language) -> None:
@@ -209,17 +200,12 @@ class WebSettingsPanel(QFrame):
         self.title.setToolTip(text("web_observer", language))
         self.title.setAccessibleName(text("web_observer", language))
         for key, label in self._captions:
-            label.setText(
-                "IPv4"
-                if key == "web_bind"
-                else text("short_refresh" if key == "web_refresh" else key, language)
-            )
+            label.setText("IPv4" if key == "web_bind" else text(key, language))
             label.setToolTip(text(key, language))
             label.setAccessibleName(text(key, language))
         for key, field in (
             ("web_bind", self.addresses),
             ("comm_port", self.port),
-            ("web_refresh", self.interval),
         ):
             field.setAccessibleName(text(key, language))
         self.host.setToolTip(text("web_boundary", language))
@@ -242,7 +228,6 @@ class WebSettingsPanel(QFrame):
             colors,
             self.host.text(),
             self.port.value(),
-            self.interval.currentIndex(),
         )
         if presentation == self._presentation:
             return  # Keep an open address popup stable across unchanged bridge ticks.
@@ -296,7 +281,7 @@ class WebSettingsPanel(QFrame):
                 padding=2,
             ),
         )
-        for field in (self.addresses, self.port, self.interval, self.address_refresh):
+        for field in (self.addresses, self.port, self.address_refresh):
             field.setEnabled(self.can_manage and self.editable)
         self.power.setEnabled(not blocked)
         self.power.setToolTip(

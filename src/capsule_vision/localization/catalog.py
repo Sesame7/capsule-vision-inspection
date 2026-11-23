@@ -341,6 +341,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "history_review_mode": ("历史记录查看 · 只读", "History review · Read-only"),
     "records_from": ("开始日期", "Start Date"),
     "records_all_batches": ("所有批次", "All Batches"),
+    "records_entire_batch": ("整个批次", "Entire Batch"),
     "records_to": ("结束日期", "End Date"),
     "records_all_accounts": ("所有账户", "All Accounts"),
     "records_find_account": ("搜索账户", "Search accounts"),
@@ -700,7 +701,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "service_error": ("故障", "Error"),
     "history_all_dates": ("所有日期", "All dates"),
     "history_group": ("组", "Group"),
-    "report_export": ("导出报表", "Export Report"),
     "report_search": ("按批号前缀查找", "Find by Batch ID prefix"),
     "previous_page": ("上一页", "Previous page"),
     "next_page": ("下一页", "Next page"),
@@ -826,6 +826,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "configured_hash": ("配置 SHA-256", "Configured SHA-256"),
     "recipe_labels": ("缺陷标签", "Defect labels"),
     "recipe_min_mask_area": ("最小掩膜面积", "Minimum Mask Area"),
+    "recipe_min_area": ("最小面积 · px²", "Min area · px²"),
     "capsule_filtered": ("已过滤", "Filtered"),
     "recipe_default_label": ("默认缺陷标签：", "Default defect label:"),
     "recipe_labels_error": (

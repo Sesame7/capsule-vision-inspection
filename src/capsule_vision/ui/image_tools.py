@@ -35,6 +35,12 @@ def image_icon(tool: str, color: str = Style.primary) -> QIcon:
                 painter.drawPolyline([QPoint(16, 3), QPoint(16, 8), QPoint(21, 8)])
                 painter.drawLine(2, 13, 14, 13)
                 painter.drawPolyline([QPoint(10, 9), QPoint(14, 13), QPoint(10, 17)])
+            elif tool == "export":
+                painter.drawPolyline(
+                    [QPoint(4, 14), QPoint(4, 20), QPoint(20, 20), QPoint(20, 14)]
+                )
+                painter.drawLine(12, 15, 12, 3)
+                painter.drawPolyline([QPoint(7, 8), QPoint(12, 3), QPoint(17, 8)])
             elif tool == "accelerate":
                 painter.drawPolyline(
                     [

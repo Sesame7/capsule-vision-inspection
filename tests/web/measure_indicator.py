@@ -1,4 +1,4 @@
-"""Measure an observer indicator from the Node fixture with the bundled Qt WebEngine."""
+"""Read layout measurements from Node observer fixtures in the bundled Qt WebEngine."""
 
 import sys
 

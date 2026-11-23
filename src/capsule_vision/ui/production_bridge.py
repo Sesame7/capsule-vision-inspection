@@ -90,6 +90,7 @@ class QtProductionBridge(QObject):
         self._timeout_reported = False
         self._detached = False
         self._command_revision = 0
+        self._fault_recovery_revision = 0
         self._command_tokens: dict[str, int] = {}
         # Reuse the established destruction-safe Future delivery gate unchanged.
         self._delivery = FutureDelivery()
@@ -143,6 +144,10 @@ class QtProductionBridge(QObject):
     def _check_thread(self) -> None:
         if self._detached or QThread.currentThread() != self.thread():
             raise RuntimeError("Bridge requires its live GUI thread")
+
+    def clear_recovered_player_feedback(self) -> None:
+        """The observed Reset also supersedes failures still queued for Qt delivery."""
+        self._fault_recovery_revision = self._command_revision
 
     def _command(self, name: str, command: Callable[[], Future[None]]) -> None:
         self._check_thread()
@@ -249,7 +254,14 @@ class QtProductionBridge(QObject):
         if isinstance(error, BaseException):
             if name == "close":
                 self._closing = False  # Explicit retry possible; never quit on failure.
-            self.command_failed.emit(name, error)
+            if int(revision) > self._fault_recovery_revision or name not in (
+                "start",
+                "stop",
+                "source_pause",
+                "source_resume",
+                "source_step",
+            ):
+                self.command_failed.emit(name, error)
         else:
             if name == "close":
                 self._close_succeeded = True

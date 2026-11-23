@@ -706,6 +706,7 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
             assert all(r.width() == 132 and r.height() == 44 for r in slots)
             base_filters: dict[int, tuple[QRect, ...]] = {}
             base_columns: dict[int, tuple[int, ...]] = {}
+            export_slot: QRect | None = None
             common_pagers: set[tuple[tuple[int, int, int, int], ...]] = set()
             for lang in LANGUAGES:
                 window.set_language(lang)
@@ -790,6 +791,12 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
                         and report.isVisible()
                     )
                     header = QRect(report.mapTo(tabs, QPoint()), report.size())
+                    assert header.top() == bar.y()
+                    assert report.visibleRegion().boundingRect() == report.rect()
+                    if export_slot is None:
+                        export_slot = header
+                    assert header == export_slot
+                    assert report.text() == "PDF" and not report.icon().isNull()
                     assert header.left() > bar.tabRect(4).right()
                     assert header.intersects(QRect(0, 0, tabs.width(), bar.height()))
                     assert header.right() == rectangles[-1].right()

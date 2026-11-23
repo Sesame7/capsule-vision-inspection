@@ -217,11 +217,12 @@ def test_independent_endpoint_round_trip_and_definitions_only(
             ReportingSettings(endpoint=endpoint_type(host="192.0.2.10")),
         ),
         FinsUdpEndpoint(port=19600, destination=FinsAddress(2, 23, 5)),
-        WebPreferences(False, "127.0.0.1", 8766, 2000),
+        WebPreferences(False, "127.0.0.1", 8766),
     )
     save_communication_preferences(path, value)
     assert load_communication_preferences(path) == value
     encoded = path.read_text(encoding="utf-8")
+    assert json.loads(encoded)["web"] == {"port": 8766}
     assert "acknowledged" not in encoded and "connected" not in encoded
     assert set(json.loads(encoded)) == {"reporting", "diagnostic", "web"}
     assert set(path.parent.iterdir()) == {path}
@@ -252,7 +253,7 @@ def test_independent_endpoint_round_trip_and_definitions_only(
         ("web", "host", "0.0.0.0"),
         ("web", "host", "224.0.0.1"),
         ("web", "port", 65536),
-        ("web", "interval_ms", 100),
+        ("web", "interval_ms", 500),
     ],
 )
 def test_invalid_preferences_rejected_without_rewriting(

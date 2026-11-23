@@ -1,9 +1,16 @@
 :root { color-scheme: dark; font-family: system-ui, "Microsoft YaHei", sans-serif; background: #0c1117; color: #e6edf3; }
 * { box-sizing: border-box; }
-body { margin: 0; padding: 4px; height: 100dvh; }
-main, #cameras { height: 100%; }
-#cameras { display: grid; gap: 4px; }
-.signals { position: fixed; right: 8px; top: 8px; z-index: 2; display: flex; gap: 10px; align-items: center; padding: 4px 7px; background: #111820eb; border-radius: 3px; font-size: 12px; pointer-events: none; }
+body { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 4px; height: 100dvh; }
+main { position: relative; flex: 1; min-height: 0; }
+#cameras { height: 100%; display: grid; gap: 4px; }
+#cameras:empty { display: none; }
+.signals {
+  flex: none; align-self: flex-end; max-width: 100%; display: flex; flex-wrap: wrap;
+  justify-content: flex-end; align-items: center; gap: 2px 10px; padding: 4px 7px;
+  background: #111820eb; border-radius: 3px; font-size: 12px; overflow-wrap: anywhere;
+}
+#metrics { text-wrap: balance; }
+#metrics > span { display: inline-block; max-width: 100%; }
 #connection { color: #e3bc73; }
 #fault { color: #c7a7e5; }
 .camera { position: relative; min-width: 0; min-height: 96px; display: grid; grid-template-rows: minmax(0, 1fr) auto; }

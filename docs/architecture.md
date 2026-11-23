@@ -1021,10 +1021,20 @@ Capsules. Both normal and portable Records center each icon and caption in a
 its own border, with the page background visible in the gutters. The slots
 share a smaller width when space is tight, and long captions elide.
 All roles can browse the first three tabs. Cycles identifies Inspection History
-in its tooltip and accessible name. The shared Export action uses the selected
-Batch on Batches and the selected final-NG capsule's recorded Batch on NG.
-Filtered entries, unbatched capsules and empty selections disable NG Export. Cycles has no Export action.
-Audit and Alarms export their effective record filters at their respective roles.
+in its tooltip and accessible name. The upper-right Records action pairs the
+export icon with **PDF**. Its tooltip and accessible name identify the report and
+its scope. Batches exports the selected Batch's complete Production Report. NG
+exports the complete Defect Classification Report for the selected final-NG
+capsule's recorded Batch, independent of gallery sorting and filters. Filtered
+entries, unbatched capsules and empty selections disable NG export. Cycles has
+no export action. Audit and Alarms export their effective record filters at
+their respective roles.
+
+The button keeps the same size and position across languages and states on the
+four export tabs. During export it shows a localized **Cancel** action. Its
+tooltip and accessible name continue to identify the initiating report and
+scope as the operator browses or switches language.
+
 Each tab keeps paging and Refresh together at the right of its filter row.
 A single shared filter bar contains two clearable dates and a searchable Batch
 selector. Both dates start empty (no bounds), with Start Date / End Date
@@ -1562,12 +1572,19 @@ full accessible text; the event/error group receives all remaining horizontal
 space. The event tooltip and accessible description retain actionable details,
 including unresolved configuration, service and archive issues alongside
 higher-priority feedback. Routine preparation does not hide these issues.
+On Inspect, the player header names the Application fault and the status strip
+keeps the fault icon in its reserved slot. Other pages show the state caption
+beside that icon. The feedback area names the observed failure, such as
+**Startup failed** or **Cleanup failed**. Its tooltip and accessible description
+retain the exception type and point to Reset only when the current user can
+perform it and the owner permits recovery.
 Start availability and its localized tooltip and accessibility guidance use the
 Application's current blocker. The existing Production feedback strip can show
 the reason while stopped, with operational errors retaining priority. Qt also
 guards Start during unsaved Vision edits, active editing work and window Close.
 Command feedback keeps its owning operation and ignores superseded results.
-A matching recovery clears the corresponding error.
+A matching recovery clears the corresponding error, including earlier player
+failures still queued for display. Independent issues retain their priority.
 Only the event group stretches when the window grows; status changes do not
 move the persistent groups.
 
@@ -1637,7 +1654,9 @@ across all languages. Slots stay stationary across ordinary language, theme and
 action-state changes; exceptional captions elide with complete localized names
 and guidance retained in tooltips/accessibility. Actual larger fonts can increase
 width and height within the bounded horizontal allocation.
-Reset remains a separate icon control in its reserved, state-dependent slot.
+Inspect shows the Reset icon in its reserved slot when Application reports FAULT
+and both the runtime and model-preparation owners have released their resources.
+Operators and higher roles can activate it.
 Batch has its localized label above a prominent value, with Edit to their right.
 Its text budget follows ordinary content and is capped for long values; elision
 never changes the underlying Batch identity or its full tooltip/accessibility text.
@@ -1843,10 +1862,11 @@ revision; the existing publisher follows that configured set without another Web
 owner. History stores each cycle's own five/six-camera identities and order, so
 older 36-channel records remain unchanged beside new 30-channel records.
 
-Default server/browser interval is 500 ms (saved Communication preferences also
-allow 1000/2000 ms; Save is separate from explicit runtime application). The publisher
-waits after each publication; the browser never overlaps polls, fetches JPEGs
-sequentially and owns at most six displayed object URLs plus one decode. Requests
+The publisher waits a fixed 500 ms after each publication and reports this
+interval in the snapshot's `refresh_interval_ms` field. The browser starts a
+poll every 500 ms or as soon as the previous poll finishes if it takes longer.
+It fetches changed JPEGs sequentially and owns at most six displayed object
+URLs plus one decode. Requests
 have a five-second poll deadline; 410 waits for the next observation, without an
 immediate retry loop. After a superseded batch, the same serial queue starts with
 the next camera to avoid fixed queue-tail starvation; configured DOM order is
@@ -1874,11 +1894,13 @@ boundaries invalidate incompatible pixels. Missing/invalid image evidence also
 clears them. Genuine server-retained/reference and stale views retain their subtle
 markers. Unchanged captions, symbols and attributes are not rebuilt. Business
 status and independent technical ERROR remain distinct. This preserves the
-bounded expiry/410 behavior and independent per-camera commits. One small
-viewport/aspect-ratio grid selection maximizes contain-fitted
-image area, without a fixed desktop width or camera remounts on resize. Normal
-presentation is just images, camera identities and six compact channel symbols;
-connection/stale/fault feedback appears only when needed.
+bounded expiry/410 behavior and independent per-camera commits.
+
+Group metrics, application fault and connection feedback share a compact row
+above the camera grid. Messages and metric pairs wrap within the viewport.
+When all three are absent, the row and its gap take no space. A change in row
+height or window size refits the grid to maximize contain-fitted image area
+while keeping the same camera cards, images and six channel indicators.
 
 Routes are `/`, `/observer.js`, `/observer.css`, `/api/snapshot`, exact returned
 `/api/cameras/<CameraId>.jpg?publisher=...&image=...`, and `/health`. The returned

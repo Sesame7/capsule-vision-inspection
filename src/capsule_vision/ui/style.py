@@ -419,6 +419,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QTabBar#recordTypes::tab:selected {{ border-color: {c.accent}; color: {c.accent}; background: {c.selected}; }}
     QTabBar#recordTypes::tab:disabled {{ color: {c.secondary}; background: {c.background}; }}
     QTabWidget#historyTabs::pane {{ padding-top: {Style.small}px; }}
+    QTabWidget#historyTabs::right-corner {{ height: {Style.touch}px; top: -1px; }}
     QTextEdit#recordDetails {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: 8px; padding: 6px; }}
     QTextEdit#channelEvidence {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: 6px; }}
     QSlider::groove:horizontal {{ height: 6px; background: {c.border}; border-radius: 3px; }}

@@ -477,7 +477,6 @@ def create_web_runtime(startup: Startup, *, restore_saved: bool = False) -> WebR
             startup.frames,
             host=settings.host,
             port=settings.port,
-            interval=settings.interval_ms / 1000,
         )
 
     return WebRuntime(

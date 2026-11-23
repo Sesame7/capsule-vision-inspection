@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 740 maintained keys across 64 locales. This includes
+Qt interface covers 741 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 94 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 907-key
+Authored coverage does not imply native-speaker verification. The full 908-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -810,9 +810,10 @@ protocol explicitly. For example:
 }
 ```
 
-`web` permits `enabled` (default false), `host` (127.0.0.1), `port` (8765) and
-`interval_ms` (500 default; 500/1000/2000). Only
-127.0.0.1 or a specific unicast IPv4 is supported. Saving/reloading preserves
+`web` accepts only `enabled` (default false), `host` (default 127.0.0.1) and
+`port` (default 8765). A file containing the retired `web.interval_ms` fails
+validation. Remove that key explicitly to load the file. The host must be
+127.0.0.1 or a specific unicast IPv4. Saving/reloading preserves
 unavailable adapter addresses; actual service startup checks local assignment and
 subnet validity. There is no DNS, wildcard fallback or automatic IP substitution.
 
@@ -821,7 +822,7 @@ Production startup or creating a file. Communication shows **Defaults · not sav
 reporting initially selects `four_cycle`, FINS/TCP and W49, disabled. Diagnostics
 also initially uses FINS/TCP at 127.0.0.1:9600 with a one-second timeout, as does
 the reporting endpoint. Explicit engineering launchers retain their per-cycle
-defaults. Web remains 127.0.0.1:8765 at 500 ms. These are editing defaults,
+defaults. The initial Web endpoint is 127.0.0.1:8765. These are editing defaults,
 not a saved Production destination. Camera source mode never selects a PLC endpoint.
 An existing empty or partially populated document still decodes omitted reporting
 and Diagnostics protocols as FINS/UDP.
@@ -1276,8 +1277,10 @@ including external new/repaired files; it is distinct from Discard. Model select
 reference remains visibly unavailable until selected. The compact Model selector shows its display name and
 configured SHA-256 prefix; its tooltip exposes the full ID/hash, not a runtime
 verification claim. Each defect label has a checkable button and an adjacent
-minimum Mask Area field in px². Each field's tooltip and accessible name identify
-its label, measurement and unit. Each pair wraps together at the available width.
+field for its minimum SDK Mask Area. A single inline caption, **Min area · px²**
+(**最小面积 · px²** in Simplified Chinese), precedes the first pair whenever
+area inputs are visible. Each pair wraps together. Each field's tooltip and
+accessible name identify its label, measurement and unit.
 There is no filter popup, technical-details or
 policy-summary panel. The summary cards use their content's natural height;
 one enclosing scroll area updates on wrapping/content/language changes and scrolls

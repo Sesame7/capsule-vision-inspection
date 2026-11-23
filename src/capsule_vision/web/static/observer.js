@@ -40,9 +40,10 @@
     if (node.getAttribute("aria-label") !== description) node.setAttribute("aria-label", description);
   }
   const cards = new Map();
+  const viewport = element("camera-viewport");
   let latest = null, stopped = false, busy = false, epoch = 0, next = null, controller = null;
   let cameraOrder = [], imageStart = 0;
-  let refreshIntervalMs = 500;
+  const refreshIntervalMs = 500;
   const current = token => !stopped && epoch === token;
   const expired = timestamp => !Number.isFinite(timestamp) || Date.now() - timestamp > 6000;
   const aged = snapshot => expired(Date.parse(snapshot.published_at));
@@ -155,7 +156,7 @@
   function arrange() {
     const wall = element("cameras"), count = cameraOrder.length;
     if (!count || stopped) return;
-    const width = wall.clientWidth, height = wall.clientHeight;
+    const width = viewport.clientWidth, height = viewport.clientHeight;
     const channelRowHeight = latest?.four_cycle ? 28 : 22;
     const minCardWidth = latest?.four_cycle ? 6 * channelRowHeight + 5 * 2 : 132;
     let best = -1, columns = 1;
@@ -267,17 +268,23 @@
       if (aged(latest)) markLost("stale");
       return;
     }
-    if (Number.isFinite(snapshot.refresh_interval_ms) && snapshot.refresh_interval_ms > 0) {
-      refreshIntervalMs = snapshot.refresh_interval_ms;
-    }
     const modeChanged = Boolean(latest?.four_cycle) !== Boolean(snapshot.four_cycle);
     latest = snapshot;
     const metrics = element("metrics"), counts = snapshot.metrics;
     const hidden = !snapshot.group_counting || !counts;
     if (metrics.hidden !== hidden) metrics.hidden = hidden;
     if (!hidden) {
-      const caption = `${t("groups")} ${counts.batches} · OK ${counts.ok} · NG ${counts.ng} · EMPTY ${counts.empty} · ${t("duration")} ${counts.duration_ms == null ? "--" : `${Math.round(counts.duration_ms)} ms`}`;
-      if (metrics.textContent !== caption) metrics.textContent = caption;
+      const fields = [
+        `${t("groups")} ${counts.batches}`, `OK ${counts.ok}`, `NG ${counts.ng}`, `EMPTY ${counts.empty}`,
+        `${t("duration")} ${counts.duration_ms == null ? "--" : `${Math.round(counts.duration_ms)} ms`}`,
+      ];
+      if (metrics.textContent !== fields.join(" · ")) {
+        metrics.replaceChildren(...fields.flatMap((field, index) => {
+          const pair = document.createElement("span");
+          pair.textContent = field;
+          return index ? [" · ", pair] : [pair];
+        }));
+      }
       if (metrics.title !== t("groupHelp")) metrics.title = t("groupHelp");
       if (metrics.getAttribute("aria-label") !== t("groupMetrics")) metrics.setAttribute("aria-label", t("groupMetrics"));
       if (metrics.getAttribute("aria-description") !== metrics.title) metrics.setAttribute("aria-description", metrics.title);
@@ -407,14 +414,22 @@
       if (!stopped) next = setTimeout(poll, Math.max(0, refreshIntervalMs - (Date.now() - started)));
     }
   }
+  const layoutObserver = new ResizeObserver(arrange);
+  layoutObserver.observe(viewport);
   window.addEventListener("pagehide", () => {
     stopped = true;
+    layoutObserver.disconnect();
     ++epoch;
     clearTimeout(next);
     if (controller) controller.abort();
     for (const card of cards.values()) clearImage(card);
   });
-  window.addEventListener("pageshow", () => { if (stopped) { stopped = false; poll(); } });
-  window.addEventListener("resize", arrange);
+  window.addEventListener("pageshow", () => {
+    if (stopped) {
+      stopped = false;
+      layoutObserver.observe(viewport);
+      poll();
+    }
+  });
   poll();
 })();

@@ -11,6 +11,7 @@ from tests.unit.test_alarm_report import event, offer
 
 from capsule_vision.application.alarm_report import AlarmReportRequest
 from capsule_vision.application.records_query import RecordsScope
+from capsule_vision.localization.catalog import text
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 
@@ -37,6 +38,16 @@ def test_alarm_pdf_scope_language_empty_and_identity(
             action.request == AlarmReportRequest(RecordsScope(), "equipment")
             and action.isEnabled()
         )
+        for description in (action.accessibleName(), action.toolTip()):
+            assert all(
+                value in description
+                for value in (
+                    "Alarm Records Report",
+                    "All dates",
+                    "All Batches",
+                    "Equipment alarm",
+                )
+            )
         action.click()
         chooser = action.chooser
         assert chooser and chooser.windowTitle() == "Alarm Records Report"
@@ -57,6 +68,9 @@ def test_alarm_pdf_scope_language_empty_and_identity(
         assert action.chooser is None and not window.history_tabs.isTabEnabled(
             window.history_tabs.indexOf(page)
         )
+        assert not action.isEnabled() and action.text() == "PDF"
+        assert action.accessibleDescription() == text("permission_operator", "en")
+        assert action.accessibleDescription() in action.toolTip()
     finally:
         close_window(window)
         delivery.detach()

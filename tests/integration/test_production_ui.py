@@ -26,11 +26,16 @@ from tests.support.qt import screen as screen
 
 from capsule_vision.application import (
     ApplicationState,
+    ApplicationStateError,
     ConfigurationIdentity,
+    ModelPreparationRequest,
+    ModelPreparationResult,
+    ModelPreparationSnapshot,
     ProductionApplicationSnapshot,
     ProductionCounters,
     StartBlocker,
 )
+from capsule_vision.application.model_preparation import ModelPreparation
 from capsule_vision.application.models import SelectedRecipe
 from capsule_vision.application.source_control import (
     SourceControlSnapshot,
@@ -439,7 +444,11 @@ def test_fault_controls_and_operator_message_redaction(
     assert not window.production_recipes.recipes.isEnabled()
     assert "private" not in window.event_label.text()
     assert "SDK" not in window.event_label.text()
-    window.buttons["secondary"].click()
+    reset = window.buttons["secondary"]
+    window.language_selector.setFocus(Qt.FocusReason.TabFocusReason)
+    QTest.keyClick(window.language_selector, Qt.Key.Key_Tab)
+    assert reset.hasFocus()
+    QTest.keyClick(reset, Qt.Key.Key_Space)
     until(lambda: window.snapshot.state is ApplicationState.READY)
     candidate = window.snapshot.candidate_prepared
     assert candidate is not None
@@ -460,6 +469,60 @@ def test_fault_controls_and_operator_message_redaction(
     until(lambda: "batch-X" in window.batch_label.text())
 
 
+def test_reset_follows_model_preparation_cleanup(
+    screen: tuple[MainWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, _ = screen
+    app = window.bridge.application
+    candidate = app.snapshot().candidate_prepared
+    assert candidate is not None
+    settling, release = Event(), Event()
+
+    def fail(owner: ModelPreparation) -> tuple[ModelPreparationResult, OSError]:
+        return ModelPreparationResult(owner.request, False, False), OSError(
+            "still owned"
+        )
+
+    def settle(_owner: ModelPreparation) -> bool:
+        settling.set()
+        return release.wait(WAIT)
+
+    monkeypatch.setattr(ModelPreparation, "run", fail)
+    monkeypatch.setattr(ModelPreparation, "settle", settle)
+    reset = window.buttons["secondary"]
+    guidance = text("fault_reset_available", window.language)
+    try:
+        app.prepare_model_cache(
+            ModelPreparationRequest(candidate.configuration.model, candidate.model_path)
+        )
+        until(
+            lambda: (
+                settling.is_set() and window.snapshot.state is ApplicationState.FAULT
+            )
+        )
+        fault = window.snapshot
+        assert not fault.runtime_owned and app.preparation_snapshot().owns_resources
+        with pytest.raises(ApplicationStateError, match="ownership"):
+            app.reset_fault()
+        assert not reset.isEnabled() and not reset.isVisible()
+        assert guidance not in window.event_label.toolTip()
+        assert guidance not in window.event_label.accessibleDescription()
+        slot = window.context_control.geometry()
+    finally:
+        release.set()
+
+    until(lambda: reset.isEnabled() and reset.isVisible())
+    assert not app.preparation_snapshot().owns_resources
+    assert app.snapshot() == fault
+    assert window.context_control.geometry() == slot
+    assert guidance in window.event_label.toolTip()
+    assert guidance in window.event_label.accessibleDescription()
+    QTest.keyClick(reset, Qt.Key.Key_Space)
+    until(lambda: window.snapshot.state is ApplicationState.READY)
+    assert app.snapshot().last_issue is None
+    assert not reset.isVisible() and guidance not in window.event_label.toolTip()
+
+
 def test_close_failure_does_not_quit_or_release_unsafe_runtime(
     screen: tuple[MainWindow, FakeSession],
 ) -> None:
@@ -474,9 +537,14 @@ def test_close_failure_does_not_quit_or_release_unsafe_runtime(
     assert window.snapshot.runtime_owned
     until(lambda: not window.bridge.closing)
     assert window.state_label.text() == text("state_FAULT", window.language)
-    assert text("shutdown_error", window.language) in window.event_label.text()
+    assert window.event_label.text() == text("shutdown_error", window.language)
     assert window.snapshot.last_issue is not None
-    assert window.snapshot.last_issue.exception_type in window.event_label.text()
+    assert window.snapshot.last_issue.exception_type in window.event_label.toolTip()
+    assert (
+        text("fault_reset_available", window.language)
+        not in window.event_label.toolTip()
+    )
+    assert not window.buttons["secondary"].isEnabled()
     assert not window.buttons["operation"].isEnabled()
     session.cleanup_safe = True
     window.close()  # Explicit second attempt after safety has been restored.
@@ -786,6 +854,35 @@ def test_stale_operation_does_not_turn_stop_or_reset_into_start(
     assert bridge.application.snapshot() == window.snapshot == ready
     assert not session.start_entered.is_set()
     assert window.buttons["operation"].isEnabled()
+
+
+def test_stale_reset_rechecks_model_preparation_ownership(
+    screen: tuple[MainWindow, FakeSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window, _ = screen
+    bridge = window.bridge
+    app = bridge.application
+    fault = replace(
+        app.snapshot(),
+        state=ApplicationState.FAULT,
+        start_blocker=StartBlocker.LIFECYCLE,
+    )
+    monkeypatch.setattr(app, "snapshot", lambda: fault)
+    bridge.refresh()
+    reset = window.buttons["secondary"]
+    assert reset.isVisible() and reset.isEnabled()
+
+    # The owner observation changes before Qt's next refresh, in the same generation.
+    held = replace(app.preparation_snapshot(), owns_resources=True)
+    monkeypatch.setattr(app, "preparation_snapshot", lambda: held)
+    dispatched: list[str] = []
+    monkeypatch.setattr(bridge, "reset", lambda: dispatched.append("reset"))
+    reset.click()
+    assert not dispatched and not reset.isEnabled() and not reset.isVisible()
+    assert (
+        text("fault_reset_available", window.language)
+        not in window.event_label.toolTip()
+    )
 
 
 @pytest.mark.parametrize(
@@ -2291,6 +2388,7 @@ def test_multilingual_player_captions_fit_without_moving_camera_layout(
             }
 
             def selected_actions(
+                _preparation: ModelPreparationSnapshot,
                 value: dict[str, str | None] = actions,
             ) -> dict[str, str | None]:
                 return value

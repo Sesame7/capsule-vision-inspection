@@ -1434,9 +1434,8 @@ def test_preview_scopes_ng_event_but_preserves_errors(
         and text("inspection_issue", language) in window.event_label.text()
     )
     window.bridge.snapshot_changed.emit(replace(before, state=ApplicationState.FAULT))
-    assert (
-        window.event_frame.isVisible()
-        and text("runtime_error", language) in window.event_label.text()
+    assert window.event_frame.isVisible() and window.event_label.text() == text(
+        "operation_error", language
     )
     window.bridge.snapshot_changed.emit(before)
     window.bridge.command_failed.emit(

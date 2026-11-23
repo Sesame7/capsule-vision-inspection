@@ -32,7 +32,6 @@ class WebPreferences:
     enabled: bool = True
     host: str = "127.0.0.1"
     port: int = 8765
-    interval_ms: int = 500
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
@@ -47,12 +46,6 @@ class WebPreferences:
             raise ValueError("Web host must be a specific local unicast IPv4")
         if type(self.port) is not int or not 1 <= self.port <= 65535:
             raise ValueError("Web port must be between 1 and 65535")
-        if type(self.interval_ms) is not int or self.interval_ms not in (
-            500,
-            1000,
-            2000,
-        ):
-            raise ValueError("Web interval_ms must be 500, 1000 or 2000")
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,9 +296,7 @@ def load_communication_preferences(
             },
             "reporting",
         )
-        web = _object(
-            obj.get("web", {}), {"enabled", "host", "port", "interval_ms"}, "web"
-        )
+        web = _object(obj.get("web", {}), {"enabled", "host", "port"}, "web")
         selected_reporting = ReportingSelection(
             _boolean(reporting.get("enabled", False), "reporting.enabled"),
             _reporting(reporting),
@@ -330,9 +321,6 @@ def load_communication_preferences(
                 _boolean(web.get("enabled", defaults.web.enabled), "web.enabled"),
                 _text(web.get("host", defaults.web.host), "web.host"),
                 _integer(web.get("port", defaults.web.port), "web.port"),
-                _integer(
-                    web.get("interval_ms", defaults.web.interval_ms), "web.interval_ms"
-                ),
             ),
             status,
         )
@@ -401,7 +389,7 @@ def communication_publication(
         payload["diagnostic"] = _endpoint_json(value.diagnostic)
     web = {
         field: getattr(value.web, field)
-        for field in ("enabled", "host", "port", "interval_ms")
+        for field in ("enabled", "host", "port")
         if getattr(value.web, field) != getattr(defaults.web, field)
     }
     if web:

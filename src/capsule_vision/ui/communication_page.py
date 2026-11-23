@@ -916,8 +916,7 @@ class CommunicationPage(QWidget):
         self.discard_settings.show()
         for field in (self.host, self.web_panel.host):
             field.textChanged.connect(self._settings_edited)
-        for field in (self.protocol, self.web_panel.interval):
-            field.currentIndexChanged.connect(self._settings_edited)
+        self.protocol.currentIndexChanged.connect(self._settings_edited)
         for field in (
             self.port,
             self.timeout,

@@ -655,8 +655,9 @@ def test_report_localizes_configuration_changes_and_retains_recorded_names() -> 
             "communication.save",
             "diagnostic.timeout = 2.5\ndiagnostic.timeout = CredentialSentinel\n"
             "reporting.settings.mode = four_cycle\nweb.host = AddressSentinel\n"
-            "web.display_name = FieldSentinel\ndiagnostic.destination.node = RouteSentinel",
-            ("2.5", "Four-cycle"),
+            "web.display_name = FieldSentinel\ndiagnostic.destination.node = RouteSentinel\n"
+            "web.interval_ms = 1000",
+            ("2.5", "Four-cycle", "Web · Refresh interval", "1000"),
         ),
         (
             "batch.information",

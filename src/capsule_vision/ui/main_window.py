@@ -45,7 +45,9 @@ from PySide6.QtWidgets import (
 )
 
 from capsule_vision.application import (
+    ApplicationError,
     ApplicationState,
+    ModelPreparationSnapshot,
     PreparedConfiguration,
     ProductionApplicationSnapshot,
 )
@@ -118,6 +120,14 @@ _START_WAIT_HINTS = (
     "source_connecting",
     "source_disconnecting",
 )
+
+
+def _set_status_tooltip(label: QLabel, tooltip: str) -> None:
+    previous = label.toolTip()
+    if tooltip != previous:
+        if previous and QToolTip.text() == previous:
+            QToolTip.hideText()
+        label.setToolTip(tooltip)
 
 
 class PlayerButton(QPushButton):
@@ -661,7 +671,7 @@ class MainWindow(QMainWindow):
         action.batch_label = (
             self.records_filters.label if self.records_filters.scope.batch else ""
         )
-        action.missing = "customer_select_batch"
+        action.missing = ("customer_batch", "customer_select_batch")
         if page is self.audit_page:
             action.request = AuditReportRequest(
                 self.records_filters.scope, self.audit_page.accounts.selected
@@ -686,10 +696,11 @@ class MainWindow(QMainWindow):
             action.request = None
             if page is self.ng_capsules:
                 action.missing = (
+                    "customer_defects",
                     "records_no_batch"
                     if self.ng_capsules.selected_capsule
                     and not self.ng_capsules.selected_capsule.filtered
-                    else "unavailable"
+                    else "unavailable",
                 )
         action.present()
 
@@ -901,7 +912,7 @@ class MainWindow(QMainWindow):
         ):
             # Never reinterpret a stale displayed action as a new Start/session.
             self.bridge.refresh()
-            self._render_operations()
+            self._render_operations(self.bridge.application.preparation_snapshot())
             return
         if action == "start":
             self.bridge.start()
@@ -916,10 +927,11 @@ class MainWindow(QMainWindow):
         elif action == "replay_step":
             self.bridge.step_source()
 
-    def _actions(self) -> dict[str, str | None]:
+    def _actions(self, preparation: ModelPreparationSnapshot) -> dict[str, str | None]:
         replay = self.bridge.control_observation
         return production_actions(
             self.snapshot,
+            preparation,
             (replay.state if replay else SourceControlState.STOPPED)
             if self.bridge.controls_enabled
             else None,
@@ -931,6 +943,7 @@ class MainWindow(QMainWindow):
         replay = self.bridge.control_snapshot()
         return production_actions(
             snapshot,
+            self.bridge.application.preparation_snapshot(),
             (replay.state if replay else SourceControlState.STOPPED)
             if self.bridge.controls_enabled
             else None,
@@ -947,8 +960,8 @@ class MainWindow(QMainWindow):
             return StartInteractionBlocker.VISION_DRAFT
         return StartInteractionBlocker.EDITING if self.editing.busy else None
 
-    def _render_operations(self) -> None:
-        actions = self._actions()
+    def _render_operations(self, preparation: ModelPreparationSnapshot) -> None:
+        actions = self._actions(preparation)
         replay = self.bridge.control_observation
         middle_step = bool(
             self.bridge.controls_enabled
@@ -959,7 +972,7 @@ class MainWindow(QMainWindow):
         basler = isinstance(app, SourceProductionApplication) and app.basler_available
         operator = permits(app, Role.OPERATOR)
         interaction = self._start_interaction_blocker()
-        can_start = controls(self.snapshot).start and interaction is None
+        can_start = controls(self.snapshot, preparation).start and interaction is None
         guidance = start_hint(
             self.snapshot, self.production_recipes.setup_guidance_key, interaction
         )
@@ -1217,6 +1230,7 @@ class MainWindow(QMainWindow):
                 self._command_issues.pop("start", None)
             reset = recovered and self.snapshot.state is ApplicationState.FAULT
             if reset:
+                self.bridge.clear_recovered_player_feedback()
                 for command in (
                     "close",
                     "stop",
@@ -1280,11 +1294,32 @@ class MainWindow(QMainWindow):
                 self.communication.resume()
         if command != "folder_source":
             # Retain one sanitized outcome per command so independent failures survive.
-            self._command_issues.pop(command, None)
-            self._command_issues[command] = (
-                failure_key(error, command, "permission_operator"),
-                type(error).__name__ if isinstance(error, BaseException) else None,
+            key = failure_key(error, command, "permission_operator")
+            diagnostic = (
+                type(error).__name__ if isinstance(error, BaseException) else None
             )
+            if (
+                command in ("start", "source_step")
+                and isinstance(error, ApplicationError)
+                and (cause := error.__cause__) is not None
+            ):
+                # A first replay Step can also complete with the Start owner's failure.
+                # A later admission rejection must keep its own evidence.
+                issue = self.bridge.application.snapshot().last_issue
+                if (
+                    issue
+                    and issue.stage == "startup"
+                    and (issue.exception_type, issue.message)
+                    == (type(cause).__name__, str(cause))
+                ):
+                    key = (
+                        "source_error" if source_error is not None else "startup_error"
+                    )
+                    diagnostic = "\n".join(
+                        dict.fromkeys((issue.exception_type, type(error).__name__))
+                    )
+            self._command_issues.pop(command, None)
+            self._command_issues[command] = (key, diagnostic)
         if command == "preferences":
             self._preferences_detail = str(error)
         self._render()
@@ -1355,8 +1390,9 @@ class MainWindow(QMainWindow):
         self.configuration_placeholder.setText(
             text(self.production_recipes.setup_guidance_key, language)
         )
-        availability = controls(snapshot)
-        self._render_operations()
+        preparation = self.bridge.application.preparation_snapshot()
+        availability = controls(snapshot, preparation)
+        self._render_operations(preparation)
         operator = permits(self.bridge.application, Role.OPERATOR)
         self.buttons["batch"].setEnabled(
             operator
@@ -1488,7 +1524,8 @@ class MainWindow(QMainWindow):
             event_key = "run_uncertain"
         if result and result.assessment.technical_status is TechnicalStatus.ERROR:
             event_key = "technical_note"
-        if snapshot.last_issue:
+        issue = snapshot.last_issue
+        if issue:
             event_key = "issue_note"
         command = next(
             (
@@ -1514,14 +1551,27 @@ class MainWindow(QMainWindow):
             "close_wait",
         }
         fault = snapshot.state is ApplicationState.FAULT
-        message = (
-            self._status_message(event_key, text(event_key, language), command)
-            if warning or fault
-            else text("configure_first", language)
-            if page == 0 and snapshot.state is ApplicationState.UNCONFIGURED
-            else ""
-        )
         detail = ""
+        if event_key in ("fault_note", "issue_note"):
+            key = {
+                "startup": "startup_error",
+                "runtime": "runtime_error",
+                "shutdown": "shutdown_error",
+                "model_preparation": "cache_failed",
+                "process_application": "process_apply_failed",
+                "history": "run_uncertain",
+            }.get(issue.stage if issue else "", "operation_error")
+            message = text(key, language)
+            if issue:
+                detail = issue.exception_type
+        elif warning or fault:
+            message = self._status_message(
+                event_key, text(event_key, language), command
+            )
+        elif page == 0 and snapshot.state is ApplicationState.UNCONFIGURED:
+            message = text("configure_first", language)
+        else:
+            message = ""
         reselection_help = ""
         production_feedback = self.production_recipes.feedback if page == 0 else None
         if production_feedback and not (warning or fault or self._closing):
@@ -1551,20 +1601,37 @@ class MainWindow(QMainWindow):
             else:
                 message = text(hint, language)
                 warning = hint not in _START_WAIT_HINTS
+        command_issue = (
+            self._command_issues[command]
+            if command and event_key == "command_error"
+            else None
+        )
+        if command_issue and command_issue[0] in ("startup_error", "source_error"):
+            detail = command_issue[1] or ""
         if self._source_issue and event_key == "command_error":
             camera, exception_type = self._source_issue
-            source_message = " · ".join(
-                part
-                for part in (camera, text("source_error", language), exception_type)
-                if part
+            source_caption = " · ".join(
+                filter(None, (camera, text("source_error", language)))
             )
-            if command is None or (
+            source_message = f"{source_caption} · {exception_type}"
+            if command_issue and command_issue[0] == "source_error":
+                detail = "\n".join(
+                    dict.fromkeys(
+                        (
+                            text("startup_error", language),
+                            *detail.splitlines(),
+                            exception_type,
+                        )
+                    )
+                )
+                message = source_caption
+            elif command is None or (
                 command in ("start", "source_step")
                 and self._command_issues[command][0] == command
             ):
                 message = source_message
             else:
-                detail = source_message
+                detail = "\n".join(filter(None, (detail, source_message)))
         if event_key == "command_error" and command == "preferences":
             detail = "\n".join(filter(None, (detail, self._preferences_detail)))
         # Expected first-run setup stays on Production; genuine saved-file
@@ -1671,11 +1738,7 @@ class MainWindow(QMainWindow):
         if cache_caption and detail:
             # Qt auto-detects rich tooltips. Escape the exception so it renders literally.
             tooltip = f"<span style='white-space: pre-wrap'>{escape(tooltip)}</span>"
-        previous_tooltip = self.event_label.toolTip()
-        if tooltip != previous_tooltip:
-            if previous_tooltip and QToolTip.text() == previous_tooltip:
-                QToolTip.hideText()
-            self.event_label.setToolTip(tooltip)
+        _set_status_tooltip(self.event_label, tooltip)
         self.event_label.setAccessibleName(announcement)
         self.event_label.setAccessibleDescription(description)
         self.state_label.setToolTip("")
@@ -1709,12 +1772,7 @@ class MainWindow(QMainWindow):
     def _render_services(self) -> None:
         bar, colors = self.event_frame, theme_colors(self)
         bar.refresh_icons(self.language)
-        for widget in (
-            bar.state,
-            bar.state_icon,
-            bar.plc,
-            bar.plc_icon,
-        ):
+        for widget in (bar.state, bar.plc, bar.plc_icon):
             if widget.toolTip():
                 widget.setToolTip("")
         selection = (
@@ -1776,6 +1834,13 @@ class MainWindow(QMainWindow):
             return
         state_text = self.state_label.text()
         state = self.snapshot.state
+        compact_fault = (
+            state is ApplicationState.FAULT
+            and self.pages.currentIndex() == 0
+            and not self._closing
+        )
+        state_tip = self.state_label.accessibleName() if compact_fault else ""
+        _set_status_tooltip(bar.state_icon, state_tip)
         requires_preparation = (
             state is ApplicationState.READY
             and self.snapshot.candidate_requires_preparation
@@ -1843,6 +1908,7 @@ class MainWindow(QMainWindow):
             self.language,
             self.snapshot.state,
             state_text,
+            compact_fault,
             state_color,
             plc,
             report_detail,
@@ -1851,8 +1917,9 @@ class MainWindow(QMainWindow):
         if identity == self._service_presentation:
             return
         self._service_presentation = identity
-        bar.state.setText(state_text)
-        bar.state_icon.setAccessibleName(bar.state.accessibleName())
+        bar.state.setText("" if compact_fault else state_text)
+        bar.state.setAccessibleName(state_text)
+        bar.state_icon.setAccessibleName(state_tip or state_text)
         bar.state_icon.setPixmap(state_icon.pixmap(20, 20))
         bar.state.setStyleSheet(f"color: {state_color};")
         bar.plc.setText(plc)
@@ -1905,17 +1972,6 @@ class MainWindow(QMainWindow):
     ) -> str:
         """Describe existing technical evidence; never guess a cause or show raw SDK text."""
         language = self.language
-        issue = self.snapshot.last_issue
-        if event_key in {"fault_note", "issue_note"} and issue is not None:
-            key = {
-                "startup": "startup_error",
-                "shutdown": "shutdown_error",
-                "runtime": "runtime_error",
-                "process_application": "process_apply_failed",
-            }.get(issue.stage, "operation_error")
-            return f"{text(key, language)} · {issue.exception_type}"
-        if event_key == "fault_note":
-            return text("runtime_error", language)
         if event_key == "command_error":
             summary = text("operation_error", language)
             if command is not None:

@@ -17,6 +17,7 @@ from pathlib import Path
 from threading import Event, get_ident
 from threading import enumerate as threads
 from time import monotonic
+from unittest.mock import Mock
 
 import cv2
 import numpy as np
@@ -311,7 +312,9 @@ def test_local_read_only_http_revision_and_cleanup(
 
     monkeypatch.setattr(HTTPServer, "server_bind", observed_bind)
     source, store = inputs()
-    service = ProductionSnapshotService(source, store, port=0, interval=60)
+    service = ProductionSnapshotService(source, store, port=0)
+    publication_wait = Mock(wraps=service.stopping.wait)
+    monkeypatch.setattr(service.stopping, "wait", publication_wait)
     original_threads = {thread.ident for thread in threads()}
     assert not service.http_alive and not service.publisher_alive
     service.start()
@@ -343,8 +346,13 @@ def test_local_read_only_http_revision_and_cleanup(
             == 410
         )
         # Metadata-only refresh keeps the immutable URL and exactly the same bytes.
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            executor.submit(service.publisher.publish).result(2)
+        wait(
+            lambda: (
+                (latest := service.publisher.latest()) is not None
+                and latest.revision > value["revision"]
+            )
+        )
+        publication_wait.assert_any_call(0.5)
         assert request(service, url)[:2] == (200, jpeg)
         assert source.value.state is ApplicationState.RUNNING
     finally:
@@ -364,7 +372,7 @@ def test_slow_publication_does_not_queue_or_block_reads_or_display(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, store = inputs()
-    service = ProductionSnapshotService(source, store, port=0, interval=0.02)
+    service = ProductionSnapshotService(source, store, port=0)
     entered, release = Event(), Event()
     owners: set[int] = set()
 
@@ -415,7 +423,7 @@ def test_failures_and_blocked_encoder_keep_shutdown_observable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, store = inputs()
-    service = ProductionSnapshotService(source, store, port=0, interval=0.02)
+    service = ProductionSnapshotService(source, store, port=0)
     source.fail = True
     service.start()
     try:
@@ -585,7 +593,7 @@ def test_static_observer_and_three_clients_reuse_cached_jpegs(
         return encode_image(frame)
 
     monkeypatch.setattr("capsule_vision.web.publisher.encode_image", counted)
-    service = ProductionSnapshotService(source, store, port=0, interval=60)
+    service = ProductionSnapshotService(source, store, port=0)
     original_threads = {thread.ident for thread in threads()}
     service.start()
     try:
@@ -697,7 +705,7 @@ def test_stable_urls_and_two_encoded_versions_without_extra_encoding(
 
 def test_http_current_previous_and_evicted_image_bytes() -> None:
     source, store = inputs()
-    service = ProductionSnapshotService(source, store, port=0, interval=0.01)
+    service = ProductionSnapshotService(source, store, port=0)
     service.start()
     try:
         wait(lambda: service.publisher.latest() is not None)
@@ -762,7 +770,7 @@ def test_hard_delivery_invalidation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, store = inputs()
-    service = ProductionSnapshotService(source, store, port=0, interval=0.01)
+    service = ProductionSnapshotService(source, store, port=0)
     service.start()
     try:
         wait(lambda: service.publisher.latest() is not None)
@@ -833,7 +841,7 @@ def test_inflight_old_body_stays_immutable_across_generation_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, store = inputs()
-    service = ProductionSnapshotService(source, store, port=0, interval=0.01)
+    service = ProductionSnapshotService(source, store, port=0)
     service.start()
     entered, release = Event(), Event()
     try:
@@ -889,7 +897,7 @@ def test_incomplete_join_keeps_cache_until_actual_encoder_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source, store = inputs()
-    service = ProductionSnapshotService(source, store, port=0, interval=0.01)
+    service = ProductionSnapshotService(source, store, port=0)
     entered, release = Event(), Event()
     service.start()
     try:

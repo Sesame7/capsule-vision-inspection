@@ -293,7 +293,6 @@ def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
             startup.frames,
             host=settings.host,
             port=settings.port,
-            interval=settings.interval_ms / 1000,
         )
     )
     window.bind_web_runtime(runtime)
@@ -619,6 +618,8 @@ def test_web_ipv4_choices_are_visible_and_refresh_preserves_manual_draft(
     )
     panel.host.setText("192.0.2.77")
     panel.address_refresh.click()
+    assert panel.findChildren(QComboBox) == [panel.addresses]
+    assert panel.port.isVisible() and panel.port.y() == panel.addresses.y()
     assert [panel.addresses.itemText(i) for i in range(panel.addresses.count())] == [
         "127.0.0.1",
         "192.0.2.10",
@@ -1256,7 +1257,6 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     page.port.setValue(19602)
     page.destination[1].setValue(7)
     page.web_panel.port.setValue(8766)
-    page.web_panel.interval.setCurrentIndex(2)
     assert not startup.data.communication.exists()
     page.save_settings.click()
     until(lambda: not page.busy)
@@ -1271,7 +1271,7 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     assert not hasattr(saved.reporting.settings.endpoint, "destination")
     assert isinstance(saved.diagnostic, FinsUdpEndpoint)
     assert saved.diagnostic.port == 19602 and saved.diagnostic.destination.node == 7
-    assert saved.web == WebPreferences(False, "127.0.0.1", 8766, 2000)
+    assert saved.web == WebPreferences(False, "127.0.0.1", 8766)
     assert {p: p.read_bytes() for p in files} == files
     assert startup.application.snapshot() == replace(
         baseline, start_blocker=StartBlocker.REPORTING_SOURCE

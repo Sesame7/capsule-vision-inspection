@@ -24,7 +24,7 @@ class Element {
   set title(value) { this.writes++; this._title = value; }
   get title() { return this._title; }
   set textContent(value) { this.writes++; this.value = String(value); this.children = []; }
-  get textContent() { return this.value + this.children.map(child => child.textContent).join(" "); }
+  get textContent() { return this.value + this.children.map(child => typeof child === "string" ? child : child.textContent).join(""); }
   append(...children) { this.writes++; this.children.push(...children); }
   replaceChildren(...children) { this.writes++; this.value = ""; this.children = children; this.remounts++; }
   replaceChild(child, previous) { const index = this.children.indexOf(previous); assert.notEqual(index, -1); this.children[index] = child; }
@@ -37,14 +37,16 @@ function fixture(language = "en") {
   const h = { now: 100000, calls: [], active: 0, maxActive: 0, urlCount: 0, urls: new Set(), maxUrls: 0, timers: new Map(), events: {}, nodes: new Map() };
   for (const match of html.matchAll(/id="([^"]+)"/g)) h.nodes.set(match[1], new Element("div"));
   const get = id => h.nodes.get(id) ?? null;
-  get("cameras").clientWidth = 1912; get("cameras").clientHeight = 1072;
+  const viewport = get("camera-viewport");
+  viewport.clientWidth = 1912; viewport.clientHeight = 1072;
+  let viewportResized;
   const imageUrl = (snapshot, row) => {
     const id=row.image_identity;
     return `/api/cameras/${encodeURIComponent(row.camera_id)}.jpg?publisher=${encodeURIComponent(snapshot.publisher_id)}&image=${[id.image_epoch,id.generation,id.cycle_id,id.sequence,id.frame_revision,...id.shape.slice(0,2)].join("-")}`;
   };
   h.snapshot = (revision = 1) => {
     const snapshot = {
-    publisher_id: "process-one", revision, generation: 1, application_state: "RUNNING", latest_cycle_id: 1, refresh_interval_ms: 2000,
+    publisher_id: "process-one", revision, generation: 1, application_state: "RUNNING", latest_cycle_id: 1, refresh_interval_ms: 500,
     published_at: new Date(h.now).toISOString(), configured_camera_ids: ["CAM6", "CAM5", "CAM4", "CAM3", "CAM2", "CAM1"],
     cameras: [6, 5, 4, 3, 2, 1].map(id => ({
       camera_id: `CAM${id}`, image_status: "current", result_status: "matched",
@@ -72,6 +74,11 @@ function fixture(language = "en") {
   let timerId = 0;
   h.context = vm.createContext({
     navigator: { language }, Date: Clock, Image, AbortController,
+    ResizeObserver: class {
+      constructor(callback) { this.callback = callback; }
+      observe(target) { assert.equal(target, viewport); viewportResized = this.callback; }
+      disconnect() { viewportResized = null; }
+    },
     document: { documentElement: {}, getElementById: get, createElement: tag => new Element(tag), createElementNS: (_namespace, tag) => new Element(tag) },
     window: { addEventListener: (name, callback) => { h.events[name] = callback; } },
     setTimeout: (callback, delay) => { const id = ++timerId; h.timers.set(id, { callback, delay }); return id; },
@@ -87,7 +94,7 @@ function fixture(language = "en") {
     },
   });
   h.start = async () => { vm.runInContext(script, h.context); await flush(); };
-  h.tick = async (delay = 2000) => {
+  h.tick = async (delay = 500) => {
     const found = [...h.timers].find(([, value]) => delay === 5000 ? value.delay === delay : value.delay < 5000);
     assert.ok(found, "Expected one pending timer");
     const [id, value] = found;
@@ -103,7 +110,11 @@ function fixture(language = "en") {
   h.connection = () => h.node("connection-text").textContent;
   h.jpegCalls = () => h.calls.filter(path => path.includes(".jpg"));
   h.presentationWrites = index => [h.card(index), ...h.card(index).children, ...h.card(index).children[0].children, ...h.card(index).children[1].children, ...h.indicators(index)].map(node => node.writes);
-  h.resize = (width, height) => { get("cameras").clientWidth = width - 8; get("cameras").clientHeight = height - 8; h.events.resize(); };
+  h.resize = (width, height, statusSpace = 0) => {
+    viewport.clientWidth = width - 8;
+    viewport.clientHeight = height - 8 - statusSpace;
+    viewportResized?.();
+  };
   h.stop = () => h.events.pagehide();
   return h;
 }
@@ -219,7 +230,8 @@ test("stale publication and older revision cannot masquerade as current state", 
   h.value = h.snapshot(4); h.value.application_state = "FAULT";
   await h.tick(); assert.equal(h.node("fault").hidden, true);
   assert.equal(h.jpegCalls().length, 6);
-  await h.tick(); await h.tick(); await h.tick();
+  h.now += 5500;  // The next poll takes the last accepted publication beyond six seconds.
+  await h.tick();
   assert.equal(h.connection(), "Stale observation"); h.neutral(0, "unavailable");
   h.value = h.snapshot(6); h.value.published_at = new Date(h.now - 20000).toISOString();
   await h.tick(); assert.equal(h.connection(), "Stale observation");
@@ -390,21 +402,24 @@ test("no configured images is concise unavailability, never inferred FAULT", asy
   assert.equal(h.node("empty").hidden, false); assert.equal(h.jpegCalls().length, 0); h.stop();
 });
 
-for (const interval of [500, 1000, 2000]) {
-  test(`browser follows server refresh interval ${interval} ms without overlapping requests`, async () => {
-    const h = fixture(); h.value.refresh_interval_ms = interval;
-    await h.start();
-    assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [interval]);
-    h.value = h.snapshot(2); h.value.refresh_interval_ms = interval;
-    h.value.cameras[0].image_identity.frame_revision++;
-    h.updateUrls();
-    await h.tick();
-    assert.equal(h.jpegCalls().length, 7);
-    assert.equal(h.maxActive, 1);
-    assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [interval]);
-    h.stop(); assert.equal(h.urls.size, 0); assert.equal(h.timers.size, 0);
-  });
-}
+test("browser polls every 500 ms without overlapping or refetching unchanged images", async () => {
+  const h = fixture();
+  await h.start();
+  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [500]);
+  h.value = h.snapshot(2);
+  h.value.refresh_interval_ms = 2000;
+  await h.tick();
+  assert.equal(h.jpegCalls().length, 6);
+  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [500]);
+  h.value = h.snapshot(3);
+  h.value.cameras[0].image_identity.frame_revision++;
+  h.updateUrls();
+  await h.tick();
+  assert.equal(h.jpegCalls().length, 7);
+  assert.equal(h.maxActive, 1);
+  assert.deepEqual([...h.timers.values()].map(timer => timer.delay), [500]);
+  h.stop(); assert.equal(h.urls.size, 0); assert.equal(h.timers.size, 0);
+});
 
 test("stable camera, picture and channel nodes across repeated publications and decoded replacements", async () => {
   const h = fixture(); await h.start();
@@ -564,6 +579,47 @@ for (const count of [5, 6]) {
   });
 }
 
+test("status appearing, wrapping and clearing refits the same camera images at a fixed window size", async () => {
+  const h = fixture();
+  await h.start();
+  const wall = h.node("cameras"), images = wall.children.map((_, i) => h.image(i));
+  const columns = () => wall.style.gridTemplateColumns;
+  h.resize(820, 850);
+  assert.equal(h.node("signals").hidden, true);
+  assert.equal(columns(), "repeat(2, minmax(0, 1fr))");
+
+  h.value = h.snapshot(2);
+  h.value.group_counting = true;
+  h.value.metrics = { batches: 5, ok: 27, ng: 2, empty: 1, duration_ms: 125 };
+  await h.tick();
+  assert.equal(h.node("signals").hidden, false);
+  const fields = h.node("metrics").children;
+  assert.deepEqual(fields.filter(node => typeof node !== "string").map(node => node.textContent),
+    ["Groups 5", "OK 27", "NG 2", "EMPTY 1", "Group time 125 ms"]);
+  h.resize(820, 850, 27);
+  assert.equal(columns(), "repeat(2, minmax(0, 1fr))");
+
+  h.value.application_state = "FAULT";
+  h.value.published_at = new Date(h.now - 20000).toISOString();
+  await h.tick();
+  assert.equal(h.connection(), "Stale observation");
+  assert.equal(h.node("fault").textContent, "Application fault · last observed");
+  assert.equal(h.node("metrics").children, fields);
+  h.resize(820, 850, 55);
+  assert.equal(columns(), "repeat(3, minmax(0, 1fr))");
+  h.neutral(0, "unavailable");
+
+  h.value = h.snapshot(3);
+  await h.tick();
+  assert.equal(h.node("signals").hidden, true);
+  h.resize(820, 850);
+  assert.equal(columns(), "repeat(2, minmax(0, 1fr))");
+  assert.equal(wall.remounts, 1);
+  images.forEach((image, i) => assert.equal(h.image(i), image));
+  assert.equal(h.jpegCalls().length, 6);
+  h.stop();
+});
+
 test("image aspect ratios, not device breakpoints, select the useful-area grid", async () => {
   const h = fixture();
   for (const row of h.value.cameras) { row.image_identity.shape = [1600, 640, 3]; row.jpeg_dimensions = { width: 256, height: 640 }; }
@@ -589,7 +645,7 @@ test("timeout of replacement decoding retains old pixels, fences late work and p
 
 for (const count of [5, 6]) {
   test(`${count} cameras: identical captions with advancing frames have no indicator or observation DOM writes`, async () => {
-    const h = fixture(); h.value.refresh_interval_ms = 500;
+    const h = fixture();
     h.value.configured_camera_ids = h.value.configured_camera_ids.slice(-count); h.value.cameras = h.value.cameras.slice(-count);
     await h.start();
     const labels = Array.from({length:count},(_,i)=>h.indicators(i).slice());
@@ -612,7 +668,11 @@ for (const count of [5, 6]) {
 
 test("unchanged complete observations renew freshness without any repeated DOM writes", async () => {
   const h=fixture(); await h.start(); const writes=h.presentationWrites(0), globals=["connection","connection-text","fault","signals","empty"].map(id=>h.node(id).writes);
-  for(let revision=2;revision<=7;revision++) {h.value=h.snapshot(revision);await h.tick();}
+  const expiresAt = h.now + 6000;
+  do {
+    h.value = h.snapshot(h.value.revision + 1);
+    await h.tick();
+  } while (h.now <= expiresAt);
   assert.deepEqual(h.presentationWrites(0),writes);
   assert.deepEqual(["connection","connection-text","fault","signals","empty"].map(id=>h.node(id).writes),globals);
   assert.equal(h.channel(0).dataset.kind,"ok");assert.equal(h.observation(0).hidden,true);assert.equal(h.jpegCalls().length,6);h.stop();
@@ -638,17 +698,27 @@ test("new incomplete results retain the previous NG/ERROR bundle, then commit ma
 for(const missing of ["pending","410"]) {
   test(`fresh metadata with prolonged ${missing} cannot renew old complete-result freshness`, async()=>{
     const h=fixture();await h.start();const original=h.image(0);
-    for(let revision=2;revision<=5;revision++) {
-      h.value=h.snapshot(revision);h.value.cameras[0].image_identity.sequence=8;
+    const expiresAt = h.now + 6000;
+    do {
+      h.value = h.snapshot(h.value.revision + 1);
+      h.value.cameras[0].image_identity.sequence = 8;
       h.updateUrls();
       if(missing==="pending")h.value.cameras[0].result_status="pending";
       else h.handler=path=>h.response(path.includes("CAM6")?410:200);
       await h.tick();
       assert.equal(h.image(0),original);
-      if(revision<5){assert.equal(h.channel(0).dataset.kind,"ok");assert.equal(h.observation(0).hidden,true);}
-    }
+      if (h.now <= expiresAt) {
+        assert.equal(h.channel(0).dataset.kind, "ok");
+        assert.equal(h.observation(0).hidden, true);
+      }
+    } while (h.now <= expiresAt);
     h.neutral(0,"unavailable");assert.equal(h.observation(0).attributes["aria-label"],"Stale observation");assert.equal(h.channel(1).dataset.kind,"ok");
-    assert.equal(h.timers.size,1);h.value=h.snapshot(6);h.value.cameras[0].image_identity.sequence=8;h.updateUrls();h.handler=()=>h.response();await h.tick();
+    assert.equal(h.timers.size, 1);
+    h.value = h.snapshot(h.value.revision + 1);
+    h.value.cameras[0].image_identity.sequence = 8;
+    h.updateUrls();
+    h.handler = () => h.response();
+    await h.tick();
     assert.notEqual(h.image(0),original);assert.equal(h.channel(0).dataset.kind,"ok");assert.equal(h.observation(0).hidden,true);h.stop();
   });
 }
@@ -708,6 +778,66 @@ test('switching modes refits six lamp groups without remounting camera cards', a
   assert.equal(h.card(0), card);
   h.stop();
 });
+function measurePage(page) {
+  const result = require('node:child_process').execFileSync('uv',
+    ['run', '--no-sync', 'python', 'tests/web/measure_indicator.py'], {
+      input: page, encoding: 'utf8', timeout: 10000, windowsHide: true,
+      env: { ...process.env, QT_QPA_PLATFORM: 'offscreen', QT_QUICK_BACKEND: 'software', QTWEBENGINE_CHROMIUM_FLAGS: '--disable-gpu' },
+    });
+  return JSON.parse(result);
+}
+
+test('rendered status occupies only its visible height above the camera grid', () => {
+  const css = fs.readFileSync('src/capsule_vision/web/static/observer.css', 'utf8');
+  const page = html.replace('<link rel="stylesheet" href="/observer.css">', `<style>${css}</style>`)
+    .replace('<script src="/observer.js" defer></script>', '')
+    .replace('</body>', `<script>
+      const get = id => document.getElementById(id);
+      document.body.style.width = "820px";
+      document.body.style.height = "700px";
+      get("cameras").append(document.createElement("section"));
+      get("empty").hidden = true;
+      function measure() {
+        const row = get("signals").getBoundingClientRect(), grid = get("cameras").getBoundingClientRect();
+        return {rowHeight: row.height, rowBottom: row.bottom, rowRight: row.right, top: grid.top, bottom: grid.bottom};
+      }
+      get("signals").hidden = true;
+      const quiet = measure();
+      get("signals").hidden = false;
+      get("fault").hidden = false;
+      get("fault").textContent = "Application fault · last observed";
+      get("connection-text").textContent = "Stale observation";
+      const combined = measure();
+      document.body.style.width = "390px";
+      get("metrics").hidden = false;
+      get("metrics").textContent = "Groups 12345 · OK 123456 · NG 45 · EMPTY 12 · Group time 500 ms";
+      const wrapped = measure();
+      get("signals").hidden = true;
+      const cleared = measure();
+      get("cameras").style.minHeight = "596px";
+      get("cameras").replaceChildren();
+      get("empty").hidden = false;
+      const empty = get("empty").getBoundingClientRect();
+      document.title = JSON.stringify({quiet, combined, wrapped, cleared, emptyTop: empty.top,
+        emptyHeight: empty.height, emptyGridHeight: get("cameras").getBoundingClientRect().height});
+    </script></body>`);
+  const {quiet, combined, wrapped, cleared, emptyTop, emptyHeight, emptyGridHeight} = measurePage(page);
+  assert.equal(quiet.top, 4);
+  assert.equal(quiet.rowHeight, 0);
+  assert.equal(quiet.bottom, 696);
+  assert.deepEqual(cleared, quiet);
+  for (const state of [combined, wrapped]) {
+    assert.ok(state.rowHeight > 0);
+    assert.equal(state.top, state.rowBottom + 4);
+    assert.equal(state.bottom, quiet.bottom);
+  }
+  assert.ok(wrapped.rowHeight > combined.rowHeight);
+  assert.ok(wrapped.rowRight <= 386);
+  assert.equal(emptyTop, quiet.top);
+  assert.equal(emptyHeight, quiet.bottom - quiet.top);
+  assert.equal(emptyGridHeight, 0);
+});
+
 test('four-cycle slot and lamp bounds in the rendered observer stylesheet', async () => {
   const h = fixture(); fourCycle(h); await h.start();
   const slot = h.channel(0);
@@ -725,12 +855,7 @@ test('four-cycle slot and lamp bounds in the rendered observer stylesheet', asyn
       });
       document.title = JSON.stringify({slot: [box.width, box.height], lamps});
     </script>`;
-  const result = require('node:child_process').execFileSync('uv',
-    ['run', '--no-sync', 'python', 'tests/web/measure_indicator.py'], {
-      input: page, encoding: 'utf8', timeout: 10000, windowsHide: true,
-      env: { ...process.env, QT_QPA_PLATFORM: 'offscreen', QT_QUICK_BACKEND: 'software', QTWEBENGINE_CHROMIUM_FLAGS: '--disable-gpu' },
-    });
-  assert.deepEqual(JSON.parse(result), {
+  assert.deepEqual(measurePage(page), {
     slot: [28, 28], lamps: [[2, 2, 11, 11], [15, 2, 11, 11], [2, 15, 11, 11], [15, 15, 11, 11]],
   });
 });

@@ -1,7 +1,6 @@
 """Two independently owned, non-daemon threads and a single-request HTTP server."""
 
 import json
-import math
 import re
 import socket
 import traceback
@@ -15,7 +14,7 @@ from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.inspection import CameraId
 
 from .hosts import validate_host
-from .publisher import SnapshotPublisher, SnapshotSource
+from .publisher import REFRESH_INTERVAL_MS, SnapshotPublisher, SnapshotSource
 
 _ASSETS = {
     "/": ("observer.html", "text/html; charset=utf-8"),
@@ -183,15 +182,10 @@ class ProductionSnapshotService:
         cameras: tuple[CameraId, ...] | None = None,
         host: str = "127.0.0.1",
         port: int = 8765,
-        interval: float = 0.5,
     ) -> None:
         if type(port) is not int or not 0 <= port <= 65535:
             raise ValueError("Invalid Web port")
-        if not math.isfinite(interval) or interval <= 0:
-            raise ValueError("Publication interval must be finite and positive")
-        self.publisher = SnapshotPublisher(
-            source, frames, cameras, refresh_interval_ms=interval * 1000
-        )
+        self.publisher = SnapshotPublisher(source, frames, cameras)
         self.host = validate_host(host)
         self.assets = {
             route: (
@@ -200,7 +194,7 @@ class ProductionSnapshotService:
             )
             for route, (name, content_type) in _ASSETS.items()
         }
-        self.port, self.interval = port, interval
+        self.port = port
         self.stopping = Event()
         self._server: _Server | None = None
         self._threads: tuple[Thread, ...] = ()
@@ -237,7 +231,7 @@ class ProductionSnapshotService:
                 self.publisher.failed(exc)
                 traceback.print_exception(exc)
             # No queued/catch-up observations, including when encoding is slow.
-            self.stopping.wait(self.interval)
+            self.stopping.wait(REFRESH_INTERVAL_MS / 1000)
 
     def _http_loop(self) -> None:
         assert self._server is not None

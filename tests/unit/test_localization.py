@@ -453,6 +453,7 @@ PRIORITY_UI_KEYS = {
     "recipe_delete_protected",
     "recipe_dirty_question",
     "recipe_min_mask_area",
+    "recipe_min_area",
     "recipe_preparing_short",
     "recipe_product_code",
     "recipe_reprepare",
@@ -489,7 +490,7 @@ PRIORITY_UI_KEYS = {
     "records_uncertain",
     "records_unresolved",
     "report_cancelled",
-    "report_export",
+    "records_entire_batch",
     "report_failed",
     "report_inspected",
     "report_interrupted",
@@ -753,6 +754,7 @@ RECIPE_WORKFLOW_KEYS = {
     "recipe_delete_protected",
     "recipe_dirty_question",
     "recipe_min_mask_area",
+    "recipe_min_area",
     "recipe_preparing_short",
     "recipe_product_code",
     "recipe_reprepare",
@@ -950,7 +952,7 @@ RECORDS_WORKFLOW_KEYS = {
     "records_uncertain",
     "records_unresolved",
     "report_cancelled",
-    "report_export",
+    "records_entire_batch",
     "report_failed",
     "report_inspected",
     "report_interrupted",
@@ -1023,11 +1025,11 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 740
+    assert len(maintained) == 741
     assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
-        (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 61),
+        (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 62),
         (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 155),
     )
     covered: set[str] = set()
@@ -1054,6 +1056,7 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
 
 def test_recipe_terms_keep_preview_preparation_and_application_distinct() -> None:
     for language in LANGUAGES:
+        assert text("recipe_min_area", language).endswith(" · px²")
         for keys in (
             (
                 "active_recipe",
@@ -1197,7 +1200,6 @@ COMPACT_KEYS = (
     "short_code",
     "short_reporting",
     "short_timeout",
-    "short_refresh",
     "short_words",
     "short_time",
 )
@@ -1478,7 +1480,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 907
+    assert len(STRINGS) == 908
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (
@@ -1759,6 +1761,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
     essential = {
         *COMPACT_KEYS,
         *WATCH_SHORT_KEYS,
+        "short_refresh",
         "comm_watch_short",
         "page_production",
         "page_recipe",
@@ -2002,7 +2005,6 @@ def test_compact_captions_preserve_full_context_resources() -> None:
                 "product_code",
                 "plc_reporting",
                 "comm_timeout",
-                "web_refresh",
                 "comm_count",
                 "history_time",
             ),

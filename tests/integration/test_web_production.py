@@ -43,9 +43,7 @@ def test_stop_restart_and_close_keep_web_independent_of_production(
 ) -> None:
     original_threads = {thread.ident for thread in threads()}
     with normal_replay(tmp_path) as (startup, window, engines):
-        service = ProductionSnapshotService(
-            startup.application, startup.frames, port=0, interval=0.02
-        )
+        service = ProductionSnapshotService(startup.application, startup.frames, port=0)
         service.start()
         try:
             for generation in (1, 2):
@@ -119,7 +117,6 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
                 startup.frames,
                 host=value.host,
                 port=value.port,
-                interval=value.interval_ms / 1000,
             )
         )
         window.bind_web_runtime(runtime)
@@ -180,11 +177,11 @@ def test_runtime_restart_during_inspection_preserves_production_and_reporting(
         )
 
 
-@pytest.mark.parametrize("interval_ms", [None, 500, 1000, 2000])
+@pytest.mark.parametrize("enabled", [False, True])
 def test_saved_web_restoration_uses_effective_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    interval_ms: int | None,
+    enabled: bool,
 ) -> None:
     services: list[ProductionSnapshotService] = []
 
@@ -198,9 +195,7 @@ def test_saved_web_restoration_uses_effective_settings(
     with socket.socket() as available:
         available.bind(("127.0.0.1", 0))
         port = available.getsockname()[1]
-    settings = WebPreferences(
-        enabled=interval_ms is not None, port=port, interval_ms=interval_ms or 500
-    )
+    settings = WebPreferences(enabled=enabled, port=port)
     save_communication_preferences(
         data.communication, CommunicationPreferences(web=settings)
     )
@@ -210,7 +205,7 @@ def test_saved_web_restoration_uses_effective_settings(
     try:
         with pytest.raises(AuthorizationError):
             runtime.stop()
-        if interval_ms is None:
+        if not enabled:
             assert runtime.restoration is None
             assert runtime.snapshot().state is WebState.STOPPED
             assert not runtime.snapshot().owned
@@ -221,9 +216,7 @@ def test_saved_web_restoration_uses_effective_settings(
             assert snapshot.state is WebState.RUNNING and snapshot.owned
             assert snapshot.configuration == settings
             (service,) = services
-            assert service.interval == interval_ms / 1000
             assert service.http_alive and service.publisher_alive
-            assert service.publisher.refresh_interval_ms == interval_ms
             deadline = monotonic() + WAIT
             while service.publisher.latest() is None:
                 assert monotonic() < deadline, service.publisher.error()
@@ -236,7 +229,7 @@ def test_saved_web_restoration_uses_effective_settings(
                 metadata = json.loads(response.read())
             finally:
                 connection.close()
-            assert metadata["refresh_interval_ms"] == interval_ms
+            assert metadata["refresh_interval_ms"] == 500
             assert metadata["publisher_id"] == service.publisher.publisher_id
     finally:
         runtime.request_close()
@@ -337,16 +330,17 @@ def test_occupied_web_port_does_not_prevent_normal_startup(
             close_window(window)
 
 
-def test_invalid_saved_interval_recovers_without_silent_overwrite(
+def test_obsolete_web_interval_is_rejected_without_overwriting_saved_settings(
     tmp_path: Path,
 ) -> None:
     path = ApplicationData.at_entry(tmp_path).communication
     path.parent.mkdir(parents=True, exist_ok=True)
-    raw = json.dumps({"web": {"interval_ms": 100}})
+    raw = json.dumps({"web": {"enabled": True, "interval_ms": 2000}})
     path.write_text(raw, encoding="utf-8")
     startup = load_startup(ApplicationData.at_entry(tmp_path))
     try:
-        assert not startup.communication.web.enabled and startup.communication_error
+        assert not startup.communication.web.enabled
+        assert "Unknown web fields: ['interval_ms']" in startup.communication_error
         assert path.read_text(encoding="utf-8") == raw
     finally:
         startup.application.close().result(5)

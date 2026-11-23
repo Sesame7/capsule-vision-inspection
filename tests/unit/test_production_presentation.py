@@ -12,6 +12,7 @@ from tests.support.production import source_frame
 
 from capsule_vision.application import (
     ApplicationState,
+    ModelPreparationSnapshot,
     ProductionApplicationSnapshot,
     ProductionCounters,
     StartBlocker,
@@ -167,15 +168,22 @@ def test_controls(
     reset: bool,
     batch: bool,
 ) -> None:
-    result = controls(snapshot(state))
+    result = controls(snapshot(state), ModelPreparationSnapshot())
     assert (result.start, result.stop, result.reset, result.batch) == (
         start,
         stop,
         reset,
         batch,
     )
+
+
+@pytest.mark.parametrize(
+    "runtime, preparation", [(True, False), (False, True), (True, True)]
+)
+def test_fault_reset_waits_for_both_owners(runtime: bool, preparation: bool) -> None:
+    fault = replace(snapshot(ApplicationState.FAULT), runtime_owned=runtime)
     assert not controls(
-        replace(snapshot(ApplicationState.FAULT), runtime_owned=True)
+        fault, ModelPreparationSnapshot(owns_resources=preparation)
     ).reset
 
 

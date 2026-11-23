@@ -361,6 +361,11 @@ class RecipePage(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
         self._label_flow = _LabelFlow(self.label_choices)
+        area_caption = QLabel(self.label_choices)
+        area_caption.setProperty("role", "secondary")
+        area_caption.setMinimumHeight(Style.touch)
+        self.labels["recipe_min_area"] = area_caption
+        self._label_flow.addWidget(area_caption)
         model_layout.addWidget(self.label_choices)
         self.label_choices.hide()
         inspection = QVBoxLayout(self.inspection_section)
@@ -1410,7 +1415,8 @@ class RecipePage(QWidget):
 
     def _clear_label_choices(self) -> None:
         self._labels_model = None
-        while (item := self._label_flow.takeAt(0)) is not None:
+        # The first item is the shared caption. Only the label/input pairs change.
+        while (item := self._label_flow.takeAt(1)) is not None:
             widget = item.widget()
             if widget is not None:
                 widget.hide()

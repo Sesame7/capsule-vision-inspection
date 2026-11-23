@@ -848,7 +848,11 @@ def test_startup_source_error_visible_before_engine_creation(
         window.buttons["operation"].click()
         until(lambda: "CAM5" in window.event_label.text())
         assert app.snapshot().state is ApplicationState.READY
-        assert text("source_error", window.language) in window.event_label.text()
+        assert (
+            window.event_label.text()
+            == f"CAM5 · {text('source_error', window.language)}"
+        )
+        assert "FolderSourceError" in window.event_label.accessibleDescription()
         assert not engine.calls and app.snapshot().counters == ProductionCounters()
     finally:
         window.close()
@@ -2205,7 +2209,7 @@ def test_vision_feedback_is_page_scoped_and_cannot_hide_application_fault(
         window.snapshot = replace(original, state=ApplicationState.FAULT)
         window.recipe_page.setup_changed.emit()
         assert window.event_label.accessibleName() == text(
-            "runtime_error", window.language
+            "operation_error", window.language
         )
         assert "rejected" not in window.event_label.toolTip()
     finally:

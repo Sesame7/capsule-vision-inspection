@@ -523,8 +523,12 @@ def test_fault_reset_is_operator_only_and_close_remains_available(
     screen.bridge.refresh()
     login(screen, Role.GUEST)
     assert not screen.buttons["secondary"].isEnabled()
+    reset_help = text("fault_reset_available", screen.language)
+    assert reset_help not in screen.event_label.toolTip()
+    assert screen.buttons["operation"].toolTip() == text("FAULT", screen.language)
     login(screen, Role.OPERATOR)
     assert screen.buttons["secondary"].isEnabled()
+    assert reset_help in screen.event_label.accessibleDescription()
     screen.buttons["secondary"].click()
     assert app.snapshot().state is ApplicationState.READY
 

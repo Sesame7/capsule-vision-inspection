@@ -7,6 +7,7 @@ import pytest
 from capsule_vision.application import (
     ApplicationState,
     ApplicationStateError,
+    ModelPreparationSnapshot,
     ProductionApplicationSnapshot,
     ProductionCounters,
 )
@@ -165,4 +166,7 @@ def test_fixed_player_actions_keep_unsupported_pause_disabled(
     snapshot = ProductionApplicationSnapshot(
         state, 1, None, None, None, ProductionCounters(), None, False, None
     )
-    assert tuple(production_actions(snapshot, replay).values()) == expected
+    assert (
+        tuple(production_actions(snapshot, ModelPreparationSnapshot(), replay).values())
+        == expected
+    )

@@ -45,7 +45,6 @@ def service(settings: WebPreferences) -> ProductionSnapshotService:
         LatestDisplayFrameStore((CameraId("CAM1"),)),
         host=settings.host,
         port=settings.port,
-        interval=settings.interval_ms / 1000,
     )
 
 
@@ -128,11 +127,11 @@ def test_actual_restart_changes_identity_releases_socket_and_restores_old_bind()
 ):
     before = {t.ident for t in threads()}
     first = WebPreferences(port=free_port())
-    second = replace(first, port=free_port(), interval_ms=1000)
     runtime = WebRuntime(service)
     try:
         assert runtime.start(first).result(5).state is WebState.RUNNING
         old_id = publisher_id(first.port)
+        second = replace(first, port=free_port())
         assert runtime.apply(second).result(5).configuration == second
         with socket.socket() as probe:
             probe.bind((first.host, first.port))  # Old listener really released.

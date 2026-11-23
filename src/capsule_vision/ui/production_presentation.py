@@ -6,6 +6,7 @@ from enum import Enum, auto
 
 from capsule_vision.application import (
     ApplicationState,
+    ModelPreparationSnapshot,
     ProductionApplicationSnapshot,
     StartBlocker,
 )
@@ -67,7 +68,7 @@ def start_hint(
         return {
             ApplicationState.STARTING: "state_STARTING",
             ApplicationState.STOPPING: "state_STOPPING",
-            ApplicationState.FAULT: "fault_note",
+            ApplicationState.FAULT: "FAULT",
             ApplicationState.CLOSED: "CLOSED",
         }.get(snapshot.state)
     if blocker is not None:
@@ -85,21 +86,27 @@ class Controls:
     batch: bool
 
 
-def controls(snapshot: ProductionApplicationSnapshot) -> Controls:
+def controls(
+    snapshot: ProductionApplicationSnapshot, preparation: ModelPreparationSnapshot
+) -> Controls:
     state = snapshot.state
     return Controls(
         snapshot.start_blocker is None,
         state in (ApplicationState.STARTING, ApplicationState.RUNNING),
-        state is ApplicationState.FAULT and not snapshot.runtime_owned,
+        state is ApplicationState.FAULT
+        and not snapshot.runtime_owned
+        and not preparation.owns_resources,
         state is ApplicationState.READY,
     )
 
 
 def production_actions(
-    snapshot: ProductionApplicationSnapshot, replay: SourceControlState | None = None
+    snapshot: ProductionApplicationSnapshot,
+    preparation: ModelPreparationSnapshot,
+    replay: SourceControlState | None = None,
 ) -> dict[str, str | None]:
     """Fixed player positions; None replay means pause/step are unsupported."""
-    available = controls(snapshot)
+    available = controls(snapshot, preparation)
     state = snapshot.state
     running = state is ApplicationState.RUNNING
     return {

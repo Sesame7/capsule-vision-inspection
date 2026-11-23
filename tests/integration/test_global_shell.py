@@ -1,6 +1,7 @@
 """Shared navigation/status contracts, with existing controlled sessions and fake engines."""
 
 from dataclasses import replace
+from threading import Event
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
@@ -12,13 +13,14 @@ from PySide6.QtWidgets import (
     QStyleOption,
     QStyleOptionComboBox,
     QStylePainter,
+    QToolTip,
     QWidget,
 )
-from tests.support.application import FakeSession, production
+from tests.support.application import WAIT, FakeSession, production
 from tests.support.qt import delete_widget, ensure_test_fonts, until
 from tests.support.qt import screen as screen
 
-from capsule_vision.application import ApplicationState
+from capsule_vision.application import ApplicationError, ApplicationState
 from capsule_vision.application.alarm_monitor import AlarmSnapshot
 from capsule_vision.application.folder_replay import FolderSourceError
 from capsule_vision.application.identity_models import AuthorizationError
@@ -262,7 +264,7 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
             ):
                 observed[0] = WebRuntimeSnapshot(
                     state=state,
-                    configuration=WebPreferences(port=8876, interval_ms=1000),
+                    configuration=WebPreferences(port=8876),
                     url="http://127.0.0.1:8876/",
                     error="bind failed" if state is WebState.FAILED else "",
                 )
@@ -734,18 +736,99 @@ def test_latest_technical_evidence_is_global_and_historical_counts_do_not_warn(
         assert window.bridge.application.snapshot() == healthy
 
 
-@pytest.mark.parametrize("language", ["zh", "en"])
+def test_failed_start_shows_its_stage_after_safe_settlement(
+    screen: tuple[MainWindow, FakeSession],
+) -> None:
+    window, session = screen
+    language = window.language
+    window.bridge.start()
+    until(session.start_entered.is_set)
+    session.ready.set_exception(ValueError("private startup details"))
+    until(lambda: "ApplicationError" in window.event_label.toolTip())
+    assert window.snapshot.state is ApplicationState.READY
+    assert window.snapshot.last_issue and window.snapshot.last_issue.stage == "startup"
+    assert (
+        window.state_label.text()
+        == window.event_frame.state.text()
+        == text("READY", language)
+    )
+    assert (
+        window.event_label.text()
+        == window.event_label.accessibleName()
+        == text("startup_error", language)
+    )
+    assert "ValueError" in window.event_label.accessibleDescription()
+    assert "private" not in window.event_label.toolTip()
+    assert text("fault_reset_available", language) not in window.event_label.toolTip()
+    # A new denied command has its own feedback even with the startup issue on record.
+    window.bridge.command_failed.emit("start", AuthorizationError("Operator required"))
+    assert window.event_label.text() == text("permission_operator", language)
+    window.bridge.command_failed.emit("start", TypeError("separate admission error"))
+    assert "TypeError" in window.event_label.toolTip()
+    assert "ValueError" not in window.event_label.toolTip()
+
+
+def test_settled_stop_failure_cannot_reappear_after_an_observed_reset(
+    screen: tuple[MainWindow, FakeSession],
+) -> None:
+    window, session = screen
+    bridge = window.bridge
+    session.ready.set_result(None)
+    bridge.start()
+    until(lambda: window.snapshot.state is ApplicationState.RUNNING)
+    session.failure = RuntimeError("controlled stop failure")
+    session.join_gate = Event()
+    try:
+        bridge.stop()
+        until(session.join_entered.is_set)
+        stopped = bridge.application.stop()  # Same in-flight Stop.
+    finally:
+        session.join_gate.set()
+    assert isinstance(stopped.exception(WAIT), ApplicationError)
+    # Observe settlement and Reset before Qt delivers the queued Stop result.
+    bridge.refresh()
+    assert window.snapshot.state is ApplicationState.FAULT
+    bridge.reset()
+    assert window.snapshot.state is ApplicationState.READY
+    QApplication.processEvents()
+    assert not window.event_label.toolTip()
+    bridge.start()  # This new request receives the fixture's already finished session.
+    until(lambda: "ApplicationError" in window.event_label.accessibleDescription())
+    assert window.event_label.text() == text("startup_error", window.language)
+
+
+@pytest.mark.parametrize("language", ["zh", "en", "de"])
 def test_fault_and_authoritative_reset_across_pages(
     screen: tuple[MainWindow, FakeSession],
     language: Language,
 ) -> None:
     window, session = screen
     window.set_language(language)
+    bar = window.event_frame
+    groups = [
+        label.parentWidget()
+        for label in (bar.state, bar.plc, bar.alarm, bar.event_label)
+    ]
+    QApplication.processEvents()
+    geometry = [group.geometry() for group in groups if group is not None]
     session.ready.set_result(None)
     window.bridge.start()
     until(lambda: window.snapshot.state is ApplicationState.RUNNING)
-    session.failure = RuntimeError("private SDK details C:/internal/model.dll")
-    session.finished.set_result(None)
+    session.join_gate = Event()
+    try:
+        session.failure = RuntimeError("private SDK details C:/internal/model.dll")
+        session.finished.set_result(None)
+        until(lambda: window.snapshot.state is ApplicationState.FAULT)
+        assert window.snapshot.runtime_owned
+        assert window.event_label.text() == text("runtime_error", language)
+        assert "RuntimeError" in window.event_label.accessibleDescription()
+        assert not window.buttons["secondary"].isEnabled()
+        assert (
+            text("fault_reset_available", language) not in window.event_label.toolTip()
+        )
+        assert window.buttons["operation"].toolTip() == text("FAULT", language)
+    finally:
+        session.join_gate.set()
     until(
         lambda: (
             window.snapshot.state is ApplicationState.FAULT
@@ -755,23 +838,61 @@ def test_fault_and_authoritative_reset_across_pages(
     window.bridge.command_failed.emit("stop", RuntimeError("old command details"))
     before = window.bridge.application.snapshot()
     assert before.last_issue is not None and before.last_issue.stage == "shutdown"
-    for page in range(5):
+    window.bridge.command_finished.emit("reset")
+    for page in (0, 1, 2, 3, 4, 0):
         window.navigate(page)
-        assert text("shutdown_error", language) in window.event_label.text()
-        assert before.last_issue.exception_type in window.event_label.toolTip()
-        assert window.event_label.accessibleDescription() == text(
-            "fault_reset_available", language
+        QApplication.processEvents()
+        assert bar.state.text() == ("" if page == 0 else text("state_FAULT", language))
+        assert bar.state.accessibleName() == text("state_FAULT", language)
+        assert bar.state_icon.isVisible() and not bar.state_icon.pixmap().isNull()
+        assert bar.state_icon.toolTip() == (
+            text("FAULT", language) if page == 0 else ""
         )
+        if page == 0:
+            assert window.state_label.isVisible()
+            assert window.state_label.text() == text("state_FAULT", language)
+            assert (
+                bar.state_icon.accessibleName() == window.state_label.accessibleName()
+            )
+        assert (
+            window.event_label.text()
+            == window.event_label.accessibleName()
+            == text("shutdown_error", language)
+        )
+        assert (
+            before.last_issue.exception_type
+            in window.event_label.accessibleDescription()
+        )
+        assert text("fault_reset_available", language) in window.event_label.toolTip()
         assert "private" not in window.event_label.toolTip()
         assert window.event_icon.isVisible()
         assert Style.fault in window.event_label.styleSheet()
         assert window.bridge.application.snapshot() == before
+        assert [group.geometry() for group in groups if group is not None] == geometry
     # Reset through the application, not a synthetic successful command signal.
+    window.bridge.command_failed.emit("batch", AuthorizationError("other operation"))
+    QToolTip.showText(
+        bar.state_icon.mapToGlobal(bar.state_icon.rect().center()),
+        bar.state_icon.toolTip(),
+        bar.state_icon,
+    )
+    assert QToolTip.isVisible()
     window.bridge.application.reset_fault()
     until(lambda: window.snapshot.state is ApplicationState.READY)
+    until(lambda: not QToolTip.isVisible(), timeout_ms=1500)
     for page in range(5):
         window.navigate(page)
-        assert not window.event_label.text() and not window.event_icon.isVisible()
+        assert (
+            bar.state.text() == text("READY", language) and not bar.state_icon.toolTip()
+        )
+        assert window.event_label.text() == (
+            text("permission_operator", language) if page == 0 else ""
+        )
+        assert window.event_icon.isVisible() == (page == 0)
+        assert (
+            text("fault_reset_available", language) not in window.event_label.toolTip()
+        )
+        assert before.last_issue.exception_type not in window.event_label.toolTip()
     assert window.bridge.application.snapshot().counters == before.counters
 
 

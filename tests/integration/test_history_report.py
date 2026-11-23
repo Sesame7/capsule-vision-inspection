@@ -179,8 +179,17 @@ def test_direct_pdf_freezes_selected_ng_batch_and_language(
         until(lambda: ng.selected_capsule is not None and action.isEnabled())
         assert ng.selected_capsule and ng.selected_capsule.key.run == "visible-run"
         assert action.request == ReportRequest("defects", batch=lot.uuid)
+        assert action.text() == "PDF" and not action.icon().isNull()
+        for description in (action.accessibleName(), action.toolTip()):
+            assert text("customer_defects", language) in description
+            assert text("records_entire_batch", language) in description
+            assert (
+                lot.label in description and today.date().isoformat() not in description
+            )
         ng.table.clearSelection()
         assert not action.isEnabled()
+        assert text("customer_defects", language) in action.accessibleName()
+        assert action.accessibleDescription() == text("unavailable", language)
         ng.table.selectRow(0)
         until(action.isEnabled)
         action.click()
@@ -207,8 +216,14 @@ def test_direct_pdf_freezes_selected_ng_batch_and_language(
         ng.table.setCurrentItem(ng.table.findItems("90", Qt.MatchFlag.MatchExactly)[0])
         assert ng.selected_capsule is not None and not ng.selected_capsule.batch_uuid
         assert action.isVisible() and not action.isEnabled()
+        assert action.accessibleDescription() == text(
+            "records_no_batch", window.language
+        )
         tabs.setCurrentWidget(window.batches_page)
         until(action.isEnabled)
+        assert window.batches_page.selected_batch
+        assert text("customer_batch", window.language) in action.accessibleName()
+        assert window.batches_page.selected_batch[1] in action.toolTip()
         action.click()
         choose_file(action, None)
         assert action.chooser is None and action.isEnabled()
