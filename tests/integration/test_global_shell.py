@@ -453,7 +453,12 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
             assert window.navbar.rect().contains(
                 QRect(button.mapTo(window.navbar, QPoint()), button.size())
             ), language
-            assert button.accessibleName() == button.toolTip() == text(key, language)
+            destination = "nav_connections" if key == "page_communication" else key
+            assert (
+                button.accessibleName()
+                == button.toolTip()
+                == text(destination, language)
+            )
             assert button.property("iconAlignment") == "center"
         assert window.navbar.rect().contains(
             QRect(

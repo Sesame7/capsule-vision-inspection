@@ -182,13 +182,13 @@ def set_button_caption(button: QPushButton, caption: str, width: int) -> None:
     button.setAccessibleName(caption)
 
 
-def set_service_title(icon: QLabel, title: QLabel, kind: str) -> None:
+def set_service_title(icon: QLabel, title: QLabel, symbol: str | QIcon) -> None:
     """Refresh service icons without changing the page-owned title slots."""
     title.ensurePolished()
     icon.setFixedSize(Style.icon, Style.icon)
-    icon.setPixmap(
-        shell_icon(kind, theme_colors(title).secondary).pixmap(Style.icon, Style.icon)
-    )
+    if isinstance(symbol, str):
+        symbol = shell_icon(symbol, theme_colors(title).secondary)
+    icon.setPixmap(symbol.pixmap(Style.icon, Style.icon))
 
 
 def set_service_status(
@@ -356,7 +356,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QPushButton#start:pressed {{ background: #4265de; }}
     QPushButton#start:disabled {{ background: {c.raised}; color: {c.secondary}; border-color: {c.border}; }}
     QFrame#navigation QPushButton {{ border: none; background: transparent; padding: 6px 10px; }}
-    QFrame#navigation QPushButton[iconAlignment="center"] {{ text-align: center; padding: 6px 4px; }}
+    QFrame#navigation QPushButton[iconAlignment="center"] {{ text-align: center; padding: 6px 2px; }}
     QFrame#navigation QPushButton, QFrame#navigation QComboBox {{ font-family: {nav_fonts}; }}
     QFrame#navigation QPushButton:hover {{ background: {c.raised}; }}
     QFrame#navigation QPushButton:pressed {{ background: {c.selected}; }}

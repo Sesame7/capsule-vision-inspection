@@ -837,6 +837,25 @@ def test_service_header_alignment_survives_language_theme_and_resize(
                 if slots is None:
                     slots = local
                 assert local == slots, (language, theme)
+                title, icon = page.diagnostics_title, page.diagnostics_icon
+                assert (
+                    title.text()
+                    == title.accessibleName()
+                    == text("comm_diagnostics", language)
+                )
+                assert (
+                    icon.size() == reporting.title_icon.size()
+                    and not icon.pixmap().isNull()
+                )
+                assert (
+                    title.x() == reporting.title.x()
+                    and icon.x() == reporting.title_icon.x()
+                )
+                assert (
+                    abs(title.geometry().center().y() - icon.geometry().center().y())
+                    <= 1
+                )
+                assert title.font() == reporting.title.font()
                 for card, dot, status, action in groups:
                     assert dot.x() - card.title.geometry().right() == Style.small + 1
                     assert dot.size().toTuple() == (8, 8)
@@ -1258,8 +1277,10 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
     page.destination[1].setValue(7)
     page.web_panel.port.setValue(8766)
     assert not startup.data.communication.exists()
+    assert page.preferences_status.text() == text("unsaved", window.language)
     page.save_settings.click()
     until(lambda: not page.busy)
+    assert page.preferences_status.text() == text("saved", window.language)
     saved = load_communication_preferences(startup.data.communication)
     assert (
         saved.reporting.enabled
@@ -1294,6 +1315,7 @@ def test_explicit_save_restart_independent_endpoints_and_no_live_state(
         assert restored_panel.controller.reporting_selection() == saved.reporting
         assert restored_panel.controller.reporting_snapshot() is None
         assert second.communication.port.value() == 19602
+        assert not second.communication.preferences_status.text()
         assert second.communication.web_panel.preferences() == saved.web
         assert not second.communication.web_panel.available
         assert second.communication.last_response is None

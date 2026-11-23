@@ -1025,7 +1025,7 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 741
+    assert len(maintained) == 742
     assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
@@ -1173,7 +1173,6 @@ def test_identity_regional_catalogs_preserve_independent_terms_and_scripts() -> 
 
 # These tokens may inherit canonical English; native overrides remain explicit.
 TECHNICAL_TOKEN_KEYS = {
-    "nav_plc",
     "production_ok",
     "production_ng",
     "production_empty",
@@ -2017,28 +2016,38 @@ def test_compact_captions_preserve_full_context_resources() -> None:
                 assert compact in EXTRA_STRINGS[language]
 
 
-def test_navigation_has_native_short_captions_and_one_protocol_identifier() -> None:
-    keys = ("nav_inspect", "page_recipe", "nav_plc", "nav_records", "nav_cameras")
+def test_navigation_has_native_captions_and_matching_recovery_directions() -> None:
+    keys = (
+        "nav_inspect",
+        "page_recipe",
+        "nav_connections",
+        "nav_records",
+        "nav_cameras",
+    )
     assert tuple(text(key, "zh") for key in keys) == (
         "检测",
         "配方",
-        "PLC",
+        "连接",
         "记录",
         "相机",
     )
     assert tuple(text(key, "en") for key in keys) == (
         "Inspect",
         "Recipe",
-        "PLC",
+        "Connections",
         "Records",
         "Cameras",
     )
     for language in LANGUAGES:
         captions = tuple(text(key, language) for key in keys)
-        assert len(set(captions)) == 5 and captions[2] == "PLC"
+        assert len(set(captions)) == 5 and captions[2] != "PLC"
+        assert captions[2] in text("startup_communication", language)
         assert all(caption.strip() and "…" not in caption for caption in captions)
         if language not in ("zh", "en"):
-            assert set(keys) - {"nav_plc"} <= EXTRA_STRINGS[language].keys()
+            assert set(keys) <= EXTRA_STRINGS[language].keys()
+    assert text("nav_connections", "de") == "Verbindungen"
+    assert text("nav_connections", "hi") == "कनेक्शन"
+    assert text("nav_connections", "zh-TW") == "連線"
     assert text("nav_records", "zh-TW") == "紀錄"
     assert text("nav_records", "pt-BR") == "Registros"
     assert text("nav_records", "pt-PT") == "Registos"

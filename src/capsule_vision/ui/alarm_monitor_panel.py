@@ -419,9 +419,14 @@ class AlarmMonitorPanel(QFrame):
         self.refresh_preview.setIcon(image_icon("refresh", colors.primary))
         self.refresh_preview.setIconSize(QSize(Style.icon, Style.icon))
         self.refresh_preview.setVisible(offline and self.expand.isChecked())
-        detail = text("alarm_preview", language) if offline else ""
-        if offline and definitions is None and not issue:
-            detail += " · " + text("alarm_preview_waiting", language)
+        detail = ""
+        preview_failed = offline and bool(issue) and not self.expand.isChecked()
+        if preview_failed:
+            detail = text("alarm_preview_failed", language)
+        elif offline and (self.expand.isChecked() or definitions is not None):
+            detail = text("alarm_preview", language)
+            if definitions is None and not issue:
+                detail += " · " + text("alarm_preview_waiting", language)
         elif not offline and snapshot.observed_at is not None:
             detail = (
                 text("comm_last_read", language)
@@ -434,7 +439,9 @@ class AlarmMonitorPanel(QFrame):
             )
         self.observation.setText(detail)
         self.observation.setVisible(bool(detail))
-        self.observation.setStyleSheet(f"color: {colors.secondary};")
+        self.observation.setStyleSheet(
+            f"color: {colors.warning if preview_failed else colors.secondary};"
+        )
         stale = not offline and snapshot.raw_word is not None and not snapshot.read_ok
         evidence = (
             text("alarm_stale_values", language)

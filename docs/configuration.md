@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 741 maintained keys across 64 locales. This includes
+Qt interface covers 742 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -582,7 +582,7 @@ image paths.
 ## Communication preferences
 
 `data/communication.json` is independent from `app.json`, Recipes, MachineLayout
-and CameraSources. Communication's explicit **Save settings** atomically replaces
+and CameraSources. **Save settings** on Connections atomically replaces
 this file (same-directory temporary write, fsync, replace). A successful Save
 applies a changed auxiliary status-service selection. Other network/reporting fields keep
 their existing activation boundaries. The Web header's power action
@@ -818,7 +818,7 @@ unavailable adapter addresses; actual service startup checks local assignment an
 subnet validity. There is no DNS, wildcard fallback or automatic IP substitution.
 
 A missing file leaves reporting and Web disabled, without blocking valid
-Production startup or creating a file. Communication shows **Defaults · not saved**;
+Production startup or creating a file. Connections shows **Defaults · not saved**;
 reporting initially selects `four_cycle`, FINS/TCP and W49, disabled. Diagnostics
 also initially uses FINS/TCP at 127.0.0.1:9600 with a one-second timeout, as does
 the reporting endpoint. Explicit engineering launchers retain their per-cycle

@@ -124,6 +124,22 @@ def test_signal_section_disclosure_layout_and_freshness(
         observed_at=1770000000,
     )
     try:
+        assert panel.status.text() == text("service_off", language)
+        assert panel.observation.isHidden()
+        panel.expand.click()
+        assert text("alarm_preview_waiting", language) in panel.observation.text()
+        panel.expand.click()
+        panel.set_preview(None, "unreadable definitions")
+        assert panel.observation.isVisible()
+        assert panel.observation.text() == text("alarm_preview_failed", language)
+        panel.expand.click()
+        assert panel.evidence_status.isVisible()
+        assert panel.evidence_status.text() == text("alarm_preview_failed", language)
+        panel.expand.click()
+        panel.set_preview(definitions)
+        assert panel.observation.isVisible() and panel.observation.text() == text(
+            "alarm_preview", language
+        )
         panel.set_snapshot(snapshot)
         QApplication.processEvents()
         assert panel.applied_target.isHidden()

@@ -1610,10 +1610,12 @@ explicit and is not evidence that an edited preference was saved or applied.
 
 The main window title is `Capsule Vision Inspection` on every page. The five
 existing destinations (Production, Recipe, Communication, History and Vision)
-use the visible English captions Inspect, Recipe, PLC, Records and Cameras.
+use the visible English captions Inspect, Recipe, Connections, Records and Cameras.
+Connections (连接 in Simplified Chinese) uses its full localized name on the
+button, in its tooltip and for assistive technology.
 Each page button centers its icon and localized caption together. The five
-slots use the same widths on both workstation profiles, ranging from 116 to
-132 logical pixels. Changing page, language or account preserves their
+slots use the same widths on both workstation profiles, ranging from 110 to
+142 logical pixels. Changing page, language or account preserves their
 positions. Extra window width goes into the gap before the right-aligned
 user, theme and native language controls. Exceptionally long captions elide
 when painted. Accessibility retains the full caption and localized destination,
@@ -1818,7 +1820,7 @@ Normal startup owns a Qt-independent `WebRuntime` control thread and at most one
 Web publisher/serial HTTP pair. Production Stop/Start leaves Web independent.
 Missing communication preferences leave Web and PLC reporting disabled; valid
 saved settings restore independently of camera source mode.
-Communication's header power action persists only Web enablement, then starts or
+On Connections, the Web header power action persists only Web enablement, then starts or
 stops using saved network settings. When the running configuration differs, the
 conditional action restarts Web with enabled saved settings or stops it with a
 saved disabled selection. Drafts never become runtime inputs implicitly. Admission

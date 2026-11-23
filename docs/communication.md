@@ -204,7 +204,7 @@ access control.
 
 ## PLC group reporting
 
-Communication → Reporting has a compact **Merge** dropdown (Chinese
+Connections → Reporting has a compact **Merge** dropdown (Chinese
 “合并”) with numeric values 0–8. Only **0** (per-cycle reporting, no merge), **1** (single-cycle PLC group) and
 **4** (four-cycle merge) are selectable; the other numbers are visibly disabled, with
 unsupported status in their tooltip/accessibility rather than repeated suffixes.
@@ -218,7 +218,7 @@ action on the right. Mode edits
 remain drafts until Save; Discard restores the saved selection. A new normal
 installation selects four_cycle, FINS/TCP and W49, with reporting disabled.
 Engineer/Administrator explicitly saves the next-Start selection. Loading reporting
-settings, opening Communication and Start warm-up issue no reporting requests.
+settings, opening Connections and Start warm-up issue no reporting requests.
 An independently enabled [status service](#plc-status-service-and-alarm-monitoring) may already be writing heartbeat/FAULT and reading alarms. Disabled reporting
 creates no automatic reporting owner: no counter reads, group attribution or result
 writes occur. Inspection and per-Cycle occurrence counters continue normally;
@@ -456,6 +456,8 @@ polarity, translated names and full tooltips. Stale values have one table-level
 notice; there is no current active count from stale evidence. Applied target
 text appears only when the draft differs. Errors remain actionable. Disabled
 service previews use the existing bounded background file job, without PLC I/O.
+With Status off, opening the signal list shows the definition preview. Its count
+or a preview failure stays visible after the list is collapsed.
 The global alarm strip remains an alarm-read observation, independent of
 heartbeat-write success.
 
@@ -554,10 +556,11 @@ service operation. Start, Stop and Apply/Restart also check authorization at
 the Web owner. Normal startup can restore saved enablement while anonymous,
 and Close drains the existing service regardless of role.
 
-The page groups **Reporting**, **Web** and **Diagnostics**
-with a compact, expandable **Status** card. Service headers use consistent
-project-native icons and place actual state indicators/text after their title
-slots, with actions aligned right. The three title slots share a width measured
+Connections groups **Reporting**, **Web**, **Status** and **Diagnostics**.
+All four headers align their project-native icons and titles within each card.
+Diagnostics uses a magnifying glass for manual register operations. Reporting,
+Web and Status place observed state beside their titles and align power actions
+at the right. These three title slots share a width measured
 from the current localized captions and actual Qt fonts, not all languages.
 The budget is recalculated on caption/font changes, never on ordinary service
 observations. Stacked cards align their indicators; side-by-side cards keep the
@@ -617,6 +620,8 @@ Unchanged reporting allows independent Web/diagnostic settings to be saved durin
 Production; changed reporting is rejected while its editing lock applies.
 
 The fixed bottom bar offers Save, confirmed Discard and concise dirty/error status.
+Opening valid saved settings leaves the feedback area clear. An explicit
+successful Save or reload shows **Saved**.
 Discard strictly reloads/validates the actual file, not an earlier page snapshot;
 missing/invalid/unusable settings leave the draft intact with an error tooltip.
 It does not persist, restart/stop any owner or undo earlier network operations.
@@ -669,8 +674,8 @@ HTTP/publisher/socket owner before starting a replacement. Failed binding attemp
 one safe restoration of the previous running configuration. The global feedback
 distinguishes a failed restart with the previous service restored from an
 unavailable service. The attempted configuration remains saved for review.
-Web command admission and preference-write errors remain on the Communication
-page and survive an independent settings Save. A failed restoration stays FAILED.
+Web command admission and preference-write errors remain visible on Connections
+and survive an independent settings Save. A failed restoration stays FAILED.
 Close waits asynchronously for actual Web and diagnostic termination; it does not
 abandon blocked work or claim socket release on timeout. Web errors never fault
 Production. Reporting places actual lifecycle beside its title and keeps its
@@ -715,7 +720,7 @@ extra FINS requests. Rejected writes print no commit event. A trace is not proof
 that the client received its ACK or a PLC scan consumed the result.
 
 For a local manual check, run the simulator separately, select UDP localhost in
-Communication, read D100, enable automatic reporting before Start on valid Folder
+Connections, read D100, enable automatic reporting before Start on valid Folder
 inputs, observe W49/bitmap traces, then End/Stop and close normally. The test suite
 also uses controlled TCP peers to verify negotiation, fragmented/error responses,
 sequence uncertainty, serialization and cleanup without real hardware.

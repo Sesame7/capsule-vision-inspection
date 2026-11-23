@@ -5,7 +5,7 @@ from threading import Event
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QCursor, QFont
+from PySide6.QtGui import QAccessible, QCursor, QFont
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
@@ -77,7 +77,7 @@ def test_localized_slots_stay_still_across_selection_theme_and_identity(
     assert bar.minimumSizeHint().width() <= Style.minimum[0] - 24
     qapp.processEvents()
     initial = tuple(bounds(c, bar) for c in controls)
-    assert tuple(b.width() for b in bar.buttons) == (116, 128, 116, 132, 132)
+    assert tuple(b.width() for b in bar.buttons) == (110, 124, 142, 128, 128)
     assert bar.user.x() - initial[4].right() - 1 >= 2 * Style.small
     for theme in ("light", "dark"):
         apply_theme(bar.window(), theme)
@@ -92,10 +92,13 @@ def test_localized_slots_stay_still_across_selection_theme_and_identity(
                     assert not button.icon().isNull()
                     caption = text(PAGE_CAPTIONS[key], language)
                     assert button.text() == caption
+                    destination = (
+                        "nav_connections" if key == "page_communication" else key
+                    )
                     assert (
                         button.accessibleName()
                         == button.toolTip()
-                        == text(key, language)
+                        == text(destination, language)
                     )
                     assert caption in (
                         button.accessibleName(),
@@ -197,6 +200,17 @@ def test_captions_painted_in_full_or_elided_only_on_overflow(
         original(painter, element, option)
 
     monkeypatch.setattr(QStylePainter, "drawControl", draw)
+    connections = bar.buttons[2]
+    accessible = QAccessible.queryAccessibleInterface(connections)
+    assert accessible is not None
+    for language in LANGUAGES:
+        bar.present(language, "dark", 2)
+        connections.grab()
+        assert (
+            painted[-1]
+            == accessible.text(QAccessible.Text.Name)
+            == text("nav_connections", language)
+        )
     for language in ("zh", "en", "de", "fr", "km", "ms", "fil", "sw"):
         bar.present(language, "dark", 0)
         qapp.processEvents()

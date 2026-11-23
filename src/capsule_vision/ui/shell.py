@@ -24,19 +24,23 @@ from capsule_vision.localization.catalog import text
 
 from .style import Style, Theme, navigation_icon, shell_icon, theme_colors
 
-# Full page names remain the accessible destinations; only the visible captions
-# are shortened. Insertion order is also the existing page stack/group order.
+# The keys are the stable page stack identities, in navigation order.
 PAGE_CAPTIONS = {
     "page_production": "nav_inspect",
     "page_recipe": "page_recipe",
-    "page_communication": "nav_plc",
+    "page_communication": "nav_connections",
     "page_history": "nav_records",
     "page_vision": "nav_cameras",
 }
 PAGES = tuple(PAGE_CAPTIONS)
-# Inspect and PLC fit the 116px base slot. These small allowances fit longer
-# localized captions while leaving a gap before the portrait window's utilities.
-_PAGE_WIDTHS = {"page_recipe": 128, "page_history": 132, "page_vision": 132}
+# Fixed caption budgets leave the remaining width for the gap before the utilities.
+_PAGE_WIDTHS = {
+    "page_production": 110,
+    "page_recipe": 124,
+    "page_communication": 142,
+    "page_history": 128,
+    "page_vision": 128,
+}
 
 
 class ElidedLabel(QLabel):
@@ -274,9 +278,11 @@ class NavigationBar(QFrame):
         # Resolve the inherited stylesheet font before the first width calculation.
         self.ensurePolished()
         for index, (key, button) in enumerate(zip(PAGES, self.buttons, strict=True)):
-            caption, destination = (
-                text(PAGE_CAPTIONS[key], language),
-                text(key, language),
+            caption = text(PAGE_CAPTIONS[key], language)
+            # Connections is the full operator-facing name. The Communication
+            # category also names historical Audit targets independently.
+            destination = (
+                caption if key == "page_communication" else text(key, language)
             )
             button.setText(caption)
             button.setToolTip(destination)

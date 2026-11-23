@@ -132,6 +132,7 @@ from .style import (
     navigation_icon,
     production_icon,
     set_button_caption,
+    set_service_title,
     shell_icon,
     theme_colors,
 )
@@ -284,7 +285,24 @@ class CommunicationPage(QWidget):
             self.alarm_panel.title,
         )
         self._service_title_metrics: tuple[tuple[str, str, int], ...] = ()
-        diagnostics = self._panel(layout, "comm_diagnostics")
+        frame = QFrame()
+        frame.setObjectName("commPanel")
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        layout.addWidget(frame)
+        diagnostics = QVBoxLayout(frame)
+        diagnostics.setContentsMargins(
+            Style.space, Style.space, Style.space, Style.space
+        )
+        diagnostics.setSpacing(Style.small)
+        header = QHBoxLayout()
+        header.setSpacing(Style.small)
+        self.diagnostics_icon = QLabel()
+        self.diagnostics_title = QLabel()
+        self.diagnostics_title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        self._captions.append(("comm_diagnostics", self.diagnostics_title))
+        header.addWidget(self.diagnostics_icon)
+        header.addWidget(self.diagnostics_title, 1)
+        diagnostics.addLayout(header)
         settings = diagnostics
         self._preferences_path: Path | None = None
         self._preferences = CommunicationPreferences()
@@ -523,27 +541,6 @@ class CommunicationPage(QWidget):
         for title in self._service_titles:
             title.installEventFilter(self)
 
-    def _panel(
-        self,
-        parent: QVBoxLayout,
-        title: str,
-        *,
-        stretch: int = 0,
-        header: QWidget | None = None,
-    ) -> QVBoxLayout:
-        frame = QFrame()
-        frame.setObjectName("commPanel")
-        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
-        parent.addWidget(frame, stretch)
-        contents = QVBoxLayout(frame)
-        contents.setContentsMargins(Style.space, Style.space, Style.space, Style.space)
-        contents.setSpacing(Style.small)
-        if header is None:
-            header = self._caption(title)
-            header.setStyleSheet("font-size: 18px; font-weight: 600;")
-        contents.addWidget(header)
-        return contents
-
     def _caption(self, key: str) -> QLabel:
         label = QLabel()
         label.setWordWrap(True)
@@ -621,6 +618,11 @@ class CommunicationPage(QWidget):
 
     def refresh_icons(self) -> None:
         colors = theme_colors(self)
+        set_service_title(
+            self.diagnostics_icon,
+            self.diagnostics_title,
+            image_icon("discover", colors.secondary),
+        )
         for button, tool in (
             (self.watch_editor_button, "plus"),
             (self.watch_add, "apply"),
@@ -958,19 +960,18 @@ class CommunicationPage(QWidget):
             self._closing or self._disposed or self._file_finished is not None
         )
         self.web_panel.refresh()
-        key = self._settings_message or (
-            "comm_settings_dirty"
-            if dirty
-            else "comm_settings_defaults"
-            if self._settings_missing
-            else "comm_settings_saved"
-        )
-        status = text(
-            {"comm_settings_saved": "saved", "comm_settings_dirty": "unsaved"}.get(
-                key, key
-            ),
-            self.language,
-        )
+        key = self._settings_message
+        if key == "comm_settings_saved":
+            key = "saved"
+        elif not key:
+            key = (
+                "unsaved"
+                if dirty
+                else "comm_settings_defaults"
+                if self._settings_missing
+                else ""
+            )
+        status = text(key, self.language) if key else ""
         failed = self._settings_message in (
             "audit_required",
             "comm_settings_failed",
@@ -981,7 +982,7 @@ class CommunicationPage(QWidget):
         detail = self._settings_detail if failed else ""
         if self._web_issue_key:
             web_message = text(self._web_issue_key, self.language)
-            status = " · ".join(dict.fromkeys((web_message, status)))
+            status = " · ".join(dict.fromkeys(filter(None, (web_message, status))))
             detail = "\n".join(filter(None, (detail, self.web_panel.operation_error)))
         self.preferences_status.setText(status)
         self.preferences_status.setToolTip(detail)

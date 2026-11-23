@@ -302,7 +302,7 @@ Record each step, including failures. The first clean cycle should establish:
    parent chain and one expected visible Qt window. Confirm native maximization
    without manually resizing. Record initial visible READY/UNCONFIGURED/FAULT and
    any warnings; do not repair settings to obtain READY.
-3. Visit Production, Recipe, Communication, History and Vision using the top
+3. Visit Inspect, Recipe, Connections, Records and Cameras using the top
    navigation. Observe selected-page transitions and the primary controls:
    player/counters; Recipe model/rules/Save; reporting/Web/diagnostics; History
    filters/table/matrix; Vision source cards/canvas/Save. Empty History or absent
