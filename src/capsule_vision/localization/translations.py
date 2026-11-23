@@ -4,6 +4,9 @@ from .languages import Language
 
 EXTRA_STRINGS: dict[Language, dict[str, str]] = {
     "ja": {
+        "records_sort": "並べ替え",
+        "capsule_filtered": "フィルター除外",
+        "recipe_min_mask_area": "最小マスク面積",
         "previous_capsule": "前のカプセル",
         "next_capsule": "次のカプセル",
         "records_ng_capsules": "NGカプセル",
@@ -743,6 +746,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "エンジニア権限が必要です",
     },
     "ko": {
+        "records_sort": "정렬",
+        "capsule_filtered": "필터로 제외됨",
+        "recipe_min_mask_area": "최소 마스크 면적",
         "previous_capsule": "이전 캡슐",
         "next_capsule": "다음 캡슐",
         "records_ng_capsules": "NG 캡슐",
@@ -1482,6 +1488,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "엔지니어 권한 필요",
     },
     "es": {
+        "records_sort": "Ordenar",
+        "capsule_filtered": "Filtradas",
+        "recipe_min_mask_area": "Área mínima de máscara",
         "previous_capsule": "Cápsula anterior",
         "next_capsule": "Cápsula siguiente",
         "records_ng_capsules": "Cápsulas NG",
@@ -2221,6 +2230,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Se requiere el rol Ingeniero",
     },
     "pt-BR": {
+        "records_sort": "Ordenar",
+        "capsule_filtered": "Filtradas",
+        "recipe_min_mask_area": "Área mínima da máscara",
         "previous_capsule": "Cápsula anterior",
         "next_capsule": "Próxima cápsula",
         "records_ng_capsules": "Cápsulas NG",
@@ -2960,6 +2972,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Requer o papel Engenheiro",
     },
     "it": {
+        "records_sort": "Ordina",
+        "capsule_filtered": "Filtrate",
+        "recipe_min_mask_area": "Area minima della maschera",
         "previous_capsule": "Capsula precedente",
         "next_capsule": "Capsula successiva",
         "records_ng_capsules": "Capsule NG",
@@ -3699,6 +3714,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Richiede il ruolo Ingegnere",
     },
     "id": {
+        "records_sort": "Urutkan",
+        "capsule_filtered": "Tersaring",
+        "recipe_min_mask_area": "Luas masker minimum",
         "previous_capsule": "Kapsul sebelumnya",
         "next_capsule": "Kapsul berikutnya",
         "records_ng_capsules": "Kapsul NG",
@@ -4438,6 +4456,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Perlu peran Insinyur",
     },
     "fr": {
+        "records_sort": "Trier",
+        "capsule_filtered": "Filtrées",
+        "recipe_min_mask_area": "Aire minimale du masque",
         "previous_capsule": "Gélule précédente",
         "next_capsule": "Gélule suivante",
         "records_ng_capsules": "Gélules NG",
@@ -5177,6 +5198,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Rôle Ingénieur requis",
     },
     "de": {
+        "records_sort": "Sortieren",
+        "capsule_filtered": "Gefiltert",
+        "recipe_min_mask_area": "Minimale Maskenfläche",
         "previous_capsule": "Vorherige Kapsel",
         "next_capsule": "Nächste Kapsel",
         "records_ng_capsules": "NG-Kapseln",
@@ -5916,6 +5940,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Rolle Ingenieur erforderlich",
     },
     "ru": {
+        "records_sort": "Сортировка",
+        "capsule_filtered": "Отфильтрованные",
+        "recipe_min_mask_area": "Минимальная площадь маски",
         "previous_capsule": "Предыдущая капсула",
         "next_capsule": "Следующая капсула",
         "records_ng_capsules": "Капсулы NG",
@@ -6655,6 +6682,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Требуется роль «Инженер»",
     },
     "tr": {
+        "records_sort": "Sırala",
+        "capsule_filtered": "Filtrelenenler",
+        "recipe_min_mask_area": "En küçük maske alanı",
         "previous_capsule": "Önceki kapsül",
         "next_capsule": "Sonraki kapsül",
         "records_ng_capsules": "NG kapsüller",
@@ -7394,6 +7424,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Mühendis yetkisi gerekli",
     },
     "zh-TW": {
+        "records_sort": "排序",
+        "capsule_filtered": "已篩除",
+        "recipe_min_mask_area": "最小遮罩面積",
         "previous_capsule": "上一顆膠囊",
         "next_capsule": "下一顆膠囊",
         "records_ng_capsules": "NG 膠囊",
@@ -8136,6 +8169,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "需要工程師權限",
     },
     "nl": {
+        "records_sort": "Sorteren",
+        "capsule_filtered": "Gefilterd",
+        "recipe_min_mask_area": "Minimaal maskeroppervlak",
         "previous_capsule": "Vorige capsule",
         "next_capsule": "Volgende capsule",
         "records_ng_capsules": "NG-capsules",
@@ -8882,6 +8918,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Engineerrechten vereist",
     },
     "pl": {
+        "records_sort": "Sortuj",
+        "capsule_filtered": "Odfiltrowane",
+        "recipe_min_mask_area": "Minimalne pole maski",
         "previous_capsule": "Poprzednia kapsułka",
         "next_capsule": "Następna kapsułka",
         "records_ng_capsules": "Kapsułki NG",
@@ -9628,6 +9667,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Wymagana rola Inżynier",
     },
     "uk": {
+        "records_sort": "Сортування",
+        "capsule_filtered": "Відфільтровані",
+        "recipe_min_mask_area": "Мінімальна площа маски",
         "previous_capsule": "Попередня капсула",
         "next_capsule": "Наступна капсула",
         "records_ng_capsules": "Капсули NG",
@@ -10374,6 +10416,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Вибрати збережений рецепт",
     },
     "ro": {
+        "records_sort": "Sortare",
+        "capsule_filtered": "Filtrate",
+        "recipe_min_mask_area": "Aria minimă a măștii",
         "previous_capsule": "Capsula anterioară",
         "next_capsule": "Capsula următoare",
         "records_ng_capsules": "Capsule NG",
@@ -11120,6 +11165,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selectare rețetă salvată",
     },
     "cs": {
+        "records_sort": "Seřadit",
+        "capsule_filtered": "Odfiltrované",
+        "recipe_min_mask_area": "Minimální plocha masky",
         "previous_capsule": "Předchozí kapsle",
         "next_capsule": "Další kapsle",
         "records_ng_capsules": "NG tobolky",
@@ -11866,6 +11914,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vybrat uloženou recepturu",
     },
     "hu": {
+        "records_sort": "Rendezés",
+        "capsule_filtered": "Kiszűrt",
+        "recipe_min_mask_area": "Minimális maszkterület",
         "previous_capsule": "Előző kapszula",
         "next_capsule": "Következő kapszula",
         "records_ng_capsules": "NG kapszulák",
@@ -12612,6 +12663,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Mentett recept kiválasztása",
     },
     "sv": {
+        "records_sort": "Sortera",
+        "capsule_filtered": "Filtrerade",
+        "recipe_min_mask_area": "Minsta maskarea",
         "previous_capsule": "Föregående kapsel",
         "next_capsule": "Nästa kapsel",
         "records_ng_capsules": "NG-kapslar",
@@ -13358,6 +13412,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Välj sparat recept",
     },
     "da": {
+        "records_sort": "Sortér",
+        "capsule_filtered": "Filtrerede",
+        "recipe_min_mask_area": "Mindste maskeareal",
         "previous_capsule": "Forrige kapsel",
         "next_capsule": "Næste kapsel",
         "records_ng_capsules": "NG-kapsler",
@@ -14104,6 +14161,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vælg gemt recept",
     },
     "fi": {
+        "records_sort": "Lajittele",
+        "capsule_filtered": "Suodatetut",
+        "recipe_min_mask_area": "Maskin vähimmäispinta-ala",
         "previous_capsule": "Edellinen kapseli",
         "next_capsule": "Seuraava kapseli",
         "records_ng_capsules": "NG-kapselit",
@@ -14850,6 +14910,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Valitse tallennettu resepti",
     },
     "nb": {
+        "records_sort": "Sorter",
+        "capsule_filtered": "Filtrerte",
+        "recipe_min_mask_area": "Minste maskeareal",
         "previous_capsule": "Forrige kapsel",
         "next_capsule": "Neste kapsel",
         "records_ng_capsules": "NG-kapsler",
@@ -15596,6 +15659,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Velg lagret oppskrift",
     },
     "sk": {
+        "records_sort": "Zoradiť",
+        "capsule_filtered": "Odfiltrované",
+        "recipe_min_mask_area": "Minimálna plocha masky",
         "previous_capsule": "Predchádzajúca kapsula",
         "next_capsule": "Nasledujúca kapsula",
         "records_ng_capsules": "NG kapsuly",
@@ -16342,6 +16408,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vybrať uloženú receptúru",
     },
     "bg": {
+        "records_sort": "Сортиране",
+        "capsule_filtered": "Филтрирани",
+        "recipe_min_mask_area": "Минимална площ на маската",
         "previous_capsule": "Предишна капсула",
         "next_capsule": "Следваща капсула",
         "records_ng_capsules": "NG капсули",
@@ -17088,6 +17157,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Избор на запазена рецепта",
     },
     "hr": {
+        "records_sort": "Poredaj",
+        "capsule_filtered": "Filtrirane",
+        "recipe_min_mask_area": "Najmanja površina maske",
         "previous_capsule": "Prethodna kapsula",
         "next_capsule": "Sljedeća kapsula",
         "records_ng_capsules": "NG kapsule",
@@ -17834,6 +17906,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Odaberi spremljen recept",
     },
     "sr-Latn": {
+        "records_sort": "Sortiraj",
+        "capsule_filtered": "Filtrirane",
+        "recipe_min_mask_area": "Najmanja površina maske",
         "previous_capsule": "Prethodna kapsula",
         "next_capsule": "Sledeća kapsula",
         "records_ng_capsules": "NG kapsule",
@@ -18580,6 +18655,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Izaberi sačuvan recept",
     },
     "el": {
+        "records_sort": "Ταξινόμηση",
+        "capsule_filtered": "Φιλτραρισμένες",
+        "recipe_min_mask_area": "Ελάχιστο εμβαδόν μάσκας",
         "previous_capsule": "Προηγούμενη κάψουλα",
         "next_capsule": "Επόμενη κάψουλα",
         "records_ng_capsules": "Κάψουλες NG",
@@ -19326,6 +19404,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Επιλογή αποθηκευμένης συνταγής",
     },
     "pt-PT": {
+        "records_sort": "Ordenar",
+        "capsule_filtered": "Filtradas",
+        "recipe_min_mask_area": "Área mínima da máscara",
         "previous_capsule": "Cápsula anterior",
         "next_capsule": "Cápsula seguinte",
         "records_ng_capsules": "Cápsulas NG",
@@ -20072,6 +20153,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selecionar receita guardada",
     },
     "vi": {
+        "records_sort": "Sắp xếp",
+        "capsule_filtered": "Đã lọc",
+        "recipe_min_mask_area": "Diện tích mặt nạ tối thiểu",
         "previous_capsule": "Viên nang trước",
         "next_capsule": "Viên nang tiếp theo",
         "records_ng_capsules": "Viên nang NG",
@@ -20818,6 +20902,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Cần quyền Kỹ sư",
     },
     "ms": {
+        "records_sort": "Isih",
+        "capsule_filtered": "Ditapis",
+        "recipe_min_mask_area": "Luas topeng minimum",
         "previous_capsule": "Kapsul sebelumnya",
         "next_capsule": "Kapsul seterusnya",
         "records_ng_capsules": "Kapsul NG",
@@ -21564,6 +21651,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pilih resipi tersimpan",
     },
     "fil": {
+        "records_sort": "Pagbukud-bukurin",
+        "capsule_filtered": "Na-filter",
+        "recipe_min_mask_area": "Pinakamaliit na lawak ng mask",
         "previous_capsule": "Nakaraang kapsula",
         "next_capsule": "Susunod na kapsula",
         "records_ng_capsules": "Mga kapsulang NG",
@@ -22310,6 +22400,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pumili ng naka-save na resipe",
     },
     "sw": {
+        "records_sort": "Panga",
+        "capsule_filtered": "Zilizochujwa",
+        "recipe_min_mask_area": "Eneo la chini la barakoa",
         "previous_capsule": "Kapsuli iliyotangulia",
         "next_capsule": "Kapsuli inayofuata",
         "records_ng_capsules": "Vidonge vya NG",
@@ -23056,6 +23149,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Chagua fomula iliyohifadhiwa",
     },
     "th": {
+        "records_sort": "เรียงลำดับ",
+        "capsule_filtered": "กรองออกแล้ว",
+        "recipe_min_mask_area": "พื้นที่มาสก์ขั้นต่ำ",
         "previous_capsule": "แคปซูลก่อนหน้า",
         "next_capsule": "แคปซูลถัดไป",
         "records_ng_capsules": "แคปซูล NG",
@@ -23802,6 +23898,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "ต้องมีสิทธิ์วิศวกร",
     },
     "hi": {
+        "records_sort": "क्रमबद्ध करें",
+        "capsule_filtered": "फ़िल्टर किए गए",
+        "recipe_min_mask_area": "मास्क का न्यूनतम क्षेत्रफल",
         "previous_capsule": "पिछला कैप्सूल",
         "next_capsule": "अगला कैप्सूल",
         "records_ng_capsules": "NG कैप्सूल",
@@ -24548,6 +24647,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "अभियंता की अनुमति ज़रूरी है",
     },
     "bn": {
+        "records_sort": "সাজান",
+        "capsule_filtered": "ফিল্টার করা",
+        "recipe_min_mask_area": "মাস্কের ন্যূনতম ক্ষেত্রফল",
         "previous_capsule": "আগের ক্যাপসুল",
         "next_capsule": "পরের ক্যাপসুল",
         "records_ng_capsules": "NG ক্যাপসুল",
@@ -25294,6 +25396,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "সংরক্ষিত রেসিপি বাছুন",
     },
     "ta": {
+        "records_sort": "வரிசைப்படுத்து",
+        "capsule_filtered": "வடிகட்டப்பட்டவை",
+        "recipe_min_mask_area": "குறைந்தபட்ச முகமூடிப் பரப்பளவு",
         "previous_capsule": "முந்தைய காப்ஸ்யூல்",
         "next_capsule": "அடுத்த காப்ஸ்யூல்",
         "records_ng_capsules": "NG காப்ஸ்யூல்கள்",
@@ -26040,6 +26145,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "சேமித்த செய்முறையைத் தேர்வு செய்",
     },
     "te": {
+        "records_sort": "క్రమబద్ధీకరించు",
+        "capsule_filtered": "ఫిల్టర్ చేసినవి",
+        "recipe_min_mask_area": "కనిష్ఠ మాస్క్ వైశాల్యం",
         "previous_capsule": "మునుపటి క్యాప్సూల్",
         "next_capsule": "తదుపరి క్యాప్సూల్",
         "records_ng_capsules": "NG క్యాప్సూల్‌లు",
@@ -26786,6 +26894,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "సేవ్ చేసిన రెసిపీ ఎంచుకో",
     },
     "mr": {
+        "records_sort": "क्रमवारी लावा",
+        "capsule_filtered": "गाळलेले",
+        "recipe_min_mask_area": "मास्कचे किमान क्षेत्रफळ",
         "previous_capsule": "मागील कॅप्सूल",
         "next_capsule": "पुढील कॅप्सूल",
         "records_ng_capsules": "NG कॅप्सूल",
@@ -27532,6 +27643,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "जतन केलेली रेसिपी निवडा",
     },
     "ne": {
+        "records_sort": "क्रमबद्ध गर्नुहोस्",
+        "capsule_filtered": "फिल्टर गरिएका",
+        "recipe_min_mask_area": "मास्कको न्यूनतम क्षेत्रफल",
         "previous_capsule": "अघिल्लो क्याप्सुल",
         "next_capsule": "अर्को क्याप्सुल",
         "records_ng_capsules": "NG क्याप्सुल",
@@ -28278,6 +28392,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "सुरक्षित रेसिपी छान्नुहोस्",
     },
     "si": {
+        "records_sort": "අනුපිළිවෙළට සකසන්න",
+        "capsule_filtered": "පෙරූ",
+        "recipe_min_mask_area": "ආවරණයේ අවම වර්ගඵලය",
         "previous_capsule": "පෙර කරල",
         "next_capsule": "ඊළඟ කරල",
         "records_ng_capsules": "NG කැප්සියුල",
@@ -29005,6 +29122,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "සුරැකි වට්ටෝරුව තෝරන්න",
     },
     "am": {
+        "records_sort": "ደርድር",
+        "capsule_filtered": "የተጣሩ",
+        "recipe_min_mask_area": "ዝቅተኛው የማስክ ስፋት",
         "previous_capsule": "ቀዳሚ ካፕሱል",
         "next_capsule": "ቀጣይ ካፕሱል",
         "records_ng_capsules": "NG ካፕሱሎች",
@@ -29740,6 +29860,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "የተቀመጠ አዘገጃጀት ምረጥ",
     },
     "km": {
+        "records_sort": "តម្រៀប",
+        "capsule_filtered": "បានច្រោះ",
+        "recipe_min_mask_area": "ផ្ទៃក្រឡាម៉ាសអប្បបរមា",
         "previous_capsule": "កន្សោមថ្នាំមុន",
         "next_capsule": "កន្សោមថ្នាំបន្ទាប់",
         "records_ng_capsules": "កន្សោម NG",
@@ -30475,6 +30598,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "ជ្រើសរូបមន្តដែលបានរក្សាទុក",
     },
     "lt": {
+        "records_sort": "Rikiuoti",
+        "capsule_filtered": "Išfiltruotos",
+        "recipe_min_mask_area": "Mažiausias kaukės plotas",
         "previous_capsule": "Ankstesnė kapsulė",
         "next_capsule": "Kita kapsulė",
         "records_ng_capsules": "NG kapsulės",
@@ -31221,6 +31347,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pasirinkti įrašytą receptą",
     },
     "lv": {
+        "records_sort": "Kārtot",
+        "capsule_filtered": "Filtrētas",
+        "recipe_min_mask_area": "Minimālais maskas laukums",
         "previous_capsule": "Iepriekšējā kapsula",
         "next_capsule": "Nākamā kapsula",
         "records_ng_capsules": "NG kapsulas",
@@ -31967,6 +32096,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Atlasīt saglabātu recepti",
     },
     "et": {
+        "records_sort": "Sordi",
+        "capsule_filtered": "Filtreeritud",
+        "recipe_min_mask_area": "Maski minimaalne pindala",
         "previous_capsule": "Eelmine kapsel",
         "next_capsule": "Järgmine kapsel",
         "records_ng_capsules": "NG-kapslid",
@@ -32713,6 +32845,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vali salvestatud retsept",
     },
     "sl": {
+        "records_sort": "Razvrsti",
+        "capsule_filtered": "Filtrirane",
+        "recipe_min_mask_area": "Najmanjša površina maske",
         "previous_capsule": "Prejšnja kapsula",
         "next_capsule": "Naslednja kapsula",
         "records_ng_capsules": "Kapsule NG",
@@ -33459,6 +33594,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Izberi shranjen recept",
     },
     "sq": {
+        "records_sort": "Rendit",
+        "capsule_filtered": "Të filtruara",
+        "recipe_min_mask_area": "Sipërfaqja minimale e maskës",
         "previous_capsule": "Kapsula e mëparshme",
         "next_capsule": "Kapsula tjetër",
         "records_ng_capsules": "Kapsulat NG",
@@ -34205,6 +34343,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Zgjidh recetën e ruajtur",
     },
     "ca": {
+        "records_sort": "Ordena",
+        "capsule_filtered": "Filtrades",
+        "recipe_min_mask_area": "Àrea mínima de la màscara",
         "previous_capsule": "Càpsula anterior",
         "next_capsule": "Càpsula següent",
         "records_ng_capsules": "Càpsules NG",
@@ -34951,6 +35092,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selecciona una recepta desada",
     },
     "af": {
+        "records_sort": "Sorteer",
+        "capsule_filtered": "Gefiltreer",
+        "recipe_min_mask_area": "Minimum maskeroppervlakte",
         "previous_capsule": "Vorige kapsule",
         "next_capsule": "Volgende kapsule",
         "records_ng_capsules": "NG-kapsules",
@@ -35697,6 +35841,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Kies gestoorde resep",
     },
     "zu": {
+        "records_sort": "Hlunga",
+        "capsule_filtered": "Ahlungiwe",
+        "recipe_min_mask_area": "Indawo encane kakhulu yemaski",
         "previous_capsule": "Ikhepsuli edlule",
         "next_capsule": "Ikhepsuli elandelayo",
         "records_ng_capsules": "Amakhepsuli NG",
@@ -36432,6 +36579,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Khetha iresiphi elondoloziwe",
     },
     "ha": {
+        "records_sort": "Jera",
+        "capsule_filtered": "Waɗanda aka tace",
+        "recipe_min_mask_area": "Mafi ƙarancin faɗin abin rufewa",
         "previous_capsule": "Kabsul ɗin da ya gabata",
         "next_capsule": "Kabsul na gaba",
         "records_ng_capsules": "Kapsulolin NG",
@@ -37167,6 +37317,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Zaɓi tsarin dubawa da aka ajiye",
     },
     "kk": {
+        "records_sort": "Сұрыптау",
+        "capsule_filtered": "Сүзілген",
+        "recipe_min_mask_area": "Масканың ең кіші ауданы",
         "previous_capsule": "Алдыңғы капсула",
         "next_capsule": "Келесі капсула",
         "records_ng_capsules": "NG капсулалары",
@@ -37913,6 +38066,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Сақталған рецептті таңдау",
     },
     "uz": {
+        "records_sort": "Saralash",
+        "capsule_filtered": "Saralangan",
+        "recipe_min_mask_area": "Niqobning eng kichik yuzasi",
         "previous_capsule": "Oldingi kapsula",
         "next_capsule": "Keyingi kapsula",
         "records_ng_capsules": "NG kapsulalar",
@@ -38659,6 +38815,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saqlangan retseptni tanlash",
     },
     "mn": {
+        "records_sort": "Эрэмбэлэх",
+        "capsule_filtered": "Шүүгдсэн",
+        "recipe_min_mask_area": "Маскны хамгийн бага талбай",
         "previous_capsule": "Өмнөх капсул",
         "next_capsule": "Дараагийн капсул",
         "records_ng_capsules": "NG капсулууд",
@@ -39405,6 +39564,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Хадгалсан жор сонгох",
     },
     "so": {
+        "records_sort": "Kala hormari",
+        "capsule_filtered": "La shaandheeyey",
+        "recipe_min_mask_area": "Bedka ugu yar ee maaskarada",
         "previous_capsule": "Kaabsalkii hore",
         "next_capsule": "Kaabsalka xiga",
         "records_ng_capsules": "Kaabsallada NG",
@@ -40151,6 +40313,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Dooro habraac kaydsan",
     },
     "tk": {
+        "records_sort": "Tertiple",
+        "capsule_filtered": "Süzülenler",
+        "recipe_min_mask_area": "Maskanyň iň kiçi meýdany",
         "previous_capsule": "Öňki kapsula",
         "next_capsule": "Indiki kapsula",
         "records_ng_capsules": "NG kapsulalar",
@@ -40888,6 +41053,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saklanan resepti saýla",
     },
     "tg": {
+        "records_sort": "Мураттабсозӣ",
+        "capsule_filtered": "Полудашуда",
+        "recipe_min_mask_area": "Масоҳати ҳадди ақали ниқоб",
         "previous_capsule": "Капсулаи қаблӣ",
         "next_capsule": "Капсулаи навбатӣ",
         "records_ng_capsules": "Капсулаҳои NG",
@@ -41634,6 +41802,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Интихоби дастури захирашуда",
     },
     "az-Latn": {
+        "records_sort": "Sırala",
+        "capsule_filtered": "Süzülmüş",
+        "recipe_min_mask_area": "Maskanın minimum sahəsi",
         "previous_capsule": "Əvvəlki kapsul",
         "next_capsule": "Növbəti kapsul",
         "records_ng_capsules": "NG kapsullar",
@@ -42380,6 +42551,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saxlanmış resepti seç",
     },
     "mg": {
+        "records_sort": "Alaharo",
+        "capsule_filtered": "Voasivana",
+        "recipe_min_mask_area": "Velaran’ny saron-tsary farany ambany",
         "previous_capsule": "Kapsily teo aloha",
         "next_capsule": "Kapsily manaraka",
         "records_ng_capsules": "Kapsily NG",
@@ -43115,6 +43289,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Fidio ny raikipohy voatahiry",
     },
     "ky": {
+        "records_sort": "Иреттөө",
+        "capsule_filtered": "Чыпкаланган",
+        "recipe_min_mask_area": "Масканын эң кичине аянты",
         "previous_capsule": "Мурунку капсула",
         "next_capsule": "Кийинки капсула",
         "records_ng_capsules": "NG капсулалары",
@@ -43861,6 +44038,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Сакталган рецептти тандоо",
     },
     "ka": {
+        "records_sort": "დალაგება",
+        "capsule_filtered": "გაფილტრული",
+        "recipe_min_mask_area": "ნიღბის მინიმალური ფართობი",
         "previous_capsule": "წინა კაფსულა",
         "next_capsule": "შემდეგი კაფსულა",
         "records_ng_capsules": "NG კაფსულები",
@@ -44607,6 +44787,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "შენახული რეცეპტის არჩევა",
     },
     "hy": {
+        "records_sort": "Տեսակավորել",
+        "capsule_filtered": "Զտված",
+        "recipe_min_mask_area": "Դիմակի նվազագույն մակերես",
         "previous_capsule": "Նախորդ պատիճ",
         "next_capsule": "Հաջորդ պատիճ",
         "records_ng_capsules": "NG պատիճներ",
@@ -45353,6 +45536,9 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Ընտրել պահպանված բաղադրատոմսը",
     },
     "ti": {
+        "records_sort": "ስራዕ",
+        "capsule_filtered": "ዝተጻረዩ",
+        "recipe_min_mask_area": "ዝተሓተ ስፍሓት ማስክ",
         "previous_capsule": "ዝሓለፈ ካፕሱል",
         "next_capsule": "ዝቕጽል ካፕሱል",
         "records_ng_capsules": "ናይ NG ካፕሱላት",

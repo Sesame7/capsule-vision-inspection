@@ -261,8 +261,7 @@ phase and the counter/source checks below. ImageNumber continuity does not prove
 physical trigger continuity; a counter read is not exposure-correlated evidence.
 Counter skips and 65535 → 0 wrap between groups are accepted without inventing
 missing groups. A repeated counter in the next group is rejected; hidden full
-reuse/reset remains undetectable. The [retained offline evaluation](plc-batch-proposal.md)
-explains these limits and is not the current register contract.
+reuse/reset remains undetectable.
 
 `FourCycleReportingWorker` is the generation's sole reporting socket owner. The
 first observed cycle queues a read at base−1, without socket work on camera,
@@ -287,6 +286,9 @@ failure, commit uncertainty or attribution loss does not retract an already
 eligible inspection completion. These totals are neither delivered-group counts
 nor proof of physical traceability. Application retains a generation-local CycleId
 high-water mark and offers the eligible group to its History owner without waiting.
+Four-cycle image archiving consumes the same completion and actual member IDs.
+Scalar Mask Area exclusion flags support camera selection locally. They do not
+change the transmitted bitmap, counter, acknowledgement or accounting.
 The selected Production Batch accumulates these totals across Runs and restarts.
 Cycle History retains per-exposure evidence and joins it to group membership by
 Run and Cycle identity. See [Production history](architecture.md#production-history).

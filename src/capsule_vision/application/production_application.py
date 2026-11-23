@@ -58,6 +58,7 @@ from .models import (
     ApplicationError,
     ApplicationState,
     ApplicationStateError,
+    PilotCounters,
     PreparedConfiguration,
     ProductionApplicationSnapshot,
     StartBlocker,
@@ -200,6 +201,13 @@ class SourceProductionApplication(ProductionApplication):
                 self.history.offer_group(self._durable_run, batch)
             if self._display_store is not None:
                 self._display_store.complete_group(batch)
+            archive = (
+                self._session.archive
+                if isinstance(self._session, SourceRuntimeSession)
+                else None
+            )
+        if archive is not None and len(batch.reports) == 4 and archive.settings.save_ng:
+            archive.group_completed(batch.reports, PilotCounters.final_channels(batch))
 
     def _install_candidate(self, candidate: PreparedConfiguration) -> None:
         with self._condition:

@@ -33,6 +33,8 @@ from . import (
     batch_records,
     batch_review,
     defect_records,
+    filtered_evidence,
+    ng_capsule_sort,
     ng_capsules,
     records_query,
     run_configuration,
@@ -51,6 +53,8 @@ from .batch_review import (
     BatchSetup,
     StartAccount,
 )
+from .history_findings import HistoryFinding as HistoryFinding
+from .history_findings import display_findings
 from .identity_models import IdentityError
 from .models import ApplicationStateError, ConfigurationIdentity
 from .records_query import BatchChoices, RecordsScope
@@ -85,13 +89,6 @@ class HistoryChannel:
     technical: str
     judgment: str
     reasons: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class HistoryFinding:
-    label: str
-    bounding_rect: BoundingRect
-    channels: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +141,10 @@ class HistoryReader(Protocol):
         scope: RecordsScope,
         cursor: ng_capsules.CapsuleRow | None = None,
         newer: bool = False,
+        mode: ng_capsules.CapsuleFilter = ng_capsules.CapsuleFilter.NG,
+        area_label: str | None = None,
+        *,
+        include_area_labels: bool = False,
     ) -> Future[ng_capsules.CapsulePage]: ...
 
     def ng_capsule_detail(
@@ -257,6 +258,7 @@ def _camera_detail(camera: CameraInspectionResult) -> list[object]:
                             finding.bounding_rect.height,
                         ),
                         tuple(dict.fromkeys(channels)),
+                        finding.area,
                     )
                     for finding, channels in by_finding.items()
                 ],
@@ -275,7 +277,14 @@ def _image_evidence(value: object, ng_channels: set[int]) -> HistoryImageEvidenc
         size = (width, height)
     decoded: list[HistoryFinding] = []
     for entry in _items(findings):
-        label, coordinates, associations = _items(entry)
+        fields = _items(entry)
+        if len(fields) == 4:
+            label, coordinates, associations, area = fields
+            if type(area) is not int or area < 0:
+                raise ValueError("Invalid History Mask Area")
+        else:
+            label, coordinates, associations = fields
+            area = None
         rect = BoundingRect(
             *cast(tuple[int, int, int, int], tuple(_items(coordinates)))
         )
@@ -296,9 +305,28 @@ def _image_evidence(value: object, ng_channels: set[int]) -> HistoryImageEvidenc
         ):
             raise ValueError("Invalid History finding evidence")
         decoded.append(
-            HistoryFinding(label, rect, cast(tuple[int, ...], tuple(channels)))
+            HistoryFinding(label, rect, cast(tuple[int, ...], tuple(channels)), area)
         )
     return HistoryImageEvidence(size, tuple(decoded))
+
+
+def _display_evidence(
+    value: object, rois: dict[int, BoundingRect | None]
+) -> HistoryImageEvidence:
+    evidence = _image_evidence(value, set(rois))
+    if len(evidence.findings) < 2:
+        return evidence
+    size = evidence.size
+    geometry = {
+        ch: roi
+        for ch, roi in rois.items()
+        if roi is not None
+        and (
+            size is None
+            or (roi.x + roi.width <= size[0] and roi.y + roi.height <= size[1])
+        )
+    }
+    return HistoryImageEvidence(size, display_findings(evidence.findings, geometry))
 
 
 def read_history_page(
@@ -359,7 +387,13 @@ def read_history_page(
             if on_image_failure is None:
                 raise
             on_image_failure(exc)
-    records = tuple(_decode_history_record(row, images) for row in visible)
+    geometry = {
+        run: ng_capsules.frozen_rois(connection, run)
+        for run in {str(r[4]) for r in visible}
+    }
+    records = tuple(
+        _decode_history_record(row, images, geometry[str(row[4])]) for row in visible
+    )
     return HistoryPageData(
         tuple(reversed(records)) if query.newer else records,
         tuple(batches),
@@ -376,7 +410,10 @@ def _cycle_payload(blob: bytes) -> list[object]:
 
 
 def _cycle_evidence(
-    blob: bytes, record_id: int, images: dict[tuple[int, str], Path]
+    blob: bytes,
+    record_id: int,
+    images: dict[tuple[int, str], Path],
+    geometry: dict[int, ng_capsules.FrozenROI],
 ) -> tuple[tuple[HistoryChannel, ...], tuple[HistoryCamera, ...], str | None]:
     # Typed boundary for our versioned SQLite payload; corrupt data fails the
     # query instead of becoming fabricated judgments or affecting Production.
@@ -404,10 +441,13 @@ def _cycle_evidence(
             _strings(r[3]),
             _strings(r[4]),
             images.get((record_id, str(r[0]))),
-            _image_evidence(
+            _display_evidence(
                 r[5],
                 {
-                    c.channel
+                    c.channel: roi.rect
+                    if (roi := geometry.get(c.channel)) is not None
+                    and (roi.camera, roi.slot) == (c.camera, c.slot)
+                    else None
                     for c in channels
                     if c.camera == r[0] and c.business == "NG"
                 },
@@ -421,11 +461,13 @@ def _cycle_evidence(
 
 
 def _decode_history_record(
-    row: tuple[object, ...], images: dict[tuple[int, str], Path]
+    row: tuple[object, ...],
+    images: dict[tuple[int, str], Path],
+    geometry: dict[int, ng_capsules.FrozenROI],
 ) -> HistoryRecord:
     record_id = int(cast(int, row[0]))
     channels, cameras, recipe_name = _cycle_evidence(
-        cast(bytes, row[12]), record_id, images
+        cast(bytes, row[12]), record_id, images, geometry
     )
     context = HistoryContext(
         float(cast(float, row[1])),
@@ -487,9 +529,15 @@ def read_ng_capsule_page(
     scope: RecordsScope,
     cursor: ng_capsules.CapsuleRow | None,
     newer: bool,
+    mode: ng_capsules.CapsuleFilter = ng_capsules.CapsuleFilter.NG,
 ) -> ng_capsules.CapsulePage:
     """Attach recorded labels without exposing the Run configuration or Cycle payloads."""
-    page = ng_capsules.page(db, scope, cursor, newer)
+    return _capsule_labels(db, ng_capsules.page(db, scope, cursor, newer, mode))
+
+
+def _capsule_labels(
+    db: sqlite3.Connection, page: ng_capsules.CapsulePage
+) -> ng_capsules.CapsulePage:
     # Read each visible Run once. Older copies may retain labels only on member Cycles.
     runs = {
         run: ng_capsules.run_labels(db, run) for run in {r.key.run for r in page.rows}
@@ -508,64 +556,181 @@ def read_ng_capsule_page(
             name = name or member_name
             camera = camera or member_cameras.get(key.channel)
         rows.append(replace(row, recipe_name=name, camera=camera))
-    return ng_capsules.CapsulePage(tuple(rows), page.more)
+    return replace(page, rows=tuple(rows))
+
+
+def request_ng_capsule_page(
+    submit: ng_capsule_sort.SubmitRead,
+    scope: RecordsScope,
+    cursor: ng_capsules.CapsuleRow | None,
+    newer: bool,
+    mode: ng_capsules.CapsuleFilter,
+    area_label: str | None,
+    include_area_labels: bool,
+) -> Future[ng_capsules.CapsulePage]:
+    if area_label is None and not include_area_labels:
+        return submit(lambda db: read_ng_capsule_page(db, scope, cursor, newer, mode))
+    scan = ng_capsule_sort.AreaScan(scope, mode, area_label, cursor, newer)
+
+    def step(db: sqlite3.Connection) -> ng_capsules.CapsulePage | None:
+        if not scan.advance(db, _group_areas):
+            return None
+        if area_label is None:
+            time_page = read_ng_capsule_page(db, scope, cursor, newer, mode)
+            return replace(time_page, area_labels=tuple(sorted(scan.labels)))
+        return _capsule_labels(db, scan.page())
+
+    return ng_capsule_sort.scheduled_page(submit, step)
+
+
+type _CycleEvidence = tuple[
+    tuple[HistoryChannel, ...], tuple[HistoryCamera, ...], str | None
+]
+
+
+def _capsule_exposure(
+    cycle: str,
+    channel_id: int,
+    filtered: bool,
+    roi: ng_capsules.FrozenROI | None,
+    data: _CycleEvidence,
+    path: Path | None,
+    companion: tuple[str, str] | None,
+) -> ng_capsules.CapsuleExposure:
+    channels, cameras, _ = data
+    matches = [ch for ch in channels if ch.channel == channel_id]
+    channel = matches[0] if len(matches) == 1 else None
+    camera_id = roi.camera if roi else channel.camera if channel else None
+    observed = [camera for camera in cameras if camera.camera == camera_id]
+    evidence = None
+    if matches and (
+        channel is None
+        or roi is not None
+        and (channel.camera, channel.slot) != (roi.camera, roi.slot)
+    ):
+        path = None
+    elif len(observed) > 1:
+        path = None
+    elif observed:
+        evidence = observed[0].image_evidence
+        if companion is not None:
+            filtered_camera, encoded = companion
+            candidate = _image_evidence(json.loads(encoded), {channel_id})
+            if (
+                filtered_camera != camera_id
+                or any(f.area is None for f in candidate.findings)
+                or (evidence is not None and evidence.size != candidate.size)
+            ):
+                path = None
+                evidence = None
+            else:
+                evidence = candidate
+    findings = (
+        tuple(
+            replace(f, channels=(channel_id,), filtered=filtered)
+            for f in evidence.findings
+            if channel_id in f.channels
+        )
+        if evidence is not None and (not filtered or companion is not None)
+        else ()
+    )
+    return ng_capsules.CapsuleExposure(
+        cycle, channel, path, evidence.size if evidence else None, findings
+    )
+
+
+def _group_areas(
+    db: sqlite3.Connection,
+    rows: tuple[ng_capsules.CapsuleRow, ...],
+    geometry: dict[int, ng_capsules.FrozenROI],
+) -> dict[int, dict[str, int]]:
+    key = rows[0].key
+    group = (key.run, key.first_cycle)
+    companions: dict[tuple[str, int], tuple[str, str]] = {}
+    if any(r.filtered for r in rows):
+        companions = {
+            (cy, ch): (cam, encoded)
+            for cy, ch, cam, encoded in db.execute(
+                """SELECT m.cycle,f.channel,f.camera,f.evidence FROM group_members m
+            JOIN cycle_area_filtered f USING(run,cycle) WHERE m.run=? AND m.first_cycle=?""",
+                group,
+            )
+        }
+    maxima: dict[int, dict[str, int]] = {}
+    for cycle, blob in db.execute(
+        """SELECT m.cycle,c.detail FROM group_members m JOIN cycles c ON (c.run_id,c.cycle_id)=(m.run,m.cycle)
+        WHERE m.run=? AND m.first_cycle=? ORDER BY m.slot""",
+        group,
+    ):
+        data = _cycle_evidence(blob, 0, {}, geometry)
+        for row in rows:
+            ch = row.key.channel
+            exposure = _capsule_exposure(
+                cycle,
+                ch,
+                row.filtered,
+                geometry.get(ch),
+                data,
+                None,
+                companions.get((cycle, ch)) if row.filtered else None,
+            )
+            for finding in exposure.findings:
+                if finding.area is not None:
+                    areas = maxima.setdefault(ch, {})
+                    areas[finding.label] = max(
+                        finding.area, areas.get(finding.label, 0)
+                    )
+    return maxima
 
 
 def read_ng_capsule(
     db: sqlite3.Connection, key: ng_capsules.CapsuleKey, *, has_images: bool
 ) -> ng_capsules.CapsuleDetail | None:
-    """Expose only one persisted rejected channel and its four actual members."""
-    if not ng_capsules.eligible(db, key):
+    """Expose a qualified channel and its four attributed exposures."""
+    kind = ng_capsules.selected_kind(db, key)
+    if kind is None:
         return None
-    roi = ng_capsules.frozen_roi(db, key)
+    geometry = ng_capsules.frozen_rois(db, key.run)
+    roi = geometry.get(key.channel)
     image_join = (
         "LEFT JOIN archive_images i ON (i.run_id,i.cycle_id,i.camera_id)=(m.run,m.cycle,:camera)"
         if has_images
         else ""
     )
+    filtered = kind == ng_capsules.CapsuleFilter.FILTERED
+    filtered_join = (
+        "LEFT JOIN cycle_area_filtered f ON (f.run,f.cycle,f.channel)=(m.run,m.cycle,:channel)"
+        if filtered
+        else ""
+    )
     rows = db.execute(
-        f"""SELECT m.cycle,c.id,c.detail,{"i.path" if has_images else "NULL"}
+        f"""SELECT m.cycle,c.id,c.detail,{"i.path" if has_images else "NULL"},
+        {"f.camera,f.evidence" if filtered else "NULL,NULL"}
         FROM group_members m LEFT JOIN cycles c ON (c.run_id,c.cycle_id)=(m.run,m.cycle)
-        {image_join} WHERE m.run=:run AND m.first_cycle=:first ORDER BY m.slot""",
+        {image_join} {filtered_join} WHERE m.run=:run AND m.first_cycle=:first ORDER BY m.slot""",
         {
             "run": key.run,
             "first": key.first_cycle,
             "camera": roi.camera if roi else None,
+            "channel": key.channel,
         },
     )
     exposures: list[ng_capsules.CapsuleExposure] = []
-    for cycle, record_id, blob, link in rows:
-        channel = None
-        evidence = None
-        path = Path(link) if link else None
-        if blob is not None:
-            channels, cameras, _ = _cycle_evidence(blob, record_id, {})
-            matches = [ch for ch in channels if ch.channel == key.channel]
-            channel = matches[0] if len(matches) == 1 else None
-            camera_id = roi.camera if roi else channel.camera if channel else None
-            observed = [camera for camera in cameras if camera.camera == camera_id]
-            if matches and (
-                channel is None
-                or roi is not None
-                and (channel.camera, channel.slot) != (roi.camera, roi.slot)
-            ):
-                path = None
-            elif len(observed) > 1:
-                path = None
-            elif observed:
-                evidence = observed[0].image_evidence
-        findings = (
-            tuple(
-                HistoryFinding(f.label, f.bounding_rect, (key.channel,))
-                for f in evidence.findings
-                if key.channel in f.channels
-            )
-            if evidence is not None
-            else ()
+    for cycle, record_id, blob, link, filtered_camera, encoded in rows:
+        data = (
+            _cycle_evidence(blob, record_id, {}, geometry)
+            if blob is not None
+            else ((), (), None)
         )
         exposures.append(
-            ng_capsules.CapsuleExposure(
-                cycle, channel, path, evidence.size if evidence else None, findings
+            _capsule_exposure(
+                cycle,
+                key.channel,
+                filtered,
+                roi,
+                data,
+                Path(link) if link else None,
+                (filtered_camera, encoded) if encoded is not None else None,
             )
         )
     return ng_capsules.CapsuleDetail(key, roi, tuple(exposures))
@@ -763,14 +928,27 @@ class ProductionHistory:
 
         return self._command(read, read_only=True)
 
+    def _submit_read[T](self, read: Callable[[sqlite3.Connection], T]) -> Future[T]:
+        return self._command(read, read_only=True)
+
     def ng_capsule_page(
         self,
         scope: RecordsScope,
         cursor: ng_capsules.CapsuleRow | None = None,
         newer: bool = False,
+        mode: ng_capsules.CapsuleFilter = ng_capsules.CapsuleFilter.NG,
+        area_label: str | None = None,
+        *,
+        include_area_labels: bool = False,
     ) -> Future[ng_capsules.CapsulePage]:
-        return self._command(
-            lambda db: read_ng_capsule_page(db, scope, cursor, newer), read_only=True
+        return request_ng_capsule_page(
+            self._submit_read,
+            scope,
+            cursor,
+            newer,
+            mode,
+            area_label,
+            include_area_labels,
         )
 
     def ng_capsule_detail(
@@ -1244,9 +1422,10 @@ class ProductionHistory:
         )
         assessment = result.assessment
         with connection:
-            if connection.execute(
-                "SELECT 1 FROM runs WHERE uuid=?", (context.run_id,)
-            ).fetchone():
+            run = connection.execute(
+                "SELECT reporting_mode FROM runs WHERE uuid=?", (context.run_id,)
+            ).fetchone()
+            if run:
                 if not batch_records.occurrence(
                     connection, context.run_id, result.cycle_id, result
                 ):
@@ -1275,6 +1454,8 @@ class ProductionHistory:
 
             if not self._has_classification:
                 defect_records.create(connection)
+            if run and run[0] == "four_cycle":
+                filtered_evidence.record(connection, context.run_id, result)
             defect_records.record_cycle(connection, context.run_id, result)
             defect_records.reconcile(connection, context.run_id, result.cycle_id)
             if context.batch_label is not None:

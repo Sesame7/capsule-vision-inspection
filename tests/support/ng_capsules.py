@@ -11,7 +11,7 @@ from time import time
 import cv2
 import numpy as np
 
-from capsule_vision.application import ConfigurationIdentity
+from capsule_vision.application import ConfigurationIdentity, filtered_evidence
 from capsule_vision.application.archive_links import PublishedImage, create, insert
 from capsule_vision.application.history import ProductionHistory
 from capsule_vision.application.run_configuration import capture_run
@@ -97,6 +97,8 @@ def sample(
     *,
     roi_width: int = RECT.width,
     recipe_name: str | None = None,
+    edge_area: int | None = None,
+    with_filtered: bool = False,
 ) -> Sample:
     root.mkdir(parents=True, exist_ok=True)
     database = root / "history.sqlite3"
@@ -186,20 +188,24 @@ def sample(
             ]
             evidence: list[object] = [camera, "SUCCESS", "OK", [], ["Unassigned"]]
             if index == 0:
+                edge: list[object] = ["Edge", [1005, 92, 12, 5], [ch, ch + 1]]
+                if edge_area is not None:
+                    edge.append(edge_area)
                 evidence.append(
                     [
                         [1520, 196],
                         [
                             ["Spot", [1144, 40, 19, 17], [ch]],
                             ["Spot", [1144, 122, 19, 17], [ch]],
-                            ["Edge", [1005, 92, 12, 5], [ch, ch + 1]],
+                            edge,
                             ["Neighbour", [1270, 36, 8, 6], [ch + 1]],
                         ],
                     ]
                 )
-            blob = zlib.compress(
-                json.dumps([[channel, other], [evidence], None]).encode()
-            )
+            channels = [channel, other]
+            if with_filtered:
+                channels.append([camera, 3, ch - 1, "OK", "SUCCESS", "OK", []])
+            blob = zlib.compress(json.dumps([channels, [evidence], None]).encode())
             db.execute(
                 """INSERT INTO cycles(completed_at,batch_segment,batch_label,run_id,cycle_id,recipe_id,model_id,model_sha,
                 status,technical,judgment,empty_count,unknown_count,detail) VALUES(?,?,?,?,?,'recipe','model',?,'COMPLETE','SUCCESS','OK',0,0,?)""",
@@ -217,4 +223,47 @@ def sample(
                 path = root / "2026-01-15" / camera / f"shot-{cycle}.png"
                 _png(path, index)
                 insert(db, PublishedImage(RUN, cycle, camera, path, float(observed)))
+            if with_filtered and index in (0, 2):
+                db.execute(filtered_evidence.CREATE_TABLE)
+                # The final-NG neighbour also had an excluded candidate.
+                for target, x in ((ch - 1, 775), (ch, 1025)):
+                    encoded = [[1520, 196], [["Hair", [x, 30, 12, 6], [target], 17]]]
+                    db.execute(
+                        "INSERT INTO cycle_area_filtered VALUES(?,?,?,?,?)",
+                        (RUN, str(cycle), camera, target, json.dumps(encoded)),
+                    )
     return Sample(root, batch.uuid, observed, ch, camera)
+
+
+def add_measured_groups(saved: Sample) -> list[tuple[str, int]]:
+    """Smallest findings occur outside the first Time page. Area and time ties cross pages."""
+    expected: list[tuple[int, int, int]] = []
+    with closing(sqlite3.connect(saved.root / "history.sqlite3")) as db, db:
+        (blob,) = db.execute(
+            "SELECT detail FROM cycles WHERE run_id=? AND cycle_id='101'", (RUN,)
+        ).fetchone()
+        payload = json.loads(zlib.decompress(blob))
+        for i in range(63):
+            first = 1000 + 20 * i
+            members = (first, first + 13, first + 3, first + 8)
+            stamp = saved.observed + 10 + i // 2
+            area = 5 if i < 6 else 27 if i < 60 else 64
+            add_group(db, RUN, members, stamp, (saved.channel,), 30)
+            rows = [["Dent", [1144, 40, 19, 17], [saved.channel], area]]
+            if i % 4 == 0:
+                rows.append(["Spot", [1144, 122, 19, 17], [saved.channel], 12])
+            payload[1][0][5][1] = rows
+            db.execute(
+                """INSERT INTO cycles(completed_at,batch_segment,batch_label,run_id,cycle_id,recipe_id,model_id,model_sha,
+                       status,technical,judgment,empty_count,unknown_count,detail)
+                       SELECT ?,batch_segment,batch_label,run_id,?,recipe_id,model_id,model_sha,
+                       status,technical,judgment,empty_count,unknown_count,? FROM cycles WHERE run_id=? AND cycle_id='101'""",
+                (
+                    stamp - 6000,
+                    str(members[3]),
+                    zlib.compress(json.dumps(payload).encode()),
+                    RUN,
+                ),
+            )
+            expected.append((area, -stamp, -first))
+    return [(str(-first), area) for area, _, first in sorted(expected)]

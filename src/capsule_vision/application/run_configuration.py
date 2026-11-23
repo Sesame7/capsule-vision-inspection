@@ -2,10 +2,11 @@
 
 import json
 import sqlite3
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, cast
 
 from capsule_vision.communication.reporting import ReportingSelection
 from capsule_vision.configuration import (
@@ -104,7 +105,7 @@ def capture_run(
     vision = prepared.vision_dependencies
     sources = vision.sources if vision is not None else None
     values = {
-        "inspection": asdict(config),
+        "inspection": config,
         "sources": asdict(sources) if sources is not None else None,
         "source_base": str(vision.sources_path.resolve().parent)
         if vision is not None and vision.sources_path is not None
@@ -124,6 +125,13 @@ def capture_run(
         else None,
     }
 
+    def frozen_fields(value: object) -> object:
+        if isinstance(value, MappingProxyType):
+            return dict(cast(MappingProxyType[object, object], value))
+        if is_dataclass(value) and not isinstance(value, type):
+            return {f.name: getattr(value, f.name) for f in fields(value)}
+        raise TypeError(f"Unsupported Run configuration value: {type(value).__name__}")
+
     def encode(value: object) -> bytes:
         return json.dumps(
             value,
@@ -131,6 +139,7 @@ def capture_run(
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
+            default=frozen_fields,
         ).encode("utf-8")
 
     effective = encode(values)

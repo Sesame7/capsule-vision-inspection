@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 737 maintained keys across 64 locales. This includes
+Qt interface covers 740 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 94 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 904-key
+Authored coverage does not imply native-speaker verification. The full 907-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -437,8 +437,10 @@ ID in the compact detail payload. Renaming a Recipe does not relabel past cycles
 The current detail payload contains channel evidence, camera evidence and an
 optional Recipe name. The three-element payload also supports an optional
 per-camera extension containing original image dimensions and effective ViMo
-labels, rectangles and channel associations. Existing camera entries without
-this extension remain readable with their stored reasons. Former two-element
+findings. Each new finding stores `[label, [x, y, width, height], channels, area]`,
+where `area` is the measured Mask Area in px². Older finding entries end at
+`channels`. Camera entries without this extension remain readable with their
+stored reasons. Former two-element
 payloads follow the existing corrupt-record query error behavior. Inspection
 displays a null Recipe name as a dash with the stored Recipe ID in its tooltip.
 
@@ -468,6 +470,14 @@ named Batch's durable totals; missing coverage stays unavailable. This addition
 does not reinterpret Cycle counts as physical positions. See the
 [accounting contract](architecture.md#production-history) for completeness and
 unbatched behavior.
+For a four-cycle Run, History stores excluded Mask Area representatives in the
+optional `cycle_area_filtered` companion, keyed by Run, Cycle and channel. Each
+row identifies the camera, source dimensions, labels, rectangles and measured
+areas. The writer creates it on the first exclusion. Its rows expire with the
+parent Cycle and are available independently of PNG publication. Group membership
+and final outcomes come from the existing PLC group records. An older package
+without this companion has an empty Filtered view.
+
 The same owner initializes scalar classification companion tables on supported
 current History before retention. Per-Cycle and per-group rows expire with their
 parent detail. Batch and Run category counts and coverage persist independently;
@@ -479,9 +489,9 @@ known durable Run summary. Missing coverage stays unavailable, without deriving
 Run categories from Batch aggregates or current Models. The manual
 [production report](architecture.md#production-history) covers the selected
 Batch. NG exports the durable defect classification for every Run belonging to
-the selected capsule's persisted Batch UUID. Both reports cover the complete
+the selected final-NG capsule's persisted Batch UUID. Both reports cover the complete
 Batch regardless of the gallery dates, Batch filter or page. An unbatched NG
-capsule has no export. Cycles is review-only.
+capsule or a Filtered selection has no export. Cycles is review-only.
 
 Export opens the native PDF Save dialog with a suggested filename containing
 the report title in the output language, the selected Batch label when available
@@ -542,10 +552,17 @@ schemas and SQLite integrity problems without opening local application data.
 
 The window identifies the directory and read-only mode. It uses the normal
 Records presentation for Batches and Runs, NG, Cycles and Alarms.
-The NG tab shows each stored member's full channel ROI from its linked PNG,
-using the copied Run layout. The gallery's Recipe names and Channel camera
-tooltips come from the copied History evidence. Each of the four numbered
-images preserves both optical views. A missing PNG leaves that image unavailable.
+The NG, Filtered and All choices use the same membership and final outcomes as
+normal Records. The NG sort menu offers Time and the labels with measured Mask
+Areas in the selected scope. A label orders capsules by their largest recorded
+area for that label, smallest first. The NG tab shows each stored member's full
+channel ROI from its linked PNG, using the copied Run layout. The gallery's
+Recipe names and Channel camera tooltips come from the copied History evidence.
+Each of the four numbered images preserves both optical views.
+Cycles and NG display a single representative
+per exposure, channel, optical view and exact label. A measured finding shows its
+SDK Mask Area. An unmeasured legacy representative shows its label alone.
+A missing PNG leaves that image unavailable.
 Its tooltip shows the recorded channel status when present. Alarms shows the stored observation time, source,
 label, state, Batch and available detail, with date, category and Batch filters.
 Cycle, group and Alarm rows still in the copy are visible beyond 30 days. A copy with
@@ -979,14 +996,16 @@ saved definition but cannot be prepared without selecting a Model. Default ViMo 
 and required with no exclusions; Size/Color and archiving default to disabled.
 Changed settings remain explicit even when their check is disabled.
 
-Recipe `defaults.vimo` defines one shared `enabled`, `required` and `disabled_labels`
-policy for every configured camera/channel. Missing/null leaves use the effective
-defaults: enabled and required, with an empty filter. The structural objects cannot
-be null. Exclusions use exact case-sensitive label identities; an empty list excludes
-nothing. The [inspection judgment](architecture.md#inspection-and-results)
-applies the shared filter to assigned findings using each channel's Occupancy.
-The SDK thresholds, full-image inference and raw results are independent of
-this consumption policy.
+Recipe `defaults.vimo` defines one shared policy for every configured camera and
+channel. Missing or null `enabled`, `required` and `disabled_labels` fields
+default to enabled, required and an empty exclusion list. Optional `minimum_areas` is a
+JSON object mapping exact, case-sensitive labels to nonnegative integer pixel
+areas, for example `{"Dent":85,"Hair":37}`. An omitted label, an omitted mapping
+or a zero value adds no area filter. Save omits zero entries. A null mapping or
+a non-integer area is invalid. After label and Occupancy gating, a representative
+with SDK Mask Area equal to its minimum qualifies. The active model's native
+cutoffs still govern which regions reach Inspection. See
+[Inspection and results](architecture.md#inspection-and-results).
 
 `capsule` has uniform product-level Size/Color settings, without camera/channel
 overrides or a configurable `required` switch:
@@ -1161,6 +1180,11 @@ Existing Recipes therefore record nothing. Any nonempty root must be a valid
 absolute directory path; enabling any switch requires one. Saving validates its
 syntax without creating directories or certifying permissions/free space. Runtime
 write failures are observable separately from inspection and PLC results.
+In four-cycle reporting, `save_ng` archives all four actual exposures of a camera
+with a final-NG channel or a final-OK channel with a recorded Mask Area exclusion.
+An unattributed group supplies no group-based request. Other modes evaluate
+`save_ng` per camera/Cycle. OK, ERROR and EMPTY always use the individual
+camera result. Overlapping switches share one original PNG.
 The responsive Image Archive card edits only this Recipe draft. The four labeled
 switches share one row with the directory/actions whenever the card's available
 width fits their requirements; otherwise they sit above the directory/actions.
@@ -1251,8 +1275,10 @@ model selection retain their drafts. Reload remains a catalog-refresh action,
 including external new/repaired files; it is distinct from Discard. Model selection is explicit even with one registered Model; an unset or unknown
 reference remains visibly unavailable until selected. The compact Model selector shows its display name and
 configured SHA-256 prefix; its tooltip exposes the full ID/hash, not a runtime
-verification claim. The second row shows compact checkable defect-label buttons,
-wrapping at the available width. There is no filter popup, technical-details or
+verification claim. Each defect label has a checkable button and an adjacent
+minimum Mask Area field in px². Each field's tooltip and accessible name identify
+its label, measurement and unit. Each pair wraps together at the available width.
+There is no filter popup, technical-details or
 policy-summary panel. The summary cards use their content's natural height;
 one enclosing scroll area updates on wrapping/content/language changes and scrolls
 only when needed. The bottom inspection card and shared image viewport stay outside
@@ -1267,19 +1293,15 @@ cannot populate another model. Metadata IO does not occupy preparation or gate
 Start; Close observes actual job termination before detaching delivery. It
 hash-checks a memory snapshot before SDK metadata loading; no inference module,
 pipeline or cache is created. Missing/invalid metadata reports an error without
-offering an inferred catalog. Guest and Operator see the saved label selections
-for the current Recipe. Engineer and Administrator can toggle the label buttons
-in the draft and persist them with Recipe Save. Checked labels participate, and unchecked
-labels update only draft `defaults.vimo.disabled_labels`. Checking all catalog
-labels leaves no filter when no other exclusions exist. Previously saved out-of-catalog exclusions
-remain preserved with a tooltip, not offered as catalog choices. Metadata failure
-leaves saved/draft exclusions unchanged. Reload or reopening Recipe retries a
-failed read. Labels retain exact
-case-sensitive identities. Recipe `defaults.vimo` supplies one shared `enabled`,
-`required` and `disabled_labels` policy for all configured cameras and channels;
-MachineLayout remains the sole authority for their identities and ROI geometry.
-Save, Discard and runtime editing locks govern this edit like other Recipe
-changes.
+offering an inferred catalog. Guest and Operator can read the saved selections
+and minima. Engineer and Administrator can edit them in the Recipe draft.
+The checkbox controls participation independently of its stored minimum.
+Blank or zero restores the default minimum for that label. Previously saved
+out-of-catalog exclusions and minima remain available in the tooltip and survive
+Save. A failed metadata read preserves the draft policy. Reload or reopening
+Recipe retries the read. Recipe Save, Discard, preparation, activation and
+runtime editing locks govern these changes. MachineLayout supplies the channel
+identities and ROI geometry.
 
 The Model selector row also offers **Prepare TensorRT cache**, independent of
 Recipe Save. It submits the selected immutable Model identity to the

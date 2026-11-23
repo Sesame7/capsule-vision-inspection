@@ -24,6 +24,38 @@ SIZE = CapsuleSettings(size=SizeSettings(True, 39, 0))
 ROI = BoundingRect(7, 5, 100, 121)
 
 
+@pytest.mark.parametrize("width,height", [(30, 20), (20, 30)])
+def test_vertical_span_uses_full_image_coordinates_in_both_views(
+    width: int, height: int
+) -> None:
+    image = np.zeros((140, 120, 3), dtype=np.uint8)
+    for y in (15, 75):
+        image[y - 4 : y, 27 : 27 + width] = (40, 0, 0)
+        image[y : y + height, 27 : 27 + width] = (41, 0, 0)
+    original = image.copy()
+    measured = measure_capsule(image, ROI, SIZE)
+    for view, y in zip(measured.views, (15, 75), strict=True):
+        assert view.body is not None
+        assert view.body.bounding_rect == BoundingRect(27, y, width, height)
+        x = 27 + (width - 1) / 2
+        assert view.body.endpoints == ((x, y), (x, y + height - 1))
+        assert view.body.length == height - 1
+    np.testing.assert_array_equal(image, original)
+
+
+@pytest.mark.parametrize("angle", [-75, -30, 15, 30, 60, 90])
+def test_tilt_sweep_measures_rasterized_vertical_extent(angle: int) -> None:
+    image = np.zeros((120, 80, 3), dtype=np.uint8)
+    polygon = np.rint(cv2.boxPoints(((40, 30), (40, 12), angle))).astype(np.int32)
+    cv2.fillConvexPoly(image, polygon, (80, 120, 200))
+    body = measure_capsule(image, BoundingRect(0, 0, 80, 120), SIZE).views[0].body
+    assert body is not None
+    y, x = np.nonzero(image[:, :, 0])
+    center_x = (int(x.min()) + int(x.max())) / 2
+    assert body.endpoints == ((center_x, int(y.min())), (center_x, int(y.max())))
+    assert body.length == int(y.max()) - int(y.min())
+
+
 @pytest.mark.parametrize("lower", [False, True])
 @pytest.mark.parametrize("crossing", [0, 1, 7])
 def test_complete_crossing_body_has_exactly_one_owner(

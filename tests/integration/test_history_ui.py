@@ -434,7 +434,9 @@ def test_portable_history_browses_old_batch_run_cycle_and_archived_evidence(
         assert viewer is not None and viewer.isVisible()
         assert viewer.viewport.image == pixels and viewer.viewport.image != other_pixels
         assert len(viewer.viewport.overlays) == 3
-        assert "Scratch · CH08, CH09" in viewer.viewport.accessibleDescription()
+        assert (
+            "Scratch · 1080 px² · CH08, CH09" in viewer.viewport.accessibleDescription()
+        )
         assert viewer.close()
 
         absent = package.image.rename(package.image.with_suffix(".held"))
@@ -600,7 +602,9 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
         assert (
             len(viewer.viewport.overlays) == 3
         )  # Shared/identical geometry is drawn once.
-        assert "Scratch · CH08, CH09" in viewer.viewport.accessibleDescription()
+        assert (
+            "Scratch · 1080 px² · CH08, CH09" in viewer.viewport.accessibleDescription()
+        )
         assert "Background" not in viewer.viewport.accessibleDescription()
         page.cycles.selectRow(0)
         page.channels.setCurrentCell(0, 1)

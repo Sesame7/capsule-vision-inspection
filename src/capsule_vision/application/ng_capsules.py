@@ -2,17 +2,26 @@
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection.production.layout import valid_rect
 
+from . import filtered_evidence
 from .records_query import RecordsScope
 
 if TYPE_CHECKING:
     from .history import HistoryChannel, HistoryFinding
+
+
+class CapsuleFilter(StrEnum):
+    NG = "ng"
+    FILTERED = "filtered"
+    ALL = "all"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,12 +39,15 @@ class CapsuleRow:
     recipe_name: str | None = None
     camera: str | None = None
     batch_uuid: str | None = None
+    filtered: bool = False  # A final-OK channel with threshold-excluded evidence.
+    sort_area: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class CapsulePage:
     rows: tuple[CapsuleRow, ...] = ()
     more: bool = False
+    area_labels: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,31 +83,53 @@ _GROUPS = """FROM plc_groups g JOIN runs r ON r.uuid=g.run
         AND sum(m.slot=1 AND m.cycle=g.first_cycle)=1)"""
 
 
-def _rejected(encoded: str) -> tuple[int, ...]:
+def _positions(
+    encoded: str, filtered: str | None, mode: CapsuleFilter
+) -> dict[int, bool]:
     # A damaged group projection cannot establish the final outcome of a position.
     try:
         pairs: list[tuple[int, str]] = json.loads(encoded)
         if len(pairs) not in (30, 36):
-            return ()
+            return {}
         finals = dict(pairs)
         if (
             set(finals) != set(range(1, len(pairs) + 1))
             or any(type(channel) is not int for channel in finals)
             or not set(finals.values()) <= {"OK", "NG", "EMPTY", "UNKNOWN"}
         ):
-            return ()
-        return tuple(
-            sorted(channel for channel, state in finals.items() if state == "NG")
-        )
+            return {}
+        excluded: set[int] = set(map(int, filtered.split(","))) if filtered else set()
+        return {
+            channel: state == "OK"
+            for channel, state in sorted(finals.items())
+            if (state == "NG" and mode != CapsuleFilter.FILTERED)
+            or (state == "OK" and channel in excluded and mode != CapsuleFilter.NG)
+        }
     except TypeError, ValueError:
-        return ()
+        return {}
 
 
-def page(
-    db: sqlite3.Connection, scope: RecordsScope, cursor: CapsuleRow | None, newer: bool
-) -> CapsulePage:
-    """Page stored NG identities before History attaches labels to the visible rows."""
+type GroupPosition = tuple[float, str, str]
+
+
+def position_groups(
+    db: sqlite3.Connection,
+    scope: RecordsScope,
+    cursor: GroupPosition | None,
+    newer: bool,
+    mode: CapsuleFilter,
+    *,
+    include_cursor: bool,
+    limit: int | None = None,
+) -> Iterator[tuple[GroupPosition, tuple[CapsuleRow, ...]]]:
+    """Stream stored groups in historical order with their scoped channel identities."""
     where = _GROUPS
+    has_filtered = mode != CapsuleFilter.NG and filtered_evidence.available(db)
+    if mode == CapsuleFilter.FILTERED and not has_filtered:
+        return
+    excluded = filtered_evidence.GROUP_CHANNELS if has_filtered else "NULL"
+    if mode == CapsuleFilter.FILTERED and limit is None:
+        where += " AND " + excluded + " IS NOT NULL"
     args: list[object] = []
     for field, op, value in (
         ("g.observed", ">=", scope.since),
@@ -108,30 +142,60 @@ def page(
     if scope.unbatched:
         where += " AND r.batch IS NULL"
     if cursor is not None:
-        op = ">=" if newer else "<="
+        op = (">" if newer else "<") + ("=" if include_cursor else "")
         where += f" AND (g.observed,g.run,g.first_cycle) {op} (?,?,?)"
-        args.extend((cursor.observed, cursor.key.run, cursor.key.first_cycle))
+        args.extend(cursor)
     order = "ASC" if newer else "DESC"
     sql = (
-        "SELECT g.observed,g.run,g.first_cycle,g.final_channels,b.label,r.batch "
+        f"SELECT g.observed,g.run,g.first_cycle,g.final_channels,b.label,r.batch,{excluded} "
         + where
+        + f" ORDER BY g.observed {order},g.run {order},g.first_cycle {order}"
     )
-    rows: list[CapsuleRow] = []
-    # Stream groups without decoding Cycle blobs or materializing the entire date range.
-    # The cursor can fall in the middle of a group with several rejected channels.
-    for observed, run, first, encoded, batch_label, batch_uuid in db.execute(
-        sql + f" ORDER BY g.observed {order},g.run {order},g.first_cycle {order}", args
+    if limit is not None:
+        sql += " LIMIT ?"
+        args.append(limit)
+    for observed, run, first, encoded, batch_label, batch_uuid, filtered in db.execute(
+        sql, args
     ):
-        channels = _rejected(encoded)
-        for channel in reversed(channels) if newer else channels:
+        channels = _positions(encoded, filtered, mode)
+        yield (
+            (observed, run, first),
+            tuple(
+                CapsuleRow(
+                    observed,
+                    CapsuleKey(run, first, channel),
+                    batch_label,
+                    batch_uuid=batch_uuid,
+                    filtered=channels[channel],
+                )
+                for channel in (reversed(channels) if newer else channels)
+            ),
+        )
+
+
+def page(
+    db: sqlite3.Connection,
+    scope: RecordsScope,
+    cursor: CapsuleRow | None,
+    newer: bool,
+    mode: CapsuleFilter = CapsuleFilter.NG,
+) -> CapsulePage:
+    """Page qualified group positions before History attaches their recorded labels."""
+    rows: list[CapsuleRow] = []
+    anchor = (
+        (cursor.observed, cursor.key.run, cursor.key.first_cycle) if cursor else None
+    )
+    for group, positions in position_groups(
+        db, scope, anchor, newer, mode, include_cursor=True
+    ):
+        for row in positions:
             if (
                 cursor
-                and (observed, run, first)
-                == (cursor.observed, cursor.key.run, cursor.key.first_cycle)
+                and group == anchor
                 and (
-                    channel >= cursor.key.channel
+                    row.key.channel >= cursor.key.channel
                     if newer
-                    else channel <= cursor.key.channel
+                    else row.key.channel <= cursor.key.channel
                 )
             ):
                 continue
@@ -139,27 +203,27 @@ def page(
                 return CapsulePage(
                     tuple(reversed(rows)) if newer else tuple(rows), True
                 )
-            rows.append(
-                CapsuleRow(
-                    observed,
-                    CapsuleKey(run, first, channel),
-                    batch_label,
-                    batch_uuid=batch_uuid,
-                )
-            )
+            rows.append(row)
     return CapsulePage(tuple(reversed(rows)) if newer else tuple(rows))
 
 
-def eligible(db: sqlite3.Connection, key: CapsuleKey) -> bool:
+def selected_kind(db: sqlite3.Connection, key: CapsuleKey) -> CapsuleFilter | None:
+    excluded = (
+        filtered_evidence.GROUP_CHANNELS if filtered_evidence.available(db) else "NULL"
+    )
     row = db.execute(
-        "SELECT g.final_channels " + _GROUPS + " AND g.run=? AND g.first_cycle=?",
+        f"SELECT g.final_channels,{excluded} "
+        + _GROUPS
+        + " AND g.run=? AND g.first_cycle=?",
         (key.run, key.first_cycle),
     ).fetchone()
-    return (
-        row is not None
-        and type(key.channel) is int
-        and key.channel in _rejected(row[0])
-    )
+    if row is not None and type(key.channel) is int:
+        positions = _positions(row[0], row[1], CapsuleFilter.ALL)
+        if key.channel in positions:
+            return (
+                CapsuleFilter.FILTERED if positions[key.channel] else CapsuleFilter.NG
+            )
+    return None
 
 
 _FROZEN_SLOTS = """
@@ -214,30 +278,36 @@ def run_labels(db: sqlite3.Connection, run: str) -> GalleryLabels:
     return name, unique_cameras(cameras)
 
 
-def frozen_roi(db: sqlite3.Connection, key: CapsuleKey) -> FrozenROI | None:
-    # Older/incomplete copies can still supply group outcomes and per-Cycle statuses.
+def frozen_rois(db: sqlite3.Connection, run: str) -> dict[int, FrozenROI]:
+    """Read only unambiguous channel geometry from this Run's frozen layout."""
     if not _has_configurations(db):
-        return None
+        return {}
     rows = db.execute(
         _FROZEN_SLOTS
-        + """SELECT camera ->> '$.camera_id', slot ->> '$.slot',
+        + """SELECT slot ->> '$.channel_id', camera ->> '$.camera_id', slot ->> '$.slot',
         slot ->> '$.rect.x', slot ->> '$.rect.y', slot ->> '$.rect.width', slot ->> '$.rect.height'
-        FROM slots WHERE slot ->> '$.channel_id'=:channel LIMIT 2""",
-        {"run": key.run, "channel": key.channel},
-    ).fetchall()
-    if len(rows) != 1:
-        return None
-    camera, slot, x, y, width, height = rows[0]
-    if (
-        not isinstance(camera, str)
-        or not camera.strip()
-        or type(slot) is not int
-        or not 0 <= slot < 6
-    ):
-        return None
-    rect = BoundingRect(x, y, width, height)
-    try:
-        valid_rect(rect)
-    except ValueError:
-        return None
-    return FrozenROI(camera, slot, rect) if rect.height >= 2 else None
+        FROM slots WHERE json_type(slot,'$.channel_id')='integer'""",
+        {"run": run},
+    )
+    result: dict[int, FrozenROI] = {}
+    seen: set[int] = set()
+    for channel, camera, slot, x, y, width, height in rows:
+        if channel in seen:
+            result.pop(channel, None)
+            continue
+        seen.add(channel)
+        if (
+            not isinstance(camera, str)
+            or not camera.strip()
+            or type(slot) is not int
+            or not 0 <= slot < 6
+        ):
+            continue
+        rect = BoundingRect(x, y, width, height)
+        try:
+            valid_rect(rect)
+        except ValueError:
+            continue
+        if rect.height >= 2:
+            result[channel] = FrozenROI(camera, slot, rect)
+    return result

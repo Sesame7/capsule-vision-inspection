@@ -4,6 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
+from sys import get_int_max_str_digits
 from threading import Event, Thread
 from typing import Literal, Protocol, cast
 
@@ -12,6 +13,7 @@ from PySide6.QtCore import (
     QObject,
     QPoint,
     QRect,
+    QRegularExpression,
     QSize,
     Qt,
     QTimer,
@@ -19,7 +21,12 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QDesktopServices, QResizeEvent, QShowEvent
+from PySide6.QtGui import (
+    QDesktopServices,
+    QRegularExpressionValidator,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QBoxLayout,
     QComboBox,
@@ -222,6 +229,7 @@ class RecipePage(QWidget):
         self._labels_completion: tuple[object, object] | None = None
         self._labels_error = ""
         self.label_checks: dict[str, QPushButton] = {}
+        self.area_fields: dict[str, QLineEdit] = {}
         self._process_reader: ProcessPreviewReader | None = None
         self._process_stop: Event | None = None
         self._delivery = FutureDelivery()
@@ -565,7 +573,11 @@ class RecipePage(QWidget):
                     "model_delete",
                 )
             ),
-            *self.label_checks.values(),
+            *(
+                widget
+                for name, check in self.label_checks.items()
+                for widget in (check, self.area_fields[name])
+            ),
             self.capsule_enabled["size"],
             self.expand_tuning["size"],
             self.capsule_enabled["color"],
@@ -1334,13 +1346,23 @@ class RecipePage(QWidget):
             self._labels_error = ""
             if self.isVisible() and not self.closing:
                 QTimer.singleShot(0, self._ensure_model_labels)
-        disabled = self._displayed_recipe().defaults.vimo.disabled_labels
+        vimo = self._displayed_recipe().defaults.vimo
+        disabled = vimo.disabled_labels
+        area_title = text("recipe_min_mask_area", self.language) + " (px²)"
         retained = tuple(label for label in disabled if label not in self.label_checks)
-        self.label_choices.setToolTip(
+        hint = (
             text("recipe_labels_retained", self.language) + " " + ", ".join(retained)
             if retained
             else text("recipe_labels", self.language)
         )
+        other_areas = [
+            f"{label} · {value} px²"
+            for label, value in vimo.minimum_areas.items()
+            if label not in self.label_checks
+        ]
+        if other_areas:
+            hint += "\n" + area_title + " · " + ", ".join(other_areas)
+        self.label_choices.setToolTip(hint)
         editable = self.editable() and model == self._labels_model
         for label, check in self.label_checks.items():
             check.blockSignals(True)
@@ -1348,6 +1370,14 @@ class RecipePage(QWidget):
             check.blockSignals(False)
             check.setEnabled(editable)
             check.setToolTip(text("recipe_default_label", self.language) + " " + label)
+            field = self.area_fields[label]
+            minimum = vimo.minimum_areas.get(label, 0)
+            value = str(minimum) if minimum or not editable else ""
+            if field.text() != value:
+                field.setText(value)
+            field.setReadOnly(not editable)
+            field.setAccessibleName(f"{label} · {area_title}")
+            field.setToolTip(f"{field.accessibleName()} · {minimum}")
 
     def _cache_request(self) -> ModelPreparationRequest | None:
         model, session = self._selected_model(), self.session
@@ -1386,6 +1416,7 @@ class RecipePage(QWidget):
                 widget.hide()
                 widget.deleteLater()
         self.label_checks.clear()
+        self.area_fields.clear()
         self.label_choices.hide()
 
     def _ensure_model_labels(self) -> None:
@@ -1457,24 +1488,42 @@ class RecipePage(QWidget):
                 self._labels_error = "Missing complete model label catalog"
             else:
                 for label in labels:
-                    check = QPushButton(label.replace("&", "&&"), self.label_choices)
+                    pair = QWidget(self.label_choices)
+                    controls = QHBoxLayout(pair)
+                    controls.setContentsMargins(0, 0, 0, 0)
+                    controls.setSpacing(2)
+                    check = QPushButton(label.replace("&", "&&"), pair)
                     check.setObjectName("recipeChoice")
                     check.setCheckable(True)
                     check.setAccessibleName(label)
                     check.setMinimumHeight(Style.touch)
-                    self._label_flow.addWidget(check)
+                    controls.addWidget(check)
+                    field = QLineEdit(pair)
+                    field.setPlaceholderText("0")
+                    field.setFixedWidth(72)
+                    field.setMinimumHeight(Style.touch)
+                    field.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    field.setValidator(
+                        QRegularExpressionValidator(QRegularExpression("[0-9]*"), field)
+                    )
+                    if limit := get_int_max_str_digits():
+                        field.setMaxLength(limit)
+                    controls.addWidget(field)
+                    self._label_flow.addWidget(pair)
                     self.label_checks[label] = check
+                    self.area_fields[label] = field
 
-                    def toggled(checked: bool, name: str = label) -> None:
-                        self._label_toggled(name, checked)
+                    def edited(_value: bool | str, name: str = label) -> None:
+                        self._edit_label(name)
 
-                    check.toggled.connect(toggled)
+                    check.toggled.connect(edited)
+                    field.textEdited.connect(edited)
                 self.label_choices.show()
                 self._tab_order()
         self.refresh_state()
         self._continue_after_labels()
 
-    def _label_toggled(self, label: str, included: bool) -> None:
+    def _edit_label(self, label: str) -> None:
         session = self.session
         if (
             session is not None
@@ -1492,13 +1541,19 @@ class RecipePage(QWidget):
             disabled = tuple(
                 item for item in defaults.vimo.disabled_labels if item != label
             )
-            if not included:
+            if not self.label_checks[label].isChecked():
                 disabled += (label,)
+            minima = dict(defaults.vimo.minimum_areas)
+            minima[label] = int(self.area_fields[label].text() or "0")
             session.draft.defaults = replace(
-                defaults, vimo=replace(defaults.vimo, disabled_labels=disabled)
+                defaults,
+                vimo=replace(
+                    defaults.vimo, disabled_labels=disabled, minimum_areas=minima
+                ),
             )
             self.changed()
-        self.refresh_state()
+        else:
+            self.refresh_state()
 
     def _capsule_changed(self, mode: PreviewMode, enabled: bool) -> None:
         if self.session is None or not self.editable():

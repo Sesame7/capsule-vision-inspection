@@ -487,7 +487,12 @@ def test_recipe_labels_show_saved_policy_and_only_engineers_can_edit(
     path = editor.entry.path
     defaults = editor.draft.defaults
     editor.draft.defaults = replace(
-        defaults, vimo=replace(defaults.vimo, disabled_labels=("Dent", "Retired"))
+        defaults,
+        vimo=replace(
+            defaults.vimo,
+            disabled_labels=("Dent", "Retired"),
+            minimum_areas={"Dent": 85, "Retired": 42},
+        ),
     )
     editor.save()
     original = path.read_bytes()
@@ -517,6 +522,14 @@ def test_recipe_labels_show_saved_policy_and_only_engineers_can_edit(
         assert "Retired" in page.label_choices.toolTip()
         allowed = role >= Role.ENGINEER
         assert all(check.isEnabled() == allowed for check in page.label_checks.values())
+        assert all(field.isReadOnly() != allowed for field in page.area_fields.values())
+        if not allowed:
+            assert page.area_fields["Chip"].text() == "0"
+        area = page.area_fields["Dent"]
+        assert area.text() == "85"
+        area.setText("86")
+        area.textEdited.emit("86")  # Recheck admission even for a programmatic signal.
+        assert area.text() == ("86" if allowed else "85")
         dent = page.label_checks["Dent"]
         dent.setChecked(
             True
@@ -526,7 +539,9 @@ def test_recipe_labels_show_saved_policy_and_only_engineers_can_edit(
         if allowed:
             page.save()
             until(lambda: not page.busy)
-            assert load_recipe(path).defaults.vimo.disabled_labels == ("Retired",)
+            saved = load_recipe(path).defaults.vimo
+            assert saved.disabled_labels == ("Retired",)
+            assert saved.minimum_areas == {"Dent": 86, "Retired": 42}
         else:
             with pytest.raises(AuthorizationError):
                 editor.save()

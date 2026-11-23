@@ -10,12 +10,10 @@ from threading import Event
 
 import pytest
 from reportlab.pdfgen.canvas import Canvas
-from scripts.development_records import Shift, cycle_result
 from tests.support.application import WAIT, FakeSession, close, prepared
 from tests.support.business import mixed_result
 from tests.support.reports import pdf_text
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
-from tests.unit.test_configured_occupancy import configuration
 from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_history import finish
 
@@ -354,7 +352,6 @@ def test_compact_export_omits_exposure_rows_and_releases_spools_on_disk_failure(
 def test_high_volume_report_length_business_fields_and_entire_batch_scope(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = configuration(tmp_path)
     now = 1_800_000_000.0
     observed = now
     owner = ProductionHistory(tmp_path / "volume.sqlite3", clock=lambda: observed)
@@ -379,14 +376,11 @@ def test_high_volume_report_length_business_fields_and_entire_batch_scope(
             batch.uuid, "volume", RECIPE, FOUR_CYCLE, StartAccount("operator-id", "Lin")
         ).result(WAIT)
         ctx = HistoryContext(now, batch.uuid, batch.label, "volume", RECIPE)
-        for group in range(200):
+        # Each mixed group contributes 18 inspected positions across six cameras.
+        groups = 300
+        for group in range(groups):
             observed = now + group * 4 + 4
-            results = [
-                cycle_result(
-                    config, Shift(0, "volume", batch.label, now), group * 4 + slot
-                )
-                for slot in range(1, 5)
-            ]
+            results = [mixed_result(group * 4 + slot) for slot in range(1, 5)]
             reports = tuple(FirstStationReport.from_result(1, r) for r in results)
             words = tuple(
                 a | b | c | d
@@ -405,7 +399,7 @@ def test_high_volume_report_length_business_fields_and_entire_batch_scope(
             owner.query(HistoryQuery(limit=1)).result(
                 WAIT
             )  # Drain bounded test handoffs.
-            if group in (0, 199):
+            if group in (0, groups - 1):
                 request = ReportRequest("batch", batch=batch.uuid)
                 output = tmp_path / f"{group}.pdf"
                 production_report.write_report(
@@ -431,7 +425,7 @@ def test_high_volume_report_length_business_fields_and_entire_batch_scope(
                     assert dict(summary.field_groups()[1])[
                         "Latest inspection"
                     ] == datetime.fromtimestamp(now + group * 4 + 4)
-                    if group == 199:
+                    if group == groups - 1:
                         assert summary.positions.inspected > 5000
         assert pages == [1, 1]
     finally:

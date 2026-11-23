@@ -236,10 +236,12 @@ class ChannelInspectionResult:
     occupancy: OccupancyResult | None = None
     traditional_skip: TraditionalSkipReason | None = None
     forced_reject: Reason | None = None
+    area_filtered: tuple[FindingAssignment, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "checks", tuple(self.checks))
         object.__setattr__(self, "vimo_findings", tuple(self.vimo_findings))
+        object.__setattr__(self, "area_filtered", tuple(self.area_filtered))
         if (
             self.forced_reject is not None
             and self.forced_reject.source is not FindingSource.COLLECTION
@@ -253,7 +255,7 @@ class ChannelInspectionResult:
         if any(
             item.channel_id != self.channel_id
             or item.finding.frame_id.camera_id != self.camera_id
-            for item in self.vimo_findings
+            for item in (*self.vimo_findings, *self.area_filtered)
         ):
             raise ValueError("Finding assigned to wrong channel/camera")
         vimo = next(
@@ -367,6 +369,7 @@ class CameraInspectionResult:
         findings = (
             *self.unassigned_findings,
             *(item.finding for item in self.assigned_findings),
+            *(item.finding for row in self.channels for item in row.area_filtered),
         )
         if any(finding.frame_id != self.frame_id for finding in findings):
             raise ValueError("Finding belongs to another frame")

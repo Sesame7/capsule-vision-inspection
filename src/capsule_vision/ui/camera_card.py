@@ -24,6 +24,7 @@ from capsule_vision.inspection.production import (
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
+from .finding_overlay import draw_findings, finding_caption
 from .production_presentation import (
     Indicator,
     channel_indicator,
@@ -46,8 +47,12 @@ class CameraViewport(QWidget):
         self.image = QImage()
         self.revision = -1
         self.conversions = 0
-        self.boxes: tuple[BoundingRect, ...] = ()
+        self.overlays: tuple[tuple[BoundingRect, str], ...] = ()
         self.message = ""
+
+    @property
+    def boxes(self) -> tuple[BoundingRect, ...]:
+        return tuple(rect for rect, _ in self.overlays)
 
     def set_frame(self, frame: DisplayFrame | None) -> None:
         revision = frame.revision if frame else -1
@@ -81,13 +86,7 @@ class CameraViewport(QWidget):
                 QRectF(transform.x, transform.y, transform.width, transform.height),
                 self.image,
             )
-            painter.setClipRect(
-                QRectF(transform.x, transform.y, transform.width, transform.height)
-            )
-            painter.setPen(QPen(QColor(Style.ng), 2))
-            for box in self.boxes:
-                painter.drawRect(QRectF(*transform.rectangle(box)))
-            painter.setClipping(False)
+            draw_findings(painter, transform, self.overlays)
         if self.message:
             painter.setPen(QColor(Style.secondary))
             painter.drawText(
@@ -315,20 +314,25 @@ class CameraCard(QFrame):
             )
             else "--"
         )
-        boxes: list[BoundingRect] = []
+        labels: dict[BoundingRect, list[str]] = {}
         if result:
-            boxes.extend(
-                item.finding.bounding_rect for item in result.assigned_findings
-            )
+            for item in result.assigned_findings:
+                f = item.finding
+                labels.setdefault(f.bounding_rect, []).append(
+                    finding_caption(f.label, f.area)
+                )
             for row in result.channels:
                 for check in row.checks:
                     if check.assessment.judgment is ProductJudgment.NG:
-                        boxes.extend(
-                            reason.bounding_rect
-                            for reason in check.reasons
-                            if reason.bounding_rect is not None
-                        )
-        self.viewport.boxes = tuple(dict.fromkeys(boxes))
+                        for reason in check.reasons:
+                            if reason.bounding_rect is not None:
+                                labels.setdefault(reason.bounding_rect, [])
+        self.viewport.overlays = tuple(
+            (rect, ", ".join(dict.fromkeys(values))) for rect, values in labels.items()
+        )
+        self.viewport.setAccessibleDescription(
+            "\n".join(caption for _, caption in self.viewport.overlays if caption)
+        )
         self.viewport.message = (
             text("pending", self.language)
             if self._frame is not None

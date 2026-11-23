@@ -41,6 +41,7 @@ from capsule_vision.inspection.production.evidence import (
     camera_vimo_evidence,
     check_result,
     duration_ms,
+    representative_findings,
 )
 
 
@@ -222,12 +223,10 @@ class ConfiguredProductionPipeline:
             layout.slots, traditional, occupancy, strict=True
         ):
             confirmed_empty = presence.state is OccupancyState.EMPTY
-            matched = (
-                ()
+            matched, filtered = (
+                ((), ())
                 if confirmed_empty
-                else tuple(
-                    item for item in assignments if item.channel_id == slot.channel_id
-                )
+                else representative_findings(slot, assignments, policy.minimum_areas)
             )
             rows.append(
                 ChannelInspectionResult(
@@ -241,6 +240,7 @@ class ConfiguredProductionPipeline:
                         ),
                     ),
                     matched,
+                    area_filtered=filtered,
                     occupancy=presence,
                     traditional_skip=TraditionalSkipReason.CONFIRMED_EMPTY
                     if self.configuration.capsule.enabled and confirmed_empty

@@ -168,15 +168,14 @@ def test_effective_findings_are_historical_camera_evidence(tmp_path: Path) -> No
         assert len(page.records) == 3
         records = {(r.context.run_id, r.cycle_id): r for r in page.records}
         stored = records[(reviewed.run_id, 1)]
-        shared = HistoryFinding("Scratch", BoundingRect(75, 17, 90, 12), (8, 9))
-        dent = HistoryFinding("Dent", BoundingRect(103, 22, 9, 12), (8,))
+        shared = HistoryFinding("Scratch", BoundingRect(75, 17, 90, 12), (8, 9), 1080)
+        dent = HistoryFinding("Dent", BoundingRect(103, 22, 9, 12), (8,), 108)
         assert stored.cameras[1].image_evidence == HistoryImageEvidence(
             (504, 120),
             (
                 shared,
                 dent,
-                HistoryFinding("Dent", BoundingRect(109, 80, 6, 9), (8,)),
-                dent,
+                HistoryFinding("Dent", BoundingRect(109, 80, 6, 9), (8,), 54),
             ),
         )
         assert stored.cameras[1].unassigned_labels == ("Background",)

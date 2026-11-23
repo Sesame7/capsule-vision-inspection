@@ -9,8 +9,6 @@ from PySide6.QtGui import (
     QImageReader,
     QPainter,
     QPaintEvent,
-    QPen,
-    QRegion,
     QResizeEvent,
     QShowEvent,
     QTextOption,
@@ -21,6 +19,7 @@ from capsule_vision.application.archive_links import relocated_image_path
 from capsule_vision.application.history import HistoryFinding
 from capsule_vision.inference import BoundingRect
 
+from .finding_overlay import draw_findings, finding_caption
 from .production_presentation import image_transform
 from .style import Style, theme_colors
 
@@ -63,15 +62,19 @@ class HistoryImageViewport(QWidget):
 
     def set_image(self, image: QImage, findings: tuple[HistoryFinding, ...]) -> None:
         self.image = image
+        self.filtered_boxes = frozenset(f.bounding_rect for f in findings if f.filtered)
         labels: dict[BoundingRect, list[str]] = {}
         for finding in findings:
-            labels.setdefault(finding.bounding_rect, []).append(finding.label)
+            labels.setdefault(finding.bounding_rect, []).append(
+                finding_caption(finding.label, finding.area)
+            )
         self.overlays = tuple(
             (rect, ", ".join(dict.fromkeys(values))) for rect, values in labels.items()
         )
         self.setAccessibleDescription(
             "\n".join(
-                f"{finding.label} · "
+                finding_caption(finding.label, finding.area)
+                + " · "
                 + ", ".join(f"CH{channel:02d}" for channel in finding.channels)
                 for finding in findings
             )
@@ -95,46 +98,8 @@ class HistoryImageViewport(QWidget):
             area = QRectF(transform.x, transform.y, transform.width, transform.height)
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
             painter.drawImage(area, self.image)
-            painter.setClipRect(area)
-            painter.setPen(QPen(QColor(Style.ng), 2))
-            boxes = tuple(
-                (QRectF(*transform.rectangle(rect)), label)
-                for rect, label in self.overlays
-            )
-            for box, _ in boxes:
-                painter.drawRect(box)
-            labels = QRegion()
-            for box, label in boxes:
-                self._draw_label(painter, area, box, label, labels)
+            draw_findings(painter, transform, self.overlays, self.filtered_boxes)
         painter.end()
-
-    @staticmethod
-    def _draw_label(
-        painter: QPainter, area: QRectF, box: QRectF, label: str, occupied: QRegion
-    ) -> None:
-        metrics = painter.fontMetrics()
-        padding = 4
-        height = metrics.height() + 4
-        caption = metrics.elidedText(
-            label,
-            Qt.TextElideMode.ElideRight,
-            max(0, min(200, int(area.width()) - 2 * padding)),
-        )
-        if not caption or height > area.height():
-            return
-        width = metrics.horizontalAdvance(caption) + 2 * padding
-        x = min(box.left(), area.right() - width)
-        y = max(area.top(), box.top() - height)
-        badge = QRectF(x, y, width, height)
-        if occupied.intersects(badge.toAlignedRect()):
-            badge.moveTop(min(box.bottom(), area.bottom() - height))
-        bounds = badge.toAlignedRect()
-        if occupied.intersects(bounds):
-            return  # Keep the box and its accessible label when neither caption fits.
-        occupied |= bounds
-        painter.fillRect(badge, QColor(Style.background))
-        painter.setPen(QColor(Style.primary))
-        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, caption)
 
 
 class HistoryImageDialog(QDialog):

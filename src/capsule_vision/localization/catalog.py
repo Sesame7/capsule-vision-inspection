@@ -825,6 +825,8 @@ STRINGS: dict[str, tuple[str, str]] = {
     ),
     "configured_hash": ("配置 SHA-256", "Configured SHA-256"),
     "recipe_labels": ("缺陷标签", "Defect labels"),
+    "recipe_min_mask_area": ("最小掩膜面积", "Minimum Mask Area"),
+    "capsule_filtered": ("已过滤", "Filtered"),
     "recipe_default_label": ("默认缺陷标签：", "Default defect label:"),
     "recipe_labels_error": (
         "完整模型标签不可用；请检查模型与 SDK，草稿未变。",
@@ -1369,6 +1371,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "short_refresh": ("刷新", "Refresh"),
     "short_words": ("字数", "Words"),
     "short_time": ("时间", "Time"),
+    "records_sort": ("排序", "Sort"),
     "comm_watch_short": ("监视", "Watch"),
     "comm_watch": ("寄存器监视", "Register watch"),
     "comm_watch_name": ("名称（可选）", "Name (optional)"),

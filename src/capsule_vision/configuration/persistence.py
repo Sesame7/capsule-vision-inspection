@@ -84,15 +84,22 @@ def _labels(value: object) -> tuple[str, ...]:
 
 def _defaults(value: object) -> CheckConfiguration:
     data = _object(value, "vimo")
-    vimo = _object(data.get("vimo", {}), "enabled required disabled_labels")
+    vimo = _object(
+        data.get("vimo", {}), "enabled required disabled_labels minimum_areas"
+    )
     enabled = _optional(vimo.get("enabled"), _bool)
     required = _optional(vimo.get("required"), _bool)
     disabled_labels = _optional(vimo.get("disabled_labels"), _labels)
+    areas = vimo.get("minimum_areas", {})
+    if not isinstance(areas, dict):
+        raise ConfigurationError("minimum_areas: expected an object of label minima")
     return CheckConfiguration(
         ViMoCheckConfig(
             True if enabled is None else enabled,
             True if required is None else required,
             () if disabled_labels is None else disabled_labels,
+            # ViMoCheckConfig validates every key and value.
+            cast(dict[str, int], areas),
         )
     )
 
@@ -323,6 +330,8 @@ def _checks_data(checks: CheckConfiguration) -> dict[str, object]:
         if value == getattr(ViMoCheckConfig(), key):
             continue
         data[key] = list(value) if isinstance(value, tuple) else value
+    if row.minimum_areas:
+        data["minimum_areas"] = dict(row.minimum_areas)
     return {"vimo": data} if data else {}
 
 

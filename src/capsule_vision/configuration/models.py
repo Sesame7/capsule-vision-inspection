@@ -1,8 +1,10 @@
 """Immutable configuration definitions; no runtime state or calibrated defaults."""
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
+from types import MappingProxyType
 from typing import cast
 
 from capsule_vision.inspection.production import CheckPolicy, InspectionLayout
@@ -72,11 +74,23 @@ class ViMoCheckConfig:
     enabled: bool = True
     required: bool = True
     disabled_labels: tuple[str, ...] = ()
+    minimum_areas: Mapping[str, int] = field(default_factory=dict[str, int], hash=False)
 
     def __post_init__(self) -> None:
         boolean(self.enabled, "enabled")
         boolean(self.required, "required")
         object.__setattr__(self, "disabled_labels", labels(self.disabled_labels))
+        if not isinstance(cast(object, self.minimum_areas), Mapping):
+            raise ConfigurationError(
+                "minimum_areas: expected a mapping of label minima"
+            )
+        areas: dict[str, int] = {}
+        for label, value in self.minimum_areas.items():
+            label = text(label, "minimum_areas label")
+            minimum = integer(value, "minimum_areas value")
+            if minimum:
+                areas[label] = minimum
+        object.__setattr__(self, "minimum_areas", MappingProxyType(areas))
 
     @property
     def policy(self) -> CheckPolicy:

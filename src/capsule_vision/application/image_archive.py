@@ -3,7 +3,7 @@
 import os
 import tempfile
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,12 +13,15 @@ from typing import Protocol, runtime_checkable
 
 import cv2
 
+from capsule_vision.communication.reporting import FirstStationReport
 from capsule_vision.configuration import ImageArchiveSettings
 from capsule_vision.diagnostics import RunDiagnostics
 from capsule_vision.inspection import CameraId, CycleId, Frame
 from capsule_vision.inspection.production import (
     CameraInspectionResult,
     ChannelBusinessStatus,
+    ChannelId,
+    InspectionLayout,
     ProductionInspectionResult,
     TechnicalStatus,
 )
@@ -56,7 +59,8 @@ class ArchiveImage:
     generation: int
     frame: Frame
     observed_at: datetime
-    status: int
+    # An attributed original can lack an individual camera classification.
+    status: int | None
     run_id: str | None = None
 
 
@@ -66,7 +70,8 @@ def write_png(root: Path, item: ArchiveImage) -> Path:
     camera = archive_component(item.frame.id.camera_id)
     directory = root.absolute() / stamp.strftime("%Y-%m-%d") / camera
     directory.mkdir(parents=True, exist_ok=True)
-    name = f"{item.status}_{stamp:%H%M%S}{stamp.microsecond // 1000:03d}_{item.frame.id.cycle_id}_{camera}"
+    prefix = "group" if item.status is None else str(item.status)
+    name = f"{prefix}_{stamp:%H%M%S}{stamp.microsecond // 1000:03d}_{item.frame.id.cycle_id}_{camera}"
     if item.run_id is not None:
         name += "_" + archive_component(item.run_id)
     ok, encoded = cv2.imencode(".png", item.frame.image)
@@ -138,6 +143,7 @@ class ImageArchive:
         max_bytes: int = 256 * 1024 * 1024,
         max_cycles: int = 8,
         max_frame_bytes: int = 32 * 1024 * 1024,
+        group_layout: InspectionLayout | None = None,
         writer: Callable[[Path, ArchiveImage], Path] = write_png,
         now: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         diagnostics: RunDiagnostics | None = None,
@@ -151,6 +157,9 @@ class ImageArchive:
         ):
             raise ValueError("Enabled archive requires five or six distinct cameras")
         self.settings, self.generation, self.cameras = settings, generation, cameras
+        if group_layout is not None and group_layout.camera_ids != cameras:
+            raise ValueError("Archive group layout differs from session cameras")
+        self._group_layout = group_layout if settings.save_ng else None
         self._max_pending, self._max_bytes = max_pending, max_bytes
         self._max_cycles, self._max_frame_bytes = max_cycles, max_frame_bytes
         self._writer, self._now = writer, now
@@ -159,6 +168,10 @@ class ImageArchive:
         self._run_id: str | None = None
         self._published: Callable[[PublishedImage], None] | None = None
         self._cycles: dict[CycleId, dict[CameraId, tuple[Frame, datetime]]] = {}
+        # None marks a camera already requested by another switch. Raw bytes have
+        # one owner in collection, awaiting attribution, or the write queue.
+        self._awaiting: dict[CycleId, dict[CameraId, ArchiveImage | None]] = {}
+        self._decisions: dict[CycleId, frozenset[CameraId]] = {}
         self._queue: deque[ArchiveImage] = deque()
         self._bytes = self._active = self._written = self._dropped = self._failed = 0
         self._issue = ""
@@ -196,7 +209,7 @@ class ImageArchive:
                 reason=message,
                 pending=len(self._queue) + self._active,
                 retained_bytes=self._bytes,
-                collecting=len(self._cycles),
+                collecting=len(self._cycles) + len(self._awaiting),
                 dropped=self._dropped,
             )
 
@@ -205,7 +218,8 @@ class ImageArchive:
             if (
                 self._stopping
                 or cycle in self._cycles
-                or len(self._cycles) >= self._max_cycles
+                or cycle in self._awaiting
+                or len(self._cycles) + len(self._awaiting) >= self._max_cycles
             ):
                 self._drop("Archive cycle capacity/state rejection", cycle)
                 return False
@@ -246,6 +260,7 @@ class ImageArchive:
                 result is not None
                 and result.cycle_id == cycle
                 and result.layout.camera_ids == self.cameras
+                and (self._group_layout is None or result.layout == self._group_layout)
             )
             if result is not None and not matched:
                 self._drop("Archive result identity mismatch", cycle)
@@ -254,43 +269,144 @@ class ImageArchive:
                 if matched and result is not None
                 else {}
             )
+            held: dict[CameraId, ArchiveImage | None] = {}
             for camera, (frame, stamp) in rows.items():
                 outcome = outcomes.get(camera)
-                status = camera_archive_status(outcome) if outcome is not None else None
-                if outcome is not None and (
-                    outcome.frame_id != frame.id
+                if (
+                    outcome is None
+                    or outcome.frame_id != frame.id
                     or outcome.image_shape != frame.image.shape
                 ):
-                    self._drop("Archive FrameId/image-shape mismatch", cycle, camera)
-                    status = None
-                enabled = (
+                    if outcome is not None:
+                        self._drop(
+                            "Archive FrameId/image-shape mismatch", cycle, camera
+                        )
+                    self._bytes -= frame.image.nbytes
+                    continue
+                status = camera_archive_status(outcome)
+                item = ArchiveImage(self.generation, frame, stamp, status, self._run_id)
+                if (
                     status is not None
                     and (
                         self.settings.save_ok,
-                        self.settings.save_ng,
+                        self.settings.save_ng and self._group_layout is None,
                         self.settings.save_error,
                         self.settings.save_empty,
                     )[status]
-                )
-                if enabled and not self._stopping:
-                    if len(self._queue) + self._active < self._max_pending:
-                        assert status is not None
-                        self._queue.append(
-                            ArchiveImage(
-                                self.generation, frame, stamp, status, self._run_id
-                            )
-                        )
-                        continue
-                    self._drop("Archive write queue capacity exceeded", cycle, camera)
-                self._bytes -= frame.image.nbytes
+                ):
+                    self._enqueue(item)
+                    held[camera] = None
+                elif self._group_layout is not None:
+                    held[camera] = item
+                else:
+                    self._bytes -= frame.image.nbytes
+            if self._group_layout is not None:
+                selected = self._decisions.pop(cycle, None)
+                if selected is not None:
+                    self._resolve(cycle, held, selected)
+                elif matched:
+                    self._awaiting[cycle] = held
             self._condition.notify_all()
+
+    def _enqueue(self, item: ArchiveImage) -> None:
+        if len(self._queue) + self._active < self._max_pending:
+            self._queue.append(item)
+        else:
+            self._drop(
+                "Archive write queue capacity exceeded",
+                item.frame.id.cycle_id,
+                item.frame.id.camera_id,
+            )
+            self._bytes -= item.frame.image.nbytes
+
+    def _resolve(
+        self,
+        cycle: CycleId,
+        held: dict[CameraId, ArchiveImage | None],
+        selected: frozenset[CameraId],
+    ) -> None:
+        for camera in selected.difference(held):
+            self._drop("Attributed archive exposure unavailable", cycle, camera)
+        for camera, item in held.items():
+            if item is not None:
+                if camera in selected:
+                    self._enqueue(item)
+                else:
+                    self._bytes -= item.frame.image.nbytes
+
+    def group_completed(
+        self,
+        reports: tuple[FirstStationReport, ...],
+        finals: Mapping[ChannelId, ChannelBusinessStatus],
+    ) -> None:
+        """Bounded handoff from the trusted completion, independent of PLC ACK and PNG I/O."""
+        layout = self._group_layout
+        if (
+            layout is None
+            or len(reports) != 4
+            or any(r.identity.generation != self.generation for r in reports)
+        ):
+            return
+        members = tuple(r.identity.cycle_id for r in reports)
+        if len(set(members)) != 4:
+            return
+        filtered = frozenset(ch for r in reports for ch in r.area_filtered_channels)
+        selected = frozenset(
+            camera.camera_id
+            for camera in layout.cameras
+            if any(
+                finals.get(s.channel_id) is ChannelBusinessStatus.NG
+                or (
+                    s.channel_id in filtered
+                    and finals.get(s.channel_id) is ChannelBusinessStatus.OK
+                )
+                for s in camera.slots
+            )
+        )
+        with self._condition:
+            if self._stopping:
+                return
+            for cycle in members:
+                if cycle in self._cycles:
+                    self._decisions[cycle] = selected
+                else:
+                    self._resolve(cycle, self._awaiting.pop(cycle, {}), selected)
+            self._condition.notify_all()
+
+    def attribution_settled(self, cycle: CycleId) -> None:
+        """A skipped/settled report without a published group releases its originals."""
+        if self._group_layout is None:
+            return
+        with self._condition:
+            if cycle in self._decisions:
+                return
+            if cycle in self._cycles:
+                self._decisions[cycle] = frozenset()
+            elif cycle in self._awaiting:
+                self._resolve(cycle, self._awaiting.pop(cycle), frozenset())
+            else:
+                return
+            self._drop("Four-exposure archive group unattributed", cycle)
 
     def request_stop(self) -> None:
         with self._condition:
             self._stopping = True
-            for rows in self._cycles.values():
+            for cycle, rows in self._cycles.items():
+                if self._group_layout is not None:
+                    selected = self._decisions.get(cycle)
+                    if selected is None:
+                        self._drop(
+                            "Four-exposure archive stopped before attribution", cycle
+                        )
+                    else:
+                        self._resolve(cycle, {}, selected)
                 self._bytes -= sum(frame.image.nbytes for frame, _ in rows.values())
             self._cycles.clear()
+            for cycle, held in self._awaiting.items():
+                self._drop("Four-exposure archive stopped before attribution", cycle)
+                self._resolve(cycle, held, frozenset())
+            self._awaiting.clear()
+            self._decisions.clear()
             self._condition.notify_all()  # Drain already accepted writes.
 
     def join(self, timeout: float | None = None) -> bool:
@@ -307,7 +423,7 @@ class ImageArchive:
                 self._failed,
                 self._bytes,
                 len(self._queue) + self._active,
-                len(self._cycles),
+                len(self._cycles) + len(self._awaiting),
                 self._issue,
                 self._thread.is_alive(),
             )

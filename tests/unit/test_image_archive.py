@@ -21,14 +21,17 @@ from capsule_vision.application.image_archive import (
     camera_archive_status,
     write_png,
 )
+from capsule_vision.communication.reporting import FirstStationReport
 from capsule_vision.configuration import ImageArchiveSettings
 from capsule_vision.diagnostics import RunDiagnostics, RuntimeDiagnostics
 from capsule_vision.inspection import CameraId, CycleId, Frame, FrameId
 from capsule_vision.inspection.production import (
     CameraInspectionResult,
+    ChannelBusinessStatus,
     FindingSource,
     OccupancyResult,
     OccupancyState,
+    ProductionInspectionResult,
     ProductJudgment,
     Reason,
     TechnicalStatus,
@@ -39,6 +42,208 @@ SUCCESS, ERROR, DISABLED = TechnicalStatus
 EMPTY, PRESENT = OccupancyState
 STAMP = datetime(2026, 10, 17, 23, 59, 59, 123456).astimezone()
 RUN = "bbd4acd7f3d8483f88311a2ab0d9c0c9"
+
+
+def occupied_cycle(cycle: int) -> ProductionInspectionResult:
+    result = production(cycle)
+    return replace(
+        result,
+        cameras=tuple(
+            replace(
+                camera,
+                channels=tuple(
+                    channel(c, PRESENT, SUCCESS, OK) for c in camera.channels
+                ),
+            )
+            for camera in result.cameras
+        ),
+    )
+
+
+@pytest.mark.parametrize("also_ok", (False, True))
+def test_group_archive_uses_actual_members_and_deduplicates_other_switches(
+    tmp_path: Path, also_ok: bool
+) -> None:
+    cycles = tuple(occupied_cycle(c) for c in (91, 117, 106, 150))
+    third = cycles[2]
+    first_camera = third.cameras[0]
+    uncertain = replace(
+        first_camera,
+        channels=(
+            channel(first_camera.channels[0], None, SUCCESS, OK),
+            *first_camera.channels[1:],
+        ),
+    )
+    cycles = (
+        cycles[0],
+        cycles[1],
+        replace(third, cameras=(uncertain, *third.cameras[1:])),
+        cycles[3],
+    )
+    layout = cycles[0].layout
+    reports = tuple(FirstStationReport.from_result(1, cycle) for cycle in cycles)
+    filtered_channel = layout.cameras[1].slots[2].channel_id
+    reports = (
+        *reports[:3],
+        replace(reports[3], area_filtered_channels=frozenset({filtered_channel})),
+    )
+    finals = dict(reports[0].statuses)
+    finals[layout.cameras[0].slots[5].channel_id] = ChannelBusinessStatus.NG
+    archive = ImageArchive(
+        ImageArchiveSettings(str(tmp_path), save_ok=also_ok, save_ng=True),
+        1,
+        layout.camera_ids,
+        group_layout=layout,
+    )
+    links: list[PublishedImage] = []
+    archive.bind_run(RUN, links.append)
+    archive.start()
+    try:
+        for index, cycle in enumerate(cycles):
+            assert archive.begin(cycle.cycle_id)
+            for j, camera in enumerate(cycle.cameras):
+                if (index, j) != (1, 1):  # One missing original on a selected camera.
+                    archive.retain(pixels(camera))
+            if index == 3:  # Reporting wins the race against the last archive callback.
+                archive.group_completed(reports, finals)
+                archive.attribution_settled(cycle.cycle_id)
+            archive.complete(cycle.cycle_id, cycle)
+    finally:
+        archive.request_stop()
+        assert archive.join(5)
+    cameras = layout.camera_ids if also_ok else layout.camera_ids[:2]
+    assert {(p.cycle_id, p.camera_id) for p in links} == {
+        (c.cycle_id, cam)
+        for c in cycles
+        for cam in cameras
+        if (c.cycle_id, cam) != (117, layout.camera_ids[1])
+    }
+    assert len(links) == 4 * len(cameras) - 1 == len(list(tmp_path.rglob("*.png")))
+    for link in links:
+        prefix = (
+            "group_"
+            if (link.cycle_id, link.camera_id) == (106, layout.camera_ids[0])
+            else "0_"
+        )
+        assert link.path.name.startswith(prefix)
+    final = archive.snapshot()
+    assert (
+        final.dropped == 1
+        and final.last_issue == "Attributed archive exposure unavailable"
+    )
+    assert final.collecting == final.retained_bytes == final.pending == 0
+
+
+def test_lost_attribution_releases_frames_before_or_after_terminal_and_at_stop(
+    tmp_path: Path,
+) -> None:
+    cycles = tuple(occupied_cycle(c) for c in (7, 15, 21, 37))
+    layout = cycles[0].layout
+    log = RuntimeDiagnostics(tmp_path / "logs", "detailed")
+    archive = ImageArchive(
+        ImageArchiveSettings(str(tmp_path), save_ng=True),
+        1,
+        layout.camera_ids,
+        group_layout=layout,
+        max_cycles=1,
+        diagnostics=RunDiagnostics(log, 1, "local", RUN),
+    )
+    archive.start()
+    try:
+        for n, cycle in enumerate(cycles[:3]):
+            assert archive.begin(cycle.cycle_id)
+            archive.retain(pixels(cycle.cameras[0]))
+            if n == 0:
+                archive.attribution_settled(cycle.cycle_id)
+            archive.complete(cycle.cycle_id, cycle)
+            if n == 1:
+                archive.attribution_settled(cycle.cycle_id)
+            if n < 2:
+                assert (
+                    archive.snapshot().retained_bytes
+                    == archive.snapshot().collecting
+                    == 0
+                )
+        assert not archive.begin(cycles[-1].cycle_id)
+    finally:
+        archive.request_stop()
+        assert archive.join(5)
+        log.close()
+    assert any(
+        row["cycle_id"] == 37 and row["collecting"] == 1
+        for row in observations(tmp_path / "logs", "archive.dropped")
+    )
+    final = archive.snapshot()
+    assert (
+        final.dropped == 4
+        and final.written == final.retained_bytes == final.collecting == 0
+    )
+    assert not list(tmp_path.rglob("*.png"))
+
+
+def test_selected_burst_drops_at_capacity_and_links_only_successful_writes(
+    tmp_path: Path,
+) -> None:
+    cycles = tuple(occupied_cycle(i) for i in (11, 25, 44, 60))
+    layout = cycles[0].layout
+    reports = tuple(FirstStationReport.from_result(1, cycle) for cycle in cycles)
+    finals = dict(reports[0].statuses)
+    entered, release = Event(), Event()
+
+    def writer(root: Path, item: ArchiveImage) -> Path:
+        if item.frame.id.camera_id == layout.camera_ids[0]:
+            entered.set()
+            assert release.wait(5)
+            raise OSError("PNG write failed")
+        return write_png(root, item)
+
+    links: list[PublishedImage] = []
+    archive = ImageArchive(
+        ImageArchiveSettings(str(tmp_path), save_ng=True),
+        1,
+        layout.camera_ids,
+        group_layout=layout,
+        max_pending=2,
+        writer=writer,
+    )
+    archive.bind_run(RUN, links.append)
+    archive.start()
+    try:
+        for cycle in cycles:
+            assert archive.begin(cycle.cycle_id)
+            for camera in cycle.cameras:
+                archive.retain(pixels(camera))
+            archive.complete(cycle.cycle_id, cycle)
+        archive.group_completed(reports, finals)
+        assert (
+            archive.snapshot().written == archive.snapshot().retained_bytes == 0
+        )  # Ordinary OK.
+        # New group, with two selected cameras and one writable slot per camera.
+        more = tuple(occupied_cycle(i) for i in (70, 90, 93, 150))
+        for cycle in more:
+            assert archive.begin(cycle.cycle_id)
+            for camera in cycle.cameras:
+                archive.retain(pixels(camera))
+            archive.complete(cycle.cycle_id, cycle)
+        for camera in layout.cameras[:2]:
+            finals[camera.slots[0].channel_id] = ChannelBusinessStatus.NG
+        archive.group_completed(
+            tuple(FirstStationReport.from_result(1, c) for c in more), finals
+        )
+        assert entered.wait(5)
+        assert archive.snapshot().pending == 2 and archive.snapshot().dropped == 6
+        archive.request_stop()
+        assert not archive.join(0) and not links
+    finally:
+        release.set()
+        archive.request_stop()
+        assert archive.join(5)
+    final = archive.snapshot()
+    assert (
+        final.failed == final.written == len(links) == 1 and final.retained_bytes == 0
+    )
+    assert links[0].cycle_id == 70 and links[0].camera_id == layout.camera_ids[1]
+    assert list(tmp_path.rglob("*.png")) == [links[0].path]
 
 
 def inspected() -> CameraInspectionResult:

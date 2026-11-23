@@ -677,6 +677,7 @@ class MainWindow(QMainWindow):
         elif (
             page is self.ng_capsules
             and (row := self.ng_capsules.selected_capsule) is not None
+            and not row.filtered
             and row.batch_uuid
         ):
             action.request = ReportRequest("defects", batch=row.batch_uuid)
@@ -687,6 +688,7 @@ class MainWindow(QMainWindow):
                 action.missing = (
                     "records_no_batch"
                     if self.ng_capsules.selected_capsule
+                    and not self.ng_capsules.selected_capsule.filtered
                     else "unavailable"
                 )
         action.present()

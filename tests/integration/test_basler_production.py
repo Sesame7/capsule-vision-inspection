@@ -72,9 +72,11 @@ from capsule_vision.application.image_archive import (
     ImageArchive,
     ImageArchiveCommands,
 )
+from capsule_vision.application.ng_capsules import CapsuleFilter
 from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
+from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.application.run_configuration import RunConfiguration
 from capsule_vision.application.source_control import SourceControlState
 from capsule_vision.communication import FinsTcpEndpoint, FinsUdpEndpoint
@@ -101,6 +103,7 @@ from capsule_vision.diagnostics import (
 from capsule_vision.inference import BoundingRect, ImageResult
 from capsule_vision.inference._validation import uint8_array
 from capsule_vision.inspection import CameraId, CycleStatus, FrameId
+from capsule_vision.inspection.production import InspectionLayout
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
@@ -385,9 +388,15 @@ def test_archive_is_independent_of_accounting_and_reports_and_joined_on_shutdown
         cameras: tuple[CameraId, ...],
         *,
         diagnostics: RunDiagnostics | None = None,
+        group_layout: InspectionLayout | None = None,
     ) -> ImageArchive:
         return ImageArchive(
-            settings, generation, cameras, writer=writer, diagnostics=diagnostics
+            settings,
+            generation,
+            cameras,
+            writer=writer,
+            diagnostics=diagnostics,
+            group_layout=group_layout,
         )
 
     monkeypatch.setattr(production_session, "ImageArchive", archiver)
@@ -553,9 +562,15 @@ def test_four_cycle_archive_burst_drains_and_links_with_a_blocked_writer(
         cameras: tuple[CameraId, ...],
         *,
         diagnostics: RunDiagnostics | None = None,
+        group_layout: InspectionLayout | None = None,
     ) -> ImageArchive:
         return ImageArchive(
-            settings, generation, cameras, writer=writer, diagnostics=diagnostics
+            settings,
+            generation,
+            cameras,
+            writer=writer,
+            diagnostics=diagnostics,
+            group_layout=group_layout,
         )
 
     monkeypatch.setattr(production_session, "ImageArchive", archiver)
@@ -736,6 +751,133 @@ def save_basler(path: Path) -> None:
             ),
         ),
     )
+
+
+@pytest.mark.parametrize("camera_count", (5, 6))
+def test_attributed_save_ng_archives_selected_cameras_and_keeps_filtered_ok(
+    tmp_path: Path, passive: PassiveBackend, camera_count: int
+) -> None:
+    data = saved_data(tmp_path, camera_count=camera_count)
+    passive.serials = SERIALS[:camera_count]
+    save_basler(data.sources)
+    root = tmp_path / "group-images"
+    path = data.recipes / "local.json"
+    recipe = load_recipe(path)
+    save_recipe(
+        path,
+        replace(
+            recipe,
+            image_archive=ImageArchiveSettings(str(root), save_ng=True),
+            defaults=replace(
+                recipe.defaults,
+                vimo=replace(recipe.defaults.vimo, minimum_areas={"label-0": 20}),
+            ),
+        ),
+    )
+
+    class SampleEngine(Engine):
+        def infer(self, image_bgr: NDArray[np.generic]) -> ImageResult:
+            base = super().infer(image_bgr)
+            level = int(image_bgr[0, 0, 0])
+            if level not in (60, 61, 70):
+                return base
+            # First two cameras see the same box with different measured areas.
+            region = inferred(BoundingRect(0, 0, 8, 10)).regions[0]
+            return replace(
+                base, regions=(replace(region, area=31 if level == 60 else 16),)
+            )
+
+    engine = SampleEngine()
+    engine.release_warm.set()
+    app = authenticated_startup(data, engine_factory=lambda _: engine).application
+    assert isinstance(app, SourceProductionApplication) and app.history
+    owner = app.history
+    with TcpPeer() as peer:
+        try:
+            app.set_reporting_selection(
+                ReportingSelection(
+                    True,
+                    ReportingSettings(
+                        endpoint=FinsTcpEndpoint(port=peer.port),
+                        mode=ReportingMode.FOUR_CYCLE,
+                    ),
+                )
+            )
+            app.start().result(WAIT)
+            peer.set_words(48, (73,))
+            if camera_count == 6:
+                peer.fail_next("sequence", "drop_after")  # Post-attribution ACK loss.
+            for cycle, intensity in enumerate((50, 60, 70, 80), 1):
+                passive.expose(cycle, tuple(range(camera_count)), intensity=intensity)
+                until(
+                    lambda cycle=cycle: (
+                        app.snapshot().counters.cycles_completed == cycle
+                    )
+                )
+                if cycle < 4:
+                    assert not root.exists()
+            until(
+                lambda: (
+                    (r := app.reporting_snapshot()) is not None
+                    and (r.failed_count if camera_count == 6 else r.acknowledged_count)
+                    == 1
+                )
+            )
+            assert peer.words(49) == (73,)
+            assert app.snapshot().pilot_counters.channel_ng == 1
+            rows = (
+                owner.ng_capsule_page(RecordsScope(), mode=CapsuleFilter.ALL)
+                .result(WAIT)
+                .rows
+            )
+            assert [(r.camera, r.filtered) for r in rows] == [
+                ("CAM1", False),
+                ("CAM2", True),
+            ]
+            if camera_count == 5:
+                # A second group sees the old PLC counter. Four observations alone
+                # must not request more PNGs, create gallery rows or change totals.
+                for cycle in range(5, 9):
+                    passive.expose(cycle, tuple(range(camera_count)), intensity=60)
+                    until(
+                        lambda cycle=cycle: (
+                            app.snapshot().counters.cycles_completed == cycle
+                        )
+                    )
+            app.stop().result(WAIT)
+            until(lambda: owner.snapshot().images_linked == 8)
+            assert app.snapshot().pilot_counters.channel_ng == 1
+            assert (
+                owner.ng_capsule_page(RecordsScope(), mode=CapsuleFilter.ALL)
+                .result(WAIT)
+                .rows
+                == rows
+            )
+            files: set[Path] = set()
+            for row in rows:
+                detail = owner.ng_capsule_detail(row.key).result(WAIT)
+                assert detail and [e.cycle for e in detail.exposures] == [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                ]
+                assert [f.area for e in detail.exposures for f in e.findings] == [
+                    16 if row.filtered else 31
+                ]
+                for i, exposure in enumerate(detail.exposures):
+                    assert exposure.path and exposure.path not in files
+                    files.add(exposure.path)
+                    image = cv2.imread(str(exposure.path))
+                    assert image is not None and image.shape == (20, 60, 3)
+                    assert np.all(image == 50 + i * 10 + int(row.filtered))
+                    assert exposure.channel and exposure.channel.business == (
+                        "NG" if i == 1 and not row.filtered else "OK"
+                    )
+            assert set(root.rglob("*.png")) == files
+        finally:
+            app.close().result(WAIT)
+            assert app.join(WAIT)
 
 
 def test_saved_source_switch_requires_explicit_production_preparation(

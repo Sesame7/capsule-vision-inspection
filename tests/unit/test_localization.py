@@ -269,6 +269,8 @@ ENGLISH_FALLBACK_KEYS = {
 # These workflow captions supplement the shared required catalog. Other locales
 # can use the existing fallback unless the caption is in their safety subset.
 PRIORITY_UI_KEYS = {
+    "records_sort",
+    "capsule_filtered",
     "active_recipe",
     "alarm_activated",
     "alarm_active",
@@ -450,6 +452,7 @@ PRIORITY_UI_KEYS = {
     "process_view_plc",
     "recipe_delete_protected",
     "recipe_dirty_question",
+    "recipe_min_mask_area",
     "recipe_preparing_short",
     "recipe_product_code",
     "recipe_reprepare",
@@ -749,6 +752,7 @@ RECIPE_WORKFLOW_KEYS = {
     "process_view_plc",
     "recipe_delete_protected",
     "recipe_dirty_question",
+    "recipe_min_mask_area",
     "recipe_preparing_short",
     "recipe_product_code",
     "recipe_reprepare",
@@ -810,6 +814,8 @@ RECIPE_REVIEW_BY_LANGUAGE: dict[Language, set[str]] = {
 
 
 RECORDS_WORKFLOW_KEYS = {
+    "records_sort",
+    "capsule_filtered",
     "account.change_password",
     "account.create",
     "account.enabled",
@@ -1017,12 +1023,12 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 737
+    assert len(maintained) == 740
     assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
-        (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 60),
-        (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 153),
+        (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 61),
+        (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 155),
     )
     covered: set[str] = set()
     for keys, _, count in groups:
@@ -1472,7 +1478,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 904
+    assert len(STRINGS) == 907
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (

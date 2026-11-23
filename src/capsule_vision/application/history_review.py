@@ -18,7 +18,7 @@ from .history import (
     HistoryQuery,
     read_history_page,
     read_ng_capsule,
-    read_ng_capsule_page,
+    request_ng_capsule_page,
 )
 from .records_query import BatchChoices, RecordsScope
 from .report_scope import register_result_filter
@@ -63,6 +63,8 @@ def _validate(db: sqlite3.Connection) -> _ReviewSchema:
     has_images = "archive_images" in tables
     if has_images:  # A valid History store need not have archived any images.
         required["archive_images"] = "run_id cycle_id camera_id path observed_at"
+    if "cycle_area_filtered" in tables:
+        required["cycle_area_filtered"] = "run cycle camera channel evidence"
     if "alarm_events" in tables:
         required["alarm_events"] = "id " + alarm_records.EVENT_COLUMNS.replace(",", " ")
     alarm_translations: bool | None = None
@@ -167,8 +169,14 @@ class HistoryReview:
         scope: RecordsScope,
         cursor: ng_capsules.CapsuleRow | None = None,
         newer: bool = False,
+        mode: ng_capsules.CapsuleFilter = ng_capsules.CapsuleFilter.NG,
+        area_label: str | None = None,
+        *,
+        include_area_labels: bool = False,
     ) -> Future[ng_capsules.CapsulePage]:
-        return self._submit(lambda db: read_ng_capsule_page(db, scope, cursor, newer))
+        return request_ng_capsule_page(
+            self._submit, scope, cursor, newer, mode, area_label, include_area_labels
+        )
 
     def ng_capsule_detail(
         self, key: ng_capsules.CapsuleKey

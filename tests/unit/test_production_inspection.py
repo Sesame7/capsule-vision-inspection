@@ -52,6 +52,7 @@ from capsule_vision.inspection.production.evidence import (
     camera_vimo_evidence,
     check_result,
     duration_ms,
+    representative_findings,
 )
 
 
@@ -106,6 +107,35 @@ def test_mirrored_mapping_changes_assignment_without_changing_algorithm() -> Non
     assert assigned[0].finding.frame_id == frame_id and not unmatched
     assert camera.slots[0].channel_id == assigned[0].channel_id
     assert check_result(VIMO, CheckPolicy(), matched=assigned).assessment.judgment is NG
+
+
+def test_shared_regions_use_each_odd_height_rois_own_divider() -> None:
+    camera = layout(1).cameras[0]
+    first, second, *rest = camera.slots
+    camera = replace(
+        camera,
+        slots=(
+            replace(first, rect=BoundingRect(0, 5, 10, 11)),
+            replace(second, rect=BoundingRect(10, 8, 10, 11)),
+            *rest,
+        ),
+    )
+    raw = inferred(BoundingRect(8, 9, 4, 2), BoundingRect(8, 7, 4, 4))
+    raw = replace(
+        raw,
+        regions=(
+            replace(raw.regions[0], label="Dent", area=8),
+            replace(raw.regions[1], label="Dent", area=7),
+        ),
+    )
+    assignments, _ = assign_vimo_findings(
+        camera, extract_vimo_findings(outcome().frame_id, raw)
+    )
+    # The first center is exactly on CH01's divider and above CH02's.
+    assert [
+        [a.finding.area for a in representative_findings(slot, assignments, {})[0]]
+        for slot in camera.slots[:2]
+    ] == [[8, 7], [8]]
 
 
 @pytest.mark.parametrize(

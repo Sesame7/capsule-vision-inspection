@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -702,7 +703,8 @@ def test_compact_recipe_layout(
         (page.metadata["product_code"], page.archive_checks["ok"]),
         (page.buttons["archive_open"], page.process_parameters.expand),
         (page.process_parameters.expand, page.model),
-        (tuple(page.label_checks.values())[-1], page.capsule_enabled["size"]),
+        (tuple(page.label_checks.values())[-1], tuple(page.area_fields.values())[-1]),
+        (tuple(page.area_fields.values())[-1], page.capsule_enabled["size"]),
         (page.capsule_enabled["size"], page.expand_tuning["size"]),
         (page.expand_tuning["size"], page.capsule_enabled["color"]),
     ):
@@ -714,6 +716,7 @@ def test_compact_recipe_layout(
         *page.metadata.values(),
         page.archive_directory,
         *page.process_parameters.fields.values(),
+        *page.area_fields.values(),
     }
     assert len(page.process_parameters.fields) == 17
     assert not page.process_parameters.details.isVisible()
@@ -1145,6 +1148,60 @@ def test_default_model_labels_edit_only_defaults_and_persist(
     assert session.draft.to_recipe() == saved
 
 
+def test_mask_area_edits_are_per_label_drafts_until_save_and_preparation(
+    configured_screen: Screen,
+) -> None:
+    window, session, runtimes = configured_screen
+    page = window.recipe_page
+    assert session.entry
+    original = session.entry.path.read_bytes()
+    prior = window.bridge.application.snapshot().candidate_prepared
+    session.draft.defaults = replace(
+        session.draft.defaults,
+        vimo=replace(
+            session.draft.defaults.vimo, minimum_areas={"Retired": 900}, required=False
+        ),
+    )
+    page.show_draft()
+    name, other = tuple(page.area_fields)[:2]
+    field = page.area_fields[name]
+    caption = text("recipe_min_mask_area", page.language)
+    assert all(
+        caption not in label.text() for label in page.model_section.findChildren(QLabel)
+    )
+    assert field.accessibleName() in field.toolTip()
+    assert (
+        field.accessibleName()
+        == f"{name} · {text('recipe_min_mask_area', page.language)} (px²)"
+    )
+    QTest.keyClicks(field, "4294967297")
+    QTest.keyClicks(field, "x-")
+    QTest.keyClicks(page.area_fields[other], "8")
+    page.label_checks[name].click()
+    assert session.draft.defaults.vimo.minimum_areas == {
+        name: 4294967297,
+        other: 8,
+        "Retired": 900,
+    }
+    assert session.entry.path.read_bytes() == original and not runtimes
+    assert window.bridge.application.snapshot().candidate_prepared is prior
+    page.save()
+    until(lambda: not page.busy)
+    saved = load_recipe(session.entry.path)
+    assert (
+        saved.defaults == session.draft.defaults
+        and saved.defaults.vimo.required is False
+    )
+    assert name in saved.defaults.vimo.disabled_labels
+    assert session.prepare(saved).configuration.checks.vimo == saved.defaults.vimo
+    field.selectAll()
+    QTest.keyClicks(field, "0")
+    assert name not in session.draft.defaults.vimo.minimum_areas
+    session.discard()
+    page.show_draft()
+    assert field.text() == "4294967297"
+
+
 def test_model_reselection_restores_labels_and_preserves_exclusions(
     configured_screen: Screen,
 ) -> None:
@@ -1326,7 +1383,15 @@ def test_inline_labels_wrap_and_cards_follow_content(
             )
         )
         QApplication.processEvents()
-        assert len({check.y() for check in page.label_checks.values()}) > 1
+        assert (
+            len(
+                {
+                    check.mapTo(page.label_choices, QPoint()).y()
+                    for check in page.label_checks.values()
+                }
+            )
+            > 1
+        )
         for check in page.label_checks.values():
             assert_inside(check, page.label_choices)
         heights.append(page.model_section.height())
@@ -1372,9 +1437,11 @@ def test_inline_labels_recheck_runtime_lock_and_metadata_close_is_observed(
     until(future.done)
     # An already delivered click is rechecked, even before the next UI refresh.
     page.label_checks["黑点"].setChecked(False)
+    edit(page.area_fields["黑点"], "100")
     assert session.draft.to_recipe() == before
     window.bridge.refresh()
     assert all(not check.isEnabled() for check in page.label_checks.values())
+    assert all(field.isReadOnly() for field in page.area_fields.values())
     stopped = app.stop()
     until(stopped.done)
     window.bridge.refresh()

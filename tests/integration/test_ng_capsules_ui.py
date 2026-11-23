@@ -14,7 +14,14 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel, QStyleOptionTab
 from tests.support.application import WAIT
-from tests.support.ng_capsules import MEMBERS, RECT, RUN, add_group, sample
+from tests.support.ng_capsules import (
+    MEMBERS,
+    RECT,
+    RUN,
+    add_group,
+    add_measured_groups,
+    sample,
+)
 from tests.support.qt import close_window, delete_widget, ensure_test_fonts, until
 from tests.support.startup import authenticated_startup, saved_data
 
@@ -22,6 +29,7 @@ from capsule_vision.application.history_review import open_history_review
 from capsule_vision.application.identity_models import AuthorizationError
 from capsule_vision.application.ng_capsules import (
     CapsuleExposure,
+    CapsuleFilter,
     CapsuleKey,
     FrozenROI,
 )
@@ -38,11 +46,127 @@ from capsule_vision.ui.production_presentation import image_transform
 from capsule_vision.ui.style import Style
 
 
+def test_sort_menu_navigation_latest_choice_and_scope_reset(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    saved = sample(tmp_path, with_filtered=True)
+    expected = add_measured_groups(saved)
+    with open_history_review(tmp_path) as reader:
+        win = HistoryReviewWindow(reader)
+        try:
+            win.resize(1080, 1920)
+            win.set_language("de")
+            win.show()
+            win.tabs.setCurrentWidget(win.ng_capsules)
+            page = win.ng_capsules
+            until(lambda: page.selected_capsule is not None)
+            original = page.selected_capsule
+
+            def open_with(label: str) -> None:
+                QTest.keyClick(page.sort_button, Qt.Key.Key_Space)
+                until(
+                    lambda: (
+                        page.sort_menu.isVisible()
+                        and any(a.data() == label for a in page.sort_menu.actions())
+                    )
+                )
+
+            open_with("Spot")
+            choices = page.sort_menu.actions()
+            assert [a.data() for a in choices] == [None, "Dent", "Spot"]
+            assert (
+                choices[0].text() == text("short_time", "de") and choices[0].isChecked()
+            )
+            assert page.selected_capsule == original
+            QTest.mouseClick(
+                page.sort_menu,
+                Qt.MouseButton.LeftButton,
+                pos=page.sort_menu.actionGeometry(choices[1]).center(),
+            )
+            until(
+                lambda: (
+                    page.selected_capsule is not None
+                    and page.selected_capsule.sort_area == 5
+                )
+            )
+            assert not page.newer.isEnabled() and page.older.isEnabled()
+            assert (
+                page.selected_capsule
+                and page.selected_capsule.key.first_cycle == expected[0][0]
+            )
+            assert (
+                text("records_sort", "de") in page.sort_button.accessibleName()
+                and "Dent" in page.sort_button.toolTip()
+            )
+            page.table.setCurrentCell(49, 0)
+            page.gallery.next.click()
+            until(lambda: page.table.rowCount() == 13 and page.table.currentRow() == 0)
+            assert (
+                page.selected_capsule
+                and page.selected_capsule.key.first_cycle == expected[50][0]
+            )
+            page.gallery.previous.click()
+            until(lambda: page.table.rowCount() == 50 and page.table.currentRow() == 49)
+            open_with("Spot")
+            choices = page.sort_menu.actions()
+            assert [a.data() for a in choices if a.isChecked()] == ["Dent"]
+            # Three admissions in one Qt turn exercise cancellation and stale-page delivery.
+            choices[2].trigger()
+            choices[0].trigger()
+            choices[2].trigger()
+            page.sort_menu.hide()
+            until(
+                lambda: (
+                    page.selected_capsule is not None
+                    and page.selected_capsule.sort_area == 12
+                    and page.area_label == "Spot"
+                )
+            )
+            assert page.table.currentRow() == 0
+            page.kind.setCurrentIndex(page.kind.findData("filtered"))
+            until(lambda: page.message.text() == text("history_none", "de"))
+            assert page.table.rowCount() == 0 and page.selected_capsule is None
+            open_with("Hair")
+            assert [a.data() for a in page.sort_menu.actions()] == [None, "Hair"]
+            page.sort_menu.actions()[1].trigger()
+            page.sort_menu.hide()
+            until(
+                lambda: (
+                    page.selected_capsule is not None and page.selected_capsule.filtered
+                )
+            )
+            assert page.selected_capsule and page.selected_capsule.sort_area == 17
+            page.kind.setCurrentIndex(page.kind.findData("ng"))
+            until(lambda: page.message.text() == text("history_none", "de"))
+            open_with("Dent")
+            page.sort_menu.actions()[0].trigger()
+            page.sort_menu.hide()
+            until(lambda: page.selected_capsule == original)
+            for dimensions in ((1080, 1920), (1920, 1080)):
+                win.resize(*dimensions)
+                positions: set[tuple[int, int]] = set()
+                for tab in (win.batches, page, win.inspection, win.alarms):
+                    win.tabs.setCurrentWidget(tab)
+                    qapp.processEvents()
+                    point = tab.newer.mapTo(win, QPoint())
+                    positions.add((point.x(), point.y()))
+                    assert page.sort_button.isVisible() == (tab is page)
+                    if tab is page:
+                        offset = point - page.sort_button.mapTo(win, QPoint())
+                        assert offset == QPoint(
+                            page.sort_button.width() + Style.small, 0
+                        )
+                assert len(positions) == 1
+        finally:
+            win.close()
+            delete_widget(win)
+
+
 def test_portable_native_pixels_boxes_and_unavailable_members(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     recipe = "Historische verkapselte Rezeptur · " + "Lichtprüfung und Freigabe " * 6
-    saved = sample(tmp_path / "original", recipe_name=recipe)
+    saved = sample(tmp_path / "original", recipe_name=recipe, edge_area=41)
     package = tmp_path / "relocated"
     copytree(saved.root, package)
     files = [package / "history.sqlite3", *package.rglob("*.png")]
@@ -127,7 +251,7 @@ def test_portable_native_pixels_boxes_and_unavailable_members(
             assert cells[0].overlays == (
                 (BoundingRect(134, 28, 19, 17), "Spot"),
                 (BoundingRect(134, 110, 19, 17), "Spot"),
-                (BoundingRect(0, 80, 7, 5), "Edge"),
+                (BoundingRect(0, 80, 7, 5), "Edge · 41 px²"),
             )
             assert cells[0].toolTip().count("Spot") == 1
             assert cells[2].image.isNull() and cells[2].empty_text == "Unavailable"
@@ -244,7 +368,7 @@ def test_guest_normal_records_reads_only_capsule_projection(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     data = saved_data(tmp_path)
-    saved = sample(data.history.parent, 6)
+    saved = sample(data.history.parent, 6, with_filtered=True)
     start = authenticated_startup(data, select_basler_batch=False)
     delivery = FutureDelivery()
     window = create_window(start, delivery)
@@ -271,6 +395,10 @@ def test_guest_normal_records_reads_only_capsule_projection(
         detail = history.ng_capsule_detail(key).result(WAIT)
         assert detail and detail.roi == FrozenROI("CAM2", 4, RECT)
         assert not hasattr(detail, "effective") and not hasattr(detail, "resources")
+        page.kind.setCurrentIndex(page.kind.findData(CapsuleFilter.FILTERED.value))
+        until(lambda: bool(page.gallery.cells[0].filtered_boxes))
+        assert page.selected_capsule and page.selected_capsule.filtered
+        assert not window.records_export.isEnabled()
         with pytest.raises(AuthorizationError):
             history.run_configuration(RUN).result(WAIT)
         window.history_tabs.setCurrentWidget(window.history)
@@ -282,10 +410,83 @@ def test_guest_normal_records_reads_only_capsule_projection(
         delivery.detach()
 
 
+def test_filtered_capsule_selection_overlay_and_export_in_both_workspaces(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    data = saved_data(tmp_path)
+    saved = sample(data.history.parent, with_filtered=True)
+
+    def select_filtered(page: NgCapsulesPage) -> None:
+        page.set_language("en")
+        assert [page.kind.itemText(i) for i in range(3)] == ["NG", "Filtered", "All"]
+        page.kind.setCurrentIndex(page.kind.findData(CapsuleFilter.FILTERED.value))
+        cell, _, missing, _ = page.gallery.cells
+        until(lambda: bool(cell.filtered_boxes))
+        assert page.table.rowCount() == 1
+        assert (
+            page.selected_capsule
+            and page.selected_capsule.filtered
+            and page.selected_capsule.batch_uuid == saved.batch
+        )
+        rect = BoundingRect(15, 18, 12, 6)
+        assert cell.filtered_boxes == {rect} and cell.overlays == (
+            (rect, "Hair · 17 px²"),
+        )
+        assert missing.image.isNull() and not missing.overlays
+        assert "Filtered · Hair · 17 px²" in missing.accessibleDescription()
+        assert "Result · OK" in cell.toolTip()
+        assert not page.gallery.next.isEnabled()
+
+    with open_history_review(data.history.parent) as reader:
+        portable = HistoryReviewWindow(reader)
+        try:
+            portable.show()
+            portable.tabs.setCurrentIndex(1)
+            select_filtered(portable.ng_capsules)
+        finally:
+            portable.close()
+            delete_widget(portable)
+    start = authenticated_startup(data, select_basler_batch=False)
+    delivery = FutureDelivery()
+    window = create_window(start, delivery)
+    try:
+        window.show()
+        window.navigate(3)
+        window.history_tabs.setCurrentIndex(1)
+        page = window.ng_capsules
+        select_filtered(page)
+        assert (
+            window.records_export.isVisible() and not window.records_export.isEnabled()
+        )
+        assert window.records_export.request is None
+        page.kind.setCurrentIndex(page.kind.findData(CapsuleFilter.ALL.value))
+        until(lambda: page.table.rowCount() == 3 and page.gallery.next.isEnabled())
+        page.gallery.next.click()
+        until(
+            lambda: (
+                window.records_export.isEnabled()
+                and bool(page.gallery.cells[0].overlays)
+            )
+        )
+        assert page.selected_capsule and not page.selected_capsule.filtered
+        assert not page.gallery.cells[0].filtered_boxes
+        page.gallery.previous.click()
+        until(
+            lambda: (
+                not window.records_export.isEnabled()
+                and bool(page.gallery.cells[0].filtered_boxes)
+            )
+        )
+        assert page.selected_capsule and page.selected_capsule.filtered
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
 def test_rapid_selection_coalesces_image_reads_and_dispose_is_nonblocking(
     qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    saved = sample(tmp_path)
+    saved = sample(tmp_path, edge_area=41)
     started, release = Event(), Event()
     threads: list[int] = []
     slots: list[int] = []
@@ -316,7 +517,10 @@ def test_rapid_selection_coalesces_image_reads_and_dispose_is_nonblocking(
             release.set()
             until(lambda: not page.gallery.cells[0].image.isNull())
             assert slots == [4, 5, 5, 5, 5] and all(t != get_ident() for t in threads)
-            assert "Edge, Neighbour" in page.gallery.cells[0].accessibleDescription()
+            assert (
+                "Edge · 41 px², Neighbour"
+                in page.gallery.cells[0].accessibleDescription()
+            )
             assert "Spot" not in page.gallery.cells[0].toolTip()
             started.clear()
             release.clear()

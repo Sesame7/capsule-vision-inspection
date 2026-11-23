@@ -4,7 +4,7 @@ No engine, worker, collection or scheduling ownership lives here. Consumers must
 release their original cycle Future/result separately to release its masks.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from capsule_vision.inference import ImageResult
 
@@ -13,7 +13,7 @@ from ..models import (
     FrameInspectionResult,
     timestamp,
 )
-from .layout import CameraLayout, OverlapPolicy
+from .layout import CameraLayout, ChannelROI, OverlapPolicy
 from .models import (
     Assessment,
     CheckPolicy,
@@ -116,6 +116,37 @@ def assign_vimo_findings(
         if not matched:
             unassigned.append(finding)
     return tuple(assigned), tuple(unassigned)
+
+
+def representative_findings(
+    slot: ChannelROI,
+    assignments: Sequence[FindingAssignment],
+    minimum_areas: Mapping[str, int],
+) -> tuple[tuple[FindingAssignment, ...], tuple[FindingAssignment, ...]]:
+    """Select by whole SDK area within this exposure and channel's two views."""
+    divider = slot.rect.y + slot.rect.height // 2
+    winners: dict[tuple[str, bool], FindingAssignment] = {}
+    for assignment in assignments:
+        if assignment.channel_id != slot.channel_id:
+            continue
+        finding = assignment.finding
+        box = finding.bounding_rect
+        lower = 2 * box.y + box.height >= 2 * divider
+        key = finding.label, lower
+        previous = winners.get(key)
+        if previous is None or (finding.area, -finding.region_index) > (
+            previous.finding.area,
+            -previous.finding.region_index,
+        ):
+            winners[key] = assignment
+    retained: list[FindingAssignment] = []
+    filtered: list[FindingAssignment] = []
+    for item in sorted(winners.values(), key=lambda a: a.finding.region_index):
+        if item.finding.area >= minimum_areas.get(item.finding.label, 0):
+            retained.append(item)
+        else:
+            filtered.append(item)
+    return tuple(retained), tuple(filtered)
 
 
 def camera_vimo_evidence(

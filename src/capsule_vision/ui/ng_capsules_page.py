@@ -1,14 +1,16 @@
-"""Four real exposures of one stored final-NG position in the shared Records workspace."""
+"""Four attributed exposures of a rejected or area-filtered capsule."""
 
+from concurrent.futures import Future
 from math import ceil
 from pathlib import Path
 from threading import Event
 from typing import cast
 
 from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QHideEvent, QImage, QResizeEvent, QShowEvent
+from PySide6.QtGui import QAction, QHideEvent, QImage, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QLabel,
+    QMenu,
     QPushButton,
     QTableWidget,
     QVBoxLayout,
@@ -19,6 +21,7 @@ from capsule_vision.application.history import HistoryReader
 from capsule_vision.application.ng_capsules import (
     CapsuleDetail,
     CapsuleExposure,
+    CapsuleFilter,
     CapsuleKey,
     CapsulePage,
     CapsuleRow,
@@ -27,6 +30,7 @@ from capsule_vision.application.records_query import RecordsScope
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
+from .finding_overlay import finding_caption
 from .future_delivery import FutureDelivery
 from .history_event_table import HistoryEventTable, record_time
 from .history_image import HistoryImageViewport
@@ -178,7 +182,11 @@ def _exposure_text(
         lines.append(f"{text('history_result', language)} · {status}")
         if channel and channel.judgment != channel.business:
             lines.append(f"{text('history_judgment', language)} · {channel.judgment}")
-        labels = [f.label for f in exposure.findings]
+        labels = [
+            (text("capsule_filtered", language) + " · " if f.filtered else "")
+            + finding_caption(f.label, f.area)
+            for f in exposure.findings
+        ]
         if channel:
             labels.extend(
                 inspection_reason(code, language) or code for code in channel.reasons
@@ -188,6 +196,15 @@ def _exposure_text(
     if image_issue:
         lines.append(image_issue)
     return title, "\n".join(lines)
+
+
+def _channel_description(row: CapsuleRow, language: Language) -> str:
+    channel = f"CH{row.key.channel:02d}"
+    if row.camera:
+        channel += f" · {row.camera}"
+    if row.filtered:
+        channel += f" · OK · {text('capsule_filtered', language)}"
+    return channel
 
 
 class NgCapsulesPage(HistoryEventTable):
@@ -202,6 +219,11 @@ class NgCapsulesPage(HistoryEventTable):
         self.scope = RecordsScope()
         self.language: Language = "zh"
         self._page = CapsulePage()
+        self.area_label: str | None = None
+        self._labels: tuple[str, ...] | None = None
+        self._options_revision = 0
+        self._options_future: Future[CapsulePage] | None = None
+        self._page_future: Future[CapsulePage] | None = None
         self._cursor: CapsuleRow | None = None
         self._newer = False
         self._page_arrow: _CapsuleButton | None = None
@@ -221,7 +243,19 @@ class NgCapsulesPage(HistoryEventTable):
             self._delivery.detach, Qt.ConnectionType.DirectConnection
         )
         self.search.hide()
-        self.kind.hide()
+        self.sort_button = QPushButton()
+        self.sort_button.setObjectName("ngCapsuleSort")
+        self.sort_button.setFixedSize(Style.touch, Style.touch)
+        self.sort_menu = QMenu(self.sort_button)
+        self.filter_bar.insertWidget(
+            self.filter_bar.indexOf(self.newer), self.sort_button
+        )
+        QWidget.setTabOrder(self.kind, self.sort_button)
+        QWidget.setTabOrder(self.sort_button, self.newer)
+        self.sort_button.clicked.connect(self._open_sort)
+        self.sort_menu.triggered.connect(self._choose_sort)
+        self.mode = CapsuleFilter.NG
+        self.kind.currentIndexChanged.connect(self._change_filter)
         root = self.layout()
         assert isinstance(root, QVBoxLayout)
         position = root.indexOf(self.table)
@@ -240,22 +274,48 @@ class NgCapsulesPage(HistoryEventTable):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.navigation_language(language)
+        self.sort_button.setIcon(image_icon("sort", theme_colors(self).primary))
+        self.sort_button.setIconSize(QSize(Style.icon, Style.icon))
+        self._sort_caption()
+        if self.sort_menu.isVisible():
+            self._sort_items()
         self.gallery.set_language(language)
+        with QSignalBlocker(self.kind):
+            self.kind.clear()
+            for label, mode in (
+                ("NG", CapsuleFilter.NG),
+                (text("capsule_filtered", language), CapsuleFilter.FILTERED),
+                (text("export_all", language), CapsuleFilter.ALL),
+            ):
+                self.kind.addItem(label, mode.value)
+            self.kind.setCurrentIndex(self.kind.findData(self.mode.value))
+        self.kind.setAccessibleName(text("history_result", language))
+        self.kind.setToolTip(self.kind.currentText())
         self.table.setAccessibleName(text("records_ng_capsules", language))
+        for idx, row in enumerate(self._page.rows):
+            if row.filtered and (item := self.table.item(idx, 3)):
+                description = _channel_description(row, language)
+                item.setToolTip(description)
+                item.setData(Qt.ItemDataRole.AccessibleTextRole, description)
+        self._size_columns()
+        self._present()
+
+    def _size_columns(self) -> None:
+        channel_sample = "CH36" if self.mode == CapsuleFilter.NG else "CH36 · OK"
         self._pane.table_min_width = self.columns(
-            language,
+            self.language,
             (
                 ("short_time", "12-31 23:59:59.999", "12-31 23:59:59.999", 0),
                 ("batch_id", "LOT-26", "LOT-20261020-003", 4),
                 ("page_recipe", "Test", "黄色胶囊-规格B-灯检方案", 6),
-                ("history_channel", "CH36", "CH36", 0),
+                ("history_channel", channel_sample, channel_sample, 0),
                 ("history_group", "999999", "999999", 0),
             ),
         )
-        self._present()
 
     def hideEvent(self, event: QHideEvent) -> None:
         super().hideEvent(event)
+        self.sort_menu.hide()
         self._select(None)
 
     def showEvent(self, event: QShowEvent) -> None:
@@ -264,7 +324,64 @@ class NgCapsulesPage(HistoryEventTable):
             self._selection_changed()
 
     def refresh(self) -> None:
+        self._options_revision += 1
+        if self._options_future is not None:
+            self._options_future.cancel()
+            self._options_future = None
+        self._labels = None
+        self.sort_menu.hide()
         self._request_page(None, False)
+
+    def _sort_caption(self) -> None:
+        title = text("records_sort", self.language)
+        value = (
+            self.area_label
+            if self.area_label is not None
+            else text("short_time", self.language)
+        )
+        self.sort_button.setToolTip(f"{title} · {value}")
+        self.sort_button.setAccessibleName(self.sort_button.toolTip())
+        self.sort_menu.setAccessibleName(title)
+
+    def _sort_items(self) -> None:
+        self.sort_menu.clear()
+        for label in (None, *(self._labels or ())):
+            caption = text("short_time", self.language) if label is None else label
+            action = self.sort_menu.addAction(caption.replace("&", "&&"))
+            action.setData(label)
+            action.setCheckable(True)
+            action.setChecked(label == self.area_label)
+        self.sort_menu.adjustSize()
+
+    def _open_sort(self) -> None:
+        self._sort_items()
+        self.sort_menu.popup(
+            self.sort_button.mapToGlobal(QPoint(0, self.sort_button.height()))
+        )
+        if (
+            self._labels is None
+            and self.owner is not None
+            and self._options_future is None
+            and not (self._listing and self.area_label is not None)
+        ):
+            self._options_future = self.owner.ng_capsule_page(
+                self.scope, mode=self.mode, include_area_labels=True
+            )
+            self._delivery.watch(
+                f"options:{self._options_revision}", self._options_future
+            )
+
+    def _choose_sort(self, action: QAction) -> None:
+        choice: object = action.data()
+        if (choice is None or isinstance(choice, str)) and choice != self.area_label:
+            self.area_label = choice
+            self._sort_caption()
+            self._request_page(None, False)
+
+    def _change_filter(self) -> None:
+        self.mode = CapsuleFilter(self.kind.currentData())
+        self._size_columns()
+        self.refresh()
 
     def _step(self, delta: int) -> None:
         if self._selected is None:
@@ -293,6 +410,8 @@ class NgCapsulesPage(HistoryEventTable):
         if self._restore_arrow_focus:
             self.table.setFocus()
         self._list_revision += 1
+        if self._page_future is not None:
+            self._page_future.cancel()
         self._error = ""
         self._page = CapsulePage()
         self.table.setRowCount(0)
@@ -303,10 +422,10 @@ class NgCapsulesPage(HistoryEventTable):
     def _submit_page(self) -> None:
         if self.owner is not None and not self._disposed:
             self._listing = True
-            self._delivery.watch(
-                f"page:{self._list_revision}",
-                self.owner.ng_capsule_page(self.scope, self._cursor, self._newer),
+            self._page_future = self.owner.ng_capsule_page(
+                self.scope, self._cursor, self._newer, self.mode, self.area_label
             )
+            self._delivery.watch(f"page:{self._list_revision}", self._page_future)
         self._present()
 
     def _selection_changed(self) -> None:
@@ -355,18 +474,36 @@ class NgCapsulesPage(HistoryEventTable):
         if self._disposed:
             return
         kind, revision = token.split(":")
+        if kind == "options":
+            if int(revision) == self._options_revision:
+                self._options_future = None
+                if isinstance(value, CapsulePage):
+                    self._labels = value.area_labels
+                    if self.sort_menu.isVisible():
+                        self._sort_items()
+                elif error:
+                    self._error = str(error)
+                    self._present()
+            return
         if kind == "page":
             self._listing = False
+            self._page_future = None
             if int(revision) != self._list_revision:
                 self._submit_page()
                 return
             self._page = value if isinstance(value, CapsulePage) else CapsulePage()
+            if self._page.area_labels is not None:
+                self._labels = self._page.area_labels
+                if self.sort_menu.isVisible():
+                    self._sort_items()
             self._error = str(error) if error else ""
             with QSignalBlocker(self.table):
                 self.table.setRowCount(len(self._page.rows))
                 for index, row in enumerate(self._page.rows):
                     stamp, full = record_time(row.observed, milliseconds=True)
                     channel = f"CH{row.key.channel:02d}"
+                    if row.filtered:
+                        channel += " · OK"
                     self.set_values(
                         index,
                         (
@@ -378,7 +515,7 @@ class NgCapsulesPage(HistoryEventTable):
                         ),
                         {
                             0: full,
-                            3: f"{channel} · {row.camera}" if row.camera else channel,
+                            3: _channel_description(row, self.language),
                             4: f"{row.key.first_cycle} · Run {row.key.run}",
                         },
                     )
@@ -438,6 +575,7 @@ class NgCapsulesPage(HistoryEventTable):
         self.message.setToolTip(self._error)
         self.message.setAccessibleDescription(self._error)
         self.refresh_button.setEnabled(self.owner is not None)
+        self.sort_button.setEnabled(self.owner is not None)
         self.newer.setEnabled(
             bool(self._page.rows)
             and (self._page.more if self._newer else self._cursor is not None)
@@ -482,4 +620,8 @@ class NgCapsulesPage(HistoryEventTable):
     def dispose(self) -> None:
         self._disposed = True
         self._cancel.set()
+        for future in (self._page_future, self._options_future):
+            if future is not None:
+                future.cancel()
+        self.sort_menu.hide()
         self._delivery.detach()

@@ -351,6 +351,115 @@ def test_shared_finding_preserved_for_presence_in_either_view(tmp_path: Path) ->
     assert FirstStationReport.from_result(1, result).reject_words[0] & 7 == 0b110
 
 
+def test_mask_area_representatives_are_channel_view_label_and_frame_local(
+    tmp_path: Path,
+) -> None:
+    config = replace(configuration(tmp_path), capsule=CapsuleSettings())
+    pixels = scene()
+    pixels[:, 160:240] = bodies()
+    observations = (
+        ("Dent", 50, BoundingRect(152, 24, 16, 6)),  # Shared between CH02 and CH03.
+        ("Dent", 62, BoundingRect(90, 10, 8, 8)),
+        ("Dent", 50, BoundingRect(171, 24, 12, 10)),  # Equal SDK area, larger bbox.
+        ("Dent", 33, BoundingRect(90, 55, 12, 10)),  # Center exactly on divider.
+        ("Dent", 8, BoundingRect(90, 54, 20, 11)),  # Center half a pixel above.
+        ("Hair", 9, BoundingRect(95, 10, 12, 12)),
+        ("dent", 12, BoundingRect(96, 10, 10, 10)),
+        ("Ignored", 90, BoundingRect(96, 20, 10, 10)),
+        ("Dent", 10, BoundingRect(10, 20, 10, 10)),  # EMPTY channel.
+    )
+    result = inferred(*(r for _, _, r in observations))
+    raw = replace(
+        result,
+        image_shape=pixels.shape,
+        regions=tuple(
+            replace(r, label=label, area=area)
+            for r, (label, area, _) in zip(result.regions, observations, strict=True)
+        ),
+    )
+    captured = cycle(config, pixels)
+
+    def inspect(minima: dict[str, int]):
+        policy = replace(
+            config.checks.vimo, disabled_labels=("Ignored",), minimum_areas=minima
+        )
+        return (
+            ConfiguredProductionPipeline(
+                replace(config, checks=replace(config.checks, vimo=policy))
+            )
+            .inspect(captured, lambda _: raw)
+            .production
+        )
+
+    baseline = inspect({})
+    equal = inspect({"Dent": 62, "Hair": 10, "dent": 13})
+    cleared = inspect({"Dent": 63, "Hair": 10, "dent": 13})
+    for base, cut, empty in zip(
+        baseline.cameras, equal.cameras, cleared.cameras, strict=True
+    ):
+        assert [
+            [a.finding.region_index for a in row.vimo_findings] for row in base.channels
+        ] == [[], [1, 3, 5, 6], [0], [], [], []]
+        assert [
+            [a.finding.area for a in row.vimo_findings] for row in cut.channels
+        ] == [[], [62], [], [], [], []]
+        assert not empty.assigned_findings
+        assert not any(row.area_filtered for row in base.channels)
+        assert [
+            [a.finding.region_index for a in row.area_filtered] for row in cut.channels
+        ] == [[], [3, 5, 6], [0], [], [], []]
+        assert [
+            [a.finding.area for a in row.area_filtered] for row in empty.channels
+        ] == [[], [62, 33, 9, 12], [50], [], [], []]
+        assert base.channels[0].business_status is ChannelBusinessStatus.EMPTY
+        assert base.channels[2].business_status is ChannelBusinessStatus.NG
+        assert cut.channels[2].business_status is ChannelBusinessStatus.OK
+    assert FirstStationReport.from_result(1, baseline).reject_words[0] & 7 == 0b110
+    assert FirstStationReport.from_result(1, equal).reject_words[0] & 7 == 0b010
+    assert FirstStationReport.from_result(1, cleared).reject_words == (0, 0, 0)
+
+
+def test_area_filter_preserves_independent_checks_and_forced_reject(
+    tmp_path: Path,
+) -> None:
+    config = configuration(tmp_path)
+    raw = replace(inferred(BoundingRect(96, 20, 9, 11)), image_shape=(120, 480, 3))
+    pixels = scene()
+    pixels[:, 80:160] = bodies(hue=20)
+    pixels[10:15, 100:120] = 0
+    captured = cycle(config, pixels)
+    base = (
+        ConfiguredProductionPipeline(config).inspect(captured, lambda _: raw).production
+    )
+    strict = ConfiguredProductionPipeline(
+        replace(
+            config,
+            checks=replace(
+                config.checks,
+                vimo=replace(config.checks.vimo, minimum_areas={"label-0": 100}),
+            ),
+        )
+    )
+    filtered = strict.inspect(captured, lambda _: raw).production
+    row = filtered.channels[1]
+    assert base.channels[1].vimo_findings and not row.vimo_findings
+    assert row.checks[1].assessment.judgment is ProductJudgment.OK
+    assert row.business_status is ChannelBusinessStatus.NG
+    assert {r.code for r in row.reasons} >= {
+        "capsule.size.upper.length",
+        "capsule.color.lower.tolerance",
+    }
+    assert all(
+        (a.occupancy, a.checks[0]) == (b.occupancy, b.checks[0])
+        for a, b in zip(base.channels, filtered.channels, strict=True)
+    )
+    forced = strict.forced_camera(config.layout.cameras[0], None, None, "missing_frame")
+    assert all(
+        c.business_status is ChannelBusinessStatus.NG and not c.vimo_findings
+        for c in forced.channels
+    )
+
+
 @pytest.mark.parametrize("error", ["execution_error", "invalid_result"])
 @pytest.mark.parametrize("required", [False, True])
 def test_confirmed_empty_preserves_enabled_vimo_errors(

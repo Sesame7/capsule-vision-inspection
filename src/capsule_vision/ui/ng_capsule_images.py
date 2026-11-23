@@ -1,7 +1,7 @@
 """Decode one selected capsule on the shared Qt pool. Only cropped pixels leave the job."""
 
 from concurrent.futures import CancelledError, Future
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event
 
@@ -49,12 +49,11 @@ def exposure_image(
         if not clipped.isEmpty():
             clipped.translate(-area.x(), -area.y())
             local.append(
-                HistoryFinding(
-                    finding.label,
-                    BoundingRect(
+                replace(
+                    finding,
+                    bounding_rect=BoundingRect(
                         clipped.x(), clipped.y(), clipped.width(), clipped.height()
                     ),
-                    finding.channels,
                 )
             )
     return ExposureImage(image.copy(area), tuple(local))

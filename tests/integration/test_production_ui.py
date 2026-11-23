@@ -235,6 +235,8 @@ def test_frames_match_identity_bgr_and_clear_stale_overlay(
     until(lambda: window.cards[0].result is not None)
     card = window.cards[0]
     assert card.viewport.boxes == (finding.bounding_rect,)
+    assert card.viewport.overlays == ((finding.bounding_rect, "label-0 · 12 px²"),)
+    assert card.viewport.accessibleDescription() == "label-0 · 12 px²"
     # A candidate layout change must not relabel the retained matching result.
     original_layout = card.camera_layout
     card.camera_layout = replace(

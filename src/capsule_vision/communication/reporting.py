@@ -138,6 +138,10 @@ class FirstStationReport:
     statuses: tuple[tuple[ChannelId, ChannelBusinessStatus], ...]
     reject_words: tuple[int, int] | tuple[int, int, int] = field(init=False)
     result_ready_at: float | None = None
+    # Scalar archive evidence carried with the attributed member. No PLC bit uses it.
+    area_filtered_channels: frozenset[ChannelId] = field(
+        default=frozenset(), kw_only=True
+    )
     _verified_empty_channels: frozenset[ChannelId] = field(
         default=frozenset(), kw_only=True, repr=False
     )
@@ -145,6 +149,13 @@ class FirstStationReport:
     def __post_init__(self) -> None:
         pairs = tuple((channel, status) for channel, status in self.statuses)
         object.__setattr__(self, "statuses", pairs)
+        filtered = frozenset(self.area_filtered_channels)
+        if filtered and (
+            any(type(ch) is not int for ch in filtered)
+            or not filtered.issubset(ch for ch, _ in pairs)
+        ):
+            raise ValueError("Filtered evidence must belong to a reported channel")
+        object.__setattr__(self, "area_filtered_channels", filtered)
         object.__setattr__(
             self,
             "reject_words",
@@ -165,6 +176,7 @@ class FirstStationReport:
             )
         statuses: list[tuple[ChannelId, ChannelBusinessStatus]] = []
         verified_empty: set[ChannelId] = set()
+        filtered: set[ChannelId] = set()
         complete = result.cycle_status is CycleStatus.COMPLETE
         for camera in result.cameras:
             observed = (
@@ -179,6 +191,8 @@ class FirstStationReport:
                     row.business_status if observed else ChannelBusinessStatus.UNKNOWN
                 )
                 statuses.append((row.channel_id, status))
+                if observed and row.area_filtered:
+                    filtered.add(row.channel_id)
                 # Business EMPTY already requires two empty views and excludes NG
                 # and forced rejection. Optional check errors can still coexist with it.
                 if status is ChannelBusinessStatus.EMPTY and all(
@@ -189,6 +203,7 @@ class FirstStationReport:
         return cls(
             ReportIdentity(generation, result.cycle_id),
             tuple(statuses),
+            area_filtered_channels=frozenset(filtered),
             _verified_empty_channels=frozenset(verified_empty)
             if complete
             else frozenset(),

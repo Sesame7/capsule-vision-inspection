@@ -331,9 +331,6 @@ publication through the existing Audit owner; it does not create a Save event.
 Incompatible Audit schemas
 are rejected visibly without migration or replacement; existing databases must be
 preserved for an explicitly authorized maintenance decision.
-The development-record replacement tool rejects stores containing configuration
-revisions or captured Run resources, preserving that evidence independently of
-synthetic record provenance.
 
 Authentication (including `session.auto_login`), logout, actual Start/Stop, Batch
 changes, unbatched statistics clearing, saved Recipe selection and important
@@ -703,12 +700,25 @@ Reporting eligibility and ambiguity checks are in [communication](communication.
 
 Full-camera ViMo runs at most once per eligible camera frame when enabled, then
 findings are assigned against saved channel ROIs with original global ChannelIds.
-After label filtering, each channel consumes its assigned findings unless
-Occupancy confirms EMPTY. A shared finding can still contribute to another
-channel, and a failed Occupancy measurement leaves the assignments available.
-Unassigned findings remain available as diagnostic evidence. The camera
-aggregates the channel judgments and collection status, and its defect overlays
-show the findings and reasons consumed by those channels. See the
+Each channel applies the Recipe label policy and suppresses assignments when
+Occupancy confirms EMPTY. For each remaining exact label in each optical view
+of this exposure, Inspection keeps the region with the greatest SDK `region.area`.
+Equal areas use the earliest region in the SDK result. The original bounding-box
+center selects the view relative to the channel ROI's horizontal divider
+(`roi.y + roi.height // 2`). A center on the divider belongs to the lower view.
+The whole Mask Area travels with the finding, including when it spans the divider
+or overlaps another channel. Each channel selects its representatives independently.
+
+A representative is effective when its Mask Area meets or exceeds the Recipe
+minimum for its label. Zero or omission preserves ViMo presence, channel
+judgments and PLC reject bits for the same inputs. A failed Occupancy measurement
+leaves the assignments available. Unassigned findings remain camera diagnostics.
+Inspection keeps each otherwise eligible representative below its minimum as
+separate area-filtered evidence for four-exposure archiving and review. It carries
+the original FrameId, channel assignment, label, rectangle and whole SDK area.
+Inspection, PLC reporting and Batch classification consume effective channel
+results. Live defect overlays show the retained rectangles with captions such as
+`Dent · 423 px²`. See the
 [PLC projection contract](communication.md#first-station-registers) for reject bits.
 
 Occupancy always measures the centered `max(1, width*70//100)` portion of the saved
@@ -940,9 +950,10 @@ Run confirmation. Stored Cycle rows have independent persistent IDs and unique
 `(run_id, cycle_id)` identities. Compact details retain configured camera/slot/
 channel identities, business/technical/judgment states and existing abnormal
 reason codes. When effective ViMo findings exist, the same Cycle transaction
-records their labels, original image rectangles and channel associations under
-the observed camera. Shared findings retain every effective assignment and
-distinct findings retain their multiplicity. Unassigned labels remain separate
+records their labels, original image rectangles, effective channel associations
+and SDK Mask Areas in pixels squared under the observed camera. A shared region
+records only the channels that retained it. Earlier records keep their original
+finding multiplicity and may lack areas. Unassigned labels remain separate
 camera observations. History reads each stored judgment and reason as recorded under the
 inspection policy in effect at the time. Neither judgments nor PLC delivery
 depend on storage success. Image pixels and raw inference outputs stay outside
@@ -1011,8 +1022,8 @@ its own border, with the page background visible in the gutters. The slots
 share a smaller width when space is tight, and long captions elide.
 All roles can browse the first three tabs. Cycles identifies Inspection History
 in its tooltip and accessible name. The shared Export action uses the selected
-Batch on Batches and the selected capsule's recorded Batch on NG. It is disabled
-for an unbatched capsule or an empty selection. Cycles has no Export action.
+Batch on Batches and the selected final-NG capsule's recorded Batch on NG.
+Filtered entries, unbatched capsules and empty selections disable NG Export. Cycles has no Export action.
 Audit and Alarms export their effective record filters at their respective roles.
 Each tab keeps paging and Refresh together at the right of its filter row.
 A single shared filter bar contains two clearable dates and a searchable Batch
@@ -1127,8 +1138,8 @@ nothing. Otherwise a Cycle matches **any** enabled recorded channel business
 state, or its independent technical ERROR for ERR. In particular, selecting OK
 includes a Cycle containing both OK and NG. Existing compressed channel evidence
 provides OK/NG membership on the History owner; this does not change the schema,
-stored aggregate judgment or status precedence. Filtering precedes keyset paging
-and applies to the full defect-report scope, with paging reset on selection change.
+stored aggregate judgment or status precedence. The Cycles page applies the filter
+before keyset paging and resets paging when the selection changes.
 Page entry, filters and Refresh request data; the scalar warning refresh
 does not poll the database. The read-only detail matrix uses stored camera order
 and slot/ChannelId mappings, with one row per camera. Each channel shows its business
@@ -1161,21 +1172,32 @@ read-only dialog. Its initial size fits the image at
 its original aspect ratio, allowing for the window frame, margins and caption
 within about 92% of the screen's available width and height. Resizing refits the
 complete image. The dialog pins the selected record and camera, and paints only their
-stored effective ViMo rectangles with matching image dimensions. Coincident
-rectangles are drawn once. Stored reasons remain available for images without
+stored effective ViMo rectangles with matching image dimensions. Captions include
+the recorded Mask Area when available. Cycles and NG use the same representative
+for each exposure, channel, optical view and exact label. The rectangle center
+locates the view in the frozen channel ROI, with the divider assigned to the lower
+view. A recorded SDK area takes priority. For unmeasured legacy boxes the largest
+rectangle wins and its caption remains label-only. Equal display ranks retain
+stored order. Without trustworthy view geometry, legacy candidates share one
+channel/label selection. A pair of previously recorded measured representatives
+retains its original evidence when the Run layout is unavailable.
+Coincident rectangles are drawn once. Stored reasons remain available for images without
 geometry. Missing, unreadable, invalid and dimension-mismatched images produce
 feedback in the Records detail area. An open error follows the selected Cycle,
 Camera and linked path across language and theme changes. A different image
 selection or a new open attempt clears that error. The native Close control and
 Esc dismiss the dialog. History has no Web API.
 
-NG Capsules lists one row per stored final-NG ChannelId in an attributed
-four-member PLC group. The Run, group and channel together identify the row.
+NG Capsules opens on **NG**, with one row per stored final-NG ChannelId in an
+attributed four-member PLC group. **Filtered** lists final-OK channels with a
+recorded Mask Area exclusion on at least one member. **All** combines the two
+sets. Each Run, group and channel appears once. A final NG always takes precedence.
 History requires four distinct member Cycles in slots 1–4, with the group's first
 Cycle in slot 1 and a complete 30- or 36-channel final outcome. Retained four-member
 facts from trusted Runs without a reporting selection also qualify. The list uses
-the Run's exact Batch association and shows up to 50 capsules per page, newest
-group observation first and channels ascending within each group. A capsule stays
+the Run's exact Batch association and shows up to 50 capsules per page. The
+default **Time** order shows the newest group observation first and channels
+ascending within each group. A capsule stays
 listed even when all four photos are unavailable. The table shows Time, Batch,
 Recipe, Channel and Group. Batch displays the associated historical label or a
 dash, and Group displays the group's first Cycle. Recipe uses the display name
@@ -1185,12 +1207,27 @@ group's retained member Cycles when their recorded values agree. An unavailable
 Recipe name displays as an em dash. Batch and Recipe share the spare column
 width and expose their complete values in tooltips and accessibility text.
 
+The NG sort button immediately before Previous Page offers **Time** and the
+exact defect labels with measured evidence in the current date, Batch and result
+scope. Choosing a label orders matching capsules by their largest recorded Mask
+Area across all four exposures and both optical views, smallest first. NG rows
+use effective findings and Filtered rows use recorded exclusions. A missing
+photo does not erase a recorded measurement. Capsules without a measurement
+for that label remain accessible through Time. Equal areas follow the Time
+order, with Run and group identity breaking ties between simultaneous groups.
+History applies this order to the entire scope before keyset pagination. A sort
+change selects the first matching capsule, and the gallery arrows follow that order.
+
 Selecting a row reads the channel's camera, slot and ROI from its frozen Run
 layout. This limited History query is available to Guest. Full Run configuration
 review requires Engineer or Administrator. Each numbered exposure shows the whole
 channel ROI from its member's linked PNG, with both mirror views in their original
 orientation and aspect ratio. Effective ViMo rectangles assigned to the channel
 are clipped to the ROI and translated to its origin when image dimensions match.
+Their captions use the recorded label and any measured Mask Area of the whole region.
+Filtered rows show `OK` beside the channel. Their excluded representatives use
+dashed amber rectangles and amber measured captions. Exposure tooltips identify
+the exclusion even when the PNG is missing.
 A conservative final NG supplies no additional findings. A missing ROI, unusable
 link or incompatible image leaves that exposure unavailable.
 
@@ -1239,7 +1276,8 @@ Stored finding evidence and the production archive writer are unchanged.
 On the same History writer and in the Cycle transaction, new records capture
 distinct effective ViMo labels and traditional NG reasons per channel. ViMo
 identity includes its saved Model and artifact digest. The pipeline has already
-applied the Recipe label filter and EMPTY gate. Unassigned regions, execution
+applied the label and Occupancy gates, selected representatives per view and
+applied the Recipe Mask Area minima. Unassigned regions, execution
 errors, UNKNOWN and forced collection rejection supply no product category.
 This classification evidence contains scalar identities and categories.
 
@@ -1293,7 +1331,7 @@ initiating session and UI language before opening Save. Simplified Chinese
   Recorded uncertainty, interrupted, faulted or active Runs, missing accounts or
   statistics and technical errors can qualify the summary. The report includes
   paper signature and date fields.
-- **Defect classification report.** NG resolves the selected capsule's Run to its
+- **Defect classification report.** NG resolves the selected rejected capsule's Run to its
   persisted Batch UUID. The matrix starts with an emphasized Batch Total and lists
   every associated Run in start order. Inspected and NG precede the recorded
   category columns and come from the corresponding Batch or Run position summary.
@@ -1440,8 +1478,8 @@ An enabled Basler session owns one `application.image_archive.ImageArchive` thre
 The source retains the original immutable full BGR Frame before runtime submission;
 the terminal camera result must match its session generation, CycleId, CameraId,
 complete FrameId and dimensions. Generation is session-bound, not guessed from
-timestamps. Missing, unfinished or ambiguously attributed frames are skipped;
-display copies are never a substitute. Borrowed aliases remain immutable until
+timestamps. A missing original, mismatched identity or ambiguous source cannot
+supply that exposure. Borrowed aliases remain immutable until
 archival write/drop as well as inference completion. No additional full-image copy
 is made at handoff.
 
@@ -1449,15 +1487,26 @@ Each camera's six channels determine its code. Any definite channel NG takes
 precedence (`1`), followed by channel technical ERROR (`2`). When every channel
 is explicitly OK or confirmed EMPTY, at least one OK gives archive OK (`0`) and
 six EMPTY give archive EMPTY (`3`). UNKNOWN prevents EMPTY/OK classification.
-EMPTY requires confirmed absence in an inspected frame. The matching
-Recipe switch controls one image per camera/cycle, independently of other cameras.
-Unassigned findings do not invent channel judgments. Collection-forced rejection
-does not turn an unfinished frame into an inspected archive image.
+EMPTY requires confirmed absence in an inspected frame. The individual camera
+code controls `save_ok`, `save_error`, `save_empty` and, outside four-cycle reporting,
+`save_ng`. Collection errors and unassigned findings retain their recorded meanings.
 
-The session registers PLC submission first. Each Cycle hands off eligible images
-at its terminal inspection result. Encoding and filesystem work run on the
+In four-cycle reporting, `save_ng` uses the reporting owner's completed group.
+A camera qualifies when one of its channels is final NG or a final-OK channel
+has an otherwise eligible representative below its Recipe minimum on any member.
+The frozen layout maps channels to cameras. The archive requests the original
+for each of the four actual member CycleIds on each qualifying camera. Multiple
+channels and switches share one write per Run/Cycle/Camera. The filename keeps
+the individual camera code, or `group` for a matching original without an
+individual classification. The persisted final outcomes and excluded
+representatives identify the capsule's review category independently of that code.
+
+The session registers PLC submission first. Individual switches may publish
+at terminal inspection. The archive holds remaining originals until attribution
+and releases them when the group is skipped or stopped. Missing originals and
+capacity losses produce diagnostics. Encoding and filesystem work run on the
 archive worker, independently of accounting, reporting ACKs and inspection
-deadlines. Limits are 8 collecting Cycles, 24 queued or active writes,
+deadlines. Limits are 8 Cycles collecting or awaiting attribution, 24 queued or active writes,
 32 MiB per frame and 256 MiB of combined retained, queued and active raw pixels.
 With no existing archive backlog, one burst of four Cycles with up to six eligible
 images each fits these defaults even while the writer is temporarily blocked,
@@ -1466,8 +1515,8 @@ additional transient storage for one image beyond that budget.
 Overflow drops archival work with scalar diagnostics; disk/encoding/path failures
 record a bounded last issue and continue subsequent images. Bridge observation
 shows an archive warning/detail without changing judgments, counters or PLC state.
-No completed pixels are retained in memory. Stop/Close drain accepted writes after
-runtime callbacks settle and wait for the actual writer exit on the application
+Once resolved, only queued and active writes retain pixels. Stop/Close drain accepted writes after
+runtime callbacks and reporting settle and wait for the actual writer exit on the application
 lifecycle thread. A blocked writer keeps shutdown pending; no timeout abandons it.
 
 The selected root receives `YYYY-MM-DD/<CameraId>/<code>_HHmmssSSS_<CycleId>_<CameraId>_<RunId>.png`.
@@ -1709,8 +1758,9 @@ An exact fourth callback arriving late may fill its missing image; an earlier or
 later frame cannot substitute. During the next incomplete group, the previous
 eligible image retains its own fourth result/overlays and identity tooltip. New
 generation/configuration boundaries invalidate compatibility; pending copies are
-released on session cleanup. No four-exposure image cache is created. Independent
-per-exposure archiving and per-Cycle/Folder presentation are unchanged.
+released on session cleanup. The display store keeps only the fourth-exposure
+candidate and eligible image. The [archive worker](#image-archiving) owns the
+originals retained for group archiving.
 
 The Qt camera header centers six four-cycle channel groups in configured order
 between camera identity and timing. Each 28×28 logical-pixel slot holds a 2×2

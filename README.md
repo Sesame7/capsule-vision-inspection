@@ -28,7 +28,7 @@ accuracy remain separate commissioning responsibilities.
 | Recipe | Edit and save Recipe definitions, models and inspection rules |
 | Vision | Configure sources, camera layouts and channel ROIs |
 | Communication | Configure PLC diagnostics, reporting, auxiliary software-status/alarm communication and the Web observer |
-| Records | All roles can browse named Batches, their read-only information, Runs and inspection records. NG Capsules shows the available archived views for each rejected channel of an attributed four-exposure group. Operators and above can export a Production PDF from Batches, a Batch Defect PDF from NG, and filtered Alarm records. Engineers and Administrators can review and export the local Audit Trail. |
+| Records | All roles can browse named Batches, Runs and inspection records. NG Capsules shows four archived exposures for rejected channels and for final-OK channels with a recorded Mask Area exclusion. Operators and above can export a Production PDF from Batches, a Batch Defect PDF from a rejected capsule, and filtered Alarm records. Engineers and Administrators can review and export the local Audit Trail. |
 
 ## Quick Start
 
@@ -130,92 +130,29 @@ that scope, and update affected operational documentation after validation.
 
 ## Development and validation
 
-Use `--help` for maintained entry points:
+Use **Records → NG** to review archived capsules, their four exposures and
+recorded Mask Areas. Portable review opens a copied History package.
 
 ```powershell
-uv run --no-sync python app.py --help
-uv run --no-sync capsule-vision --help
+uv run --no-sync python app.py --history "D:\Ly\Images"
 ```
 
-For realistic Records and customer-report review on a **Windows development
-checkout**, generate an isolated showcase from the repository root:
+To compare ViMo models in the verified SDK environment, run the visualization
+tool once per model on the same original full-camera PNGs. A directory accepts
+`--filenames` or `--limit`. Each invocation writes a fresh
+`outputs/visualization/` subdirectory with the model SHA-256, native area
+cutoffs, per-image region labels, measured areas, rectangles, masks and overlays.
 
 ```powershell
-uv run --no-sync python scripts/populate_development_data.py showcase --anchor 2026-11-06 --utc-offset +08:00
-uv run --no-sync python scripts/populate_development_data.py verify-showcase --stage outputs/showcase-<generated-id>
+uv run --no-sync python scripts/visualize_inference.py MODEL.vimosln IMAGE.png
 ```
 
-The anchor is the last day of the two-week scenario (default: yesterday).
-The fixed UTC offset makes regeneration reproducible. Ten named Batches, 25
-Runs, three fictional production accounts and sparse engineering/alarm events
-include continuation, an interrupted Run and unbatched activity. Independent
-Run/Batch/category and overlap expectations live in `expected.json`, outside
-customer presentation. A SQLite application ID marks both stores as synthetic.
-Only the saved Recipe's enabled checks and verified model-package labels are
-used. Unsupported offline label metadata stops generation; it never invokes
-the SDK. These are simulated evidence, not acquired frames, actual PLC reads,
-successful ACKs or mechanical ejection. No camera archives are generated.
+The separate development History rebuild verifies saved receipts and can enrich
+legacy areas for the original study model. Its plan and verification records
+also support reviewing earlier comparisons. [Development History backfill](docs/development-history-area-rebuild.md)
 
-To **replace recognized development records**, close the application and all
-database owners, inspect the exact paths/counts printed by the preview, then
-explicitly confirm that preview's SHA-256:
-
-```powershell
-uv run --no-sync python scripts/populate_development_data.py preview-showcase --stage outputs/showcase-<generated-id>
-uv run --no-sync python scripts/populate_development_data.py replace-showcase --stage outputs/showcase-<generated-id> --confirm <printed-plan-sha256>
-```
-
-Replacement accepts only the checkout's entry-relative `data/` and a validated
-stage under its `outputs/`. It refuses unknown/customer Batches, additional
-non-synthetic Runs, open owners, redirected files, changed previews, future or
-expired scenarios, and the stress profile. There is no force override. The
-security maintenance lease and native open-file checks protect ownership.
-History and Audit are replaced together in a single SQLite rollback-journal
-transaction; their previous files remain in a unique `before-*` backup in the
-stage. Credentials, configuration, model artifacts, licenses and images are
-untouched. Synthetic historical personnel are not newly provisioned login
-accounts. Keep installed records development-only; never copy this workflow
-to a field/customer installation.
-
-For a **separate** one-Batch/100-Run fixture, add `--profile stress` to `showcase`.
-It remains isolated and is not part of the ordinary showcase. Use a recent
-anchor when opening generated stores in the normal application, whose usual
-30-day detail retention still applies.
-
-The earlier compact commissioning fixtures remain available for boundary
-tests and isolated review. Their account provisioning is optional and prompts
-for credentials; it is not needed to generate or install the showcase:
-
-The legacy `populate` command adds `DEV-*` examples to installed records. Do not
-mix it into a showcase installation; use `review` for those isolated fixtures.
-
-```powershell
-uv run --no-sync python scripts/populate_development_data.py accounts
-uv run --no-sync python scripts/populate_development_data.py populate
-uv run --no-sync python app.py
-```
-
-`accounts` prompts locally for masked credentials. On an empty account store it
-sets up `DEV-Admin`. On an existing store, sign in with an enabled Administrator.
-It creates `DEV-Engineer` and `DEV-Operator` with temporary passwords that must
-be changed at first login. Existing accounts keep their credentials.
-
-`populate` records twelve fictitious commissioning shifts against the saved
-Recipe, verified model and channel layout in this checkout's `data/`. The first
-import selects `DEV-LOT-F`. Re-running keeps the original dates and any later
-Batch selection. Conflicting sample identities or incompatible History schemas
-stop the import. In Records, leave both shared dates empty to browse examples across shifts.
-Use Administrator to review both Audit and Alarm History. `DEV-LOT-*` Batches
-and `DEV-Example-*` audit actors identify the samples. The usual History
-retention period applies.
-
-For isolated UI or report review, run
-`uv run --no-sync python scripts/populate_development_data.py review`.
-It reads the checkout's saved configuration and writes a fresh History and Audit
-pair under `outputs/records-review-*/data/`, leaving installed records intact.
-The scenarios include multi-Run Batches, four-exposure groups, mixed defects and
-empty channels, technical errors, alarm transitions and unsuccessful saves.
-Group evidence represents eligibility for reporting. The examples issue no PLC requests.
+Use the equipment-free Demo for Qt and lifecycle checks. Use the localhost FINS
+simulator for protocol diagnostics. [Local simulator](docs/communication.md#local-simulator-and-verification)
 
 The normal repository quality gates are:
 

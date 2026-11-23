@@ -315,6 +315,19 @@ def test_malformed_recipe_json(tmp_path: Path, content: str, message: str) -> No
         {"vimo": {"disabled_labels": "黑点"}},
         {"vimo": {"disabled_labels": [1]}},
         {"vimo": {"disabled_labels": ["黑点", "黑点"]}},
+        *(
+            {"vimo": {"minimum_areas": invalid}}
+            for invalid in (
+                None,
+                list[object](),
+                0,
+                {"": 1},
+                {"Dent": False},
+                {"Dent": -1},
+                {"Dent": 6.5},
+                {"Dent": "6"},
+            )
+        ),
     ],
 )
 def test_strict_nested_types(tmp_path: Path, defaults: dict[str, object]) -> None:
@@ -347,6 +360,38 @@ def test_absent_and_null_default_leaves_keep_effective_defaults(
     )
     resolved = resolve_configuration(machine(), load_recipe(path), registry())
     assert resolved.checks == CheckConfiguration()
+
+
+def test_minimum_areas_freeze_exact_labels_and_save_only_nonzero(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "areas.json"
+    minima = {"Dent": 41, "dent": 0, "退役": 2**32}
+    policy = ViMoCheckConfig(False, False, ("Dent",), minima)
+    minima["Dent"] = 99
+    recipe = RecipeDefinition(
+        "areas", "Area test", model_id="general", defaults=CheckConfiguration(policy)
+    )
+    save_recipe(path, recipe)
+    saved = json.loads(path.read_bytes())["defaults"]["vimo"]
+    assert saved == {
+        "enabled": False,
+        "required": False,
+        "disabled_labels": ["Dent"],
+        "minimum_areas": {"Dent": 41, "退役": 2**32},
+    }
+    assert (
+        resolve_configuration(machine(), load_recipe(path), registry()).checks.vimo
+        == policy
+    )
+    save_recipe(
+        path,
+        replace(
+            recipe,
+            defaults=CheckConfiguration(ViMoCheckConfig(minimum_areas={"Dent": 0})),
+        ),
+    )
+    assert "defaults" not in json.loads(path.read_bytes())
 
 
 def test_atomic_replace_failure_preserves_target(

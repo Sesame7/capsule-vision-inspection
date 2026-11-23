@@ -128,7 +128,14 @@ class SourceRuntimeSession(ProductionRuntimeSession):
         settings = prepared.configuration.image_archive
         self.archive = (
             ImageArchive(
-                settings, generation, self._layout.camera_ids, diagnostics=diagnostics
+                settings,
+                generation,
+                self._layout.camera_ids,
+                diagnostics=diagnostics,
+                group_layout=self._layout
+                if isinstance(reporting, FourCycleReportingWorker)
+                and reporting.settings.mode is ReportingMode.FOUR_CYCLE
+                else None,
             )
             if continuous_source is not None and settings.enabled
             else None
@@ -240,6 +247,8 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             reporter.note_skipped(
                 identity, exc
             )  # Scalar diagnostic, no traceback retention.
+            if self.archive is not None:
+                self.archive.attribution_settled(cycle_id)
             if self.basler_control is not None:
                 self.basler_control.reported(cycle_id)
             return
@@ -252,7 +261,14 @@ class SourceRuntimeSession(ProductionRuntimeSession):
             control = self.basler_control
             if control is not None:
                 pending.add_done_callback(lambda _: control.reported(cycle_id))
+            archive = self.archive
+            if archive is not None and isinstance(reporter, FourCycleReportingWorker):
+                pending.add_done_callback(
+                    lambda _: archive.attribution_settled(cycle_id)
+                )
         except (ReportingCapacityError, ReportingStateError) as exc:
+            if self.archive is not None:
+                self.archive.attribution_settled(cycle_id)
             # Keep a fresh, traceback-free source issue. The completed inspection
             # still reaches accounting; overload is not model NG/application FAULT.
             with self._lock:

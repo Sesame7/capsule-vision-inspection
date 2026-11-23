@@ -149,6 +149,11 @@ def image_icon(tool: str, color: str = Style.primary) -> QIcon:
                 painter.drawLine(3, 21, 21, 21)
                 painter.drawLine(3, 19, 3, 23)
                 painter.drawLine(21, 19, 21, 23)
+            elif tool == "sort":
+                for y, width in ((6, 5), (12, 8), (18, 11)):
+                    painter.drawLine(3, y, 3 + width, y)
+                painter.drawLine(18, 18, 18, 5)
+                painter.drawPolyline([QPoint(15, 8), QPoint(18, 5), QPoint(21, 8)])
             elif tool in ("previous", "next"):
                 x, dx = (15, -7) if tool == "previous" else (9, 7)
                 painter.drawLine(x, 5, x + dx, 12)
