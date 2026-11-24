@@ -267,18 +267,18 @@ def select(dialog: UsersDialog, username: str) -> Account:
 
 def assert_account_table_columns(dialog: UsersDialog) -> None:
     table, header = dialog.table, dialog.table.horizontalHeader()
-    width = table.viewport().width()
-    widths = tuple(table.columnWidth(i) for i in range(4))
-    assert sum(widths) == width
-    for actual, percent in zip(widths, (30, 19, 22, 29), strict=True):
-        floor, remainder = divmod(width * percent, 100)
-        assert floor <= actual <= floor + bool(remainder), (width, widths, percent)
+    assert header.sectionResizeMode(0) is QHeaderView.ResizeMode.Stretch
+    assert sum(table.columnWidth(i) for i in range(4)) == table.viewport().width()
+    for column in (1, 2, 3):
+        assert header.sectionResizeMode(column) is QHeaderView.ResizeMode.Fixed
+        assert table.columnWidth(column) >= max(
+            header.sectionSizeHint(column), table.sizeHintForColumn(column)
+        )
     assert table.horizontalScrollBar().maximum() == 0
     assert not header.stretchLastSection()
     alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
     assert header.defaultAlignment() == alignment
     for column in range(4):
-        assert header.sectionResizeMode(column) is QHeaderView.ResizeMode.Fixed
         heading = table.horizontalHeaderItem(column)
         assert heading is not None and heading.textAlignment() == alignment
         assert heading.toolTip() == heading.text()
@@ -400,7 +400,18 @@ def test_manage_users_presents_and_changes_auto_login(
     )
     QApplication.processEvents()
     slot = QRect(button.mapTo(users, QPoint()), button.size())
-    button.click()
+    create = users.controls["identity_create"]
+    create.setFocus()
+    for key in (
+        "short_refresh",
+        "identity_change_role",
+        "identity_disable",
+        "identity_reset",
+        "identity_set_auto_login",
+    ):
+        QTest.keyClick(users, Qt.Key.Key_Tab)
+        assert users.controls[key].hasFocus()
+    QTest.keyClick(button, Qt.Key.Key_Space)
     assert_authorized(worker)
     assert QRect(button.mapTo(users, QPoint()), button.size()) == slot
     other = select(users, other.username)
@@ -410,7 +421,7 @@ def test_manage_users_presents_and_changes_auto_login(
     assert_status(worker.username, enabled)
     users.controls["short_refresh"].click()
     assert_authorized(other)
-    button.click()
+    QTest.keyClick(button, Qt.Key.Key_Space)
     until(lambda: not users.busy and users.auto_login_account_id is None)
     assert_status(other.username, enabled)
     assert button.text() == set_caption
@@ -1477,15 +1488,20 @@ def test_manage_users_at_preferred_size(
     users = UsersDialog(host)
     stamp = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
     operator = Account("shift", "Shared Shift", Role.OPERATOR, True, stamp)
+    shift_prefix = "Line03_NightShift_VisualInspection_Operator_"
+    east = Account("east", shift_prefix + "East", Role.OPERATOR, True)
+    west = Account("west", shift_prefix + "West", Role.OPERATOR, True)
     users.install_accounts(
         (
             operator,
             Account("eng", "Line Engineer", Role.ENGINEER, True, stamp),
             Account("admin", "Line Admin", Role.ADMINISTRATOR, True, stamp),
             Account("former", "Former Operator", Role.OPERATOR, False),
+            east,
+            west,
             *(
                 Account(f"op{i}", f"Operator {i}", Role.OPERATOR, True)
-                for i in range(8)
+                for i in range(6)
             ),
         ),
         operator.account_id,
@@ -1510,12 +1526,15 @@ def test_manage_users_at_preferred_size(
         assert users.selected() == operator
         assert users.table.verticalScrollBar().maximum() > 0
         assert users.table.horizontalScrollBar().maximum() == 0
-        if language in ("zh", "en", "de"):
-            for column in range(4):
-                assert users.table.columnWidth(column) >= max(
-                    users.table.sizeHintForColumn(column),
-                    users.table.horizontalHeader().sectionSizeHint(column),
-                )
+        for account in (operator, east, west):
+            select(users, account.username)
+            cell = users.table.currentItem()
+            assert cell is not None and users.selected() == account
+            assert (
+                users.table.visualItemRect(cell).width()
+                >= users.table.sizeHintForIndex(users.table.indexFromItem(cell)).width()
+            )
+            assert users.selected_username.isHidden()
         status = users.table.item(0, 2)
         assert status is not None
         assert status.text() == text(
@@ -1545,12 +1564,61 @@ def test_manage_users_at_preferred_size(
                 and button.toolTip()
                 and button.accessibleName()
             )
+        for key in ("identity_create", "short_refresh"):
+            assert users.controls[key].parentWidget() is users.global_actions
+        for key in (
+            "identity_change_role",
+            "identity_disable",
+            "identity_reset",
+            "identity_set_auto_login",
+        ):
+            assert users.controls[key].parentWidget() is users.account_actions
         users.controls["identity_change_role"].setFocus()
         QTest.keyClick(users, Qt.Key.Key_Escape)
         assert not users.isVisible()
     finally:
         users.close()
         host.close()
+
+
+def test_elided_selected_username_follows_account_and_available_width(
+    identity_screen: tuple[MainWindow, LocalIdentity],
+) -> None:
+    window, owner = identity_screen
+    ui = window.identity_controls
+    login(ui)
+    username = (
+        "华东生产基地胶囊三号包装线成品视觉检测与质量审核组周末夜班交接负责人（东区）"
+    )
+    account = completed(owner.create_account(username, Role.OPERATOR, SECRET))
+    users = manager(ui)
+    table, label = users.table, users.selected_username
+    row = users.accounts.index(account)
+    table.setCurrentCell(row, 2)
+    until(label.isVisible)
+    assert users.selected() == account and label.text() == username
+    assert label.textFormat() is Qt.TextFormat.PlainText
+    accessible = QAccessible.queryAccessibleInterface(label)
+    assert accessible and accessible.text(QAccessible.Text.Name) == username
+    assert label.parentWidget() is users.account_actions
+    until(
+        lambda: label.geometry().bottom() < users.controls["identity_change_role"].y()
+    )
+
+    users.controls["short_refresh"].click()
+    until(lambda: not users.busy)
+    window.set_language("de")
+    assert users.selected() == account and label.text() == username
+    users.resize(1100, 500)
+    until(label.isHidden)
+    assert users.selected() == account
+    users.resize(850, 500)
+    until(label.isVisible)
+    assert label.text() == username
+    table.clearSelection()
+    assert users.selected() is None and label.isHidden()
+    select(users, "Worker")
+    assert label.isHidden() and not label.text()
 
 
 def test_dismissed_role_dialog_ignores_delayed_success_without_retargeting(

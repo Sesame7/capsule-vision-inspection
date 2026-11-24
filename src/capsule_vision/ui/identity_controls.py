@@ -8,6 +8,7 @@ from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QTimer, Signal, 
 from PySide6.QtGui import QAction, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QBoxLayout,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -64,7 +65,6 @@ _ROLES = {
     Role.ADMINISTRATOR: "identity_administrator",
 }
 FormKind = Literal["login", "setup", "change", "rotate", "create", "reset", "recover"]
-_USER_GLOBAL_ACTIONS = ("identity_create", "short_refresh", "identity_set_auto_login")
 _AUTO_LOGIN_SHORT = {
     "identity_auto_login": "short_auto_login",
     "identity_set_auto_login": "short_set_auto_login",
@@ -296,6 +296,9 @@ class UsersDialog(_AccountDialog):
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(Style.touch)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.horizontalHeader().setMinimumSectionSize(0)
         self.table.horizontalHeader().setDefaultAlignment(
@@ -319,28 +322,45 @@ class UsersDialog(_AccountDialog):
         self.global_actions = QWidget()
         self.account_actions = QWidget()
         self._global_row = QHBoxLayout(self.global_actions)
-        self._account_row = QHBoxLayout(self.account_actions)
-        for row in (self._global_row, self._account_row):
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(6)
-        for key in (
-            "identity_create",
-            "short_refresh",
-            "identity_change_role",
-            "identity_disable",
-            "identity_reset",
-            "identity_set_auto_login",
+        selected_layout = QVBoxLayout(self.account_actions)
+        selected_layout.setContentsMargins(0, 0, 0, 0)
+        selected_layout.setSpacing(Style.small)
+        self.selected_username = QLabel()
+        self.selected_username.setTextFormat(Qt.TextFormat.PlainText)
+        self.selected_username.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.selected_username.setWordWrap(True)
+        self.selected_username.hide()
+        selected_layout.addWidget(self.selected_username)
+        self._account_row = QHBoxLayout()
+        self._account_row.setSpacing(Style.small)
+        selected_layout.addLayout(self._account_row)
+        self._account_pairs = (QHBoxLayout(), QHBoxLayout())
+        for pair in self._account_pairs:
+            self._account_row.addLayout(pair)
+        for row, keys in (
+            (self._global_row, ("identity_create", "short_refresh")),
+            (self._account_pairs[0], ("identity_change_role", "identity_disable")),
+            (self._account_pairs[1], ("identity_reset", "identity_set_auto_login")),
         ):
-            button = QPushButton()
-            button.setMinimumHeight(Style.touch)
-            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            row = self._global_row if key in _USER_GLOBAL_ACTIONS else self._account_row
-            row.addWidget(button)
-            self.controls[key] = button
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(Style.small)
+            for key in keys:
+                button = QPushButton()
+                button.setMinimumHeight(Style.touch)
+                button.setSizePolicy(
+                    QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+                )
+                row.addWidget(button)
+                self.controls[key] = button
         self.controls["short_refresh"].setFixedWidth(Style.touch)
         self.controls["identity_create"].setObjectName("start")
         self._action_grid.addWidget(
-            self.global_actions, 0, 0, Qt.AlignmentFlag.AlignLeft
+            self.global_actions,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
         )
         self._action_grid.addWidget(self.account_actions, 0, 1)
         self._actions_wrapped = False
@@ -364,6 +384,18 @@ class UsersDialog(_AccountDialog):
     @Slot()
     def selection_changed(self) -> None:
         self.set_busy(self.busy)
+        self._show_selected_username()
+
+    def _show_selected_username(self) -> None:
+        item = self.table.item(self.table.currentRow(), 0)
+        name = ""
+        if item is not None and item.isSelected():
+            cell = self.table.visualItemRect(item)
+            hint = self.table.sizeHintForIndex(self.table.indexFromItem(item))
+            if hint.width() > cell.width():
+                name = item.text()
+        self.selected_username.setText(name)
+        self.selected_username.setVisible(bool(name))
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -397,7 +429,7 @@ class UsersDialog(_AccountDialog):
     @Slot()
     def _reflow(self) -> None:
         self._layout_actions()
-        self._layout_columns()
+        self._show_selected_username()
 
     def _size_action_captions(self) -> None:
         variants = {
@@ -428,12 +460,22 @@ class UsersDialog(_AccountDialog):
                 button.setMinimumWidth(width)
 
     def _layout_actions(self) -> None:
+        account_width = (
+            sum(pair.sizeHint().width() for pair in self._account_pairs)
+            + self._account_row.spacing()
+        )
+        available = self.action_area.width()
+        self._account_row.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if account_width > available
+            else QBoxLayout.Direction.LeftToRight
+        )
         required = (
             self._global_row.sizeHint().width()
             + self._action_grid.horizontalSpacing()
-            + self._account_row.sizeHint().width()
+            + account_width
         )
-        wrapped = self.action_area.width() < required
+        wrapped = available < required
         if wrapped != self._actions_wrapped:
             self._actions_wrapped = wrapped
             self._action_grid.removeWidget(self.global_actions)
@@ -445,21 +487,36 @@ class UsersDialog(_AccountDialog):
                 self._action_grid.addWidget(self.account_actions, 1, 0, 1, 2)
             else:
                 self._action_grid.addWidget(
-                    self.global_actions, 0, 0, Qt.AlignmentFlag.AlignLeft
+                    self.global_actions,
+                    0,
+                    0,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
                 )
                 self._action_grid.addWidget(self.account_actions, 0, 1)
 
-    def _layout_columns(self) -> None:
-        width = self.table.viewport().width()
-        if width <= 0:
-            return
-        # Round shared edges for 30:19:22:29 so the Status column has room for
-        # localized captions while the columns still fill the viewport exactly.
-        edges = [width * percent // 100 for percent in (0, 30, 49, 71, 100)]
-        for column in range(4):
-            value = edges[column + 1] - edges[column]
-            if self.table.columnWidth(column) != value:
-                self.table.setColumnWidth(column, value)
+    def _size_account_columns(self) -> None:
+        self.table.ensurePolished()
+        header = self.table.horizontalHeader()
+        metrics = self.table.fontMetrics()
+        role_names = tuple(
+            text(key, self.language)
+            for role, key in _ROLES.items()
+            if role is not Role.GUEST
+        )
+        statuses = tuple(
+            _users_caption(key, self.language)
+            for key in ("identity_enabled", "identity_disabled", "identity_auto_login")
+        )
+        for column, values in enumerate(
+            (role_names, statuses, ("2000-12-31 23:59",)), 1
+        ):
+            width = (
+                max(metrics.horizontalAdvance(value) for value in values)
+                + 2 * Style.small
+            )
+            self.table.setColumnWidth(
+                column, max(header.sectionSizeHint(column), width)
+            )
 
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -586,6 +643,7 @@ class UsersDialog(_AccountDialog):
         )
         self.set_busy(self.busy)
         self._size_action_captions()
+        self._size_account_columns()
         self._queue_layout()
         self.feedback(self.status_key, language)
 

@@ -346,23 +346,23 @@ applicable.
 
 The Administrator's resizable Manage Users dialog prefers 850×500 Qt logical pixels,
 bounded by the available screen work area on first display. Its read-only,
-single-selection table allocates its viewport width to Username / Role / Status /
-Last Login in 30% / 19% / 22% / 29% proportions. Shared column edges round to logical
-pixels and use the entire viewport, including after scrollbar changes. The shares
-stay fixed across language changes and are independent of account text
-and selection. Headers and cells align left; long text elides. Account count changes
-do not resize the dialog. Disabled accounts remain visible,
-additional accounts scroll, and refresh preserves selection by account ID. Full
-cell values remain available through tooltips and accessibility.
+single-selection table sizes Role, Status and Last Login for their localized
+headings and values, including the local date and time to the minute. Username
+uses the remaining viewport width. Headers and cells align left. When a selected
+username is elided, its full original value appears once above the account actions.
+Full cell values are available through tooltips and accessibility. Disabled
+accounts remain in the list. Additional accounts scroll within the dialog.
+Refresh and language changes preserve selection by account ID.
 Status shows Auto login for the authorized Operator, Enabled for other enabled
 accounts and Disabled for disabled accounts. The authorized row's tooltip and
 accessible text include both enablement and auto-login status. Set Auto authorizes
 the selected eligible Operator, replacing any prior authorization. Clear Auto
-revokes the selected Operator's authorization. Both captions share one action
-slot next to New User and icon-only Refresh. Chinese and English use compact
-captions. Other languages use their existing localized wording. Change Role,
-Enable/Disable User and Reset Password sit on the right. When localized captions
-need more width, the selected-account actions move together to a second row.
+revokes the selected Operator's authorization. New User and icon-only Refresh
+form the general action group. Change Role, Enable/Disable User, Reset Password
+and Set/Clear Auto form the selected-account group. This group sits to the right
+when it fits, moves below the general actions when needed, and can wrap within
+that space. Set and Clear share one button width. Chinese and English use compact
+auto-login captions.
 Change Role opens a separate role selector with Save/Cancel; unchanged roles
 cannot be saved. Disabling requires a confirmation naming the target; enabling
 does not. Selecting any existing Administrator disables the account-specific
