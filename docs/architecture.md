@@ -1118,7 +1118,11 @@ and only one Batch's accumulated children. It does not load Cycle/group evidence
 Stale completions cannot replace a newer list or expansion. A failed child-page
 read remains visible and requires explicit refresh or re-expansion to retry.
 Expansion does not change selection; selecting a child retains its parent Batch
-as the metadata and whole-Batch Export context.
+as the metadata and whole-Batch Export context. A new Batch PDF requires a
+selected row from the latest completed list for the current filters and page.
+Clearing the selection or requesting another list disables new exports until
+the current list has a selected row. An open Save dialog keeps its admitted
+Batch through subsequent browsing.
 Run quantities use the durable Run summary: Inspected is OK + NG, and Pass Rate
 is OK / Inspected, unavailable for a zero denominator.
 Unavailable summaries show dashes, with localized evidence feedback; uncertain

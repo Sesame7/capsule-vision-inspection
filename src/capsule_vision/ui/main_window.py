@@ -653,8 +653,8 @@ class MainWindow(QMainWindow):
             self.alarm_page,
         )[index]
         self.history_tabs.place_filters(index, self.records_filters)
-        self._report_context()
         page.refresh()
+        self._report_context()
 
     def _report_context(self) -> None:
         page = self.history_tabs.currentWidget()

@@ -1,9 +1,11 @@
 """History uses persisted group membership and the admitted manual report command."""
 
+from concurrent.futures import Future
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from time import time
+from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QDate, Qt
@@ -20,6 +22,7 @@ from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_history import finish
 from tests.unit.test_production_report import FOUR_CYCLE, record_group
 
+from capsule_vision.application.batch_review import BatchList
 from capsule_vision.application.history import HistoryContext, ProductionHistory
 from capsule_vision.application.report_scope import (
     ReportRequest,
@@ -113,6 +116,86 @@ def choose_file(action: RecordsExport, target: Path | None) -> None:
         picker.setDirectory(str(target.parent))
         picker.selectFile(target.name)
         picker.accept()
+
+
+def test_batch_pdf_requires_current_query_and_keeps_admitted_batch(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    startup = authenticated_startup(saved_data(tmp_path), select_basler_batch=False)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        history = startup.application.history
+        assert history is not None
+        for label in ("Lot Alpha", "Lot Beta"):
+            lot = history.select_batch(label).result(WAIT)
+            assert lot
+            run = f"run-{label}"
+            history.start_run(lot.uuid, run, RECIPE, FOUR_CYCLE).result(WAIT)
+            history.finish_run(run, "stopped", False).result(WAIT)
+        alpha_page = history.batch_page("Lot Alpha").result(WAIT)
+        beta_page = history.batch_page("Lot Beta").result(WAIT)
+        alpha, beta = alpha_page.rows[0], beta_page.rows[0]
+        window.show()
+        window.set_language("en")
+        window.navigate(3)
+        filters, page, action = (
+            window.records_filters,
+            window.batches_page,
+            window.records_export,
+        )
+        filters.select_batch(alpha.uuid, alpha.label)
+        until(
+            lambda: (
+                page.selected_batch == (alpha.uuid, alpha.label) and action.isEnabled()
+            )
+        )
+
+        stale, latest = Future[BatchList](), Future[BatchList]()
+        with patch.object(history, "batch_page", side_effect=(stale, latest)) as read:
+            filters.select_batch(beta.uuid, beta.label)
+            assert page.selected_batch is None and action.request is None
+            assert not action.isEnabled()
+            action.click()
+            assert action.chooser is None
+            filters.select_batch(alpha.uuid, alpha.label)
+            stale.set_result(beta_page)
+            until(lambda: read.call_count == 2)
+            assert [query.kwargs["batch"] for query in read.call_args_list] == [
+                beta.uuid,
+                alpha.uuid,
+            ]
+            assert page.selected_batch is None and action.request is None
+            assert not action.isEnabled()
+            latest.set_result(alpha_page)
+            until(action.isEnabled)
+        assert action.request == ReportRequest("batch", batch=alpha.uuid)
+
+        filters.start.set_date(QDate.currentDate().addDays(-1))
+        assert not action.isEnabled() and action.request is None
+        until(action.isEnabled)
+        action.click()
+        chooser = action.chooser
+        assert chooser
+        output = tmp_path / Path(chooser.selectedFiles()[0]).name
+        assert alpha.label in output.name
+        page.table.clearSelection()
+        filters.select_batch(beta.uuid, beta.label)
+        until(lambda: page.selected_batch == (beta.uuid, beta.label))
+        assert action.request == ReportRequest("batch", batch=beta.uuid)
+        window.history_tabs.setCurrentWidget(window.history)
+        filters.select_batch(alpha.uuid, alpha.label)
+        assert page.selected_batch is None
+        window.set_language("zh")
+        assert action.chooser is chooser and alpha.label in action.toolTip()
+        choose_file(action, output)
+        until(lambda: action.feedback == ("report_saved", str(output)), 12000)
+        body = pdf_text(output)
+        assert text("customer_batch", "en") in body
+        assert alpha.label in body and beta.label not in body
+    finally:
+        close_window(window)
+        delivery.detach()
 
 
 @pytest.mark.parametrize("language", ["zh", "en", "zh-TW", "de"])

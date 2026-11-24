@@ -104,9 +104,11 @@ def test_batch_search_and_paging_on_a_25_hour_local_day(
         until(lambda: page.detail is not None and page.detail.batch.label == "Line-50")
         assert page.table.topLevelItemCount() == 50 and page.older.isEnabled()
         page.older.click()
+        assert page.selected_batch is None
         until(lambda: page.detail is not None and page.detail.batch.label == "Line-00")
         assert page.table.topLevelItemCount() == 1 and page.newer.isEnabled()
         page.newer.click()
+        assert page.selected_batch is None
         until(lambda: page.detail is not None and page.detail.batch.label == "Line-50")
         page.table.setCurrentItem(parent(page, 2))
         until(lambda: page.detail is not None and page.detail.batch.label == "Line-48")
@@ -251,6 +253,18 @@ def test_public_readonly_batch_metadata_and_export_context(
         identity.login("Shift", TEST_PASSWORD).result(WAIT)
         window.identity_controls.refresh()
         until(window.records_export.isEnabled)
+        row = parent(page)
+        QTest.mouseClick(
+            page.table.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.ControlModifier,
+            page.table.visualItemRect(row).center(),
+        )
+        assert page.table.currentItem() is row and not page.table.selectedItems()
+        assert page.selected_batch is None and window.records_export.request is None
+        assert not window.records_export.isEnabled()
+        window.records_export.click()
+        assert window.records_export.chooser is None
         page.table.setCurrentItem(child(parent(page)))
         assert page.selected_batch == (batch.uuid, batch.label)
         assert window.records_export.request == ReportRequest("batch", batch=batch.uuid)

@@ -145,6 +145,7 @@ class BatchesPage(RecordsPage):
         self._cursor: tuple[float, str] | None = None
         self._newer = False
         self.scope = RecordsScope()
+        self._query_scope: RecordsScope | None = None
         self._list_version = self._version = 0
         self._listing = False
         self._reading: tuple[int, str, int] | None = None
@@ -207,6 +208,9 @@ class BatchesPage(RecordsPage):
 
     @property
     def selected_batch(self) -> tuple[str, str] | None:
+        # Shared filters can change on another tab before this page refreshes.
+        if self._listing or self._query_scope != self.scope:
+            return None
         return next(
             ((r.uuid, r.label) for r in self._page.rows if r.uuid == self._selected),
             None,
@@ -261,6 +265,8 @@ class BatchesPage(RecordsPage):
             self._render()
             return
         self._listing = True
+        self._query_scope = self.scope
+        self.selection_changed.emit()
         self.newer.setEnabled(False)
         self.older.setEnabled(False)
         self._delivery.watch(
@@ -277,8 +283,8 @@ class BatchesPage(RecordsPage):
         )
 
     def _selection(self) -> None:
-        item = self.table.currentItem()
-        uid = str(item.data(0, Qt.ItemDataRole.UserRole)) if item is not None else None
+        items = self.table.selectedItems()
+        uid = str(items[0].data(0, Qt.ItemDataRole.UserRole)) if items else None
         changed = uid != self._selected
         self._selected = uid
         self._prune()
@@ -320,8 +326,8 @@ class BatchesPage(RecordsPage):
         uid = str(item.data(0, Qt.ItemDataRole.UserRole))
         if uid != self._expanded:
             return
-        current = self.table.currentItem()
-        if current is not None and current.parent() is item:
+        selected = self.table.selectedItems()
+        if selected and selected[0].parent() is item:
             self.table.setCurrentItem(item)
         item.takeChildren()
         self._expanded = None
@@ -356,7 +362,6 @@ class BatchesPage(RecordsPage):
         if self._disposed:
             return
         if token.startswith("list/"):
-            self._listing = False
             if token != f"list/{self._list_version}":
                 self._load_list()
                 return
@@ -367,6 +372,8 @@ class BatchesPage(RecordsPage):
             self._errors.clear()
             self._run_rows = []
             self._rebuild()
+            self._listing = False
+            self.selection_changed.emit()
         else:
             request, self._reading = self._reading, None
             if request is None:
@@ -390,7 +397,6 @@ class BatchesPage(RecordsPage):
         self._load_detail()
 
     def _rebuild(self) -> None:
-        previous = self._selected
         with QSignalBlocker(self.table):
             self.table.clear()
             self._items.clear()
@@ -411,8 +417,6 @@ class BatchesPage(RecordsPage):
                 self._items[self._expanded].setExpanded(True)
             if self._selected is not None:
                 self.table.setCurrentItem(self._items[self._selected])
-        if self._selected != previous:
-            self.selection_changed.emit()
 
     def _values(
         self,
