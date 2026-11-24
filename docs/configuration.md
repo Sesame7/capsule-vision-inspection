@@ -596,17 +596,21 @@ image paths.
 
 `data/communication.json` is independent from `app.json`, Recipes, MachineLayout
 and CameraSources. **Save settings** on Connections atomically replaces
-this file (same-directory temporary write, fsync, replace). A successful Save
-applies a changed auxiliary status-service selection. Other network/reporting fields keep
-their existing activation boundaries. The Web header's power action
-persists only `web.enabled` from the actual validated file, then requests runtime
-start/stop using saved Web network settings. It never saves unrelated drafts or
-changes effective reporting selection. An invalid file is not silently replaced;
-first-use defaults can establish a missing file. Unsaved reporting edits never change next-Start admission; diagnostic
-requests continue to use the effective saved endpoint, not draft text. Save and
-reporting publication are serialized with Start under the existing Application
-lock. An unchanged reporting selection permits saving independent Web, status or diagnostic
-preferences during Production. Active sessions keep their frozen settings.
+this file (same-directory temporary write, fsync, replace). The publication
+owner applies a changed auxiliary status-service selection after the write.
+Other network/reporting fields keep their existing activation boundaries. The Web
+header's power action persists only `web.enabled` from the actual validated file,
+then requests runtime start/stop using saved Web network settings. It never saves
+unrelated drafts or changes effective reporting selection. Replacing an invalid
+file requires explicit Save. First-use defaults can establish a missing file.
+Unsaved reporting edits never change next-Start admission. Diagnostic requests
+use the effective saved endpoint. If verification fails, Diagnostics
+requires an explicit reload of the saved file. [Connections workspace controls](communication.md#workspace-controls)
+
+Save and reporting publication are serialized with Start under the existing
+Application lock. An unchanged reporting selection permits saving independent
+Web, status or diagnostic preferences during Production. Active sessions keep
+their frozen settings.
 
 Confirmed Discard reloads the actual file through this codec, without writing or
 undoing requests/results. On any reload/validation failure (including a missing

@@ -3,6 +3,7 @@
 import re
 from collections.abc import Callable
 from concurrent.futures import Future
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime
 from math import ceil
@@ -55,9 +56,11 @@ from capsule_vision.application.alarm_monitor import AlarmSnapshot
 from capsule_vision.application.audit import (
     AuditOperation,
     AuditUnavailable,
+    RevisionConfirmationError,
     RevisionEvidence,
     differences,
 )
+from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
     IdentityError,
     Role,
@@ -115,7 +118,6 @@ from capsule_vision.configuration.communication_preferences import (
     StatusPreferences,
     communication_publication,
     load_communication_preferences,
-    save_communication_preferences,
 )
 from capsule_vision.configuration.process_parameters import ProcessCatalog
 from capsule_vision.localization.catalog import text
@@ -147,6 +149,132 @@ class _WatchOutcome:
     failed_request: CommunicationRequest | None = None
     error: BaseException | None = None
     interrupted: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _SettingsSaveFailure:
+    error: Exception
+    verified: CommunicationPreferences | None
+    readback_detail: str = ""
+
+
+def _save_communication_settings(
+    path: Path,
+    value: CommunicationPreferences,
+    previous: CommunicationPreferences,
+    owner: ProductionReportingCommands | None,
+    identity: LocalIdentity | None,
+    revision: int | None,
+) -> CommunicationPreferences | _SettingsSaveFailure:
+    """Keep publication, readback and Audit confirmation as separate facts."""
+    before_content = None
+    old = None
+    missing = False
+    try:
+        before_content = path.read_bytes()
+        old = load_communication_preferences(path, content=before_content)
+    except (ConfigurationError, OSError) as exc:
+        # Explicit Save also repairs invalid or missing settings.
+        missing = isinstance(exc, FileNotFoundError)
+        changes = (
+            "Missing file" if missing else "Unreadable configuration",
+            differences(previous, value)[1] or "Saved defaults",
+        )
+    else:
+        changes = differences(old, value)
+
+    publication = communication_publication(path, value)
+    evidence = (
+        RevisionEvidence("communication", "communication.json", publication.content)
+        if identity is not None and old != value
+        else None
+    )
+    attempted = published = False
+
+    def publish() -> None:
+        nonlocal attempted, published
+        attempted = True
+        publication.publish()
+        published = True
+
+    save_error = None
+    try:
+        if (
+            isinstance(owner, SourceProductionApplication)
+            and owner.identity is identity
+        ):
+            owner.persist_reporting_selection(
+                value.reporting,
+                publish,
+                revision=revision,
+                changes=changes,
+                status=value.status,
+                evidence=evidence,
+                communication_content=publication.content
+                if identity is not None
+                else None,
+            )
+        else:
+            with (
+                identity.change(
+                    "communication.save",
+                    path.name,
+                    revision,
+                    *changes,
+                    evidence=evidence,
+                )
+                if identity is not None
+                else nullcontext()
+            ):
+                if owner is None:
+                    publish()
+                else:
+                    owner.persist_reporting_selection(value.reporting, publish)
+    except Exception as exc:
+        save_error = exc
+        if not attempted and not isinstance(exc, RevisionConfirmationError):
+            raise
+        if attempted and not published:
+            # A refused replace can leave the previous target or first-use defaults intact.
+            try:
+                content = path.read_bytes()
+            except Exception as read_error:
+                if missing and isinstance(read_error, FileNotFoundError):
+                    raise exc from None
+                return _SettingsSaveFailure(exc, None, str(read_error))
+            if (
+                content == before_content
+                and old is not None
+                and old.diagnostic == previous.diagnostic
+            ):
+                raise
+    if not published:
+        unknown = ConfigurationError(
+            "Could not verify communication settings publication."
+        )
+        return _SettingsSaveFailure(
+            unknown, None, str(save_error) if save_error else ""
+        )
+    try:
+        if isinstance(save_error, RevisionConfirmationError) and identity is not None:
+            recorded = identity.audit.revision_content(
+                save_error.operation.id, revision
+            ).result()
+            if recorded != publication.content:
+                raise ConfigurationError(
+                    "Communication publication differs from the Audit revision."
+                )
+        content = path.read_bytes()
+        saved = load_communication_preferences(path, content=content)
+        if content != publication.content:
+            raise ConfigurationError(
+                "Saved bytes differ from the communication publication."
+            )
+    except Exception as read_error:
+        if save_error is None:
+            return _SettingsSaveFailure(read_error, None)
+        return _SettingsSaveFailure(save_error, None, str(read_error))
+    return _SettingsSaveFailure(save_error, saved) if save_error is not None else saved
 
 
 class CommunicationPage(QWidget):
@@ -208,6 +336,7 @@ class CommunicationPage(QWidget):
         self._last_write: CommunicationResponse | None = None
         self._settings_loading = False
         self._settings_missing = True
+        self._diagnostics_reload_required = False
         self._settings_message, self._settings_detail = "", ""
         self._web_issue_key = ""
         self._alarm_preview_attempted = False
@@ -867,6 +996,8 @@ class CommunicationPage(QWidget):
             value = replace(value, reporting=self._reporting.reporting_selection())
         self._preferences_path, self._preferences = path, value
         self._settings_missing = not path.exists()
+        if error:
+            self._require_diagnostic_reload()
         self._show_preferences(value)
         self.alarm_panel.show()
         self.alarm_enabled.toggled.connect(self._settings_edited)
@@ -904,9 +1035,14 @@ class CommunicationPage(QWidget):
         self._refresh()
 
     def _effective_target_text(self) -> str:
+        if self._diagnostics_reload_required:
+            return f"{text('comm_effective_endpoint', self.language)} · {text('unavailable', self.language)}"
         saved = self._preferences.diagnostic
         try:
-            if self.diagnostic_selection() == saved:
+            if (
+                self.diagnostic_selection() == saved
+                and self._settings_message != "configuration_confirmation_incomplete"
+            ):
                 return ""
         except ValueError:
             pass  # An invalid draft still uses the saved target.
@@ -970,6 +1106,7 @@ class CommunicationPage(QWidget):
         status = text(key, self.language) if key else ""
         failed = self._settings_message in (
             "audit_required",
+            "configuration_confirmation_incomplete",
             "comm_settings_failed",
             "comm_reload_failed",
             "permission_engineer",
@@ -990,10 +1127,21 @@ class CommunicationPage(QWidget):
             self.busy or self._auto_refresh or self._closing or self._disposed
         )
         self.alarm_panel.refresh_preview.setEnabled(editable)
+        incomplete = self._settings_message == "configuration_confirmation_incomplete"
+        review = incomplete or self._diagnostics_reload_required
         self.save_settings.setEnabled(
-            engineer and editable and (dirty or failed or self._settings_missing)
+            engineer
+            and editable
+            and (dirty or self._settings_missing or (failed and not incomplete))
         )
-        self.discard_settings.setEnabled(engineer and editable and dirty)
+        self.discard_settings.setEnabled(engineer and editable and (dirty or review))
+        self.discard_settings.setToolTip(
+            text(
+                "comm_discard_question" if review else "comm_discard",
+                self.language,
+            )
+        )
+        self.discard_settings.setAccessibleDescription(self.discard_settings.toolTip())
         self.save_settings.setToolTip(
             text(
                 "comm_save_settings" if engineer else "permission_engineer",
@@ -1045,34 +1193,18 @@ class CommunicationPage(QWidget):
 
         self._file_work(app.preview_alarm_definitions, finished)
 
-    def _commit_preferences(
-        self,
-        value: CommunicationPreferences,
-        persist: Callable[[], None] | None,
-        revision: int | None = None,
-    ) -> None:
-        if persist is not None:
-            if self._authorize is not None:
-                self._authorize(revision)
-            if isinstance(self._reporting, SourceProductionApplication):
-                self._reporting.persist_reporting_selection(
-                    value.reporting, persist, status=value.status, revision=revision
-                )
-            elif self._reporting is not None:
-                self._reporting.persist_reporting_selection(value.reporting, persist)
-            else:
-                persist()
-        elif (
-            self._reporting is not None
-            and value.reporting != self._reporting.reporting_selection()
-        ):
-            if self._authorize is not None:
-                self._authorize(revision)
-            self._reporting.set_reporting_selection(value.reporting)
+    def _adopt_saved_preferences(self, value: CommunicationPreferences) -> None:
         if value.diagnostic != self._preferences.diagnostic:
             self._watch_fresh.clear()
             self._render_watch()
         self._preferences = value
+        self._settings_missing = False
+        self.web_panel.saved_available = True
+
+    def _require_diagnostic_reload(self) -> None:
+        self._diagnostics_reload_required = True
+        self._watch_fresh.clear()
+        self._render_watch()
 
     @Slot()
     def persist_settings(self) -> None:
@@ -1090,92 +1222,37 @@ class CommunicationPage(QWidget):
             path = self._preferences_path
             owner = self._reporting
             identity = self._application.identity if self._application else None
-            if identity is not None:
-                defaults = self._preferences
+            previous = self._preferences
 
-                def store() -> None:
-                    try:
-                        old = load_communication_preferences(path)
-                    except ConfigurationError as exc:
-                        # Explicit Save also repairs invalid or missing settings.
-                        changed = True
-                        before = (
-                            "Missing file"
-                            if isinstance(exc.__cause__, FileNotFoundError)
-                            else "Unreadable configuration"
-                        )
-                        changes = (
-                            before,
-                            differences(defaults, value)[1] or "Saved defaults",
-                        )
-                    else:
-                        changes = differences(old, value)
-                        changed = old != value
-
-                    publication = communication_publication(path, value)
-                    evidence = (
-                        RevisionEvidence(
-                            "communication", "communication.json", publication.content
-                        )
-                        if changed
-                        else None
-                    )
-
-                    if (
-                        isinstance(owner, SourceProductionApplication)
-                        and owner.identity is identity
-                    ):
-                        owner.persist_reporting_selection(
-                            value.reporting,
-                            publication.publish,
-                            revision=revision,
-                            changes=changes,
-                            status=value.status,
-                            evidence=evidence,
-                            communication_content=publication.content,
-                        )
-                    else:
-                        with identity.change(
-                            "communication.save",
-                            path.name,
-                            revision,
-                            *changes,
-                            evidence=evidence,
-                        ):
-                            if owner is None:
-                                publication.publish()
-                            else:
-                                owner.persist_reporting_selection(
-                                    value.reporting, publication.publish
-                                )
-
-                self._file_work(
-                    store, lambda _, error: self._saved_settings(value, error)
+            def store() -> CommunicationPreferences | _SettingsSaveFailure:
+                return _save_communication_settings(
+                    path, value, previous, owner, identity, revision
                 )
+
+            if identity is not None:
+                self._file_work(store, self._saved_settings)
                 return
-            self._commit_preferences(
-                value, lambda: save_communication_preferences(path, value), revision
-            )
+            result = store()
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self._saved_settings(None, exc)
         else:
-            self._saved_settings(value, None)
+            self._saved_settings(result, None)
 
-    def _saved_settings(
-        self, value: CommunicationPreferences | None, error: BaseException | None
-    ) -> None:
+    def _saved_settings(self, value: object, error: BaseException | None) -> None:
+        detail = ""
+        if isinstance(value, _SettingsSaveFailure):
+            error, detail = value.error, value.readback_detail
+            if value.verified is None:
+                self._require_diagnostic_reload()
+            else:
+                self._adopt_saved_preferences(value.verified)
         if error is not None:
             self._settings_message, self._settings_detail = (
                 failure_key(error, "comm_settings_failed"),
-                str(error),
+                "\n".join(filter(None, (str(error), detail))),
             )
-        elif value is not None:
-            if value.diagnostic != self._preferences.diagnostic:
-                self._watch_fresh.clear()
-                self._render_watch()
-            self._preferences = value
-            self._settings_missing = False
-            self.web_panel.saved_available = True
+        elif isinstance(value, CommunicationPreferences):
+            self._adopt_saved_preferences(value)
             self._settings_message, self._settings_detail = "comm_settings_saved", ""
             self._show_preferences(value)
             self.preferences_validated.emit()
@@ -1262,11 +1339,7 @@ class CommunicationPage(QWidget):
         self._refresh()
 
     def request_discard(self) -> None:
-        if (
-            not self.dirty
-            or self._discard_dialog is not None
-            or not self.discard_settings.isEnabled()
-        ):
+        if self._discard_dialog is not None or not self.discard_settings.isEnabled():
             return
         dialog = QMessageBox(self)
         dialog.setWindowTitle(text("comm_discard", self.language))
@@ -1303,6 +1376,7 @@ class CommunicationPage(QWidget):
             or self._auto_refresh
         ):
             return
+        value = None
         try:
             if (
                 revision is not None
@@ -1314,18 +1388,31 @@ class CommunicationPage(QWidget):
             value = load_communication_preferences(
                 self._preferences_path, content=content
             )
-            self._commit_preferences(value, None, revision)
+            if (
+                self._reporting is not None
+                and value.reporting != self._reporting.reporting_selection()
+            ):
+                if self._authorize is not None:
+                    self._authorize(revision)
+                self._reporting.set_reporting_selection(value.reporting)
             if isinstance(self._reporting, SourceProductionApplication):
                 self._reporting.observe_reporting_content(value.reporting, content)
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
+            if (
+                isinstance(exc, (ConfigurationError, OSError))
+                and not (self._settings_missing and isinstance(exc, FileNotFoundError))
+            ) or (
+                value is not None and value.diagnostic != self._preferences.diagnostic
+            ):
+                self._require_diagnostic_reload()
             self._settings_message, self._settings_detail = (
                 failure_key(exc, "comm_reload_failed"),
                 str(exc),
             )
         else:
+            self._diagnostics_reload_required = False
+            self._adopt_saved_preferences(value)
             self._show_preferences(value)
-            self.web_panel.saved_available = True
-            self._settings_missing = False
             self._settings_message, self._settings_detail = "comm_settings_saved", ""
             self.preferences_validated.emit()
         self._refresh()
@@ -1490,7 +1577,6 @@ class CommunicationPage(QWidget):
         )
         self.save_settings.setToolTip(text("comm_save_settings", language))
         self.save_settings.setAccessibleName(self.save_settings.toolTip())
-        self.discard_settings.setToolTip(text("comm_discard", language))
         self.discard_settings.setAccessibleName(text("comm_discard", language))
         if self.reporting_panel is not None:
             self.reporting_panel.set_language(language)
@@ -1826,7 +1912,12 @@ class CommunicationPage(QWidget):
                 self.stop_monitoring()
 
     def _start_watch(self) -> bool:
-        if self.busy or self._closing or self._disposed:
+        if (
+            self._diagnostics_reload_required
+            or self.busy
+            or self._closing
+            or self._disposed
+        ):
             return False
         if not self._watch_groups:
             self._watch_state = "comm_watch_empty"
@@ -1857,7 +1948,13 @@ class CommunicationPage(QWidget):
     def dispatch(self, kind: RequestKind, *, count: int = 1) -> bool:
         if QThread.currentThread() != self.thread():
             raise RuntimeError("Communication dispatch requires the GUI thread")
-        if self.busy or self._auto_refresh or self._closing or self._disposed:
+        if (
+            self._diagnostics_reload_required
+            or self.busy
+            or self._auto_refresh
+            or self._closing
+            or self._disposed
+        ):
             return False
         request: CommunicationRequest | None = None
         try:
@@ -2177,14 +2274,13 @@ class CommunicationPage(QWidget):
             self.manual_button,
         ):
             button.setEnabled(not (self._closing or self._disposed))
-        for control in (self.watch_selector, self.watch_remove, self.watch_once):
+        for control in (self.watch_selector, self.watch_remove):
             control.setEnabled(editable and bool(self._watch_groups))
+        can_request = editable and not self._diagnostics_reload_required
+        self.watch_once.setEnabled(can_request and bool(self._watch_groups))
         self.watch_auto.setEnabled(
             not (self._closing or self._disposed)
-            and (
-                self._auto_refresh
-                or (engineer and not self.busy and bool(self._watch_groups))
-            )
+            and (self._auto_refresh or (can_request and bool(self._watch_groups)))
         )
         self.watch_auto.setChecked(self._auto_refresh)
         action_key = "comm_watch_stop" if self._auto_refresh else "comm_watch_auto"
@@ -2208,7 +2304,7 @@ class CommunicationPage(QWidget):
         )
         self.watch_selector.setToolTip(group)
         self.watch_selector.setAccessibleDescription(group)
-        self.write_button.setEnabled(editable)
+        self.write_button.setEnabled(can_request)
         self.write_button.setToolTip(
             text("comm_write", self.language)
             + "\n"

@@ -1330,6 +1330,7 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
         assert startup.communication_error
         assert not startup.communication.web.enabled
         assert not startup.communication.reporting.enabled
+        assert not window.communication.write_button.isEnabled()
         assert (
             startup.communication_error
             in window.communication.preferences_status.toolTip()
@@ -1343,6 +1344,9 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
         assert (
             load_communication_preferences(data.communication) == startup.communication
         )
+        assert not window.communication.write_button.isEnabled()
+        window.communication.reload_settings()
+        assert window.communication.write_button.isEnabled()
     finally:
         close_window(window)
         delivery.detach()
@@ -1642,6 +1646,7 @@ def test_reload_failure_preserves_entire_draft(
     assert panel.enabled.isChecked() and page.dirty
     assert panel.controller.reporting_selection() is effective
     assert page.preferences_status.toolTip()
+    assert not page.write_button.isEnabled()
 
 
 def test_discard_does_not_undo_observed_write(

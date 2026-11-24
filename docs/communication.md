@@ -613,14 +613,25 @@ watches and automatic reporting transactions remain outside this trail.
 TCP node negotiation remains with the serial network owner. Late responses cannot
 replace a newer request's presentation.
 
-**Save settings** atomically writes the communication preferences; failed
-validation/write preserves the entire draft and effective settings. Unsaved fields
-never change reporting admission. An active session retains its frozen selection.
+**Save settings** atomically writes the communication preferences and strictly
+decodes the saved bytes. Failed intent or a refused replacement that leaves the
+previous valid file intact preserves the draft and its effective endpoint.
+Unsaved fields never change reporting admission. An active session retains its
+frozen selection.
 The settings save and the Web power preference write each require their own
 durable audit intent. Power records the saved enable bit independently of the
 subsequent service start or stop.
 Unchanged reporting allows independent Web/diagnostic settings to be saved during
 Production; changed reporting is rejected while its editing lock applies.
+
+If Audit confirmation fails after publication, Diagnostics compares the file
+byte for byte with the publication and the recorded revision. A match displays
+the verified endpoint for Read, Watch and Write and marks readings from a
+different endpoint stale. Save still reports incomplete Audit confirmation.
+An unverifiable publication or saved file makes the effective target unavailable
+and blocks those requests until an explicit Discard/Reload validates the file.
+The same Reload action is available when verification fails with a clean draft.
+Reloading leaves an unresolved Audit operation open.
 
 The fixed bottom bar offers Save, confirmed Discard and concise dirty/error status.
 Opening valid saved settings leaves the feedback area clear. An explicit

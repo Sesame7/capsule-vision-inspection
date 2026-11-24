@@ -1,18 +1,21 @@
 """Normal save surfaces retain exact revisions and expose incomplete confirmation."""
 
 import sqlite3
+from concurrent.futures import Future
 from contextlib import closing
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QSignalSpy
+from PySide6.QtWidgets import QApplication, QMessageBox
 from tests.integration.test_communication_settings_ui import (
     settings_window as settings_window,
 )
 from tests.support.application import WAIT
 from tests.support.qt import close_window, until
-from tests.support.startup import authenticated_startup
+from tests.support.startup import TEST_PASSWORD, authenticated_startup
 
 from capsule_vision.application import ApplicationStateError, PreparedConfiguration
 from capsule_vision.application.audit import AuditQuery
@@ -21,7 +24,19 @@ from capsule_vision.application.production_application import (
     SourceProductionApplication,
 )
 from capsule_vision.application.startup import ApplicationData, Startup
-from capsule_vision.configuration import load_camera_sources, load_recipe
+from capsule_vision.communication import FinsMemoryArea
+from capsule_vision.communication.operations import (
+    CommunicationRequest,
+    CommunicationResponse,
+    RegisterWatchGroup,
+    RequestKind,
+)
+from capsule_vision.configuration import (
+    ConfigurationIOError,
+    ConfigurationPublication,
+    load_camera_sources,
+    load_recipe,
+)
 from capsule_vision.configuration.communication_preferences import (
     load_communication_preferences,
 )
@@ -30,6 +45,22 @@ from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
+from capsule_vision.web.runtime import WebRuntime
+
+
+@pytest.fixture
+def diagnostic_requests(
+    settings_window: tuple[Startup, MainWindow], monkeypatch: pytest.MonkeyPatch
+) -> list[CommunicationRequest]:
+    requests: list[CommunicationRequest] = []
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        requests.append(request)
+        values = (72,) * request.count if request.kind is RequestKind.READ else None
+        return CommunicationResponse(request, values, 1, datetime.now(UTC))
+
+    monkeypatch.setattr(settings_window[1].communication, "_execute", execute)
+    return requests
 
 
 def refuse(path: Path, table: str, action: str) -> None:
@@ -98,19 +129,37 @@ def test_communication_revision_tracks_complete_file_and_unchanged_save(
 @pytest.mark.parametrize("failure", ["intent", "publication", "confirmation"])
 def test_communication_failed_save_does_not_claim_confirmed_revision(
     settings_window: tuple[Startup, MainWindow],
+    diagnostic_requests: list[CommunicationRequest],
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
     startup, window = settings_window
     page, owner = window.communication, startup.application.identity
-    assert owner
+    assert owner and isinstance(startup.application, SourceProductionApplication)
+    window.set_language("en")
+    web = WebRuntime(lambda _: pytest.fail("Communication Save must not start Web"))
+    window.bind_web_runtime(web)
+    web_before = web.snapshot()
     page.persist_settings()
     until(lambda: not page.busy)
     old = startup.data.communication.read_bytes()
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 109))
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    stamp = page.watch_table.item(0, 4)
+    assert stamp and stamp.text()
+    last_read = stamp.text()
+    validated = QSignalSpy(page.preferences_validated)
     (initial,) = owner.audit.revisions("communication", "communication.json").result(
         WAIT
     )
     page.web_panel.port.setValue(8767)
+    page.port.setValue(9601)
+    panel = page.reporting_panel
+    assert panel
+    panel.enabled.setChecked(True)
+    panel.port.setValue(19610)
+    page.running_address.setValue(216)
     if failure in ("intent", "confirmation"):
         refuse(
             startup.data.audit,
@@ -125,6 +174,20 @@ def test_communication_failed_save_does_not_claim_confirmed_revision(
         monkeypatch.setattr("capsule_vision.configuration._io.os.replace", deny)
     page.persist_settings()
     until(lambda: not page.busy)
+    expected_port = 9601 if failure == "confirmation" else 9600
+    saved = load_communication_preferences(startup.data.communication)
+    assert saved.diagnostic.port == expected_port
+    assert startup.application.reporting_selection() == saved.reporting
+    assert saved.reporting.enabled == (failure == "confirmation")
+    assert startup.application.reporting_snapshot() is None
+    assert startup.application.alarm_snapshot().selection == saved.status
+    assert startup.application.alarm_snapshot().state == "off"
+    assert web.snapshot() == web_before
+    assert page.dispatch(RequestKind.READ)
+    until(lambda: not page.busy)
+    assert diagnostic_requests[-1].endpoint.port == expected_port
+    assert page.port.value() == 9601 and validated.count() == 0
+    assert text("saved", "en") != page.preferences_status.text()
     rows = owner.audit.revisions("communication", "communication.json").result(WAIT)
     assert sum(row.confirmed for row in rows) == 1
     assert rows[-1] == initial
@@ -140,9 +203,138 @@ def test_communication_failed_save_does_not_claim_confirmed_revision(
             text("configuration_confirmation_incomplete", window.language)
             in page.preferences_status.text()
         )
+        assert page.discard_settings.isEnabled() and not page.save_settings.isEnabled()
+        assert (
+            page.manual_endpoint.isVisible()
+            and "127.0.0.1:9601" in page.manual_endpoint.text()
+        )
+        assert page.watch_status.accessibleName() == text("comm_watch_stale", "en")
+        retained = page.watch_table.item(0, 4)
+        assert retained and retained.text() == last_read
+        page.port.setValue(9602)
     else:
         assert startup.data.communication.read_bytes() == old
+        assert page.dirty and page.preferences_status.toolTip()
+    assert f"127.0.0.1:{expected_port}" in page.manual_endpoint.text()
+    assert page.read_watch_once()
+    until(lambda: not page.busy)
+    page.write_values.setText("17")
+    assert page.dispatch(RequestKind.WRITE)
+    until(lambda: not page.busy)
+    assert [(r.kind, r.endpoint.port, r.start) for r in diagnostic_requests] == [
+        (RequestKind.READ, 9600, 109),
+        (RequestKind.READ, expected_port, 100),
+        (RequestKind.READ, expected_port, 109),
+        (RequestKind.WRITE, expected_port, 100),
+    ]
+    (write,) = owner.audit.page(AuditQuery(action="plc.write")).result(WAIT)
+    assert write.outcome == "success" and write.operation.after == "[17]"
+    assert f"127.0.0.1:{expected_port}" in write.operation.target
     assert not startup.application.snapshot().runtime_owned
+
+
+@pytest.mark.parametrize(
+    "interference",
+    [
+        "same_settings",
+        "invalid",
+        "missing",
+        "no_receipt",
+        "session_change",
+        "confirmed_replaced",
+    ],
+)
+def test_unverified_diagnostics_require_explicit_reload(
+    settings_window: tuple[Startup, MainWindow],
+    diagnostic_requests: list[CommunicationRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    interference: str,
+) -> None:
+    startup, window = settings_window
+    page, owner = window.communication, startup.application.identity
+    assert owner
+    path = startup.data.communication
+    page.persist_settings()
+    until(lambda: not page.busy)
+    page.port.setValue(9601)
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 109))
+    if interference != "confirmed_replaced":
+        refuse(startup.data.audit, "completions", "communication.save")
+    publish = ConfigurationPublication.publish
+
+    def interfere(publication: ConfigurationPublication) -> None:
+        publish(publication)
+        if interference in ("same_settings", "confirmed_replaced"):
+            path.write_bytes(publication.content + b"\n")
+        elif interference == "invalid":
+            path.write_bytes(b'{"unknown":true}')
+        elif interference == "missing":
+            path.unlink()
+        elif interference == "no_receipt":
+            raise ConfigurationIOError("No publication receipt")
+
+    review = owner.audit.revision_content
+
+    def logout_before_review(
+        operation_id: str, revision: int | None = None
+    ) -> Future[bytes]:
+        owner.logout()
+        return review(operation_id, revision)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(ConfigurationPublication, "publish", interfere)
+        if interference == "session_change":
+            fault.setattr(owner.audit, "revision_content", logout_before_review)
+        page.persist_settings()
+        until(lambda: not page.busy)
+    if interference == "session_change":
+        assert owner.snapshot().account is None
+        owner.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+        window.identity_controls.refresh()
+    revision = owner.audit.revisions("communication", "communication.json").result(
+        WAIT
+    )[0]
+    content = owner.audit.revision_content(revision.record.operation.id).result(WAIT)
+    assert revision.record.outcome == (
+        "success" if interference == "confirmed_replaced" else "unresolved"
+    )
+    assert page.port.value() == 9601
+    assert not page.dispatch(RequestKind.READ)
+    assert not page.dispatch(RequestKind.WRITE)
+    assert not page.read_watch_once() and not page.start_monitoring()
+    assert not any(
+        b.isEnabled() for b in (page.watch_once, page.watch_auto, page.write_button)
+    )
+    assert text("unavailable", window.language) in page.manual_endpoint.text()
+    assert not diagnostic_requests and not owner.audit.page(
+        AuditQuery(action="plc.write")
+    ).result(WAIT)
+
+    path.write_bytes(b'{"diagnostic":null}')
+    page.reload_settings()
+    assert not page.dispatch(RequestKind.READ)
+    path.write_bytes(content)
+    # An unchanged Save cannot clear the interlock or confirm the earlier revision.
+    page.persist_settings()
+    until(lambda: not page.busy)
+    assert not page.dirty and not page.dispatch(RequestKind.WRITE)
+    assert page.discard_settings.isEnabled()
+    page.discard_settings.click()
+    dialog = page.findChild(QMessageBox)
+    assert dialog is not None
+    next(
+        b
+        for b in dialog.buttons()
+        if dialog.buttonRole(b) == QMessageBox.ButtonRole.AcceptRole
+    ).click()
+    until(page.watch_once.isEnabled)
+    assert page.dispatch(RequestKind.READ)
+    until(lambda: not page.busy)
+    assert [r.endpoint.port for r in diagnostic_requests] == [9601]
+    assert (
+        owner.audit.revisions("communication", "communication.json").result(WAIT)[0]
+        == revision
+    )
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])

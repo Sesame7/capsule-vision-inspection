@@ -320,7 +320,9 @@ and durable pending evidence remain intact and Save explicitly reports incomplet
 audit confirmation. There is no automatic rollback, retry or inferred recovery.
 An affected candidate remains ineligible until explicit selection prepares it
 from the published definitions. Vision files retain independent outcomes;
-Communication retains its existing publication/next-Start admission boundary.
+Communication verifies the published bytes and pending revision before adopting
+the Diagnostics endpoint after a confirmation failure. Reporting keeps its
+next-Start admission boundary. [Connections workspace controls](communication.md#workspace-controls)
 A confirmed revision is evidence of publication, not Production activation or Run usage.
 
 `AuditTrail.revisions` provides bounded, revision-fenced Engineer review by artifact
