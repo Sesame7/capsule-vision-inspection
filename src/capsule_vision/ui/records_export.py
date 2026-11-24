@@ -94,6 +94,7 @@ class RecordsExport(QPushButton):
         self.chooser: QFileDialog | None = None
         self.feedback: tuple[str, str] | None = None
         self._session = app.session_revision
+        self._closing = False
         self._export_revision: int | None = None
         self._cancel: Event | None = None
         self._admitted: tuple[CustomerReport, str] | None = None
@@ -144,7 +145,7 @@ class RecordsExport(QPushButton):
         enabled = allowed and available and self.request is not None
         if self._cancel is not None:
             enabled = not self._cancel.is_set()
-        self.setEnabled(enabled and self.chooser is None)
+        self.setEnabled(enabled and self.chooser is None and not self._closing)
 
         request, batch = self._admitted or (self.request, self.batch_label)
         title = caption
@@ -189,12 +190,15 @@ class RecordsExport(QPushButton):
         )
 
         def chosen(result: int) -> None:
+            if self.chooser is not chooser:
+                return
             files = chooser.selectedFiles()
             self.chooser = None
             chooser.deleteLater()
             if (
                 result != QDialog.DialogCode.Accepted
                 or not files
+                or self._closing
                 or revision != self.app.session_revision
             ):
                 self._admitted = None
@@ -229,6 +233,8 @@ class RecordsExport(QPushButton):
 
     @Slot(str, object, object)
     def _completed(self, permission: str, result: object, error: object) -> None:
+        if self._cancel is None:
+            return  # Final disposal can follow a completion already queued to Qt.
         self._cancel = None
         self._admitted = None
         if self._export_revision == self.app.session_revision:
@@ -248,9 +254,19 @@ class RecordsExport(QPushButton):
         self.present()
         self.feedback_changed.emit()
 
-    def dispose(self) -> None:
+    def begin_close(self) -> None:
+        self._closing = True
+        self.setEnabled(False)
         if self.chooser is not None:
             self.chooser.reject()
         if self._cancel is not None:
             self._cancel.set()
+
+    def resume(self) -> None:
+        self._closing = False
+        self.present()
+
+    def dispose(self) -> None:
+        self.begin_close()
         self._delivery.detach()
+        self._cancel = None

@@ -1251,6 +1251,7 @@ class MainWindow(QMainWindow):
             self.editing.resume()
             if not self.bridge.closed:
                 self.communication.resume()
+                self.records_export.resume()
         if command != "folder_source":
             # Retain one sanitized outcome per command so independent failures survive.
             key = failure_key(error, command, "permission_operator")
@@ -2220,6 +2221,7 @@ class MainWindow(QMainWindow):
             if application is not None:
                 application.removeEventFilter(self)
             self.bridge.detach()
+            self.records_export.dispose()
             self.identity_controls.dispose()
             self.communication.dispose()
             self.batches_page.dispose()
@@ -2271,7 +2273,7 @@ class MainWindow(QMainWindow):
 
     def _begin_close(self) -> None:
         self._closing = True
-        self.records_export.dispose()
+        self.records_export.begin_close()
         self.identity_controls.begin_close()
         self.editing.closing = True
         self._render()

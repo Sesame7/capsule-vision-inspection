@@ -1486,8 +1486,13 @@ is introduced.
 The same single cancellable export worker reads these private copies; it does not
 read live configuration or infer missing evidence. Audit and Alarm reads are revision-fenced,
 and the initiating session must still authorize atomic replacement at the report's
-required role. Failure/cancellation preserves an
-existing destination. Close cancels and joins the actual export worker.
+required role. Failure/cancellation preserves an existing destination.
+At Close admission, Records dismisses an open PDF chooser, requests cancellation
+of an active export and disables new exports. Application owns the worker join.
+If Close fails, the surviving window continues to receive export completions.
+Once the pending export settles, the PDF action follows the current selection
+and permissions. Completion feedback belongs only to the initiating session.
+Records detaches completion delivery at final window disposal.
 
 ## Image archiving
 

@@ -1,20 +1,24 @@
 """History uses persisted group membership and the admitted manual report command."""
 
+from collections.abc import Iterator
 from concurrent.futures import Future
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from threading import Event
 from time import time
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QCoreApplication, QDate, QEvent, Qt
+from PySide6.QtTest import QSignalSpy
 from PySide6.QtWidgets import QApplication, QFileDialog
 from tests.support.application import WAIT
 from tests.support.business import mixed_result
 from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.reports import pdf_text
 from tests.support.startup import (
+    TEST_PASSWORD,
     authenticated_startup,
     saved_data,
 )
@@ -22,8 +26,10 @@ from tests.unit.test_durable_batches import RECIPE
 from tests.unit.test_history import finish
 from tests.unit.test_production_report import FOUR_CYCLE, record_group
 
+from capsule_vision.application import ApplicationState
 from capsule_vision.application.batch_review import BatchList
 from capsule_vision.application.history import HistoryContext, ProductionHistory
+from capsule_vision.application.identity_models import Role
 from capsule_vision.application.report_scope import (
     ReportRequest,
 )
@@ -33,6 +39,7 @@ from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.history_page import HistoryPage
+from capsule_vision.ui.main_window import MainWindow
 from capsule_vision.ui.records_export import RecordsExport
 
 
@@ -116,6 +123,150 @@ def choose_file(action: RecordsExport, target: Path | None) -> None:
         picker.setDirectory(str(target.parent))
         picker.selectFile(target.name)
         picker.accept()
+
+
+@pytest.fixture
+def batch_pdf_window(qapp: QApplication, tmp_path: Path) -> Iterator[MainWindow]:
+    startup = authenticated_startup(saved_data(tmp_path), select_basler_batch=False)
+    delivery = FutureDelivery()
+    window = create_window(startup, delivery)
+    try:
+        history = startup.application.history
+        assert history is not None
+        batch = history.select_batch("Close recovery lot").result(WAIT)
+        assert batch
+        window.show()
+        window.navigate(3)
+        window.records_filters.select_batch(batch.uuid, batch.label)
+        until(window.records_export.isEnabled)
+        yield window
+    finally:
+        close_window(window)
+        delivery.detach()
+
+
+@pytest.mark.parametrize(
+    "pending", [False, True], ids=["open-chooser", "active-export"]
+)
+def test_failed_close_restores_batch_pdf_after_fresh_login(
+    batch_pdf_window: MainWindow, tmp_path: Path, pending: bool
+) -> None:
+    window = batch_pdf_window
+    app, action = window.bridge.application, window.records_export
+    identity, history = app.identity, app.history
+    assert identity and history
+    original_revision = identity.snapshot().revision
+    batch = action.batch_label
+    action.click()
+    chooser = action.chooser
+    assert chooser
+    enabled_on_dismissal: list[bool] = []
+    chooser.finished.connect(lambda: enabled_on_dismissal.append(action.isEnabled()))
+    capture = Future[None]()
+    interrupted = tmp_path / "interrupted.pdf"
+    try:
+        with patch.object(history, "capture_report", return_value=capture) as snapshot:
+            if pending:
+                choose_file(action, interrupted)
+                until(lambda: snapshot.called)
+            with patch.object(
+                app, "_close_resources", side_effect=OSError("cleanup failed")
+            ):
+                window.close()
+                until(
+                    lambda: (
+                        window.snapshot.state is ApplicationState.FAULT
+                        and not window.bridge.closing
+                        and window.navbar.user.isEnabled()
+                    )
+                )
+            guest = identity.snapshot()
+            assert window.isVisible() and guest.role is Role.GUEST
+            assert guest.revision > original_revision
+            assert action.chooser is None and not action.isEnabled()
+            if pending:
+                cancel = snapshot.call_args.args[2]
+                assert isinstance(cancel, Event) and cancel.is_set()
+            else:
+                assert enabled_on_dismissal == [False]
+                snapshot.assert_not_called()
+            renewed = identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+            assert renewed.revision > guest.revision
+            window.identity_controls.refresh()
+            if pending:
+                assert action.text() == "Cancel" and not action.isEnabled()
+    finally:
+        capture.set_result(None)
+
+    until(lambda: action.text() == "PDF" and action.isEnabled())
+    assert action.feedback is None and not interrupted.exists()
+    assert batch == "Close recovery lot"
+    for name in ("first", "second"):
+        output = tmp_path / f"{name}.pdf"
+        action.click()
+        choose_file(action, output)
+        until(output.is_file, 12000)
+        assert batch in pdf_text(output)
+        until(lambda: action.text() == "PDF" and action.isEnabled())
+        assert action.feedback == ("report_saved", str(output))
+    window.close()
+    until(lambda: not window.isVisible())
+    assert window.bridge.closed and window.communication.closed and app.join(0)
+
+
+@pytest.mark.parametrize(
+    "queued", [False, True], ids=["after-close", "queued-at-disposal"]
+)
+def test_final_window_close_ignores_late_pdf_completion(
+    batch_pdf_window: MainWindow, tmp_path: Path, queued: bool
+) -> None:
+    window = batch_pdf_window
+    action = window.records_export
+    pending = Future[Path]()
+    output = tmp_path / "previous-session.pdf"
+    with patch.object(
+        window.bridge.application, "export_report", return_value=pending
+    ) as export:
+        action.click()
+        choose_file(action, output)
+    cancel = export.call_args.kwargs["cancel"]
+    changed = QSignalSpy(action.feedback_changed)
+    dispose = action.dispose
+
+    def final_disposal() -> None:
+        if queued:
+            pending.set_result(output)  # The signal is already in the Qt event queue.
+        dispose()
+
+    with patch.object(action, "dispose", side_effect=final_disposal):
+        window.close()
+        until(lambda: not window.isVisible())
+    assert window.bridge.closed and isinstance(cancel, Event) and cancel.is_set()
+    if not queued:
+        pending.set_result(output)
+    QCoreApplication.sendPostedEvents(action, QEvent.Type.MetaCall)
+    assert changed.count() == 0 and action.feedback != ("report_saved", str(output))
+
+
+def test_published_pdf_feedback_does_not_cross_login_revisions(
+    batch_pdf_window: MainWindow, tmp_path: Path
+) -> None:
+    window = batch_pdf_window
+    app, action = window.bridge.application, window.records_export
+    identity = app.identity
+    assert identity
+    pending = Future[Path]()
+    output = tmp_path / "prior-session.pdf"
+    with patch.object(app, "export_report", return_value=pending):
+        action.click()
+        choose_file(action, output)
+    pending.set_result(output)
+    window.identity_controls.logout()
+    identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
+    window.identity_controls.refresh()
+    QCoreApplication.sendPostedEvents(action, QEvent.Type.MetaCall)
+    until(lambda: action.text() == "PDF" and action.isEnabled())
+    assert action.feedback is None
 
 
 def test_batch_pdf_requires_current_query_and_keeps_admitted_batch(
