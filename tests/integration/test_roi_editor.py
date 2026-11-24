@@ -448,7 +448,7 @@ def _assert_source_free_roi_layout(
         assert (
             button.width() >= button.fontMetrics().horizontalAdvance(button.text()) + 12
         )
-    assert dialog.canvas.height() > dialog.source_cards.height()
+    assert dialog.canvas.height() > dialog.source_cards.sizeHint().height()
     assert not session.dirty
     dialog.request_back()
 

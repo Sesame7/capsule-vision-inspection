@@ -1433,14 +1433,21 @@ another Recipe or modifying application references. Runtime editing locks apply
 again when confirmed, and persistence errors stay observable.
 Cameras owns source setup and canvas-first Machine ROI editing. Apply ROI,
 Common size and Distribute evenly reject invalid bounds atomically.
-Cameras stacks two subtly contrasted source and ROI containers. One rounded
-Folder/Basler track moves its selected thumb without animation; contextual Loop/FPS
-or connection/discovery controls align right. Cards retain configured row-major order:
-two columns on narrow workspaces, three when at least 1092 logical pixels are
-available for cards. Camera headers use the same icon + numeric identity as
-Production, with full localized names in accessibility text/tooltips. Card headers
-select the displayed camera; inline Folder path/browse and discovered-device
-selection edit that camera's existing source draft without selecting it.
+Cameras places the source controls to the left of the ROI editor when the
+landscape workspace has room for a usable source column and the image toolbars.
+At 1920×1080 the column is about 420 logical pixels wide. Cards appear in
+configured order and scroll vertically when needed. The rounded Folder/Basler
+switch stays above the cards and moves its selected thumb without animation.
+Loop/FPS or connection/discovery controls align right when they fit beside the
+switch and wrap below it otherwise.
+Portrait and narrower workspaces keep the cards above the editor in two columns,
+or three when at least 1092 logical pixels are available for cards. The layout
+is independent of reference image aspect ratio and retains the selected camera,
+reference, ROI and pending edits across resizes. Camera headers use the same
+icon and numeric identity as Production, with full localized names in accessibility
+text and tooltips. Selecting a card header displays that camera. The inline Folder
+path, Browse action and device selector edit their own camera's source draft
+while preserving the displayed camera.
 Basler serials are selected from discovered devices, not entered manually.
 Undiscovered saved assignments remain visible and unchanged; discovery never
 auto-assigns or clears them. Devices used by another card cannot be assigned twice;

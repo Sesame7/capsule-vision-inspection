@@ -311,6 +311,7 @@ def stylesheet(theme: Theme = "dark") -> str:
     QLabel[role="state"] {{ font-size: {Style.title}px; font-weight: 600; }}
     QLabel[role="error"] {{ color: {c.warning}; }}
     QFrame#visionSources {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
+    QScrollArea#visionCardScroll {{ background: transparent; }}
     QFrame#visionRoi {{ background: {c.raised}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
     QFrame#recipeSection {{ background: {c.surface}; border: 1px solid {c.border}; border-radius: {Style.radius}px; }}
     QFrame#visionModeSwitch QPushButton {{ background: transparent; border: none; border-radius: 20px; padding: 0; }}

@@ -8,7 +8,7 @@ from time import monotonic
 from typing import Literal, cast
 
 import numpy as np
-from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, Signal, Slot
+from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QPainter,
@@ -18,6 +18,8 @@ from PySide6.QtGui import (
     QStandardItemModel,
 )
 from PySide6.QtWidgets import (
+    QApplication,
+    QBoxLayout,
     QButtonGroup,
     QComboBox,
     QFileDialog,
@@ -28,6 +30,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -223,17 +226,37 @@ class _SourceCard(QPushButton):
         painter.end()
 
 
-class _SourceCards(QWidget):
-    """Reflow whole cards by usable width, retaining configured row-major order."""
+class _SourceCards(QScrollArea):
+    """Keep whole source editors in order, scrolling only when they cannot fit."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.grid = QGridLayout(self)
+        self.setObjectName("visionCardScroll")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWidgetResizable(True)
+        self._body = QWidget()
+        self.grid = QGridLayout(self._body)
         self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setSpacing(Style.small)
         self._cards: list[_SourceCard] = []
         self.columns = 2
+        self.setWidget(self._body)
+        self._body.setAutoFillBackground(False)
+        self.viewport().setAutoFillBackground(False)
+        self.verticalScrollBar().rangeChanged.connect(
+            self._reveal_focus, Qt.ConnectionType.QueuedConnection
+        )
+
+    def sizeHint(self) -> QSize:
+        return self._body.sizeHint()
+
+    @Slot()
+    def _reveal_focus(self) -> None:
+        focused = QApplication.focusWidget()
+        if focused is not None and self._body.isAncestorOf(focused):
+            self.ensureWidgetVisible(focused)
 
     def add_card(self, card: _SourceCard) -> None:
         self._cards.append(card)
@@ -252,11 +275,10 @@ class _SourceCards(QWidget):
             ),
             default=0,
         )
-        self.setFixedHeight(rows * height + max(0, rows - 1) * Style.small)
+        self._body.setFixedHeight(rows * height + max(0, rows - 1) * Style.small)
+        self.updateGeometry()
 
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        # Three cards need useful space for a Windows path or model + serial.
-        columns = 3 if event.size().width() >= 3 * 360 + 2 * Style.small else 2
+    def set_columns(self, columns: int) -> None:
         if columns != self.columns:
             self.columns = columns
             for card in self._cards:
@@ -267,8 +289,6 @@ class _SourceCards(QWidget):
                 self.grid.addWidget(card, index // columns, index % columns)
             self.grid.invalidate()
             self._sync_height()
-            self.updateGeometry()
-        super().resizeEvent(event)
 
 
 class VisionPage(QWidget):
@@ -331,15 +351,15 @@ class VisionPage(QWidget):
             self._capture_finished, Qt.ConnectionType.QueuedConnection
         )
         self.buttons: dict[str, QPushButton] = {}
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(Style.space)
+        self._workspace = QVBoxLayout(self)
+        self._workspace.setContentsMargins(0, 0, 0, 0)
+        self._workspace.setSpacing(Style.space)
         self.source_area = QFrame()
         self.source_area.setObjectName("visionSources")
-        source_layout = QVBoxLayout(self.source_area)
-        source_layout.setContentsMargins(10, 10, 10, 10)
-        source_layout.setSpacing(Style.small)
-        root.addWidget(self.source_area)
+        self._source_layout = QVBoxLayout(self.source_area)
+        self._source_layout.setContentsMargins(10, 10, 10, 10)
+        self._source_layout.setSpacing(Style.small)
+        self._workspace.addWidget(self.source_area)
         self._cameras = QButtonGroup(self)
         self.camera_cards: dict[CameraId, _SourceCard] = {}
         self.source_cards = _SourceCards()
@@ -414,8 +434,11 @@ class VisionPage(QWidget):
         self.fps.editingFinished.connect(self.fps_changed)
         self.fps_decrease.clicked.connect(lambda: self._step_fps(-1))
         self.fps_increase.clicked.connect(lambda: self._step_fps(1))
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(Style.small)
+        self._mode_row = QHBoxLayout()
+        self._mode_row.setSpacing(Style.small)
+        self._source_actions = QHBoxLayout()
+        self._source_actions.setSpacing(Style.small)
+        self._source_actions.addStretch(1)
         self._source_modes = QButtonGroup(self)
         self.mode_switch = _SourceModeSwitch()
         self.mode_switch.setObjectName("visionModeSwitch")
@@ -444,10 +467,10 @@ class VisionPage(QWidget):
 
             button.clicked.connect(choose_source)
             switch.addWidget(button)
-        mode_row.addWidget(self.mode_switch)
-        mode_row.addStretch(1)
-        mode_row.addWidget(self.playback_options)
-        # Visibility is set before mode_row is attached: own these as children
+        self._mode_row.addWidget(self.mode_switch, 0, Qt.AlignmentFlag.AlignLeft)
+        self._mode_row.addLayout(self._source_actions, 1)
+        self._source_actions.addWidget(self.playback_options)
+        # Visibility is set before the layout is attached: own these as children
         # now so they can never briefly show as native top-level windows.
         self.connection_status = QLabel(self.source_area)
         self.connect_source = QPushButton(self.source_area)
@@ -457,7 +480,7 @@ class VisionPage(QWidget):
             self.connect_source,
             self.disconnect_source,
         ):
-            mode_row.addWidget(widget)
+            self._source_actions.addWidget(widget)
             widget.setVisible(connection is not None)
         for button in (self.connect_source, self.disconnect_source):
             button.setFixedSize(Style.touch, Style.touch)
@@ -468,9 +491,10 @@ class VisionPage(QWidget):
         self.disconnect_source.clicked.connect(
             lambda: self.connection_operation(connect=False)
         )
-        mode_row.addWidget(self.discover)
-        source_layout.addLayout(mode_row)
-        source_layout.addWidget(self.source_cards)
+        self._source_actions.addWidget(self.discover)
+        self._source_actions.addStretch(0)
+        self._source_layout.addLayout(self._mode_row)
+        self._source_layout.addWidget(self.source_cards, 1)
         self.loop.setMinimumHeight(Style.touch)
         if self.sources is None:
             for widget in (
@@ -483,7 +507,7 @@ class VisionPage(QWidget):
         roi = QVBoxLayout(self.roi_area)
         roi.setContentsMargins(10, 10, 10, 10)
         roi.setSpacing(4)
-        root.addWidget(self.roi_area, 1)
+        self._workspace.addWidget(self.roi_area, 1)
         reference_controls = QWidget()
         references = QHBoxLayout(reference_controls)
         references.setContentsMargins(0, 0, 0, 0)
@@ -593,8 +617,54 @@ class VisionPage(QWidget):
         self._cameras.idToggled.connect(self._camera_selected)
         self.canvas.selected.connect(self.select_roi)
         self.canvas.geometry_changed.connect(self.commit_geometry)
+        self._reflow_timer = QTimer(self)
+        self._reflow_timer.setSingleShot(True)
+        self._reflow_timer.timeout.connect(self._arrange_workspace)
         self.set_language(language)
         self.switch_camera()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._reflow_timer.start(0)
+
+    def _arrange_workspace(self) -> None:
+        width = self.contentsRect().width()
+        gutter = self._workspace.spacing()
+        # Two of nine available parts give the source column about 420 px at 1920.
+        source_width = (width - gutter) * 2 // 9
+        editor_width = max(
+            self.reference_toolbar.sizeHint().width(),
+            self.geometry_toolbar.sizeHint().width(),
+        )
+        margins = self._source_layout.contentsMargins()
+        inset = margins.left() + margins.right() + 2 * self.source_area.frameWidth()
+        sidebar = (
+            width > self.contentsRect().height()
+            and source_width >= 320
+            and width - gutter - source_width >= editor_width + inset
+        )
+        direction = QBoxLayout.Direction
+        orientation = direction.LeftToRight if sidebar else direction.TopToBottom
+        if self._workspace.direction() != orientation:
+            self._workspace.setDirection(orientation)
+            self._workspace.setStretch(0, 2 if sidebar else 0)
+            self._workspace.setStretch(1, 7 if sidebar else 1)
+        card_width = (source_width if sidebar else width) - inset
+        columns = 1 if sidebar else 3 if card_width >= 3 * 360 + 2 * Style.small else 2
+        self.source_cards.set_columns(columns)
+        wrap = (
+            self.mode_switch.sizeHint().width()
+            + Style.small
+            + self._source_actions.sizeHint().width()
+            > card_width
+        )
+        header = direction.TopToBottom if wrap else direction.LeftToRight
+        if self._mode_row.direction() != header:
+            self._mode_row.setDirection(header)
+            self._source_actions.setStretch(0, 0 if wrap else 1)
+            self._source_actions.setStretch(
+                self._source_actions.count() - 1, 1 if wrap else 0
+            )
 
     @property
     def camera(self) -> CameraId:
@@ -1826,6 +1896,7 @@ class VisionPage(QWidget):
         self.canvas.setToolTip("")
         self.reference_toolbar.sync_metrics()
         self.geometry_toolbar.sync_metrics()
+        self._reflow_timer.start(0)
         self.canvas.update()
         feedback = self.feedback
         if feedback != self._last_feedback:

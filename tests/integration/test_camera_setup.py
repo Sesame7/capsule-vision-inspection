@@ -2027,6 +2027,24 @@ def test_inline_discovery_retains_offline_assignments_and_errors(
     assert not engine.calls
 
 
+def _wait_for_source_layout(workspace: VisionPage, columns: int) -> None:
+    def settled() -> bool:
+        cards = workspace.source_cards
+        if columns != cards.columns:
+            return False
+        if columns == 1:
+            return (
+                workspace.roi_area.x() > workspace.source_area.geometry().right()
+                and workspace.source_area.width() < workspace.width() // 4
+            )
+        return (
+            workspace.roi_area.y() > workspace.source_area.geometry().bottom()
+            and cards.viewport().height() >= cards.sizeHint().height()
+        )
+
+    until(settled)
+
+
 def test_vision_cards_reflow_by_usable_width_without_changing_pixels_or_identity(
     camera_screen: tuple[MainWindow, VisionPage, ControlledEngine],
 ) -> None:
@@ -2040,14 +2058,26 @@ def test_vision_cards_reflow_by_usable_width_without_changing_pixels_or_identity
     heights: dict[int, int] = {}
     for size, columns in (
         ((1080, 1920), 2),
-        ((1920, 1080), 3),
+        ((1920, 1080), 1),
+        ((1080, 800), 2),  # Landscape, but too narrow for both editors.
         ((1300, 1920), 3),
         ((1080, 1920), 2),
     ):
         window.resize(*size)
-        QApplication.processEvents()
-        assert workspace.source_cards.columns == columns
-        heights[columns] = workspace.source_cards.height()
+        _wait_for_source_layout(workspace, columns)
+        heights[columns] = workspace.source_cards.sizeHint().height()
+        source, roi = workspace.source_area.geometry(), workspace.roi_area.geometry()
+        if columns == 1:
+            assert 400 <= source.width() <= 440
+            assert (roi.left() - source.right() - 1, roi.top(), roi.height()) == (
+                Style.space,
+                source.top(),
+                source.height(),
+            )
+            assert workspace.canvas.height() >= 790
+        else:
+            assert roi.top() - source.bottom() - 1 == Style.space
+            assert workspace.source_cards.verticalScrollBar().maximum() == 0
         assert tuple(workspace.camera_cards) == order
         for i, card in enumerate(workspace.camera_cards.values()):
             item = workspace.source_cards.grid.itemAtPosition(i // columns, i % columns)
@@ -2060,19 +2090,85 @@ def test_vision_cards_reflow_by_usable_width_without_changing_pixels_or_identity
             <= workspace.geometry_toolbar.y() - workspace.canvas.geometry().bottom()
             <= Style.small
         )
-    assert heights[3] < heights[2]
-    # Actual widget width controls reflow even inside a wide/landscape shell.
-    window.resize(1920, 1080)
-    workspace.source_cards.setFixedWidth(1000)
-    QApplication.processEvents()
-    assert workspace.source_cards.columns == 2
+    assert heights[3] < heights[2] < heights[1]
     assert (workspace.sources.definition, workspace.draft.definition) == before
+    assert not engine.calls
+
+
+def test_short_sidebar_keeps_cam6_reachable_and_other_camera_edits_pending(
+    camera_screen: tuple[MainWindow, VisionPage, ControlledEngine],
+) -> None:
+    window, workspace, engine = camera_screen
+    cam2, cam5, cam6 = (CameraId(f"CAM{i}") for i in (2, 5, 6))
+    workspace.camera_cards[cam2].click()
+    until(lambda: not window.editing.busy)
+    workspace.buttons["reference_next"].click()
+    until(lambda: not window.editing.busy)
+    workspace.select_roi(2)
+    frame, reference = workspace.frame, workspace.reference.currentText()
+    assert frame is not None and workspace.sources is not None
+    original = workspace.draft.rois(cam2)[2]
+    folder = workspace.camera_cards[cam5].folder
+    folder.selectAll()
+    QTest.keyClicks(folder, "pending-cam5")
+    x = workspace.coordinates["X"]
+    x.setText(str(original.rect.x + 1))
+    last = workspace.camera_cards[cam6]
+    window.resize(1920, 1080)
+    _wait_for_source_layout(workspace, 1)
+    window.activateWindow()
+    last.browse.setFocus()
+    until(lambda: QApplication.focusWidget() is last.browse)
+    scroll = workspace.source_cards
+    max_height = workspace.maximumHeight()
+    for size, columns in (((1600, 760), 1), ((1080, 1920), 2), ((1920, 1080), 1)):
+        # Constrain the page itself even if an inactive page raises the shell minimum.
+        workspace.setMaximumHeight(600 if size == (1600, 760) else max_height)
+        window.resize(*size)
+        _wait_for_source_layout(workspace, columns)
+        if size == (1600, 760):
+            until(lambda: scroll.verticalScrollBar().value() > 0)
+            assert QApplication.focusWidget() is last.browse
+            assert (
+                scroll.viewport()
+                .rect()
+                .contains(
+                    last.browse.mapTo(scroll.viewport(), last.browse.rect().center())
+                )
+            )
+            header = workspace.mode_switch.geometry()
+            QTest.keyClick(last.browse, Qt.Key.Key_Tab)
+            assert QApplication.focusWidget() is last.configuration
+            assert (
+                scroll.viewport()
+                .rect()
+                .contains(
+                    last.configuration.mapTo(
+                        scroll.viewport(), last.configuration.rect().center()
+                    )
+                )
+            )
+            assert workspace.mode_switch.geometry() == header
+        assert workspace.camera == cam2 and workspace.selected_index == 2
+        assert (
+            workspace.frame is frame and workspace.reference.currentText() == reference
+        )
+        assert (
+            x.text() == str(original.rect.x + 1)
+            and workspace.draft.rois(cam2)[2] == original
+        )
+        assert (
+            folder.text()
+            == workspace.sources.definition.camera(cam5).folder
+            == "pending-cam5"
+        )
+        assert workspace.buttons["save"].isEnabled()
     assert not engine.calls
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("theme", ["dark", "light"])
-def test_unified_source_thumb_and_right_aligned_context(
+def test_unified_source_thumb_and_responsive_context(
     camera_screen: tuple[MainWindow, VisionPage, ControlledEngine],
     language: Language,
     theme: Theme,
@@ -2084,9 +2180,13 @@ def test_unified_source_thumb_and_right_aligned_context(
     window.set_theme(theme)
     for size in ((1080, 1920), (1920, 1080)):
         window.resize(*size)
-        QApplication.processEvents()
         source, roi = workspace.source_area, workspace.roi_area
-        assert source.geometry().bottom() < roi.y()
+        sidebar = size == (1920, 1080)
+        _wait_for_source_layout(workspace, 1 if sidebar else 2)
+        if sidebar:
+            assert source.geometry().right() < roi.x()
+        else:
+            assert source.geometry().bottom() < roi.y()
         assert workspace.canvas.parentWidget() is roi
         assert workspace.geometry_toolbar.parentWidget() is roi
         for mode in ("basler", "folder"):
@@ -2108,14 +2208,18 @@ def test_unified_source_thumb_and_right_aligned_context(
             context = (
                 workspace.playback_options if mode == "folder" else workspace.discover
             )
-            assert (
-                context.mapTo(source, context.rect().topRight()).x()
-                >= source.width() - 12
-            )
-            assert (
-                context.mapTo(source, QPoint()).x()
-                > switch.mapTo(source, switch.rect().topRight()).x()
-            )
+            QApplication.processEvents()
+            if sidebar and (mode == "folder" or workspace.connect_source.isVisible()):
+                until(lambda c=context, s=switch: c.y() > s.geometry().bottom())
+                first = (
+                    workspace.playback_options
+                    if mode == "folder"
+                    else workspace.connection_status
+                )
+                assert first.x() == switch.x()
+            else:
+                until(lambda c=context, s=switch: c.x() > s.geometry().right())
+                assert context.geometry().right() >= source.width() - 12
             assert workspace.playback_options.isVisible() == (mode == "folder")
             assert workspace.discover.isVisible() == (mode == "basler")
             assert not workspace.feedback and not window.event_label.text()
@@ -2310,12 +2414,12 @@ def _assert_folder_reference(
     window, workspace, engine = camera_screen
     window.resize(*size)
     window.set_language(language)
-    QApplication.processEvents()
+    _wait_for_source_layout(workspace, 1 if size[0] > size[1] else 2)
     assert workspace.isVisible() and workspace.parentWidget() is window.vision_page
     assert workspace.buttons["vision_import"].accessibleName() == text(
         "vision_import", language
     )
-    assert workspace.canvas.height() > workspace.source_cards.height()
+    assert workspace.canvas.height() > workspace.source_cards.sizeHint().height()
     window.grab()
     assert workspace.canvas.width() >= 600
     for control in (
@@ -2434,8 +2538,8 @@ def _assert_source_layout(
     window.resize(*size)
     window.set_language(language)
     window.set_theme(theme)
-    QApplication.processEvents()
-    assert workspace.canvas.height() > workspace.source_cards.height()
+    _wait_for_source_layout(workspace, 1 if size[0] > size[1] else 2)
+    assert workspace.canvas.height() > workspace.source_cards.sizeHint().height()
     assert len(workspace.canvas.rois) == 6 and workspace.frame is not None
     assert workspace.source_modes[
         "basler" if mode == "basler" else "folder"
@@ -2502,10 +2606,10 @@ def _assert_source_layout(
         .rect()
         .contains(workspace.folder.geometry())
     )
-    assert (
-        workspace.reference_toolbar.mapTo(workspace, QPoint()).y()
-        > workspace.source_cards.geometry().bottom()
-    )
+    if size[0] > size[1]:
+        assert workspace.source_area.geometry().right() < workspace.roi_area.x()
+    else:
+        assert workspace.source_area.geometry().bottom() < workspace.roi_area.y()
     assert workspace.canvas.y() > workspace.reference_toolbar.geometry().bottom()
     window.grab()
     assert not engine.calls and not workspace.draft.dirty
