@@ -49,6 +49,7 @@ class WebSettingsPanel(QFrame):
         self.dirty = False
         self.editable = True
         self.can_manage = True
+        self.settings_worker_available = True
         self.saved_available = False
         self._address_error = ""
         self.operation_error = ""
@@ -221,6 +222,7 @@ class WebSettingsPanel(QFrame):
             self.dirty,
             self.editable,
             self.can_manage,
+            self.settings_worker_available,
             self.saved_available,
             self.operation_error,
             self._address_error,
@@ -283,7 +285,7 @@ class WebSettingsPanel(QFrame):
         )
         for field in (self.addresses, self.port, self.address_refresh):
             field.setEnabled(self.can_manage and self.editable)
-        self.power.setEnabled(not blocked)
+        self.power.setEnabled(not blocked and self.settings_worker_available)
         self.power.setToolTip(
             action
             + "\n"

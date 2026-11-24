@@ -1088,6 +1088,7 @@ class CommunicationPage(QWidget):
                 self.reporting_panel.can_manage = can_edit
                 self.reporting_panel.refresh()
         self.web_panel.can_manage = engineer
+        self.web_panel.settings_worker_available = not self.busy
         self.web_panel.editable = not (
             self._closing or self._disposed or self._file_finished is not None
         )
@@ -1469,6 +1470,7 @@ class CommunicationPage(QWidget):
             or self._closing
             or self._disposed
             or self._file_finished is not None
+            or (action == "power" and self.busy)
             or runtime.snapshot().busy
             or runtime.snapshot().closing
         ):

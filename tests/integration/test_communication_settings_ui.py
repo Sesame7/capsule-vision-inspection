@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from math import ceil
 from pathlib import Path
 from threading import Event
+from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSignalBlocker, Qt, QTimer, QUrl
@@ -44,11 +45,13 @@ from capsule_vision.application import (
     ProductionCounters,
     StartBlocker,
 )
+from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.identity_models import Role
 from capsule_vision.application.startup import ApplicationData, Startup, load_startup
 from capsule_vision.communication import (
     FinsMemoryArea,
     FinsTcpEndpoint,
+    FinsTimeoutError,
     FinsUdpEndpoint,
     ModbusSettings,
 )
@@ -277,6 +280,98 @@ def available_port() -> int:
         return probe.getsockname()[1]
 
 
+@pytest.mark.parametrize(
+    "operation,running",
+    [("read", False), ("failed_read", True), ("stop_watch", False), ("write", True)],
+)
+def test_web_power_waits_for_shared_communication_worker(
+    settings_window: tuple[Startup, MainWindow],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    running: bool,
+) -> None:
+    startup, window = settings_window
+    page, panel = window.communication, window.communication.web_panel
+    identity = startup.application.identity
+    assert identity is not None
+    runtime = WebRuntime(
+        lambda settings: ProductionSnapshotService(
+            startup.application, startup.frames, host=settings.host, port=settings.port
+        )
+    )
+    window.bind_web_runtime(runtime)
+    panel.port.setValue(available_port())
+    page.persist_settings()
+    assert page.busy and not panel.power.isEnabled()
+    panel.requested.emit("power")
+    until(lambda: not page.busy)
+    assert panel.power.isEnabled() and not panel.operation_error
+    if running:
+        panel.power.click()
+        until(lambda: panel.available and not page.busy)
+        panel.port.setValue(panel.port.value() - 1)
+        page.persist_settings()
+        until(lambda: not page.busy)
+        assert panel.apply_changes.isVisible() and panel.apply_changes.isEnabled()
+
+    query = AuditQuery(action="communication.web_power")
+    audit_before = identity.audit.page(query).result(WAIT)
+    assert len(audit_before) == int(running)
+    saved = startup.data.communication.read_bytes()
+    observed = runtime.snapshot()
+    feedback = page.preferences_status.text()
+    entered, release = Event(), Event()
+
+    def execute(request: CommunicationRequest) -> CommunicationResponse:
+        entered.set()
+        assert release.wait(WAIT)
+        if operation == "failed_read":
+            raise FinsTimeoutError("isolated read timeout")
+        values = None if request.kind is RequestKind.WRITE else (17,)
+        return CommunicationResponse(request, values, 1, datetime.now(UTC))
+
+    monkeypatch.setattr(page, "_execute", execute)
+    try:
+        if operation == "stop_watch":
+            assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100))
+            assert page.start_monitoring()
+        else:
+            kind = RequestKind.WRITE if operation == "write" else RequestKind.READ
+            assert page.dispatch(kind)
+        until(entered.is_set)
+        if operation == "stop_watch":
+            page.stop_monitoring()
+            assert not page.auto_refresh
+        assert page.busy
+        with (
+            patch.object(runtime, "apply") as apply,
+            patch.object(runtime, "stop") as stop,
+        ):
+            panel.power.click()
+            panel.requested.emit("power")
+            assert not panel.power.isEnabled()
+            assert (
+                not panel.operation_error and page.preferences_status.text() == feedback
+            )
+            assert panel.port.isEnabled() and panel.available == running
+            if running:
+                assert (
+                    panel.open_browser.isEnabled() and panel.apply_changes.isEnabled()
+                )
+                assert panel.open_browser.accessibleDescription() == observed.url
+            apply.assert_not_called()
+            stop.assert_not_called()
+    finally:
+        release.set()
+        until(lambda: not page.busy)
+    assert panel.power.isEnabled() and not panel.operation_error
+    if operation == "failed_read":
+        assert page.feedback_text == text("comm_timeout_error", page.language)
+    assert runtime.snapshot() == observed
+    assert startup.data.communication.read_bytes() == saved
+    assert identity.audit.page(query).result(WAIT) == audit_before
+
+
 def test_web_power_only_persists_enablement_and_apply_uses_saved_network(
     settings_window: tuple[Startup, MainWindow],
     monkeypatch: pytest.MonkeyPatch,
@@ -490,6 +585,20 @@ def test_web_power_save_failure_preserves_running_service_and_drafts(
         and "controlled power persistence failure" in page.preferences_status.toolTip()
     )
     assert panel.power.text() == text("web_turn_off", window.language)
+
+    def read(request: CommunicationRequest) -> CommunicationResponse:
+        return CommunicationResponse(request, (17,), 1, datetime.now(UTC))
+
+    monkeypatch.setattr(page, "_execute", read)
+    previous_error = panel.operation_error
+    assert "controlled power persistence failure" in previous_error
+    assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100))
+    assert page.start_monitoring()
+    panel.requested.emit("power")
+    assert panel.operation_error == previous_error
+    until(lambda: not page.busy)
+    assert page.auto_refresh and panel.power.isEnabled()
+    page.stop_monitoring()
 
 
 def test_web_power_bind_failure_keeps_saved_enablement_and_reports_actual_failure(

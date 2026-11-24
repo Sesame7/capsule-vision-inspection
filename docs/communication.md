@@ -666,6 +666,10 @@ reporting or diagnostic drafts. A missing first-use file can be established from
 effective startup defaults; invalid files require explicit review/Save. Persistence
 failure leaves the runtime unchanged. Lifecycle failure retains the successfully
 saved preference and shows the actual failure; it never pretends the service ran.
+Power is disabled while Diagnostics or a settings operation holds the shared
+Communication worker. A Power request during that time leaves saved enablement,
+the Audit Trail, the Web runtime and its feedback unchanged. A running service
+keeps its browser link available during Diagnostics.
 
 **Restart Web** appears when saved enabled settings differ from the running Web
 configuration. If the saved selection is disabled, the action reads
