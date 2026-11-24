@@ -84,6 +84,14 @@ class WebSettingsPanel(QFrame):
         url_row.setContentsMargins(0, 0, 0, 0)
         url_row.addWidget(self.open_browser)
         header.addWidget(url_area, 1)
+        self._secondary_action = ""
+        self.apply_changes = QPushButton()
+        self.apply_changes.setProperty("iconAlignment", "leading")
+        self.apply_changes.setMinimumHeight(Style.touch)
+        self.apply_changes.clicked.connect(
+            lambda: self.requested.emit(self._secondary_action)
+        )
+        header.addWidget(self.apply_changes)
         self.power = QPushButton()
         self.power.setMinimumHeight(Style.touch)
         self.power.setObjectName("webPower")
@@ -125,17 +133,6 @@ class WebSettingsPanel(QFrame):
             grid.setColumnStretch(column, 2 if column == 0 else 1)
             widget.setMinimumHeight(Style.touch)
         root.addLayout(grid)
-        actions = QHBoxLayout()
-        actions.addStretch()
-        self._secondary_action = ""
-        self.apply_changes = QPushButton()
-        self.apply_changes.setProperty("iconAlignment", "leading")
-        self.apply_changes.setMinimumHeight(Style.touch)
-        self.apply_changes.clicked.connect(
-            lambda: self.requested.emit(self._secondary_action)
-        )
-        actions.addWidget(self.apply_changes)
-        root.addLayout(actions)
         self.actual.setTextFormat(Qt.TextFormat.PlainText)
         self.set_preferences(WebPreferences())
         self.host.textChanged.connect(self.refresh)
@@ -319,19 +316,15 @@ class WebSettingsPanel(QFrame):
             self.power.setToolTip(self.power.toolTip() + "\n" + self.operation_error)
         if retry:
             apply_key = "web_retry"
-            captions = (apply_key,)
         else:
             apply_key = (
                 "web_apply_changes" if self.saved.enabled else "web_apply_disabled"
             )
-            captions = ("web_apply_changes", "web_apply_disabled")
         self.apply_changes.setVisible(bool(self._secondary_action))
         self.apply_changes.setIcon(production_icon("reset", colors.primary))
-        set_button_caption(
-            self.apply_changes,
-            text(apply_key, self.language),
-            button_width(self.apply_changes, captions),
-        )
+        caption = text(apply_key, self.language)
+        self.apply_changes.setText(caption)
+        self.apply_changes.setAccessibleName(caption)
         self.apply_changes.setEnabled(
             bool(self._secondary_action)
             and not blocked
@@ -372,6 +365,9 @@ class WebSettingsPanel(QFrame):
             else None
         )
         self._url_text = running.url if running is not None else ""
+        if self._url_text and self._secondary_action:
+            # Share the status slot's spare width with the running link.
+            self.actual.setMinimumWidth(0)
         self.open_browser.setIcon(shell_icon("globe", colors.secondary))
         self.open_browser.setToolTip(
             text("web_open", self.language)

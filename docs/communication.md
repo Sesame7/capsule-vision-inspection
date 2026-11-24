@@ -663,8 +663,9 @@ Reporting, Web and Status headers use a small filled dot with concise
 state text: neutral when off, green when confirmed running/online, amber while
 waiting/stale/unavailable and red for a confirmed service failure. Reserved
 caption widths are measured from the three services' concise states across
-supported languages, keeping state widths and right-side actions stable during
-status, theme and language changes. Each dot follows its shared title slot
+supported languages to keep the power actions stable during status, theme and
+language changes. When Web shows both a running URL and a secondary action,
+its state caption uses its natural width. Each dot follows its shared title slot
 with a consistent gap. Shared action budgets align stacked headers; side-by-side
 cards remain locally right-aligned. Service
 power buttons are neutral and equally sized; their existing activation semantics
@@ -701,9 +702,11 @@ Applying reuses the existing serial Web owner. The separate power-off action
 persists disabled, so the next process launch stays off.
 
 The effective running URL is a browser action between the Web title/state group
-and the power action. Unavailable URLs are hidden; long URLs
-retain their full value in the tooltip/accessibility description. Service state
-and operation failure remain visible; the status has no runtime tooltip. Saved
+and the header actions. The secondary action, when applicable, sits immediately
+left of Power. The IPv4 and Port fields sit directly below the header in every
+state. Unavailable URLs are hidden. Elided URLs retain their full value in the
+tooltip and accessible description. Service state and operation failure remain
+visible. The status has no runtime tooltip. Saved
 file validation/persistence and address-enumeration recovery retain specific
 error explanations at their existing controls. Open Browser uses
 the actual running URL, not the edited endpoint. An explicit address refresh lists

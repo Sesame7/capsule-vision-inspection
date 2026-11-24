@@ -1116,6 +1116,49 @@ def test_web_service_dot_uses_observed_health_and_neutral_power_slots(
         )
 
 
+def test_web_secondary_actions_share_header_space_with_the_running_url(
+    settings_window: tuple[Startup, MainWindow],
+) -> None:
+    startup, window = settings_window
+    window.resize(1920, 1080)
+    window.set_language("de")
+    page = window.communication
+    panel = page.web_panel
+    saved = WebPreferences(enabled=True, port=18090)
+    save_communication_preferences(
+        startup.data.communication, CommunicationPreferences(web=saved)
+    )
+    page.reload_settings()
+    runtime = create_web_runtime(startup)
+    window.bind_web_runtime(runtime)
+    QApplication.processEvents()
+    assert panel.apply_changes.isHidden()
+    card_size, power = panel.size(), panel.power.geometry()
+    assert power.right() == panel.port.geometry().right()
+    assert panel.rect().bottom() - panel.port.geometry().bottom() == power.top()
+    running = WebRuntimeSnapshot(
+        state=WebState.RUNNING,
+        configuration=replace(saved, port=18091),
+        url="http://127.0.0.1:18091/",
+        owned=True,
+    )
+    for observed, caption in (
+        (WebRuntimeSnapshot(state=WebState.FAILED), "web_retry"),
+        (running, "web_apply_changes"),
+    ):
+        with patch.object(runtime, "snapshot", return_value=observed):
+            panel.refresh()
+            QApplication.processEvents()
+            assert panel.apply_changes.isVisible() and panel.apply_changes.isEnabled()
+            assert_full_caption(panel.apply_changes, text(caption, window.language))
+            action = panel.apply_changes.geometry()
+            assert action.y() == power.y() and action.height() == power.height()
+            assert power.left() - action.right() - 1 == Style.small
+            assert panel.power.geometry() == power and panel.size() == card_size
+            if observed.url:
+                assert panel.open_browser.text() == observed.url
+
+
 @pytest.mark.parametrize("width", (1080, 1920))
 def test_service_header_alignment_survives_language_theme_and_resize(
     settings_window: tuple[Startup, MainWindow], width: int
