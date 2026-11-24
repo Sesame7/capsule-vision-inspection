@@ -365,7 +365,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "batch_specification": ("规格", "Specification"),
     "batch_notes": ("备注", "Notes"),
     "batch_edit_info": ("编辑信息", "Edit information"),
-    "batch_view_inspections": ("查看检测记录", "View inspections"),
     "batch_no_groups": ("没有可归属的 PLC 分组", "No attributable PLC groups"),
     "batch_info_conflict": (
         "批次信息已更改，请刷新后再编辑",

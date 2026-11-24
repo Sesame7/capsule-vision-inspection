@@ -160,7 +160,6 @@ ENGLISH_FALLBACK_KEYS = {
     "batch_recent_run",
     "batch_recent_run_hint",
     "batch_report_deferred",
-    "batch_view_inspections",
     "customer_accounts_missing",
     "customer_alarm_period",
     "customer_audit_account",
@@ -1487,7 +1486,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 913
+    assert len(STRINGS) == 912
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (

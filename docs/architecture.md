@@ -1132,12 +1132,11 @@ Run quantities use the durable Run summary: Inspected is OK + NG, and Pass Rate
 is OK / Inspected, unavailable for a zero denominator.
 Unavailable summaries show dashes, with localized evidence feedback; uncertain
 recorded totals retain their warning. The date filter applies to discovery;
-both totals and Run children cover the whole Batch. All roles review metadata
-read-only here; editing belongs to Production Batch setup. There is no separate
-information dialog or View inspections action. Shared dates/Batch selection still
-filter Cycles. Reviewing a Batch never selects it for Production. Loss/expiry
-feedback remains in the stored-evidence tooltips. Unspecified information stays
-empty, without fabricated product values.
+both totals and Run children cover the whole Batch. All roles review the inline
+metadata here. Editing belongs to Production Batch setup. In Cycles, the shared
+date and Batch filters limit the records shown. Production maintains its own
+Batch selection. Loss/expiry feedback remains in the stored-evidence tooltips.
+Unspecified information stays empty, without fabricated product values.
 
 Inspection queries run on the Production History owner. The Qt page retains at most
 50 cycles with keyset Newer/Older navigation. Named Batch filtering uses the exact

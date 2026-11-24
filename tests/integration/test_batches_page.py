@@ -198,7 +198,7 @@ def test_public_readonly_batch_metadata_and_export_context(
         assert page.detail is not None and page.detail.batch.uuid == other.uuid
         assert all(parent(page).text(c) == "—" for c in range(4, 8))
         assert not parent(page).isExpanded()
-        assert not hasattr(page, "edit") and not hasattr(page, "view")
+        assert not hasattr(page, "edit")
         assert 60 <= page.metadata.height() <= 90
         assert all(not label.text() for label in page.metadata_labels)
         filters = window.records_filters

@@ -13,7 +13,6 @@ from PySide6.QtCore import (
     QPersistentModelIndex,
     QRect,
     QRectF,
-    QSignalBlocker,
     QSize,
     Qt,
     QTimer,
@@ -56,7 +55,6 @@ from capsule_vision.application.history import (
     ProductionHistory,
 )
 from capsule_vision.application.records_query import RecordsScope
-from capsule_vision.application.report_scope import ALL_RESULTS
 from capsule_vision.localization.catalog import CAPSULE_REASON_KEYS, text
 from capsule_vision.localization.languages import Language
 
@@ -318,7 +316,6 @@ class HistoryPage(QWidget):
         self._query = HistoryQuery()
         self._data = HistoryPageData((), (), False)
         self._error = ""
-        self._loaded = False
         self._detail_record_id: int | None = None
         self._image_issue: tuple[int, str, Path, str] | None = None
         self._delivery = FutureDelivery()
@@ -646,17 +643,6 @@ class HistoryPage(QWidget):
         self.channel_detail.setPlaceholderText(text("history_select_channel", language))
         self._present()
 
-    def activate(self) -> None:
-        if not self._loaded and not self.busy:
-            self.refresh()
-
-    def view_batch(self, batch: str, label: str) -> None:
-        """Open this exact Batch without changing the shared calendar bounds."""
-        self.scope = replace(self.scope, batch=batch, unbatched=False)
-        with QSignalBlocker(self.result):
-            self.result.set_selected(ALL_RESULTS)
-        self.refresh()
-
     @Slot()
     def refresh(self) -> None:
         self._revision += 1
@@ -700,7 +686,6 @@ class HistoryPage(QWidget):
         if revision != str(self._revision):
             self._submit()  # Only the latest user filter, never an automatic retry.
             return
-        self._loaded = True
         self._error = str(error) if error else ""
         self._data = (
             data

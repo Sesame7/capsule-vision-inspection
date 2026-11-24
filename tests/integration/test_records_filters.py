@@ -1,6 +1,5 @@
 """One shared, actually nullable range and persisted Batch selector in Records."""
 
-from concurrent.futures import Future
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,12 +25,8 @@ from tests.unit.test_durable_batches import RECIPE
 
 from capsule_vision.application.alarm_records import AlarmEvent
 from capsule_vision.application.audit import AuditOperation, AuditQuery
-from capsule_vision.application.history import HistoryContext, ProductionHistory
-from capsule_vision.application.records_query import (
-    BatchChoice,
-    BatchChoices,
-    RecordsScope,
-)
+from capsule_vision.application.history import HistoryContext
+from capsule_vision.application.records_query import BatchChoice
 from capsule_vision.localization.catalog import text
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -202,45 +197,6 @@ def test_blank_selected_cleared_dates_and_native_popup_bounds(
             date.popup.hide()
             date.close()
             date.deleteLater()
-
-
-def test_pending_choice_validation_cannot_clear_a_later_batch_handoff(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    history = ProductionHistory(tmp_path / "history.sqlite3")
-    pending: Future[BatchChoices] = Future()
-    requested: list[RecordsScope] = []
-
-    def hold(
-        scope: RecordsScope,
-        search: str = "",
-        cursor: tuple[float, str] | None = None,
-        *,
-        alarm_revision: int | None = None,
-    ) -> Future[BatchChoices]:
-        requested.append(scope)
-        return pending
-
-    monkeypatch.setattr(history, "batch_choices", hold)
-    filters = RecordsFilters(history)
-    try:
-        filters.show()
-        filters.select_batch("old", "Earlier selection")
-        filters.start.set_date(QDate.currentDate())
-        assert requested[0].batch == "old"
-        filters.select_batch(
-            "new", "Viewed Batch"
-        )  # View inspections while the earlier read is pending.
-        pending.set_result(BatchChoices((), False, False, False))
-        until(filters.choices.isEnabled)
-        assert (
-            filters.scope.batch == "new" and filters.batch.toolTip() == "Viewed Batch"
-        )
-    finally:
-        filters.dispose()
-        filters.close()
-        history.request_stop()
-        assert history.join(WAIT)
 
 
 def test_unavailable_picker_preserves_selection_without_retrying(

@@ -49,7 +49,7 @@ prescribe a new service, database or framework.
 - One IPC supports **30 or 36 channels**. A 72-channel machine uses **two independent 36-channel IPCs**; the vision software does not synchronize them across IPCs.
 - Basler is the production acquisition source. Folder Replay remains available for demonstration and engineering/testing.
 - Continue supporting the existing dark/light themes, supported **64 UI languages**, and the optional read-only Web Observer.
-- The standard application retains its **five primary pages**: Production, Recipe, Vision, Communication, History. New records appear inside History, not as additional primary navigation pages.
+- The **five primary pages** are Inspect, Recipe, Connections, Records and Cameras. New History views belong in **Records**.
 - Existing mature engineering functions should be preserved when useful. Simplification means reducing unnecessary behavior/complexity, not arbitrarily shrinking cards or removing buttons.
 
 ## 2. Roles and operating workflow
@@ -201,7 +201,8 @@ for an explicitly approved change. The product requirements are:
   Inspected, OK, NG and Pass Rate. Update Run and Batch totals from the same
   eligible group fact. Detail expiry must not erase these summaries, and incomplete
   historical evidence must not be turned into guessed capsule counts.
-- Operators and above can maintain optional product name, specification and notes outside an active Run. View Inspections opens the exact persisted Batch without changing Production selection. Retain Audit evidence of information edits.
+- Operators and above can maintain optional product name, specification and notes outside an active Run. Retain Audit evidence of information edits.
+- In **Records → Cycles**, the shared Batch and date filters replace the former Batch-row shortcut. The Batch filter uses the exact persisted identity. Production maintains its own Batch selection.
 
 - **One History record per Cycle** remains the storage and detail unit. Keep the existing camera/channel detail matrix, per-Cycle reasons, time filtering and result lookup.
 - Associate the required one or four observed Run/Cycle identities with their eligible physical group regardless of History arrival order. Retain group timing and final outcomes for the same 30-day detail window.
@@ -249,7 +250,7 @@ for an explicitly approved change. The product requirements are:
 
 ## 7. Audit Trail and alarms
 
-- Records contains **Batches**, **NG**, **Cycles**, **Audit** and **Alarms** within the existing five primary navigation destinations.
+- Normal Records presents **Batches**, **NG**, **Cycles**, **Audit** and **Alarms** in that order. Read-only portable History presents **Batches**, **NG**, **Cycles** and **Alarms**.
 - Audit Trail records meaningful human/security events: important account/session actions, Production Start/Stop/new/continued Batch/Recipe selection, Recipe/Model/Vision/Communication changes, manual PLC writes, and necessary failures/authorization rejections. Do **not** record navigation clicks, routine refreshes, every photo, or other trivial interactions.
 - Each audit entry should have time, actor, action, target, result, and a short informative description. For material configuration changes, use meaningful before/after values when affordable; never record passwords or sensitive secrets. Audit is locally persistent, and Engineer or Administrator can export matching records as customer PDFs.
 - Alarm monitoring is **independent of PLC detection-result reporting**. When configured and enabled, it can run after software startup while Production is READY, RUNNING, or stopped; unavailable communication is an **unknown/unavailable monitor state**, not proof that all PLC alarms cleared.
@@ -276,7 +277,7 @@ for an explicitly approved change. The product requirements are:
 - Distribute remaining space according to content need, instead of rigid equal fractions or a globally fixed narrow width for a data-heavy column. Do not let an excessively long optional value steal space required for a short but essential column.
 - Preserve the ability to read core values **without relying on tooltips** when the window has sufficient room. Long, genuinely unbounded dynamic text may elide with full tooltip/accessibility text.
 - If the viewport genuinely cannot fit sensible column minima, prefer a deliberate responsive fallback (layout reflow or table horizontal scrolling where appropriate) over squeezing columns to unreadable widths. Do not increase the application's minimum supported screen requirement casually.
-- Apply this rule especially to the four **Records** tabs, **PLC Diagnostics Watch** and **Recipe/model tables**.
+- Apply this rule to **Records** tables in both viewers, **PLC Diagnostics Watch** and **Recipe/model tables**.
 
 ### 8.3 Language-change stability
 

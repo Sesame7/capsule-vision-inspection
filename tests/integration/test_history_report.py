@@ -81,7 +81,7 @@ def test_group_column_disambiguates_runs_and_has_no_inferred_members(
         history.start_run(batch.uuid, "run-3", RECIPE, None).result(WAIT)
         for cycle in range(2265, 2269):
             assert history.offer(replace(context, run_id="run-3"), mixed_result(cycle))
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         assert (
             page.cycles.rowCount() == 2 * (mode.group_size or 0) + 4

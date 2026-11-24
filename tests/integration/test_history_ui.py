@@ -230,7 +230,7 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
         assert history.offer(ctx, mixed_result(2))
         page.resize(1080, 900)
         page.show()
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         button = page.image_button
         assert button.text() == button.accessibleName() == "打开图片"
@@ -242,7 +242,7 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
             PublishedImage(ctx.run_id, 1, "CAM2", photo, ctx.completed_at)
         )
         until(lambda: history.snapshot().images_linked == 1)
-        page.refresh()
+        page.refresh_button.click()
         until(lambda: not page.busy)
         page.cycles.selectRow(1)
         assert cycle_record(page, 1).cycle_id == 1 and not button.isEnabled()
@@ -532,7 +532,7 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
         apply_theme(page, "light")
         page.resize(1080, 1920)
         page.show()
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         page.cycles.selectRow(1)
         page.channels.setCurrentCell(1, 2)
@@ -878,7 +878,7 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
                 ),
                 result,
             )
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         qapp.processEvents()
         assert page.size() == QSize(*size)
@@ -1104,7 +1104,7 @@ def test_stored_recipe_names_missing_names_and_content_sized_channel_details(
             replace(context, completed_at=context.completed_at - 1, recipe_name=None),
             mixed_result(2),
         )
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         assert content(page.cycles, 0, 4) == context.recipe_name
         name_item = page.cycles.item(0, 4)
@@ -1283,7 +1283,7 @@ def test_business_counts_independent_errors_and_cycle_anomalies(
             ),
             result,
         )
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         qapp.processEvents()
         result_item = page.cycles.item(0, 5)
@@ -1442,7 +1442,7 @@ def test_historical_camera_ng_keeps_its_stored_judgment(
     history = ProductionHistory(path)
     page = HistoryPage(history)
     try:
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         assert content(page.cycles, 0, 5) == "OK 36 · NG 0"
         assert page.channel_detail.toPlainText() == "周期 NG"
@@ -1519,7 +1519,7 @@ def test_matrix_preserves_stored_camera_order_and_slot_mapping_at_minimum_width(
             ),
             result,
         )
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         qapp.processEvents()
         assert page.width() == 1080
@@ -1655,7 +1655,7 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
             replace(context, completed_at=stamp + 5, batch_segment="other-segment"),
             replace(production(53), cycle_status=CycleStatus.TIMED_OUT),
         )
-        page.activate()
+        page.refresh()
         until(lambda: not page.busy)
         qapp.processEvents()
         assert page.width() == size[0]
@@ -1862,7 +1862,7 @@ def test_loading_stale_delivery_empty_unavailable_and_warning(
     apply_theme(page, "dark")
     page.show()
     try:
-        page.activate()
+        page.refresh()
         assert entered.wait(WAIT) and page.busy
         assert page.status.text() == text("history_loading", "zh")
         responsive = Event()
@@ -1899,7 +1899,7 @@ def test_loading_stale_delivery_empty_unavailable_and_warning(
         page.deleteLater()
     unavailable = HistoryPage(None)
     try:
-        unavailable.activate()
+        unavailable.refresh()
         assert unavailable.status.text() == text("history_unavailable", "zh")
         unavailable.set_language("de")
         assert unavailable.status.text() == text("history_unavailable", "de")
