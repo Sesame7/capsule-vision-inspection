@@ -647,13 +647,6 @@ class RecipePage(QWidget):
             self._browse_entry = None
             self.show_draft()
 
-    @Slot(object, str)
-    def _operation_failed(self, error: object, key: str) -> None:
-        self._report_error(
-            error if isinstance(error, BaseException) else str(error), key
-        )
-        self.refresh_state()
-
     def set_language(self, language: Language) -> None:
         self.language = language
         self.process_parameters.set_language(language)

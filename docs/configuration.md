@@ -99,7 +99,7 @@ The 94 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 912-key
+Authored coverage does not imply native-speaker verification. The full 874-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
