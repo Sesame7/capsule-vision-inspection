@@ -1237,6 +1237,10 @@ for that label remain accessible through Time. Equal areas follow the Time
 order, with Run and group identity breaking ties between simultaneous groups.
 History applies this order to the entire scope before keyset pagination. A sort
 change selects the first matching capsule, and the gallery arrows follow that order.
+After a date, Batch or result filter changes, the selected label stays checked
+until History confirms the labels for the new scope. If that label is absent,
+the gallery checks **Time** and opens its first page. Failed or superseded
+queries leave the sort choice in place.
 
 Selecting a row reads the channel's camera, slot and ROI from its frozen Run
 layout. This limited History query is available to Guest. Full Run configuration

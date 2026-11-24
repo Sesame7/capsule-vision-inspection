@@ -7,7 +7,14 @@ from threading import Event
 from typing import cast
 
 from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, Signal, Slot
-from PySide6.QtGui import QAction, QHideEvent, QImage, QResizeEvent, QShowEvent
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QHideEvent,
+    QImage,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QLabel,
     QMenu,
@@ -217,6 +224,7 @@ class NgCapsulesPage(HistoryEventTable):
         self.owner = owner
         self._root = image_root
         self.scope = RecordsScope()
+        self._query_scope = self.scope
         self.language: Language = "zh"
         self._page = CapsulePage()
         self.area_label: str | None = None
@@ -247,6 +255,7 @@ class NgCapsulesPage(HistoryEventTable):
         self.sort_button.setObjectName("ngCapsuleSort")
         self.sort_button.setFixedSize(Style.touch, Style.touch)
         self.sort_menu = QMenu(self.sort_button)
+        self._sort_group = QActionGroup(self.sort_menu)
         self.filter_bar.insertWidget(
             self.filter_bar.indexOf(self.newer), self.sort_button
         )
@@ -324,6 +333,7 @@ class NgCapsulesPage(HistoryEventTable):
             self._selection_changed()
 
     def refresh(self) -> None:
+        self._query_scope = self.scope
         self._options_revision += 1
         if self._options_future is not None:
             self._options_future.cancel()
@@ -341,15 +351,21 @@ class NgCapsulesPage(HistoryEventTable):
         )
         self.sort_button.setToolTip(f"{title} · {value}")
         self.sort_button.setAccessibleName(self.sort_button.toolTip())
+        self.sort_button.setAccessibleDescription(value)
         self.sort_menu.setAccessibleName(title)
+        self.sort_menu.setAccessibleDescription(value)
 
     def _sort_items(self) -> None:
         self.sort_menu.clear()
-        for label in (None, *(self._labels or ())):
+        labels = self._labels
+        if labels is None:
+            labels = (self.area_label,) if self.area_label is not None else ()
+        for label in (None, *labels):
             caption = text("short_time", self.language) if label is None else label
             action = self.sort_menu.addAction(caption.replace("&", "&&"))
             action.setData(label)
             action.setCheckable(True)
+            self._sort_group.addAction(action)
             action.setChecked(label == self.area_label)
         self.sort_menu.adjustSize()
 
@@ -374,9 +390,24 @@ class NgCapsulesPage(HistoryEventTable):
     def _choose_sort(self, action: QAction) -> None:
         choice: object = action.data()
         if (choice is None or isinstance(choice, str)) and choice != self.area_label:
-            self.area_label = choice
-            self._sort_caption()
-            self._request_page(None, False)
+            self._set_sort(choice)
+
+    def _set_sort(self, label: str | None) -> None:
+        self.area_label = label
+        self._sort_caption()
+        self._request_page(None, False)
+
+    def _accept_labels(self, labels: tuple[str, ...] | None) -> bool:
+        """Return whether a confirmed inventory required a new Time page."""
+        if labels is None:
+            return False
+        self._labels = labels
+        reset = self.area_label is not None and self.area_label not in labels
+        if reset:
+            self._set_sort(None)
+        if reset or self.sort_menu.isVisible():
+            self._sort_items()
+        return reset
 
     def _change_filter(self) -> None:
         self.mode = CapsuleFilter(self.kind.currentData())
@@ -477,10 +508,10 @@ class NgCapsulesPage(HistoryEventTable):
         if kind == "options":
             if int(revision) == self._options_revision:
                 self._options_future = None
+                if self._query_scope != self.scope:
+                    return
                 if isinstance(value, CapsulePage):
-                    self._labels = value.area_labels
-                    if self.sort_menu.isVisible():
-                        self._sort_items()
+                    self._accept_labels(value.area_labels)
                 elif error:
                     self._error = str(error)
                     self._present()
@@ -488,14 +519,15 @@ class NgCapsulesPage(HistoryEventTable):
         if kind == "page":
             self._listing = False
             self._page_future = None
+            if self._query_scope != self.scope:
+                return
             if int(revision) != self._list_revision:
                 self._submit_page()
                 return
-            self._page = value if isinstance(value, CapsulePage) else CapsulePage()
-            if self._page.area_labels is not None:
-                self._labels = self._page.area_labels
-                if self.sort_menu.isVisible():
-                    self._sort_items()
+            page = value if isinstance(value, CapsulePage) else CapsulePage()
+            if self._accept_labels(page.area_labels):
+                return
+            self._page = page
             self._error = str(error) if error else ""
             with QSignalBlocker(self.table):
                 self.table.setRowCount(len(self._page.rows))

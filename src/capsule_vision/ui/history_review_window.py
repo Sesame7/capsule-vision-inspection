@@ -117,6 +117,8 @@ class HistoryReviewWindow(QMainWindow):
     @Slot(int)
     def _refresh_tab(self, index: int) -> None:
         page = (self.batches, self.ng_capsules, self.inspection, self.alarms)[index]
+        # An inactive NG tab can still receive labels from its previous scope.
+        self.ng_capsules.scope = self.filters.scope
         page.scope = self.filters.scope
         self.tabs.place_filters(index, self.filters)
         page.refresh()

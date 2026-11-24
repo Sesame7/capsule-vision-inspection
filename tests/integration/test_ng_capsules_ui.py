@@ -1,12 +1,15 @@
 """Qt gallery selection, native pixel crops, path confinement and Records admission."""
 
 import sqlite3
+from collections.abc import Iterator
+from concurrent.futures import Future
 from contextlib import closing
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 from shutil import copytree
 from threading import Event, get_ident
+from unittest.mock import patch
 
 import pytest
 from PySide6.QtCore import QDate, QPoint, QSize, Qt
@@ -31,6 +34,7 @@ from capsule_vision.application.ng_capsules import (
     CapsuleExposure,
     CapsuleFilter,
     CapsuleKey,
+    CapsulePage,
     FrozenROI,
 )
 from capsule_vision.inference import BoundingRect
@@ -44,6 +48,28 @@ from capsule_vision.ui.ng_capsule_images import ExposureImage, exposure_image
 from capsule_vision.ui.ng_capsules_page import NgCapsulesPage
 from capsule_vision.ui.production_presentation import image_transform
 from capsule_vision.ui.style import Style
+
+
+def open_sort(page: NgCapsulesPage, label: str | None) -> None:
+    QTest.keyClick(page.sort_button, Qt.Key.Key_Space)
+    until(
+        lambda: (
+            page.sort_menu.isVisible()
+            and any(a.data() == label for a in page.sort_menu.actions())
+        )
+    )
+
+
+def choose_area(page: NgCapsulesPage, label: str, expected_area: int) -> None:
+    open_sort(page, label)
+    next(a for a in page.sort_menu.actions() if a.data() == label).trigger()
+    page.sort_menu.hide()
+    until(
+        lambda: (
+            page.selected_capsule is not None
+            and page.selected_capsule.sort_area == expected_area
+        )
+    )
 
 
 def test_sort_menu_navigation_latest_choice_and_scope_reset(
@@ -62,16 +88,7 @@ def test_sort_menu_navigation_latest_choice_and_scope_reset(
             until(lambda: page.selected_capsule is not None)
             original = page.selected_capsule
 
-            def open_with(label: str) -> None:
-                QTest.keyClick(page.sort_button, Qt.Key.Key_Space)
-                until(
-                    lambda: (
-                        page.sort_menu.isVisible()
-                        and any(a.data() == label for a in page.sort_menu.actions())
-                    )
-                )
-
-            open_with("Spot")
+            open_sort(page, "Spot")
             choices = page.sort_menu.actions()
             assert [a.data() for a in choices] == [None, "Dent", "Spot"]
             assert (
@@ -107,7 +124,7 @@ def test_sort_menu_navigation_latest_choice_and_scope_reset(
             )
             page.gallery.previous.click()
             until(lambda: page.table.rowCount() == 50 and page.table.currentRow() == 49)
-            open_with("Spot")
+            open_sort(page, "Spot")
             choices = page.sort_menu.actions()
             assert [a.data() for a in choices if a.isChecked()] == ["Dent"]
             # Three admissions in one Qt turn exercise cancellation and stale-page delivery.
@@ -123,11 +140,35 @@ def test_sort_menu_navigation_latest_choice_and_scope_reset(
                 )
             )
             assert page.table.currentRow() == 0
+            win.filters.select_batch(saved.batch, "Training lot")
+            until(lambda: page.selected_capsule is not None)
+            assert page.selected_capsule and page.selected_capsule.sort_area == 12
+            assert page.area_label == "Spot"
+            page.kind.setCurrentIndex(page.kind.findData("all"))
+            until(lambda: page.selected_capsule is not None)
+            open_sort(page, "Hair")
+            assert [a.data() for a in page.sort_menu.actions() if a.isChecked()] == [
+                "Spot"
+            ]
+            page.sort_menu.hide()
             page.kind.setCurrentIndex(page.kind.findData("filtered"))
-            until(lambda: page.message.text() == text("history_none", "de"))
-            assert page.table.rowCount() == 0 and page.selected_capsule is None
-            open_with("Hair")
+            until(lambda: page.selected_capsule is not None)
+            assert page.area_label is None and page.table.rowCount() == 1
+            selected = page.selected_capsule
+            assert selected and selected.key == CapsuleKey(
+                RUN, "101", saved.channel - 1
+            )
+            assert selected.filtered and selected.sort_area is None
+            open_sort(page, "Hair")
             assert [a.data() for a in page.sort_menu.actions()] == [None, "Hair"]
+            assert [a.data() for a in page.sort_menu.actions() if a.isChecked()] == [
+                None
+            ]
+            assert (
+                page.sort_menu.accessibleDescription()
+                == page.sort_button.accessibleDescription()
+                == text("short_time", "de")
+            )
             page.sort_menu.actions()[1].trigger()
             page.sort_menu.hide()
             until(
@@ -137,11 +178,8 @@ def test_sort_menu_navigation_latest_choice_and_scope_reset(
             )
             assert page.selected_capsule and page.selected_capsule.sort_area == 17
             page.kind.setCurrentIndex(page.kind.findData("ng"))
-            until(lambda: page.message.text() == text("history_none", "de"))
-            open_with("Dent")
-            page.sort_menu.actions()[0].trigger()
-            page.sort_menu.hide()
             until(lambda: page.selected_capsule == original)
+            assert page.area_label is None
             for dimensions in ((1080, 1920), (1920, 1080)):
                 win.resize(*dimensions)
                 positions: set[tuple[int, int]] = set()
@@ -160,6 +198,104 @@ def test_sort_menu_navigation_latest_choice_and_scope_reset(
         finally:
             win.close()
             delete_widget(win)
+
+
+@pytest.fixture
+def edge_sorted_review(
+    qapp: QApplication, tmp_path: Path
+) -> Iterator[HistoryReviewWindow]:
+    sample(tmp_path, edge_area=41, with_filtered=True)
+    with open_history_review(tmp_path) as reader:
+        win = HistoryReviewWindow(reader)
+        try:
+            win.show()
+            win.tabs.setCurrentWidget(win.ng_capsules)
+            choose_area(win.ng_capsules, "Edge", 41)
+            yield win
+        finally:
+            win.close()
+            delete_widget(win)
+
+
+def test_area_sort_waits_for_confirmed_current_labels(
+    edge_sorted_review: HistoryReviewWindow,
+) -> None:
+    page = edge_sorted_review.ng_capsules
+    old_page, failed_page = Future[CapsulePage](), Future[CapsulePage]()
+    old_options, failed_options = Future[CapsulePage](), Future[CapsulePage]()
+    no_inventory = Future[CapsulePage]()
+    # An already-running read can still deliver after a scope change.
+    assert old_page.set_running_or_notify_cancel()
+    assert old_options.set_running_or_notify_cancel()
+    replies = (old_page, failed_page, old_options, no_inventory, failed_options)
+    with patch.object(page.owner, "ng_capsule_page", side_effect=replies) as queries:
+        page.kind.setCurrentIndex(page.kind.findData("filtered"))
+        open_sort(page, "Edge")
+        active = page.sort_menu.actions()[1]
+        active.trigger()
+        assert (
+            active.data() == "Edge" and active.isChecked() and queries.call_count == 1
+        )
+        page.kind.setCurrentIndex(page.kind.findData("all"))
+        old_page.set_result(CapsulePage(area_labels=("Hair",)))
+        until(lambda: queries.call_count == 2)
+        assert page.area_label == "Edge"
+        failed_page.set_exception(RuntimeError("area page unavailable"))
+        until(lambda: page.message.toolTip() == "area page unavailable")
+
+        open_sort(page, "Edge")
+        page.kind.setCurrentIndex(page.kind.findData("filtered"))
+        old_options.set_result(CapsulePage(area_labels=()))
+        no_inventory.set_result(CapsulePage())
+        until(lambda: page.message.text() == text("history_none", page.language))
+        assert page.area_label == page.sort_button.accessibleDescription() == "Edge"
+        open_sort(page, "Edge")
+        failed_options.set_exception(RuntimeError("labels unavailable"))
+        until(lambda: page.message.toolTip() == "labels unavailable")
+        assert page.area_label == "Edge" and queries.call_count == 5
+        page.sort_menu.hide()
+    # The next successful menu query confirms that only Hair is available.
+    open_sort(page, "Hair")
+    until(lambda: page.selected_capsule is not None)
+    assert (
+        page.area_label is None
+        and page.selected_capsule
+        and page.selected_capsule.filtered
+    )
+    assert [a.data() for a in page.sort_menu.actions() if a.isChecked()] == [None]
+
+
+def test_inactive_ng_tab_ignores_labels_from_a_replaced_date_scope(
+    edge_sorted_review: HistoryReviewWindow,
+) -> None:
+    win = edge_sorted_review
+    page = win.ng_capsules
+    past = QDate.currentDate().addDays(-3)
+    delayed = Future[CapsulePage]()
+    with patch.object(page.owner, "ng_capsule_page", return_value=delayed):
+        win.filters.end.set_date(past)
+        win.tabs.setCurrentWidget(win.inspection)
+        win.filters.end.clear()
+        delayed.set_result(CapsulePage(area_labels=()))
+        QApplication.processEvents()
+        assert page.area_label == "Edge"
+    win.tabs.setCurrentWidget(page)
+    until(
+        lambda: (
+            page.selected_capsule is not None and page.selected_capsule.sort_area == 41
+        )
+    )
+    win.filters.end.set_date(past)
+    until(
+        lambda: (
+            page.area_label is None
+            and page.message.text() == text("history_none", page.language)
+        )
+    )
+    open_sort(page, None)
+    assert [(a.data(), a.isChecked()) for a in page.sort_menu.actions()] == [
+        (None, True)
+    ]
 
 
 def test_portable_native_pixels_boxes_and_unavailable_members(
@@ -408,15 +544,16 @@ def test_filtered_capsule_selection_overlay_and_export_in_both_workspaces(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     data = saved_data(tmp_path)
-    saved = sample(data.history.parent, with_filtered=True)
+    saved = sample(data.history.parent, edge_area=41, with_filtered=True)
 
     def select_filtered(page: NgCapsulesPage) -> None:
         page.set_language("en")
         assert [page.kind.itemText(i) for i in range(3)] == ["NG", "Filtered", "All"]
+        choose_area(page, "Edge", 41)
         page.kind.setCurrentIndex(page.kind.findData(CapsuleFilter.FILTERED.value))
         cell, _, missing, _ = page.gallery.cells
         until(lambda: bool(cell.filtered_boxes))
-        assert page.table.rowCount() == 1
+        assert page.table.rowCount() == 1 and page.area_label is None
         assert (
             page.selected_capsule
             and page.selected_capsule.filtered
@@ -635,7 +772,7 @@ def test_gallery_packs_fitted_images_and_allocates_remaining_space(
 def test_gallery_paging_and_shared_filter_reset(
     qapp: QApplication, tmp_path: Path
 ) -> None:
-    saved = sample(tmp_path)
+    saved = sample(tmp_path, edge_area=41)
     with closing(sqlite3.connect(tmp_path / "history.sqlite3")) as db, db:
         for first in (301, 401):
             add_group(
@@ -729,6 +866,11 @@ def test_gallery_paging_and_shared_filter_reset(
             page.refresh_button.click()
             until(lambda: page.table.rowCount() == 50 and page.older.isEnabled())
             assert not previous.isEnabled() and following.isEnabled()
+            choose_area(page, "Edge", 41)
+            window.filters.select_batch(None, unbatched=True)
+            until(lambda: page.selected_capsule is not None)
+            assert page.area_label is None and page.selected_capsule
+            assert page.selected_capsule.key == CapsuleKey("unbatched", "101", 1)
         finally:
             window.close()
             delete_widget(window)
