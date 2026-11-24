@@ -57,6 +57,9 @@ PRIORITY_UI_LANGUAGES = (
 
 IDENTITY_UI_KEYS = {
     "identity_setup",
+    "identity_create_admin",
+    "identity_rotation_required",
+    "identity_temporary_password_reused",
     "identity_rotate",
     "identity_guidance",
     "identity_weak",
@@ -1025,7 +1028,7 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 743
+    assert len(maintained) == 746
     assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
@@ -1127,6 +1130,11 @@ def test_identity_ui_has_complete_native_coverage() -> None:
                 assert username in value.format(username=username), (language, key)
         for keys in (
             ("identity_login", "identity_logout", "identity_switch"),
+            (
+                "identity_rotation_required",
+                "identity_temporary_password_reused",
+                "identity_change",
+            ),
             ("identity_change", "identity_reset", "identity_change_role"),
             ("identity_enable", "identity_disable"),
             ("identity_enabled", "identity_disabled"),
@@ -1479,7 +1487,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 909
+    assert len(STRINGS) == 912
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (

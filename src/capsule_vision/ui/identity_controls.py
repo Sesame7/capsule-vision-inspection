@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from capsule_vision.application.audit import AuditUnavailable
@@ -86,7 +87,7 @@ def identity_feedback(error: object) -> str:
         (AuthenticationError, "identity_invalid"),
         (LastAdministratorError, "identity_last_admin"),
         (AccountConflictError, "identity_conflict"),
-        (PasswordReuseError, "identity_rotate"),
+        (PasswordReuseError, "identity_temporary_password_reused"),
         (IdentityValidationError, "identity_validation"),
         (StaleSessionError, "identity_stale"),
         (AuthorizationError, "identity_denied"),
@@ -123,6 +124,10 @@ class CredentialDialog(_AccountDialog):
     ) -> None:
         super().__init__(parent)
         self.kind, self.account = kind, account
+        self.title_key = {
+            "recover": "identity_reset",
+            "rotate": "identity_rotation_required",
+        }.get(kind, f"identity_{kind}")
         self.revision = 0
         self.busy = False
         self.form = QFormLayout()
@@ -164,10 +169,6 @@ class CredentialDialog(_AccountDialog):
         else:
             self.role.hide()
             self.role_label.hide()
-        self.guidance = QLabel()
-        self.guidance.setWordWrap(True)
-        self.guidance.setVisible(kind != "login")
-        self.body.addWidget(self.guidance)
         self.weak = QCheckBox()
         self.grant = QCheckBox()
         for check in (self.weak, self.grant):
@@ -236,26 +237,33 @@ class CredentialDialog(_AccountDialog):
                 field.clear()
 
     def present(self, language: Language) -> None:
-        key = "identity_reset" if self.kind == "recover" else f"identity_{self.kind}"
-        self.setWindowTitle(text(key, language))
-        self.submit.setText(
-            text("identity_change" if self.kind == "rotate" else key, language)
-        )
-        self.guidance.setText(text("identity_guidance", language))
+        self.setWindowTitle(text(self.title_key, language))
+        submit_key = {
+            "rotate": "identity_change",
+            "setup": "identity_create_admin",
+        }.get(self.kind, self.title_key)
+        self.submit.setText(text(submit_key, language))
+        self.submit.setAccessibleName(self.submit.text())
         self.weak.setText(text("identity_weak", language))
         self.grant.setText(text("identity_grant", language))
         for key, label in self.labels.items():
             label.setText(text(key, language))
             self.fields[key].setAccessibleName(label.text())
+        if field := self.fields.get("identity_new_password"):
+            guidance = text("identity_guidance", language)
+            field.setToolTip(guidance)
+            field.setAccessibleDescription(guidance)
         self.role_label.setText(text("identity_role", language))
         self.role.setAccessibleName(self.role_label.text())
         for index, role in enumerate(
             (Role.OPERATOR, Role.ENGINEER, Role.ADMINISTRATOR)
         ):
             self.role.setItemText(index, text(_ROLES[role], language))
-        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
-            text("cancel", language)
+        dismiss = self.buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        dismiss.setText(
+            text("identity_logout" if self.kind == "rotate" else "cancel", language)
         )
+        dismiss.setAccessibleName(dismiss.text())
         self.feedback(self.status_key, language)
 
     def set_busy(self, busy: bool, language: Language) -> None:
@@ -743,7 +751,19 @@ class IdentityControls(QObject):
             self._delivery.detach, Qt.ConnectionType.DirectConnection
         )
         self.menu = QMenu(navbar.user)
+        self.menu.setSeparatorsCollapsible(False)
         navbar.user.setMenu(self.menu)
+        self.menu_identity = QLabel()
+        self.menu_identity.setTextFormat(Qt.TextFormat.PlainText)
+        self.menu_identity.setProperty("role", "secondary")
+        self.menu_identity.setContentsMargins(
+            Style.space, Style.small, Style.space, Style.small
+        )
+        self._identity_line = QWidgetAction(self.menu)
+        self._identity_line.setDefaultWidget(self.menu_identity)
+        self._identity_line.setSeparator(True)
+        self._identity_line.setEnabled(False)
+        self.menu.addAction(self._identity_line)
         self.controls: dict[str, QAction] = {}
         for key, callback in (
             ("identity_setup", self.offer_setup),
@@ -774,9 +794,16 @@ class IdentityControls(QObject):
             self.session_changed.emit()
         account = snapshot.account
         detail = text(
-            "identity_rotate" if snapshot.rotation_required else _ROLES[snapshot.role],
+            "identity_rotation_required"
+            if snapshot.rotation_required
+            else _ROLES[snapshot.role],
             self.language,
         )
+        context = f"{account.username} · {detail}" if account else ""
+        self.menu_identity.setText(context)
+        # Qt exposes the widget action's mnemonic text in the menu accessibility tree.
+        self._identity_line.setText(context.replace("&", "&&"))
+        self._identity_line.setVisible(account is not None)
         storage = self.owner.storage_snapshot() if self.owner else None
         state = storage.state if storage else StorageState.CLOSED
         uninitialized = bool(storage and storage.uninitialized)
@@ -897,7 +924,10 @@ class IdentityControls(QObject):
         form = self.form = CredentialDialog(kind, account, self.window)
         if self.users is not None:
             self.users.set_busy(True)
-        form.revision = self.owner.snapshot().revision
+        session = self.owner.snapshot()
+        form.revision = session.revision
+        if kind == "login" and session.account is not None:
+            form.title_key = "identity_switch"
         if kind == "rotate":
             form.setWindowModality(Qt.WindowModality.WindowModal)
         form.present(self.language)

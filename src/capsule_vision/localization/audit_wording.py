@@ -5,6 +5,7 @@ from .languages import Language
 
 _CAPTIONS: dict[str, tuple[str, str]] = {
     "identity_login": ("登录", "Sign in"),
+    "identity_logout": ("退出登录", "Logout"),
     "identity_auto_login": ("启动时自动登录", "Startup auto-login"),
     "identity_create": ("创建账户", "Create account"),
     "identity_enable": ("启用账户", "Enable account"),

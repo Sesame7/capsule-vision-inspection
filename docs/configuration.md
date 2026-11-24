@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 743 maintained keys across 64 locales. This includes
+Qt interface covers 746 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 94 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 909-key
+Authored coverage does not imply native-speaker verification. The full 912-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -325,13 +325,25 @@ The navigation's current-user button uses the exact caption `Guest` for anonymou
 sessions in every language, or the account's original username when logged in.
 Its tooltip and accessible name retain the localized role and any storage status,
 without repeating the anonymous identity. Role names elsewhere remain localized.
-Login and Switch User use masked credential forms. Opening, canceling or failing
+The signed-in user menu shows one noninteractive line with the full original
+username and localized role. During required password change the line shows the
+restricted state. Anonymous sessions open directly on their available actions.
+The masked sign-in form uses Login or Switch user for its title and primary
+action according to the session when the form opened. Opening, canceling or failing
 Switch User preserves the otherwise-valid current login; only committed successful
 authentication replaces it. Pending dismissal invalidates that specific attempt
 in the account service as well as its UI callback. Logout immediately invalidates
 pending authentication.
-Change Password verifies the current password and confirms the new one. The
-Administrator's resizable Manage Users dialog prefers 850×500 Qt logical pixels,
+Change Password verifies the current password and confirms the new one. Required
+rotation has its own title, Change Password and Log out actions, and one specific
+message on temporary-password reuse. Log out, Esc and native Close all return a
+still-restricted session to Guest. First setup identifies the first
+Administrator in the title and uses Create administrator as its primary action.
+The new password field offers password guidance in its tooltip and accessible
+description. Weak-password and Administrator-grant acknowledgements appear when
+applicable.
+
+The Administrator's resizable Manage Users dialog prefers 850×500 Qt logical pixels,
 bounded by the available screen work area on first display. Its read-only,
 single-selection table allocates its viewport width to Username / Role / Status /
 Last Login in 30% / 19% / 22% / 29% proportions. Shared column edges round to logical

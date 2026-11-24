@@ -9,11 +9,13 @@ from threading import Event, current_thread, main_thread
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
-from PySide6.QtGui import QColor, QFont
-from PySide6.QtTest import QSignalSpy
+from PySide6.QtGui import QAccessible, QColor, QFont
+from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QDialogButtonBox,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -89,6 +91,13 @@ def test_account_menu_theme_and_language_in_workstation_navigation(
     assert bar.user.geometry() == user_slot and "Admin" in bar.user.accessibleName()
     ui.menu.popup(bar.user.mapToGlobal(QPoint(0, bar.user.height())))
     until(ui.menu.isVisible)
+    accessible = QAccessible.queryAccessibleInterface(ui.menu)
+    assert accessible is not None
+    header = accessible.child(0)
+    assert header and header.role() is QAccessible.Role.Separator
+    assert header.text(QAccessible.Text.Name) == "Admin · Administrator"
+    QTest.keyClick(ui.menu, Qt.Key.Key_Down)
+    assert ui.menu.activeAction() is ui.controls["identity_logout"]
     assert (
         ui.controls["identity_manage"].isVisible()
         and ui.controls["identity_manage"].isEnabled()
@@ -127,6 +136,7 @@ def test_navigation_guest_and_logged_in_caption_in_all_languages(
             == text("identity_guest", language)
         )
         assert ui.controls["identity_login"].text() == text("identity_login", language)
+        assert not ui.menu.actions()[0].isVisible()
         assert bar.user.size() == button_size and owner.snapshot() == guest
 
     login(ui)
@@ -143,6 +153,8 @@ def test_navigation_guest_and_logged_in_caption_in_all_languages(
                 f"{authenticated.account.username} · {text('identity_administrator', language)}"
             )
         )
+        assert ui.menu.actions()[0].isVisible()
+        assert ui.menu_identity.text() == bar.user.accessibleName()
         assert bar.user.size() == button_size and owner.snapshot() == authenticated
     ui.logout()
     assert bar.user.text() == "Guest"
@@ -505,6 +517,11 @@ def test_guest_login_wrong_disabled_switch_logout_and_self_password(
     assert ui.controls["identity_manage"].isVisible()
     assert "Admin" in window.navbar.user.accessibleName()
     ui.change_password()
+    dialog = form(ui)
+    assert dialog.windowTitle() == dialog.submit.text() == text("identity_change", "en")
+    assert (
+        dialog.buttons.button(QDialogButtonBox.StandardButton.Cancel).text() == "Cancel"
+    )
     dialog = submit(
         ui, old_password=SECRET, new_password=NEW_SECRET, confirm="mismatch"
     )
@@ -520,6 +537,14 @@ def test_guest_login_wrong_disabled_switch_logout_and_self_password(
     current = owner.snapshot()
     ui.switch_user()
     assert owner.snapshot() == current
+    dialog = form(ui)
+    assert dialog.windowTitle() == dialog.submit.text() == "Switch user"
+    assert dialog.submit.accessibleName() == dialog.submit.text()
+    dismiss = dialog.buttons.button(QDialogButtonBox.StandardButton.Cancel)
+    assert dismiss.text() == dismiss.accessibleName() == "Cancel"
+    dismiss.click()
+    assert owner.snapshot() == current and ui.form is None
+    ui.switch_user()
     dialog = submit(ui, username="Worker", password=SECRET)
     until(lambda: not dialog.busy)
     assert dialog.status.text() == text("identity_invalid", "en")
@@ -645,7 +670,7 @@ def test_switch_dismissal_is_ordered_with_service_commit(
     production = window.bridge.application.snapshot()
     changes = QSignalSpy(ui.session_changed)
     ui.switch_user()
-    form(ui).reject()  # Opening and canceling without a request changes nothing.
+    QTest.keyClick(form(ui), Qt.Key.Key_Escape)
     assert owner.snapshot() == current and changes.count() == 0
     entered, release = Event(), Event()
     original_login = owner.login
@@ -677,7 +702,7 @@ def test_switch_dismissal_is_ordered_with_service_commit(
             # Deliberately withhold Qt dispatch until the service has committed.
             replacement = attempt.result(5)
             assert replacement.role is Role.OPERATOR and dialog.busy
-        dialog.reject()
+        dialog.close()
         release.set()
         until(attempt.done)
         if committed:
@@ -825,10 +850,19 @@ def test_first_setup_weak_confirmation_and_immediate_login(
         setup.fields["identity_new_password"].setText("abcd")
         assert not setup.weak.isChecked() and not setup.submit.isEnabled()
         window.set_language("en")
+        assert setup.windowTitle() == text("identity_setup", "en")
         assert (
-            setup.guidance.text() == text("identity_guidance", "en")
-            and setup.fields["identity_username"].text() == "Lin"
+            setup.submit.text()
+            == setup.submit.accessibleName()
+            == "Create administrator"
         )
+        new_password = setup.fields["identity_new_password"]
+        guidance = text("identity_guidance", "en")
+        assert (
+            new_password.toolTip() == new_password.accessibleDescription() == guidance
+        )
+        assert all(label.text() != guidance for label in setup.findChildren(QLabel))
+        assert setup.fields["identity_username"].text() == "Lin"
         setup.fields["identity_confirm"].setText("abcd")
         setup.weak.click()
         setup.submit.click()
@@ -847,10 +881,11 @@ def test_temporary_login_cancel_retry_and_rotate_without_old_password(
     window, owner = identity_screen
     ui = window.identity_controls
     login(ui)
-    completed(owner.create_account("Tech", Role.ENGINEER, SECRET))
-    for cancel in (True, False):
+    username = "R&D <Tech>"
+    completed(owner.create_account(username, Role.ENGINEER, SECRET))
+    for dismissal in ("button", "escape", "close", "submit"):
         ui.login()
-        submit(ui, username="Tech", password=SECRET)
+        submit(ui, username=username, password=SECRET)
         until(lambda: ui.form is not None and ui.form.kind == "rotate")
         rotation = form(ui)
         assert set(rotation.fields) == {"identity_new_password", "identity_confirm"}
@@ -864,20 +899,50 @@ def test_temporary_login_cancel_retry_and_rotate_without_old_password(
             and not ui.controls["identity_switch"].isVisible()
         )
         window.set_language("zh")
-        assert rotation.windowTitle() == text("identity_rotate", "zh")
-        if cancel:
-            rotation.reject()
+        assert rotation.windowTitle() == text("identity_rotation_required", "zh")
+        assert rotation.submit.text() == text("identity_change", "zh")
+        dismiss = rotation.buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        assert (
+            dismiss.text() == dismiss.accessibleName() == text("identity_logout", "zh")
+        )
+        assert ui.menu_identity.text() == f"{username} · {rotation.windowTitle()}"
+        if dismissal != "submit":
+            if dismissal == "button":
+                dismiss.click()
+            elif dismissal == "escape":
+                QTest.keyClick(rotation, Qt.Key.Key_Escape)
+            else:
+                rotation.close()
             assert owner.snapshot().account is None and ui.form is None
         else:
             submit(ui, new_password=SECRET, confirm=SECRET)
             until(lambda dialog=rotation: not dialog.busy)
-            assert owner.snapshot() == pending and rotation.status.text() == text(
-                "identity_rotate", "zh"
-            )
+            reason = text("identity_temporary_password_reused", "zh")
+            assert owner.snapshot() == pending
+            assert rotation.status.text() == rotation.status.accessibleName() == reason
+            assert rotation.windowTitle() != reason
+            assert [
+                label
+                for label in rotation.findChildren(QLabel)
+                if label.isVisible() and label.text() == reason
+            ] == [rotation.status]
             submit(ui, new_password=NEW_SECRET, confirm=NEW_SECRET)
             until(lambda: ui.form is None)
             assert owner.snapshot().role is Role.ENGINEER
             assert owner.snapshot().revision > pending.revision
+    ui.menu.popup(
+        window.navbar.user.mapToGlobal(QPoint(0, window.navbar.user.height()))
+    )
+    until(ui.menu.isVisible)
+    accessible = QAccessible.queryAccessibleInterface(ui.menu)
+    assert accessible is not None
+    header = accessible.child(0)
+    assert header is not None
+    assert (
+        header.text(QAccessible.Text.Name)
+        == f"{username} · {text('identity_engineer', 'zh')}"
+    )
+    QTest.keyClick(ui.menu, Qt.Key.Key_Escape)
 
 
 def test_offline_gui_uses_live_lease_and_reports_audit_loss(
@@ -988,6 +1053,11 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
         QApplication.processEvents()
         assert ui.form is credentials
         assert credentials.windowTitle() == text("identity_login", language)
+        assert (
+            credentials.submit.text()
+            == credentials.submit.accessibleName()
+            == credentials.windowTitle()
+        )
         assert credentials.fields["identity_username"].text() == "QA_{CAM01}_用户"
         assert (
             credentials.fields["identity_password"].text()
@@ -1002,6 +1072,20 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
     credentials.reject()
     login(ui)
     revision = owner.snapshot().revision
+    ui.controls["identity_switch"].trigger()
+    switching = form(ui)
+    switching.fields["identity_username"].setText("Draft")
+    for language in languages:
+        window.set_language(language)
+        assert (
+            switching.windowTitle()
+            == switching.submit.text()
+            == text("identity_switch", language)
+        )
+        assert switching.submit.accessibleName() == switching.submit.text()
+        assert switching.fields["identity_username"].text() == "Draft"
+    QTest.keyClick(switching, Qt.Key.Key_Escape)
+    assert ui.form is None and owner.snapshot().revision == revision
     users = manager(ui)
     worker = select(users, "Worker")
     users.controls["identity_change_role"].click()
