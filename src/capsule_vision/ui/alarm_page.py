@@ -46,7 +46,6 @@ class AlarmPage(HistoryEventTable):
         super().__init__("alarm")
         self._source = source
         self.scope = RecordsScope()
-        self.search.hide()
         self.language: Language = "zh"
         self.rows: tuple[AlarmRecord, ...] = ()
         self._token = 0
@@ -75,7 +74,6 @@ class AlarmPage(HistoryEventTable):
         self._reading = False
         self._error = ""
         self.table.setRowCount(0)
-        self.search.clear()
         self.clear_details()
         self.message.clear()
         self.message.setToolTip("")
@@ -87,8 +85,6 @@ class AlarmPage(HistoryEventTable):
     def set_language(self, language: Language) -> None:
         self.language = language
         self.navigation_language(language)
-        self.search.setPlaceholderText(text("batch_id", language))
-        self.search.setAccessibleName(self.search.placeholderText())
         selected = self.kind.currentData()
         self.kind.clear()
         self.kind.addItem(text("alarm_all_types", language), "")

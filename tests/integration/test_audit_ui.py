@@ -95,7 +95,6 @@ def test_historical_account_popup_search_disabled_accounts_and_late_delivery(
         assert all(row.operation.username == "Current" for row in page.rows)
         assert not any(control.isVisible() for control in page.findChildren(QComboBox))
         assert picker.text() == "All Accounts" and picker.selected is None
-        assert not page.search.isVisible()
         picker.click()
         until(lambda: picker.choices.isEnabled() and picker.choices.count() == 51)
         scroll = picker.choices.verticalScrollBar()

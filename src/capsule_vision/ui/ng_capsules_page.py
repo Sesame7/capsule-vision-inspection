@@ -250,7 +250,6 @@ class NgCapsulesPage(HistoryEventTable):
         self.destroyed.connect(
             self._delivery.detach, Qt.ConnectionType.DirectConnection
         )
-        self.search.hide()
         self.sort_button = QPushButton()
         self.sort_button.setObjectName("ngCapsuleSort")
         self.sort_button.setFixedSize(Style.touch, Style.touch)

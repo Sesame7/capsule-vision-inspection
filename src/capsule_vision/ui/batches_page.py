@@ -159,7 +159,6 @@ class BatchesPage(RecordsPage):
         self._disposed = False
         self._observed_run: str | None = None
         self.kind.hide()
-        self.search.hide()
         self.refresh_button.clicked.connect(self.refresh)
         self.newer.clicked.connect(lambda: self._turn(True))
         self.older.clicked.connect(lambda: self._turn(False))

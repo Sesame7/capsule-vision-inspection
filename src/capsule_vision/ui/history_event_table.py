@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -164,20 +163,15 @@ class RecordsPage(QWidget):
         bar = self.filter_bar = QHBoxLayout()
         bar.setSpacing(Style.small)
         root.addLayout(bar)
-        self.search = QLineEdit()
-        self.search.setClearButtonEnabled(True)
         self.kind = RecordsFilterCombo()
         self.kind.setObjectName("recordFilter")
         self.kind.currentTextChanged.connect(self.kind.setToolTip)
-        for w in (self.search, self.kind):
-            w.setMinimumHeight(Style.touch)
-            bar.addWidget(w, 1 if w is self.search else 0)
-        self.search.setMinimumWidth(80)
-        self.search.setMaximumWidth(112)
+        self.kind.setMinimumHeight(Style.touch)
         self.kind.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.kind.setFixedWidth(176)
+        bar.addWidget(self.kind)
         bar.addStretch(1)
         self.newer, self.older, self.refresh_button = (
             QPushButton(),

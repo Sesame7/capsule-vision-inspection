@@ -75,7 +75,6 @@ class AuditPage(HistoryEventTable):
         self.destroyed.connect(
             self._delivery.detach, Qt.ConnectionType.DirectConnection
         )
-        self.search.hide()
         self.kind.hide()
         self.accounts = AuditAccounts(identity)
         self.filter_bar.insertWidget(0, self.accounts)
