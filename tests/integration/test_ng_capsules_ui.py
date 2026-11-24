@@ -12,7 +12,7 @@ import pytest
 from PySide6.QtCore import QDate, QPoint, QSize, Qt
 from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QLabel, QStyleOptionTab
+from PySide6.QtWidgets import QApplication, QLabel
 from tests.support.application import WAIT
 from tests.support.ng_capsules import (
     MEMBERS,
@@ -310,7 +310,7 @@ def test_portable_native_pixels_boxes_and_unavailable_members(
     assert before == {p: sha256(p.read_bytes()).digest() for p in files}
 
 
-def test_portable_tabs_center_the_painted_group_and_elide_at_narrow_widths(
+def test_portable_tabs_center_captions_and_preserve_localized_names(
     qapp: QApplication, tmp_path: Path
 ) -> None:
     ensure_test_fonts()
@@ -346,12 +346,6 @@ def test_portable_tabs_center_the_painted_group_and_elide_at_narrow_widths(
                 )
 
             window.set_language("az-Latn")
-            bar.setFixedWidth(4 * 88)
-            qapp.processEvents()
-            assert all(bar.tabRect(i).width() == 88 for i in range(4))
-            option = QStyleOptionTab()
-            bar.initStyleOption(option, 3)
-            assert option.text.endswith("…")
             assert (
                 tabs.tabText(3)
                 == bar.accessibleTabName(3)

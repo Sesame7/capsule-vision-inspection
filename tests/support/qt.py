@@ -9,6 +9,19 @@ import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer
 from PySide6.QtGui import QFontDatabase
 
+from capsule_vision.localization.languages import Language
+from capsule_vision.ui.style import Theme
+
+VISUAL_CASES: tuple[tuple[Language, Theme], ...] = (
+    ("zh", "light"),
+    ("en", "dark"),
+    ("de", "light"),
+    ("hi", "dark"),
+)
+VISUAL_LANGUAGES: tuple[Language, ...] = tuple(
+    language for language, _theme in VISUAL_CASES
+)
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 

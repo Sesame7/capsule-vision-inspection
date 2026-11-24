@@ -18,10 +18,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from tests.support.qt import ensure_test_fonts, until
+from tests.support.qt import VISUAL_CASES, VISUAL_LANGUAGES, ensure_test_fonts, until
 
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui import shell
 from capsule_vision.ui.shell import PAGE_CAPTIONS, PAGES, NavigationBar
 from capsule_vision.ui.style import Style, apply_theme
@@ -79,31 +79,28 @@ def test_localized_slots_stay_still_across_selection_theme_and_identity(
     initial = tuple(bounds(c, bar) for c in controls)
     assert tuple(b.width() for b in bar.buttons) == (110, 124, 142, 128, 128)
     assert bar.user.x() - initial[4].right() - 1 >= 2 * Style.small
-    for theme in ("light", "dark"):
+    for language, theme in VISUAL_CASES:
         apply_theme(bar.window(), theme)
-        for language in LANGUAGES:
-            for page in (0, 4):
-                bar.present(language, theme, page)
-                qapp.processEvents()
-                assert_fit(bar)
-                assert tuple(bounds(c, bar) for c in controls) == initial
-                assert bar.buttons[page].isChecked()
-                for key, button in zip(PAGES, bar.buttons, strict=True):
-                    assert not button.icon().isNull()
-                    caption = text(PAGE_CAPTIONS[key], language)
-                    assert button.text() == caption
-                    destination = (
-                        "nav_connections" if key == "page_communication" else key
-                    )
-                    assert (
-                        button.accessibleName()
-                        == button.toolTip()
-                        == text(destination, language)
-                    )
-                    assert caption in (
-                        button.accessibleName(),
-                        button.accessibleDescription(),
-                    )
+        for page in (0, 4):
+            bar.present(language, theme, page)
+            qapp.processEvents()
+            assert_fit(bar)
+            assert tuple(bounds(c, bar) for c in controls) == initial
+            assert bar.buttons[page].isChecked()
+            for key, button in zip(PAGES, bar.buttons, strict=True):
+                assert not button.icon().isNull()
+                caption = text(PAGE_CAPTIONS[key], language)
+                assert button.text() == caption
+                destination = "nav_connections" if key == "page_communication" else key
+                assert (
+                    button.accessibleName()
+                    == button.toolTip()
+                    == text(destination, language)
+                )
+                assert caption in (
+                    button.accessibleName(),
+                    button.accessibleDescription(),
+                )
     for username in (None, "Morgan Alvarez", "An exceptionally long account name " * 3):
         bar.present_user(username, "Operator")
         qapp.processEvents()
@@ -185,7 +182,7 @@ def test_painted_icon_and_caption_are_centered_together(
         assert abs(left - right) <= 4 * image.devicePixelRatio(), button.text()
 
 
-def test_captions_painted_in_full_or_elided_only_on_overflow(
+def test_workstation_navigation_paints_localized_captions(
     bar: NavigationBar, qapp: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     bar.window().resize(1056, bar.sizeHint().height())
@@ -203,54 +200,15 @@ def test_captions_painted_in_full_or_elided_only_on_overflow(
     connections = bar.buttons[2]
     accessible = QAccessible.queryAccessibleInterface(connections)
     assert accessible is not None
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         bar.present(language, "dark", 2)
-        connections.grab()
-        assert (
-            painted[-1]
-            == accessible.text(QAccessible.Text.Name)
-            == text("nav_connections", language)
-        )
-    for language in ("zh", "en", "de", "fr", "km", "ms", "fil", "sw"):
-        bar.present(language, "dark", 0)
         qapp.processEvents()
         for button in bar.buttons:
             button.grab()
             assert painted[-1] == button.text(), (language, button.text(), painted[-1])
-
-    long_name = "A longer translated caption " * 6
-
-    def translated(key: str, language: Language) -> str:
-        return long_name if key == "nav_records" else text(key, language)
-
-    monkeypatch.setattr(shell, "text", translated)
-    old = tuple(b.geometry() for b in bar.buttons)
-    bar.present("en", "dark", 3)
-    qapp.processEvents()
-    records = bar.buttons[3]
-    records.grab()
-    assert painted[-1].endswith("…") and long_name.startswith(painted[-1][:-1])
-    assert records.text() == records.accessibleDescription() == long_name
-    assert records.toolTip() == records.accessibleName() == "History"
-    assert old == tuple(b.geometry() for b in bar.buttons)
-
-
-def test_font_change_remeasures_but_does_not_reorder_or_replace_actions(
-    bar: NavigationBar, qapp: QApplication
-) -> None:
-    instances = (*bar.buttons, bar.user, bar.theme, bar.language)
-    bar.window().activateWindow()
-    bar.buttons[0].setFocus(Qt.FocusReason.TabFocusReason)
-    hints: list[int] = []
-    for size in (15, 26, 15):
-        bar.setStyleSheet(bar.styleSheet() + f"\nQWidget {{font-size: {size}px;}}")
-        bar.window().resize(1056, bar.sizeHint().height())
-        qapp.processEvents()
-        hints.append(bar.buttons[0].sizeHint().height())
-        assert_fit(bar)
-        assert instances == (*bar.buttons, bar.user, bar.theme, bar.language)
-        assert bar.buttons[0].hasFocus() and bar.buttons[0].isChecked()
-    assert hints[0] == hints[2] < hints[1]
+        assert accessible.text(QAccessible.Text.Name) == text(
+            "nav_connections", language
+        )
 
 
 def test_pointer_leaves_no_focus_border_but_tab_and_check_remain_visible(

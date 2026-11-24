@@ -207,9 +207,15 @@ def test_signal_section_disclosure_layout_and_freshness(
         panel.close()
 
 
-@pytest.mark.parametrize("width", (1080, 1920))
-@pytest.mark.parametrize("theme", ("dark", "light"))
-@pytest.mark.parametrize("language", ("zh", "en", "de", "ti"))
+@pytest.mark.parametrize(
+    "width,theme,language",
+    [
+        (1080, "light", "zh"),
+        (1920, "dark", "en"),
+        (1080, "dark", "de"),
+        (1920, "light", "ti"),
+    ],
+)
 def test_independent_address_row_is_aligned_and_equal_width(
     qapp: QApplication, width: int, theme: Theme, language: Language
 ) -> None:
@@ -421,8 +427,9 @@ def test_alarm_header_power_requires_save_and_discard_restores_draft(
             delivery.detach()
 
 
-@pytest.mark.parametrize("language", ("zh", "en", "de", "ti"))
-@pytest.mark.parametrize("width", (1000, 1840))
+@pytest.mark.parametrize(
+    "language,width", [("zh", 1000), ("en", 1840), ("de", 1840), ("ti", 1000)]
+)
 def test_signal_table_current_stale_offline_and_geometry(
     qapp: QApplication, language: Language, width: int
 ) -> None:

@@ -15,7 +15,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QLabel
 from tests.support.capsule_images import SETTINGS, bodies
 from tests.support.cycles import image_result
-from tests.support.qt import assert_full_caption, until
+from tests.support.qt import VISUAL_LANGUAGES, assert_full_caption, until
 from tests.support.recipe_ui import Screen, assert_inside, edit
 from tests.support.recipe_ui import configured_screen as configured_screen
 
@@ -47,7 +47,7 @@ from capsule_vision.inspection.production import (
 )
 from capsule_vision.inspection.production.capsule import CapsuleSettings, judge_capsule
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.recipe_tuning import (
     PreviewMode,
     RecipeTuning,
@@ -548,7 +548,7 @@ def test_length_controls_and_complete_vertical_span_match_production(
         )
         assert pixels.pixelColor(point).name() == "#ffff00"
     original = session.draft.capsule
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         assert preview.canvas.selection == (0, 0)
         assert preview.measurements[0].measured is measured

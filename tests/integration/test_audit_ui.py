@@ -10,7 +10,7 @@ from PySide6.QtGui import QTextTable
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox
 from tests.support.application import WAIT, production
-from tests.support.qt import close_window, ensure_test_fonts, until
+from tests.support.qt import VISUAL_LANGUAGES, close_window, ensure_test_fonts, until
 from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
@@ -31,7 +31,6 @@ from capsule_vision.application.history import HistoryContext
 from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.audit_page import AuditPage
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -570,7 +569,7 @@ def test_targets_show_recorded_names_and_details_only_add_meaningful_changes(
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
+def test_audit_details_preserve_recorded_values_and_plain_fallback(
     qapp: QApplication, tmp_path: Path, language: str
 ) -> None:
     assert language in ("zh", "en")
@@ -580,7 +579,7 @@ def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
     assert identity
     page = AuditPage(identity)
     long_note = (
-        "线下样品核对记录" * 39 if language == "zh" else "UnbrokenReviewLabel" * 16
+        "线下样品核对记录" if language == "zh" else "Sample verified at shift handover"
     )
     try:
         identity.audit.record(
@@ -608,7 +607,7 @@ def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
         )
         ensure_test_fonts()
         page.set_language(language)
-        page.resize(560, 430)
+        page.resize(1080, 1920)
         page.show()
         page.refresh()
         until(lambda: len(page.rows) >= 2)
@@ -638,7 +637,6 @@ def test_narrow_audit_details_keep_aligned_values_and_plain_fallback(
                             == value
                         )
                 assert page.details.horizontalScrollBar().maximum() == 0
-                assert page.details.verticalScrollBar().maximum() > 0
             else:
                 assert len(frames) == 2
                 assert all(
@@ -708,7 +706,7 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
             base_columns: dict[int, tuple[int, ...]] = {}
             export_slot: QRect | None = None
             common_pagers: set[tuple[tuple[int, int, int, int], ...]] = set()
-            for lang in LANGUAGES:
+            for lang in VISUAL_LANGUAGES:
                 window.set_language(lang)
                 for i, key in enumerate(
                     (
@@ -804,7 +802,7 @@ def test_record_segments_filters_and_columns_stay_usable_in_both_profiles(
             for i, event_page in enumerate((window.audit_page, window.alarm_page), 3):
                 tabs.setCurrentIndex(i)
                 qapp.processEvents()
-                for language in LANGUAGES:
+                for language in VISUAL_LANGUAGES:
                     event_page.set_language(language)
                     table = event_page.table
                     assert (

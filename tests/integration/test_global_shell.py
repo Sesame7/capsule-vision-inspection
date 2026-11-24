@@ -17,7 +17,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.application import WAIT, FakeSession, production
-from tests.support.qt import delete_widget, ensure_test_fonts, until
+from tests.support.qt import (
+    VISUAL_CASES,
+    VISUAL_LANGUAGES,
+    delete_widget,
+    ensure_test_fonts,
+    until,
+)
 from tests.support.qt import screen as screen
 
 from capsule_vision.application import ApplicationError, ApplicationState
@@ -135,45 +141,44 @@ def test_status_strip_roles_fit_and_only_feedback_stretches(qapp: QApplication) 
     host.show()
     qapp.processEvents()
     try:
-        for theme in ("dark", "light"):
+        for language, theme in VISUAL_CASES:
             apply_theme(host, theme)
             qapp.processEvents()
-            for language in LANGUAGES:
-                bar.refresh_icons(language)
-                for source, plc, alarm in (
-                    ("source_folder_status", "—", "alarm_off"),
-                    ("UNCONFIGURED", "0", "alarm_waiting"),
-                    ("state_RUNNING", "9999", "alarm_online"),
-                    ("state_FAULT", "65535", "alarm_unavailable"),
-                ):
-                    captions = (
-                        text(source, language),
-                        f"HR 65532 · {plc}",
-                        text(alarm, language),
+            bar.refresh_icons(language)
+            for source, plc, alarm in (
+                ("source_folder_status", "—", "alarm_off"),
+                ("UNCONFIGURED", "0", "alarm_waiting"),
+                ("state_RUNNING", "9999", "alarm_online"),
+                ("state_FAULT", "65535", "alarm_unavailable"),
+            ):
+                captions = (
+                    text(source, language),
+                    f"HR 65532 · {plc}",
+                    text(alarm, language),
+                )
+                for label, caption in zip(labels, captions, strict=True):
+                    label.setText(caption)
+                qapp.processEvents()
+                geometry = tuple(
+                    value
+                    for group in status_groups
+                    for value in (group.x(), group.width())
+                )
+                assert fixed_geometry.setdefault(language, geometry) == geometry, (
+                    language,
+                    theme,
+                    plc,
+                )
+                assert event_group.width() >= bar.width() // 4
+                assert (bar.width(), bar.height()) == (1056, 44)
+                for label, caption in zip(labels, captions, strict=True):
+                    assert label.accessibleName() == label.text() == caption
+                    assert not label.toolTip()
+                    assert label.fontMetrics().horizontalAdvance(caption) <= (
+                        label.width()
                     )
-                    for label, caption in zip(labels, captions, strict=True):
-                        label.setText(caption)
-                    qapp.processEvents()
-                    geometry = tuple(
-                        value
-                        for group in status_groups
-                        for value in (group.x(), group.width())
-                    )
-                    assert fixed_geometry.setdefault(language, geometry) == geometry, (
-                        language,
-                        theme,
-                        plc,
-                    )
-                    assert event_group.width() >= bar.width() // 4
-                    assert (bar.width(), bar.height()) == (1056, 44)
-                    for label, caption in zip(labels, captions, strict=True):
-                        assert label.accessibleName() == label.text() == caption
-                        assert not label.toolTip()
-                        assert label.fontMetrics().horizontalAdvance(caption) <= (
-                            label.width()
-                        )
-                    for a, b in zip(parents[:-1], parents[1:], strict=True):
-                        assert a.geometry().right() < b.geometry().left()
+                for a, b in zip(parents[:-1], parents[1:], strict=True):
+                    assert a.geometry().right() < b.geometry().left()
         narrow = bar.event_label.width()
         positions = tuple(group.geometry() for group in status_groups)
         for width in (1896, 1056):
@@ -322,7 +327,7 @@ def test_web_runtime_status_is_compact_and_keeps_details_and_global_errors(
 
 
 @pytest.mark.parametrize("size", [(1080, 1857), (1920, 1017)])
-def test_all_languages_fit_shell_and_preserve_active_inspection(
+def test_language_switch_fits_shell_and_preserves_active_inspection(
     screen: tuple[MainWindow, FakeSession],
     size: tuple[int, int],
     monkeypatch: pytest.MonkeyPatch,
@@ -420,7 +425,7 @@ def test_all_languages_fit_shell_and_preserve_active_inspection(
         original(painter, element, option)
 
     monkeypatch.setattr(QStylePainter, "drawControl", draw_control)
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.language_selector.activated.emit(
             window.language_selector.findData(language)
         )

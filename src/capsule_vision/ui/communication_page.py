@@ -412,12 +412,13 @@ class CommunicationPage(QWidget):
         self.watch_tools.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
-        self.watch_tools_layout = QGridLayout(self.watch_tools)
-        self.watch_tools_layout.setContentsMargins(0, 0, 0, 0)
-        self.watch_tools_layout.setSpacing(Style.small)
-        self.watch_tools_layout.setColumnStretch(2, 1)
-        self._watch_wrapped: bool | None = None
+        toolbar = QHBoxLayout(self.watch_tools)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(Style.small)
         self.watch_selection = QWidget()
+        self.watch_selection.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         selection = QHBoxLayout(self.watch_selection)
         selection.setContentsMargins(0, 0, 0, 0)
         selection.setSpacing(Style.small)
@@ -447,6 +448,9 @@ class CommunicationPage(QWidget):
         for button in (self.watch_once, self.watch_auto):
             button.setProperty("compactAction", True)
             actions.addWidget(button)
+        toolbar.addWidget(self.watch_selection)
+        toolbar.addWidget(self.watch_actions)
+        toolbar.addStretch()
         watch.addWidget(self.watch_tools)
         watch.addWidget(self.watch_editor)
         self.watch_editor.hide()
@@ -530,10 +534,7 @@ class CommunicationPage(QWidget):
         self.set_language("zh")
         self.service_cards.installEventFilter(self)
         self.scroll_area.viewport().installEventFilter(self)
-        self.watch_tools.installEventFilter(self)
         self.watch_table.viewport().installEventFilter(self)
-        for title in self._service_titles:
-            title.installEventFilter(self)
 
     def _caption(self, key: str) -> QLabel:
         label = QLabel()
@@ -637,17 +638,12 @@ class CommunicationPage(QWidget):
         self._arrange_services()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched in self._service_titles and event.type() is QEvent.Type.FontChange:
-            self._arrange_services()
-        if event.type() in (
+        if watched is self.watch_table.viewport() and event.type() in (
             QEvent.Type.Resize,
             QEvent.Type.Show,
             QEvent.Type.LayoutRequest,
         ):
-            if watched is self.watch_tools:
-                self._arrange_watch()
-            elif watched is self.watch_table.viewport():
-                self._size_watch_columns()
+            self._size_watch_columns()
         if watched in (
             self.service_cards,
             self.scroll_area.viewport(),
@@ -660,28 +656,6 @@ class CommunicationPage(QWidget):
             # appears. Content minimums can temporarily exceed this viewport.
             self._arrange_services()
         return super().eventFilter(watched, event)
-
-    def _arrange_watch(self) -> None:
-        required = (
-            self.watch_selection.minimumSizeHint().width()
-            + self.watch_actions.minimumSizeHint().width()
-            + Style.small
-        )
-        wrapped = self.watch_tools.width() < required
-        if wrapped == self._watch_wrapped:
-            return
-        self._watch_wrapped = wrapped
-        for widget in (self.watch_selection, self.watch_actions):
-            self.watch_tools_layout.removeWidget(widget)
-        self.watch_tools_layout.addWidget(
-            self.watch_selection, 0, 0, Qt.AlignmentFlag.AlignLeft
-        )
-        self.watch_tools_layout.addWidget(
-            self.watch_actions,
-            1 if wrapped else 0,
-            0 if wrapped else 1,
-            Qt.AlignmentFlag.AlignLeft,
-        )
 
     def _size_watch_columns(self) -> None:
         header = self.watch_table.horizontalHeader()
@@ -1627,7 +1601,6 @@ class CommunicationPage(QWidget):
         self._render_watch()
         self._refresh()
         self._arrange_services()
-        self._arrange_watch()
         self._size_watch_columns()
 
     def _snapshot(self, kind: RequestKind, count: int = 1) -> CommunicationRequest:

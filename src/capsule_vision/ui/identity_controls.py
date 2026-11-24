@@ -5,10 +5,9 @@ from concurrent.futures import Future
 from typing import Literal
 
 from PySide6.QtCore import QEvent, QObject, QSignalBlocker, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QResizeEvent, QShowEvent
+from PySide6.QtGui import QAction, QShowEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QBoxLayout,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -338,18 +337,17 @@ class UsersDialog(_AccountDialog):
             row = self._global_row if key in _USER_GLOBAL_ACTIONS else self._account_row
             row.addWidget(button)
             self.controls[key] = button
-            button.installEventFilter(self)
         self.controls["short_refresh"].setFixedWidth(Style.touch)
         self.controls["identity_create"].setObjectName("start")
         self._action_grid.addWidget(
             self.global_actions, 0, 0, Qt.AlignmentFlag.AlignLeft
         )
         self._action_grid.addWidget(self.account_actions, 0, 1)
-        self._action_mode = (False, False, False)
+        self._actions_wrapped = False
         self.body.addWidget(self.action_area)
         self.body.addWidget(self.status)
         self.table.itemSelectionChanged.connect(self.selection_changed)
-        for widget in (self.table, self.table.viewport(), self.action_area):
+        for widget in (self.table.viewport(), self.action_area):
             widget.installEventFilter(self)
 
     def selected(self) -> Account | None:
@@ -366,10 +364,6 @@ class UsersDialog(_AccountDialog):
     @Slot()
     def selection_changed(self) -> None:
         self.set_busy(self.busy)
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._queue_layout()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -392,12 +386,7 @@ class UsersDialog(_AccountDialog):
         self._queue_layout()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() in (
-            QEvent.Type.Resize,
-            QEvent.Type.FontChange,
-            QEvent.Type.ApplicationFontChange,
-            QEvent.Type.StyleChange,
-        ):
+        if event.type() == QEvent.Type.Resize:
             self._queue_layout()
         return super().eventFilter(watched, event)
 
@@ -410,7 +399,7 @@ class UsersDialog(_AccountDialog):
         self._layout_actions()
         self._layout_columns()
 
-    def _layout_actions(self) -> None:
+    def _size_action_captions(self) -> None:
         variants = {
             "identity_disable": ("identity_enable", "identity_disable"),
             "identity_set_auto_login": (
@@ -421,9 +410,7 @@ class UsersDialog(_AccountDialog):
         for key, button in self.controls.items():
             if key == "short_refresh":
                 continue
-            button.setMinimumHeight(
-                max(Style.touch, button.fontMetrics().height() + 14)
-            )
+            button.ensurePolished()
             captions = tuple(
                 _users_caption(k, self.language) for k in variants.get(key, ())
             )
@@ -439,31 +426,18 @@ class UsersDialog(_AccountDialog):
                 button.setFixedWidth(width)
             else:
                 button.setMinimumWidth(width)
-        widths = {
-            key: max(button.minimumWidth(), button.sizeHint().width())
-            for key, button in self.controls.items()
-        }
-        global_width = sum(widths[key] for key in _USER_GLOBAL_ACTIONS) + (
-            self._global_row.spacing() * (self._global_row.count() - 1)
+
+    def _layout_actions(self) -> None:
+        required = (
+            self._global_row.sizeHint().width()
+            + self._action_grid.horizontalSpacing()
+            + self._account_row.sizeHint().width()
         )
-        account_width = sum(
-            width for key, width in widths.items() if key not in _USER_GLOBAL_ACTIONS
-        ) + self._account_row.spacing() * (self._account_row.count() - 1)
-        width = self.action_area.width()
-        wrapped = width < global_width + 18 + account_width
-        mode = wrapped, width < global_width, width < account_width
-        if mode != self._action_mode:
-            self._action_mode = mode
+        wrapped = self.action_area.width() < required
+        if wrapped != self._actions_wrapped:
+            self._actions_wrapped = wrapped
             self._action_grid.removeWidget(self.global_actions)
             self._action_grid.removeWidget(self.account_actions)
-            for row, stacked in zip(
-                (self._global_row, self._account_row), mode[1:], strict=True
-            ):
-                row.setDirection(
-                    QBoxLayout.Direction.TopToBottom
-                    if stacked
-                    else QBoxLayout.Direction.LeftToRight
-                )
             if wrapped:
                 self._action_grid.addWidget(
                     self.global_actions, 0, 0, 1, 2, Qt.AlignmentFlag.AlignLeft
@@ -486,9 +460,6 @@ class UsersDialog(_AccountDialog):
             value = edges[column + 1] - edges[column]
             if self.table.columnWidth(column) != value:
                 self.table.setColumnWidth(column, value)
-        row_height = max(Style.touch, self.table.fontMetrics().height() + 12)
-        if self.table.verticalHeader().defaultSectionSize() != row_height:
-            self.table.verticalHeader().setDefaultSectionSize(row_height)
 
     def set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -528,7 +499,6 @@ class UsersDialog(_AccountDialog):
                 if selected is not None and not editable
                 else button.text()
             )
-        self._queue_layout()
 
     def install_accounts(
         self, accounts: tuple[Account, ...], auto_login_account_id: str | None = None
@@ -615,6 +585,8 @@ class UsersDialog(_AccountDialog):
             production_icon("reset", theme_colors(self).primary)
         )
         self.set_busy(self.busy)
+        self._size_action_captions()
+        self._queue_layout()
         self.feedback(self.status_key, language)
 
 

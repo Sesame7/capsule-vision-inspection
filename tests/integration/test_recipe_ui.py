@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
 )
-from tests.support.qt import assert_full_caption, until
+from tests.support.qt import VISUAL_LANGUAGES, assert_full_caption, until
 from tests.support.recipe_ui import (
     Screen,
     assert_inside,
@@ -225,9 +225,8 @@ def test_recipe_choice_buttons_keyboard_persistence_and_separate_disclosure(
     assert all(b.isChecked() for b in page.archive_checks.values())
 
 
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("theme", ["dark", "light"])
-def test_archive_responsive_groups_label_hit_targets_and_locks(
+@pytest.mark.parametrize("language,theme", [("zh", "light"), ("en", "dark")])
+def test_archive_row_label_hit_targets_and_locks(
     configured_screen: Screen, language: Language, theme: Theme
 ) -> None:
     window, session, runtimes = configured_screen
@@ -265,56 +264,7 @@ def test_archive_responsive_groups_label_hit_targets_and_locks(
             != page.buttons["archive_open"].icon().pixmap(24, 24).toImage()
         )
     assert heights[0] == heights[1] == heights[2]
-    # Constrain this section, not the supported application window width.
-    conditions = page.archive_checks["ok"].parentWidget()
-    path = page.archive_directory.parentWidget()
-    layout = page.archive_section.layout()
-    assert conditions is not None and path is not None and layout is not None
-    required = (
-        conditions.sizeHint().width()
-        + path.minimumSizeHint().width()
-        + layout.contentsMargins().left()
-        + layout.contentsMargins().right()
-        + layout.spacing()
-    )
-    page.archive_section.setMaximumWidth(required - Style.touch)
-    until(stacked)
-    for current_language in ("en", "zh", language):
-        window.set_language(current_language)
-        QApplication.processEvents()
-        # The localized Save images heading is no longer a fixed-width PNG tag.
-        page.archive_section.setMaximumWidth(
-            conditions.sizeHint().width()
-            + path.minimumSizeHint().width()
-            + layout.contentsMargins().left()
-            + layout.contentsMargins().right()
-            + layout.spacing()
-            - Style.touch
-        )
-        until(stacked)
-        assert_inside(page.archive_directory, page.archive_section)
-        assert_inside(page.buttons["archive_open"], page.archive_section)
-    page.archive_section.setMaximumWidth(16777215)
-    until(lambda: not stacked())
-    # Child requirements can change without a window resize.
-    minimum = page.archive_directory.minimumWidth()
-    page.archive_directory.setMinimumWidth(
-        page.archive_section.width() - 4 * Style.touch
-    )
-    until(stacked)
-    page.archive_directory.setMinimumWidth(minimum)
-    until(lambda: not stacked())
-    previous_max = page.summary_scroll.maximumHeight()
-    page.summary_scroll.setMaximumHeight(page.archive_section.sizeHint().height())
-    QApplication.processEvents()
-    assert page.summary_scroll.verticalScrollBar().maximum() > 0
-    page.summary_scroll.ensureWidgetVisible(page.archive_directory)
-    QApplication.processEvents()
-    assert_inside(page.archive_directory, page)
     assert_inside(page.buttons["save"], page)
-    page.summary_scroll.setMaximumHeight(previous_max)
-    QApplication.processEvents()
-    assert page.summary_scroll.verticalScrollBar().maximum() == 0
     for check in page.archive_checks.values():
         # Click in the label/padded right edge, away from the indicator.
         point = QPoint(check.width() - 5, check.height() // 2)
@@ -921,7 +871,7 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
         )
         + Style.space
     )
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert save.size() == save_size
@@ -956,7 +906,7 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
     sample_size = preview.sample.size()
     hue_size = preview.hue.size()
     tolerance_size = preview.tolerance_label.size()
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert preview.sample.size() == sample_size
@@ -998,7 +948,7 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
     assert workspace.geometry_toolbar.height() == Style.touch
     assert all(line.width() == 72 for line in workspace.coordinates.values())
     sizes = tuple(workspace.buttons[key].size() for key in ("roi_set_rect", "save"))
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         for key, expected in zip(("roi_set_rect", "save"), sizes, strict=True):

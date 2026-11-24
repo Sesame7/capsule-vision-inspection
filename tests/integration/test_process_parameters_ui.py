@@ -22,7 +22,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.application import WAIT
-from tests.support.qt import close_window, delete_widget, ensure_test_fonts, until
+from tests.support.qt import (
+    VISUAL_CASES,
+    close_window,
+    delete_widget,
+    ensure_test_fonts,
+    until,
+)
 from tests.support.recipe_ui import assert_inside, edit
 from tests.support.startup import (
     TEST_PASSWORD,
@@ -37,7 +43,7 @@ from capsule_vision.application.startup import Startup
 from capsule_vision.configuration import load_recipe, save_recipe
 from capsule_vision.configuration.process_parameters import load_process_catalog
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
@@ -245,26 +251,26 @@ def test_process_card_fits_localized_fields_at_both_layout_widths(
     card.expand.click()
     before = card.values()
     try:
-        for theme in ("dark", "light"):
+        for (language, theme), (width, columns) in zip(
+            VISUAL_CASES, ((1032, 2), (1872, 3), (1872, 3), (1032, 2)), strict=True
+        ):
             apply_theme(card, theme)
             card.refresh_theme()
-            for language in LANGUAGES:
-                card.set_language(language)
-                for width, columns in ((1032, 2), (1872, 3)):
-                    card.resize(width, 1200)
-                    qapp.processEvents()
-                    qapp.processEvents()
-                    assert len({group.x() for group in card.groups.values()}) == columns
-                    assert card.values() == before and card.expand.isChecked()
-                    for parameter in card.catalog.parameters:
-                        field = card.fields[parameter.id]
-                        assert (
-                            field.height() >= Style.touch
-                            and field.focusPolicy() == Qt.FocusPolicy.StrongFocus
-                        )
-                        assert parameter.label(language) in field.accessibleName()
-                        assert "D" in field.toolTip()
-                        assert_inside(field, card.groups[parameter.group])
+            card.set_language(language)
+            card.resize(width, 1200)
+            qapp.processEvents()
+            qapp.processEvents()
+            assert len({group.x() for group in card.groups.values()}) == columns
+            assert card.values() == before and card.expand.isChecked()
+            for parameter in card.catalog.parameters:
+                field = card.fields[parameter.id]
+                assert (
+                    field.height() >= Style.touch
+                    and field.focusPolicy() == Qt.FocusPolicy.StrongFocus
+                )
+                assert parameter.label(language) in field.accessibleName()
+                assert "D" in field.toolTip()
+                assert_inside(field, card.groups[parameter.group])
     finally:
         card.close()
         delete_widget(card)

@@ -71,7 +71,7 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language, is_language
+from capsule_vision.localization.languages import Language, is_language
 from capsule_vision.web.runtime import WebRuntime, WebState
 
 from .alarm_page import AlarmPage
@@ -133,8 +133,6 @@ def _set_status_tooltip(label: QLabel, tooltip: str) -> None:
 class PlayerButton(QPushButton):
     """The existing native action button, with a fixed icon-above-caption drawing."""
 
-    metrics_changed = Signal()
-
     def content_rects(self) -> tuple[QRect, QRect]:
         # Leave room for the native focus border in either focus state. Content
         # stays stationary instead of following stylesheet focus-padding changes.
@@ -169,11 +167,6 @@ class PlayerButton(QPushButton):
             QPalette.ColorRole.ButtonText,
         )
         painter.end()
-
-    def changeEvent(self, event: QEvent) -> None:
-        super().changeEvent(event)
-        if event.type() is QEvent.Type.FontChange:
-            self.metrics_changed.emit()
 
 
 class MainWindow(QMainWindow):
@@ -352,19 +345,16 @@ class MainWindow(QMainWindow):
         for index, key in enumerate(("operation", "pause", "stop", "secondary")):
             button = QPushButton() if key == "secondary" else PlayerButton()
             button.setIconSize(QSize(Style.icon, Style.icon))
-            button.setFixedHeight(48)
             self._operation_buttons.addButton(button, index)
             self.buttons[key] = button
             if key == "secondary":
                 button.setProperty("iconAlignment", "leading")
-                button.setFixedWidth(Style.touch)
+                button.setFixedSize(Style.touch, 48)
                 self.context_control.addWidget(button)
             else:
                 assert isinstance(button, PlayerButton)
                 button.setProperty("iconAlignment", "top")
-                button.metrics_changed.connect(
-                    self._render, Qt.ConnectionType.QueuedConnection
-                )
+                button.setFixedSize(120, 60)
                 button.setObjectName(
                     "start" if key == "operation" else "productionAction"
                 )
@@ -983,7 +973,6 @@ class MainWindow(QMainWindow):
             self._closing,
             can_start,
             guidance,
-            tuple(self.buttons[key].font().key() for key in actions),
         )
         if (
             identity == self._operation_presentation
@@ -1039,47 +1028,19 @@ class MainWindow(QMainWindow):
                 )
             )
             button.ensurePolished()
-        player = tuple(self.buttons[key] for key in ("operation", "pause", "stop"))
-        captions = (
-            "replay_start",
-            "replay_continue",
-            "replay_pause",
-            "replay_step",
-            "production_stop",
-        )
-        # A comfortable font-scaled slot, independent of the longest translated
-        # caption. Actions/languages retain equal stationary roles; exceptional
-        # captions elide with their full identity in accessibility/tooltips.
-        width = max(
-            120,
-            min(
-                180,
-                ceil(
-                    6 * max(QFontMetricsF(button.font()).height() for button in player)
-                ),
-            ),
-        )
-        height = max(
-            60,
-            Style.icon
-            + 12
-            + max(
-                button.fontMetrics().boundingRect(text(key, language)).height()
-                for button in player
-                for key in captions
-                for language in LANGUAGES
-            ),
-        )
         for key in ("operation", "pause", "stop"):
             button = self.buttons[key]
-            button.setFixedSize(width, height)
             button.setText(
                 QFontMetricsF(button.font()).elidedText(
-                    button.accessibleName(), Qt.TextElideMode.ElideRight, width - 20
+                    button.accessibleName(),
+                    Qt.TextElideMode.ElideRight,
+                    button.width() - 20,
                 )
             )
         slots = 2 if basler else 3
-        self.operation_group.setFixedWidth(Style.touch + slots * (width + Style.small))
+        self.operation_group.setFixedWidth(
+            Style.touch + slots * (self.buttons["operation"].width() + Style.small)
+        )
         self.context_control.setCurrentIndex(1 if actions["secondary"] else 0)
 
     @Slot(object)
@@ -2233,11 +2194,6 @@ class MainWindow(QMainWindow):
             self.summary,
             self.identity_label,
             self.production_recipes,
-            self.batch_label,
-        ):
-            self._render_identity()
-        if event.type() is QEvent.Type.FontChange and watched in (
-            self.batch_caption,
             self.batch_label,
         ):
             self._render_identity()

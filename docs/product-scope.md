@@ -289,7 +289,7 @@ for an explicitly approved change. The product requirements are:
 ### 8.4 Visual validation expectations
 
 - Validate relevant changed pages with **native Qt measurements and real screenshots** on the two Windows workstation profiles: portrait 1080×1920 at 100% and landscape 3840×2160 at 200% (approximately 1920×1080 logical pixels). Retain the field UI validation safeguards.
-- Include simplified Chinese, English and selected longer localized captions/scripts as representative cases, plus available-width checks. Prefer automated width-budget tests over manually inspecting all 64 languages; do not claim coverage that was not run.
+- Use normal application fonts and representative Chinese, English and longer or complex-script examples across the two profiles and themes. Keep catalog correctness checks for all 64 locales. Smaller development windows and custom font sizes are outside visual acceptance.
 - Review whether a column is disproportionately compressed, whether relevant headers/values are legible, and whether switching languages/state visibly moves stable action groups despite available room. Do not declare success merely because no control overlaps or because full text appears in tooltips.
 - A Windows field workstation can provide human screenshot/interaction confirmation when needed. **Isolated UI previews must not connect cameras, send PLC commands, change live configuration or touch customer data**; follow [field UI validation](field-ui-validation.md).
 

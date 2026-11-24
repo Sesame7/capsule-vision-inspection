@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from tests.support.application import WAIT, FakeSession, close, prepared, production
 from tests.support.business import channel, mixed_result
 from tests.support.production import source_frame
-from tests.support.qt import close_window, ensure_test_fonts, until
+from tests.support.qt import VISUAL_LANGUAGES, close_window, ensure_test_fonts, until
 from tests.support.qt import screen as screen
 
 from capsule_vision.application import (
@@ -55,7 +55,7 @@ from capsule_vision.inspection.production import (
     TechnicalStatus,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.batch_dialog import BatchDialog
 from capsule_vision.ui.camera_card import CameraCard
 from capsule_vision.ui.main_window import MainWindow, PlayerButton
@@ -1377,24 +1377,6 @@ def test_five_metrics_follow_cumulative_business_counts_and_batch(
     assert window.metrics["processing"][0].text() == "--"
 
 
-def test_metrics_wrap_without_shrinking_labels(
-    screen: tuple[MainWindow, FakeSession],
-    qapp: QApplication,
-) -> None:
-    window, _ = screen
-    window.resize(1080, 1400)
-    window.set_language("en")
-    for value, caption in window.metrics.values():
-        caption.setStyleSheet("font-size: 88px;")
-        value.setStyleSheet("font-size: 88px;")
-    qapp.processEvents()
-    until(lambda: window.metric_row.itemAtPosition(1, 0) is not None)
-    for value, caption in window.metrics.values():
-        for label in (value, caption):
-            assert label.width() >= label.fontMetrics().horizontalAdvance(label.text())
-            assert window.summary.rect().contains(label.mapTo(window.summary, QPoint()))
-
-
 def test_ng_is_quiet_but_technical_errors_keep_fixed_status_geometry(
     screen: tuple[MainWindow, FakeSession],
 ) -> None:
@@ -1589,140 +1571,6 @@ def test_recipe_summary_candidate_active_and_unconfigured(
     # Presentation snapshots never promote the application's initial candidate.
     assert window.bridge.application.snapshot().active is None
     assert window.bridge.application.snapshot().counters == ProductionCounters()
-
-
-@pytest.mark.parametrize("language", ["zh", "en"])
-@pytest.mark.parametrize("font_pixels", [19, 23])
-def test_summary_long_identities_adapt_to_narrower_and_larger_text(
-    screen: tuple[MainWindow, FakeSession],
-    tmp_path: Path,
-    language: Language,
-    font_pixels: int,
-) -> None:
-    window, _ = screen
-    window.set_language(language)
-    a = window.snapshot.candidate_prepared
-    assert a is not None
-    b = replace(
-        a,
-        configuration=replace(
-            a.configuration,
-            recipe_id="B",
-            display_name="Long next Recipe 配方名称 " * 20,
-        ),
-    )
-    for label in (
-        window.state_label,
-        window.identity_label,
-        window.batch_label,
-    ):
-        label.setStyleSheet(f"font-size: {font_pixels}px;")
-    pending = replace(
-        window.snapshot,
-        active=ConfigurationIdentity.from_prepared(a),
-        candidate=ConfigurationIdentity.from_prepared(b),
-        active_prepared=a,
-        candidate_prepared=b,
-        selected_recipe=SelectedRecipe(
-            b.configuration.recipe_id, b.configuration.display_name
-        ),
-        batch_id="long-batch-identity-" * 20,
-    )
-    current_name = "Long Recipe 很长的配方名称 " * 15
-    current = replace(
-        window.snapshot,
-        candidate_prepared=replace(
-            a, configuration=replace(a.configuration, display_name=current_name)
-        ),
-        selected_recipe=SelectedRecipe(a.configuration.recipe_id, current_name),
-        batch_id="batch-with-a-long-identity-" * 15,
-    )
-    for size in ((1920, 1080), (1080, 720), (1080, 1920), (1920, 1080)):
-        window.resize(*size)
-        for snapshot in (current, pending):
-            window.bridge.snapshot_changed.emit(snapshot)
-            QApplication.processEvents()
-            batch_left = window.batch_group.mapTo(window.summary, QPoint()).x()
-            assert (
-                batch_left
-                == window.summary.contentsRect().left()
-                + window.summary_layout.contentsMargins().left()
-            )
-            for widget in (
-                window.identity_group,
-                window.batch_group,
-                window.buttons["operation"],
-            ):
-                start = widget.mapTo(window.summary, QPoint())
-                assert window.summary.rect().contains(start)
-                assert window.summary.rect().contains(
-                    start + QPoint(widget.width() - 1, widget.height() - 1)
-                )
-            if snapshot is current:
-                identity = window.identity_group
-                operation = window.operation_group
-                center = (
-                    identity.mapTo(window.summary, QPoint()).x() + identity.width() / 2
-                )
-                if (
-                    2 * operation.width() + identity.width() + 2 * Style.space
-                    <= window.summary.width()
-                ):
-                    assert abs(center - window.summary.width() / 2) <= 1
-                else:
-                    assert (
-                        window.batch_group.geometry().right()
-                        < identity.geometry().left()
-                    )
-                    assert identity.geometry().right() < operation.geometry().left()
-                assert not window.identity_label.isVisible()
-                assert window.production_recipes.recipes.toolTip().startswith(
-                    f"{text('page_recipe', language)}: {current_name}"
-                )
-                assert (
-                    text("pending_recipe", language)
-                    not in window.identity_label.toolTip()
-                )
-                right = (
-                    operation.mapTo(window.summary, QPoint()).x() + operation.width()
-                )
-                assert window.summary.width() - right <= Style.space + 1
-                assert len(window.metrics) == 5 and "channel_empty" in window.metrics
-        identity_left = window.identity_group.mapTo(window.summary, QPoint()).x()
-        identity_right = (
-            window.identity_group.mapTo(window.summary, QPoint()).x()
-            + window.identity_group.width()
-        )
-        batch_right = batch_left + window.batch_group.width()
-        operation_left = window.buttons["operation"].mapTo(window.summary, QPoint()).x()
-        assert batch_right + Style.space <= identity_left
-        assert identity_right + Style.space <= operation_left
-        assert window.identity_label.text().startswith(text("active_recipe", language))
-        assert window.buttons["batch"].size() == QSize(Style.touch, Style.touch)
-        for widget in (
-            window.state_label,
-            window.identity_label,
-            window.production_recipes,
-        ):
-            start = widget.mapTo(window.identity_group, QPoint())
-            assert window.identity_group.rect().contains(start)
-            assert window.identity_group.rect().contains(
-                start + QPoint(widget.width() - 1, widget.height() - 1)
-            )
-        assert (
-            window.identity_heading.geometry().bottom()
-            < window.production_recipes.geometry().top()
-        )
-        assert window.batch_group.rect().contains(window.batch_label.geometry())
-        assert (
-            window.buttons["batch"].x()
-            == window.batch_label.x() + window.batch_label.width() + Style.small
-        )
-        for label in (window.identity_label, window.batch_label):
-            assert (
-                label.fontMetrics().horizontalAdvance(label.text()) <= label.width()
-            ), (label.text(), label.width())
-        window.grab()
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -2378,7 +2226,7 @@ def test_multilingual_player_captions_fit_without_moving_camera_layout(
     monkeypatch.setattr(
         type(window.bridge), "controls_enabled", property(lambda _: True)
     )
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         for paused in (False, True):
             actions = {
                 "operation": "replay_continue" if paused else "start",

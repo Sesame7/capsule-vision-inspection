@@ -1637,11 +1637,9 @@ Color target Hue wraps. Optional process-parameter text, Vision FPS/ROI fields
 with deferred validation, register lists and other non-spin inputs retain their
 existing editing and commit behavior.
 
-The supported workstation profiles are portrait 1080×1920 at 100% Windows
-scaling and landscape 3840×2160 at 200% (about 1920×1080 Qt logical pixels).
-The native frame and taskbar reduce the maximized client area. The supported
-minimum width of 1080 logical pixels does not change Qt's window minimum or
-the image canvas coordinate system.
+The [Qt workstation profiles](field-ui-validation.md#native-screenshots-and-geometry)
+are portrait 1080×1920 and landscape 1920×1080 logical pixels at normal
+application fonts. The native frame and taskbar reduce the maximized client area.
 
 Folder Replay keeps Start/Resume, Pause/Step and Stop in fixed player positions.
 Start remains visible in the operation slot in UNCONFIGURED and READY, including
@@ -1650,13 +1648,9 @@ Basler shows only Start and Stop in a stable right-anchored pair, retaining the
 separate applicable Fault Reset slot. Connecting uses the localized connection
 caption before the existing warm-up presentation.
 The player icons always sit above their captions.
-The visible native player buttons have equal widths and a common height of about
-60 logical pixels at ordinary fonts. Their shared width follows a comfortable
-font-metric budget, normally 120 logical pixels, rather than the longest translated action
-across all languages. Slots stay stationary across ordinary language, theme and
-action-state changes; exceptional captions elide with complete localized names
-and guidance retained in tooltips/accessibility. Actual larger fonts can increase
-width and height within the bounded horizontal allocation.
+The native player buttons occupy equal 120×60 logical-pixel slots across
+languages, themes and action states. Captions elide when needed and retain
+their complete localized names and guidance in tooltips and accessible text.
 Inspect shows the Reset icon in its reserved slot when Application reports FAULT
 and both the runtime and model-preparation owners have released their resources.
 Operators and higher roles can activate it.
@@ -1696,8 +1690,8 @@ The Watch toolbar starts with the group dropdown and square Add and Remove
 buttons. The selector uses the shared chevron. Read and Auto sit beside these
 controls and reserve their own localized caption widths. During automatic refresh
 the same slot shows a checked Stop action with the loop icon and one-second
-interval. The table stays in place between reads. When space is tight, Read
-and Auto wrap together below the group controls.
+interval. The toolbar stays on one row in both workstation profiles, and the
+table stays in place between reads.
 Long group names retain their full tooltip and accessible description.
 Write has an explicit localized verb beside the register address and values.
 Save and service power controls retain visible verbs. Compact captioned actions

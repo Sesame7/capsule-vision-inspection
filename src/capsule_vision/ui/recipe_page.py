@@ -24,18 +24,15 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QDesktopServices,
     QRegularExpressionValidator,
-    QResizeEvent,
     QShowEvent,
 )
 from PySide6.QtWidgets import (
-    QBoxLayout,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -308,8 +305,8 @@ class RecipePage(QWidget):
             self.buttons[key] = button
             selection.addWidget(button)
         recipe.addLayout(selection)
-        self._metadata_row = QHBoxLayout()
-        self._metadata_row.setSpacing(Style.space)
+        metadata_row = QHBoxLayout()
+        metadata_row.setSpacing(Style.space)
         self._metadata_fields: list[QWidget] = []
         self.metadata: dict[str, QLineEdit] = {}
         for key in ("display_name", "product_code"):
@@ -325,9 +322,9 @@ class RecipePage(QWidget):
             column.addWidget(label)
             column.addWidget(line)
             self._metadata_fields.append(field)
-            self._metadata_row.addWidget(field, 1)
+            metadata_row.addWidget(field, 1)
             line.textEdited.connect(self._metadata_changed)
-        recipe.addLayout(self._metadata_row)
+        recipe.addLayout(metadata_row)
         model_layout = QVBoxLayout(self.model_section)
         model_layout.setContentsMargins(
             Style.space, Style.space, Style.space, Style.space
@@ -422,17 +419,16 @@ class RecipePage(QWidget):
         self.archive_section.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
         )
-        self._archive_layout = QGridLayout(self.archive_section)
-        self._archive_layout.setContentsMargins(
+        archive_row = QHBoxLayout(self.archive_section)
+        archive_row.setContentsMargins(
             Style.space, Style.space, Style.space, Style.space
         )
-        self._archive_layout.setSpacing(Style.small)
-        self._archive_stacked: bool | None = None
-        self._archive_conditions = QWidget(self.archive_section)
-        self._archive_conditions.setSizePolicy(
+        archive_row.setSpacing(Style.small)
+        conditions_group = QWidget(self.archive_section)
+        conditions_group.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
-        conditions = QHBoxLayout(self._archive_conditions)
+        conditions = QHBoxLayout(conditions_group)
         conditions.setContentsMargins(0, 0, 0, 0)
         conditions.setSpacing(Style.small)
         self.labels["image_archive"] = QLabel()
@@ -447,11 +443,9 @@ class RecipePage(QWidget):
             check.toggled.connect(self._archive_edited)
             self.archive_checks[name] = check
             conditions.addWidget(check)
-        self._archive_path = QWidget(self.archive_section)
-        self._archive_path.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        path_row = QHBoxLayout(self._archive_path)
+        path_group = QWidget(self.archive_section)
+        path_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        path_row = QHBoxLayout(path_group)
         path_row.setContentsMargins(0, 0, 0, 0)
         path_row.setSpacing(Style.small)
         self.archive_directory = QLineEdit()
@@ -468,7 +462,8 @@ class RecipePage(QWidget):
             button.clicked.connect(callback)
             self.buttons[key] = button
             path_row.addWidget(button)
-        self.archive_section.installEventFilter(self)
+        archive_row.addWidget(conditions_group)
+        archive_row.addWidget(path_group, 1)
         for section in (
             self.recipe_section,
             self.archive_section,
@@ -701,9 +696,6 @@ class RecipePage(QWidget):
         archive.setAccessibleDescription(archive.toolTip())
         for key, line in self.metadata.items():
             line.setAccessibleName(text(key, language))
-        # The archive grid can keep its previous column widths while Tune is open.
-        self._archive_layout.invalidate()
-        self._arrange_fields()
         self.show_draft()
 
     def refresh_theme(self) -> None:
@@ -727,50 +719,6 @@ class RecipePage(QWidget):
                 if button.isChecked()
                 else image_icon("next", colors.primary)
             )
-
-    def _arrange_fields(self) -> None:
-        self._metadata_row.setDirection(
-            QBoxLayout.Direction.LeftToRight
-            if self.width() >= 560
-            else QBoxLayout.Direction.TopToBottom
-        )
-        self._arrange_archive()
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched is self.archive_section and event.type() in (
-            QEvent.Type.Resize,
-            QEvent.Type.Show,
-            QEvent.Type.LayoutRequest,
-        ):
-            self._arrange_archive()
-        return super().eventFilter(watched, event)
-
-    def _arrange_archive(self) -> None:
-        margins = self._archive_layout.contentsMargins()
-        required = (
-            self._archive_conditions.sizeHint().width()
-            + self._archive_path.minimumSizeHint().width()
-            + margins.left()
-            + margins.right()
-            + self._archive_layout.horizontalSpacing()
-        )
-        stacked = self.archive_section.contentsRect().width() < required
-        if stacked != self._archive_stacked:
-            self._archive_stacked = stacked
-            self._archive_layout.removeWidget(self._archive_conditions)
-            self._archive_layout.removeWidget(self._archive_path)
-            self._archive_layout.addWidget(self._archive_conditions, 0, 0)
-            self._archive_layout.addWidget(
-                self._archive_path, 1 if stacked else 0, 0 if stacked else 1
-            )
-            self._archive_layout.setColumnStretch(0, 1 if stacked else 0)
-            self._archive_layout.setColumnStretch(1, 0 if stacked else 1)
-            self.archive_section.updateGeometry()
-            self.summary_scroll.updateGeometry()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        self._arrange_fields()
-        super().resizeEvent(event)
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)

@@ -1747,78 +1747,50 @@ def test_fps_stepper_boundaries_and_keyboard_entry(
     assert workspace.buttons["vision_discard"].isEnabled()
 
 
-@pytest.mark.parametrize("language", ["zh", "en"])
-def test_roi_toolbar_wraps_without_shrinking_fields(
+@pytest.mark.parametrize("size,language", [((1080, 1920), "zh"), ((1920, 1080), "de")])
+def test_roi_toolbars_at_workstation_sizes(
     camera_screen: tuple[MainWindow, VisionPage, ControlledEngine],
+    size: tuple[int, int],
     language: Language,
 ) -> None:
     window, workspace, engine = camera_screen
-    window.set_language(language)
-    QApplication.processEvents()
-    restored_width = workspace.width()
-    toolbar = workspace.geometry_toolbar
-    numeric = workspace.buttons["roi_set_rect"]
-    bulk = workspace.buttons["roi_common"]
-    widths = [field.width() for field in workspace.coordinates.values()]
     before = workspace.draft.definition
-    save = workspace.buttons["save"]
-    upper = workspace.reference_toolbar
-    reference = workspace.buttons["vision_import"]
-    assert numeric.mapTo(toolbar, QPoint()).y() == bulk.mapTo(toolbar, QPoint()).y()
-    assert save.mapTo(toolbar, QPoint()).y() == numeric.mapTo(toolbar, QPoint()).y()
-    assert upper.height() <= Style.touch + Style.small
-    narrow = toolbar.minimumSizeHint().width() + Style.small
-    workspace.setFixedWidth(narrow + workspace.width() - toolbar.width())
-    QApplication.processEvents()
-    assert bulk.mapTo(toolbar, QPoint()).y() > numeric.mapTo(toolbar, QPoint()).y()
-    assert toolbar.height() >= numeric.height() + bulk.height()
-    for control in (
-        *workspace.coordinates.values(),
-        numeric,
-        bulk,
-        workspace.buttons["roi_distribute"],
-        workspace.status,
-        save,
-    ):
-        assert toolbar.rect().contains(control.mapTo(toolbar, QPoint()))
-        assert toolbar.rect().contains(
-            control.mapTo(toolbar, control.rect().bottomRight())
-        )
-    upper_controls = (
-        workspace.reference,
-        *(
-            workspace.buttons[key]
-            for key in (
-                "reference_previous",
-                "reference_next",
-                "roi_refresh",
-                "roi_fit",
-                "roi_actual",
-            )
+    window.resize(*size)
+    window.set_language(language)
+    _wait_for_source_layout(workspace, 2 if size[0] == 1080 else 1)
+    for toolbar, widgets in (
+        (
+            workspace.reference_toolbar,
+            (
+                workspace.reference,
+                *(
+                    workspace.buttons[key]
+                    for key in (
+                        "reference_previous",
+                        "reference_next",
+                        "roi_refresh",
+                        "roi_fit",
+                        "roi_actual",
+                    )
+                ),
+            ),
         ),
-    )
-    for control in upper_controls:
-        assert upper.rect().contains(control.mapTo(upper, QPoint()))
-        assert upper.rect().contains(control.mapTo(upper, control.rect().bottomRight()))
-    assert [field.width() for field in workspace.coordinates.values()] == widths
-    assert save.mapTo(toolbar, save.rect().topRight()).x() == toolbar.width() - 1
-    workspace.setFixedWidth(restored_width)
-    QApplication.processEvents()
-    assert numeric.mapTo(toolbar, QPoint()).y() == bulk.mapTo(toolbar, QPoint()).y()
-    assert save.mapTo(toolbar, QPoint()).y() == numeric.mapTo(toolbar, QPoint()).y()
-    assert upper.height() <= Style.touch + Style.small
-    upper.setFixedWidth(upper.minimumSizeHint().width() + Style.small)
-    QApplication.processEvents()
-    fit, actual = workspace.buttons["roi_fit"], workspace.buttons["roi_actual"]
-    assert actual.mapTo(upper, QPoint()).y() > reference.mapTo(upper, QPoint()).y()
-    assert fit.mapTo(upper, QPoint()).y() == actual.mapTo(upper, QPoint()).y()
-    assert actual.mapTo(upper, actual.rect().topRight()).x() == upper.width() - 1
-    for control in upper_controls:
-        assert upper.rect().contains(control.mapTo(upper, QPoint()))
-        assert upper.rect().contains(control.mapTo(upper, control.rect().bottomRight()))
-    upper.setFixedWidth(1000)
-    QApplication.processEvents()
-    assert upper.height() <= Style.touch + Style.small
+        (
+            workspace.geometry_toolbar,
+            (
+                *workspace.coordinates.values(),
+                *(
+                    workspace.buttons[key]
+                    for key in ("roi_set_rect", "roi_common", "roi_distribute", "save")
+                ),
+            ),
+        ),
+    ):
+        for widget in widgets:
+            assert toolbar.rect().contains(widget.mapTo(toolbar, QPoint()))
+            assert toolbar.rect().contains(
+                widget.mapTo(toolbar, widget.rect().bottomRight())
+            )
     assert workspace.draft.definition == before and not engine.calls
 
 

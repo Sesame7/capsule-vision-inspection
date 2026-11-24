@@ -18,13 +18,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
-    QStyle,
-    QStyleOptionButton,
     QWidget,
 )
 from tests.support.application import FakeSession, prepared
 from tests.support.qt import (
+    VISUAL_CASES,
+    VISUAL_LANGUAGES,
     assert_full_caption,
     close_window,
     ensure_test_fonts,
@@ -52,13 +51,11 @@ from capsule_vision.application.identity_models import (
 from capsule_vision.application.passwords import PasswordVerifier
 from capsule_vision.display import LatestDisplayFrameStore
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
-from capsule_vision.ui import identity_controls as identity_ui_module
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.account_maintenance import MaintenanceWindow
 from capsule_vision.ui.identity_controls import (
     CredentialDialog,
     IdentityControls,
-    RoleDialog,
     UsersDialog,
 )
 from capsule_vision.ui.main_window import MainWindow
@@ -118,7 +115,7 @@ def test_account_menu_theme_and_language_in_workstation_navigation(
     assert window.bridge.application.snapshot() == before
 
 
-def test_navigation_guest_and_logged_in_caption_in_all_languages(
+def test_navigation_guest_and_logged_in_captions(
     identity_screen: tuple[MainWindow, LocalIdentity],
 ) -> None:
     window, owner = identity_screen
@@ -126,7 +123,7 @@ def test_navigation_guest_and_logged_in_caption_in_all_languages(
     before = window.bridge.application.snapshot()
     button_size = bar.user.size()
     guest = owner.snapshot()
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert_full_caption(bar.user, "Guest")
@@ -142,7 +139,7 @@ def test_navigation_guest_and_logged_in_caption_in_all_languages(
     login(ui)
     authenticated = owner.snapshot()
     assert authenticated.account is not None
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert_full_caption(bar.user, authenticated.account.username)
@@ -168,7 +165,7 @@ def test_navigation_preserves_original_usernames_and_full_descriptions(
     ensure_test_fonts()
     bar = NavigationBar()
     apply_theme(bar, "dark")
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         bar.present(language, "dark", 0)
         bar.present_user(username, text("identity_engineer", language))
         assert bar.user.text() == bar.user.fontMetrics().elidedText(
@@ -268,7 +265,7 @@ def select(dialog: UsersDialog, username: str) -> Account:
     raise AssertionError(username)
 
 
-def assert_account_table_columns(dialog: UsersDialog) -> tuple[int, ...]:
+def assert_account_table_columns(dialog: UsersDialog) -> None:
     table, header = dialog.table, dialog.table.horizontalHeader()
     width = table.viewport().width()
     widths = tuple(table.columnWidth(i) for i in range(4))
@@ -288,12 +285,17 @@ def assert_account_table_columns(dialog: UsersDialog) -> tuple[int, ...]:
         for row in range(table.rowCount()):
             item = table.item(row, column)
             assert item is not None and item.textAlignment() == alignment
+            detail = item.text()
+            if (
+                column == 2
+                and dialog.accounts[row].account_id == dialog.auto_login_account_id
+            ):
+                detail = f"{text('identity_enabled', dialog.language)} · {text('identity_auto_login', dialog.language)}"
             assert (
-                item.text()
-                == item.toolTip()
+                item.toolTip()
                 == item.data(Qt.ItemDataRole.AccessibleTextRole)
+                == detail
             )
-    return widths
 
 
 def confirm_disable(controls: IdentityControls) -> None:
@@ -1030,25 +1032,13 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
 ) -> None:
     window, owner = identity_screen
     ui = window.identity_controls
-    languages: tuple[Language, ...] = (
-        "zh",
-        "en",
-        "zh-TW",
-        "ja",
-        "ko",
-        "de",
-        "it",
-        "th",
-        "hi",
-        "ti",
-    )
     before = window.bridge.application.snapshot()
     ui.login()
     credentials = form(ui)
     credentials.fields["identity_username"].setText("QA_{CAM01}_用户")
     credentials.fields["identity_password"].setText("unsubmitted fixture input")
     credentials.fields["identity_password"].setFocus()
-    for language in languages:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert ui.form is credentials
@@ -1075,7 +1065,7 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
     ui.controls["identity_switch"].trigger()
     switching = form(ui)
     switching.fields["identity_username"].setText("Draft")
-    for language in languages:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         assert (
             switching.windowTitle()
@@ -1093,7 +1083,7 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
     assert role is not None
     role.role.setCurrentIndex(role.role.findData(Role.ENGINEER))
     role.role.setFocus()
-    for language in languages:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert ui.users is users and ui.role_dialog is role
@@ -1133,7 +1123,7 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
             current.role.setCurrentIndex(current.role.findData(Role.ENGINEER))
         current.fields["identity_new_password"].setFocus()
         current.feedback("identity_mismatch", window.language)
-        for language in languages:
+        for language in VISUAL_LANGUAGES:
             window.set_language(language)
             QApplication.processEvents()
             assert ui.form is current
@@ -1152,7 +1142,7 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
     users.controls["identity_disable"].click()
     confirmation = ui.confirmation
     assert confirmation is not None
-    for language in languages:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert ui.confirmation is confirmation
@@ -1474,101 +1464,8 @@ def test_users_close_does_not_cancel_accepted_account_creation_or_restore_dialog
         release.set()
 
 
-def test_users_and_role_geometry_all_supported_languages(qapp: QApplication) -> None:
-    ensure_test_fonts()
-    host = QWidget()
-    users = UsersDialog(host)
-    stamp = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
-    accounts = tuple(
-        Account(str(i), "Account" + str(i), Role.OPERATOR, i != 2, stamp if i else None)
-        for i in range(9)
-    )
-    accounts += (Account("long", "LongUser" * 8, Role.ADMINISTRATOR, True),)
-    users.install_accounts(accounts)
-    role = RoleDialog(accounts[-1], 1, users)
-    try:
-        for theme in ("dark", "light"):
-            apply_theme(host, theme)
-            for language in LANGUAGES:
-                users.present(language)
-                users.show()
-                dispatched = Event()
-                QTimer.singleShot(0, dispatched.set)
-                until(dispatched.is_set)
-                until(
-                    lambda: (
-                        sum(users.table.columnWidth(i) for i in range(4))
-                        == users.table.viewport().width()
-                        and all(
-                            users.rect().contains(
-                                QRect(b.mapTo(users, QPoint()), b.size())
-                            )
-                            for b in users.controls.values()
-                        )
-                    )
-                )
-                available = users.screen().availableGeometry()
-                frame = users.frameGeometry().width() - users.width()
-                assert users.width() == min(850, available.width() - frame)
-                assert (
-                    7 * Style.touch
-                    <= users.table.viewport().height()
-                    <= 10 * Style.touch
-                )
-                assert users.table.verticalScrollBar().maximum() > 0
-                assert users.table.horizontalScrollBar().maximum() == 0
-                assert_account_table_columns(users)
-                for key, button in users.controls.items():
-                    assert users.rect().contains(
-                        QRect(button.mapTo(users, QPoint()), button.size())
-                    )
-                    assert button.height() >= Style.touch
-                    assert button.accessibleName() and button.toolTip()
-                    if key != "short_refresh":
-                        assert_full_caption(button, button.text())
-                long_item = users.table.item(len(accounts) - 1, 0)
-                assert long_item is not None
-                assert long_item.text() == long_item.toolTip() == accounts[-1].username
-                assert users.table.columnWidth(
-                    0
-                ) < users.table.fontMetrics().horizontalAdvance(long_item.text())
-                select(users, accounts[-1].username)
-                assert users.selected() == accounts[-1]
-                assert (
-                    long_item.data(Qt.ItemDataRole.AccessibleTextRole)
-                    == accounts[-1].username
-                )
-                ys = {
-                    button.mapTo(users, QPoint()).y()
-                    for button in users.controls.values()
-                }
-                if language in ("zh", "en"):
-                    assert len(ys) == 1
-                role.present(language)
-                role.show()
-                QApplication.processEvents()
-                assert role.role.accessibleName() and not role.submit.isEnabled()
-                for button in role.buttons.buttons():
-                    assert isinstance(button, QPushButton)
-                    assert button.height() >= Style.touch
-                    assert_full_caption(button, button.text())
-                role.hide()
-        users.present("en")
-        users.show()
-        users.setFocus()
-        from PySide6.QtTest import QTest
-
-        QTest.keyClick(users, Qt.Key.Key_Escape)
-        assert not users.isVisible()
-    finally:
-        role.close()
-        users.close()
-        host.close()
-
-
-@pytest.mark.parametrize("language", ["zh", "en", "de"])
-@pytest.mark.parametrize("theme", ["light", "dark"])
-def test_users_common_values_fit_at_preferred_width(
+@pytest.mark.parametrize("language,theme", VISUAL_CASES)
+def test_manage_users_at_preferred_size(
     qapp: QApplication, language: Language, theme: Theme
 ) -> None:
     ensure_test_fonts()
@@ -1578,363 +1475,79 @@ def test_users_common_values_fit_at_preferred_width(
     host.setFont(font)
     apply_theme(host, theme)
     users = UsersDialog(host)
-    stamp = datetime(2099, 12, 31, 15, 59, tzinfo=UTC)
+    stamp = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
     operator = Account("shift", "Shared Shift", Role.OPERATOR, True, stamp)
     users.install_accounts(
         (
             operator,
-            Account("engineer", "Line Engineer", Role.ENGINEER, True, stamp),
-            Account("admin", "Review Admin", Role.ADMINISTRATOR, True, stamp),
+            Account("eng", "Line Engineer", Role.ENGINEER, True, stamp),
+            Account("admin", "Line Admin", Role.ADMINISTRATOR, True, stamp),
             Account("former", "Former Operator", Role.OPERATOR, False),
+            *(
+                Account(f"op{i}", f"Operator {i}", Role.OPERATOR, True)
+                for i in range(8)
+            ),
         ),
         operator.account_id,
     )
     users.present(language)
-    users.show()
-    users.resize(850, 500)
-    table = users.table
     try:
-        for enlarged in (False, True):
-            if enlarged:
-                table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-                table.setStyleSheet("QTableWidget#accounts {font-size: 20px;}")
-            QApplication.processEvents()
-            until(
-                lambda: (
-                    sum(table.columnWidth(i) for i in range(4))
-                    == table.viewport().width()
+        assert users.size().toTuple() == (850, 500)
+        users.show()
+        users.resize(850, 500)
+        qapp.processEvents()
+        until(
+            lambda: (
+                sum(users.table.columnWidth(i) for i in range(4))
+                == users.table.viewport().width()
+                and all(
+                    users.rect().contains(QRect(b.mapTo(users, QPoint()), b.size()))
+                    for b in users.controls.values()
                 )
             )
-            assert table.verticalScrollBar().isVisible() == enlarged
-            assert table.horizontalScrollBar().maximum() == 0
-            assert users.selected() == operator
-            for column in range(4):
-                required = max(
-                    table.sizeHintForColumn(column),
-                    table.horizontalHeader().sectionSizeHint(column),
-                )
-                assert table.columnWidth(column) >= required, (
-                    language,
-                    theme,
-                    enlarged,
-                    column,
-                    table.columnWidth(column),
-                    required,
-                )
-        status = table.item(0, 2)
-        assert status is not None
-        assert (
-            status.text()
-            == {"zh": "自动登录", "en": "Auto login", "de": "Auto-Anmeldung"}[language]
         )
-        description = f"{text('identity_enabled', language)} · {text('identity_auto_login', language)}"
+        assert_account_table_columns(users)
+        assert users.selected() == operator
+        assert users.table.verticalScrollBar().maximum() > 0
+        assert users.table.horizontalScrollBar().maximum() == 0
+        if language in ("zh", "en", "de"):
+            for column in range(4):
+                assert users.table.columnWidth(column) >= max(
+                    users.table.sizeHintForColumn(column),
+                    users.table.horizontalHeader().sectionSizeHint(column),
+                )
+        status = users.table.item(0, 2)
+        assert status is not None
+        assert status.text() == text(
+            "short_auto_login" if language in ("en", "zh") else "identity_auto_login",
+            language,
+        )
         assert (
             status.toolTip()
             == status.data(Qt.ItemDataRole.AccessibleTextRole)
-            == description
-        )
-    finally:
-        users.close()
-        host.close()
-
-
-@pytest.mark.parametrize("count", [0, 2, 10])
-def test_users_layout_counts_resize_and_complete_timestamps(
-    qapp: QApplication, count: int
-) -> None:
-    ensure_test_fonts()
-    host = QWidget()
-    apply_theme(host, "dark")
-    users = UsersDialog(host)
-    stamp = datetime(2099, 12, 31, 15, 59, tzinfo=UTC)
-    accounts = tuple(
-        Account(
-            str(i),
-            ("LongUsername" * 5) if i == 1 else f"User{i}",
-            Role.OPERATOR,
-            True,
-            stamp,
-        )
-        for i in range(count)
-    )
-    try:
-        users.present("en")
-        users.show()
-        QApplication.processEvents()
-        original_size = users.size()
-        users.install_accounts(accounts)
-        until(lambda: users.table.horizontalScrollBar().maximum() == 0)
-        assert users.size() == original_size
-        assert users.table.rowCount() == count
-        assert users.table.horizontalScrollBar().maximum() == 0
-        assert_account_table_columns(users)
-        assert (users.table.verticalScrollBar().maximum() > 0) == (count == 10)
-        for row in range(count):
-            item = users.table.item(row, 3)
-            assert item is not None
-            assert item.text() == stamp.astimezone().strftime("%Y-%m-%d %H:%M")
-            assert users.table.fontMetrics().horizontalAdvance(
-                item.text()
-            ) + 12 <= users.table.columnWidth(3)
-        if count:
-            selected = select(users, accounts[-1].username)
-        else:
-            selected = None
-        identities = dict(users.controls)
-        for width in (850, 560, 850, 500, 850, 420, 850):
-            users.resize(width, 500)
-            until(
-                lambda: (
-                    sum(users.table.columnWidth(i) for i in range(4))
-                    == users.table.viewport().width()
-                )
-            )
-            QApplication.processEvents()
-            assert users.controls == identities
-            assert users.selected() == selected
-            assert users.table.horizontalScrollBar().maximum() == 0
-            assert_account_table_columns(users)
-            rectangles = [
-                QRect(b.mapTo(users, QPoint()), b.size())
-                for b in users.controls.values()
-            ]
-            assert all(users.rect().contains(r) for r in rectangles)
-            assert all(
-                not left.intersects(right)
-                for i, left in enumerate(rectangles)
-                for right in rectangles[i + 1 :]
-            )
-            global_y = users.controls["identity_create"].mapTo(users, QPoint()).y()
-            account_y = (
-                users.controls["identity_change_role"].mapTo(users, QPoint()).y()
-            )
-            if width == 850:
-                assert global_y == account_y
-            elif width <= 500:
-                assert global_y < account_y
-            assert global_y > users.table.geometry().bottom()
-            signature = tuple(r.getRect() for r in rectangles)
-            resized = QSignalSpy(users.table.horizontalHeader().sectionResized)
-            for _ in range(6):
-                QApplication.processEvents()
-                assert (
-                    tuple(
-                        QRect(b.mapTo(users, QPoint()), b.size()).getRect()
-                        for b in users.controls.values()
-                    )
-                    == signature
-                )
-            assert resized.count() == 0
-        narrow_columns = [users.table.columnWidth(i) for i in range(4)]
-        users.resize(1000, 500)
-        until(lambda: users.table.columnWidth(0) > narrow_columns[0])
-        assert users.table.columnWidth(3) > narrow_columns[3]
-        assert users.table.columnWidth(1) > narrow_columns[1]
-        assert users.table.columnWidth(2) > narrow_columns[2]
-        assert_account_table_columns(users)
-        users.install_accounts(tuple(reversed(accounts)))
-        QApplication.processEvents()
-        assert users.selected() == selected
-        assert users.size().width() == 1000
-        for key in ("identity_change_role", "identity_disable", "identity_reset"):
-            assert users.controls[key].isEnabled() == bool(count)
-    finally:
-        users.close()
-        host.close()
-
-
-@pytest.mark.parametrize("pixels", [30, 48])
-def test_users_enlarged_fonts_wrap_actions_without_losing_focus(
-    qapp: QApplication, pixels: int
-) -> None:
-    host = QWidget()
-    apply_theme(host, "light")
-    users = UsersDialog(host)
-    users.install_accounts(
-        (Account("user", "A long account username " * 2, Role.OPERATOR, True),)
-    )
-    users.present("en")
-    users.show()
-    users.resize(850, 500)
-    button = users.controls["identity_reset"]
-    button.setFocus()
-    try:
-        users.setStyleSheet(f"QWidget {{font-size: {pixels}px;}}")
-        until(
-            lambda: (
-                users.controls["identity_create"].mapTo(users, QPoint()).y()
-                < users.controls["identity_change_role"].mapTo(users, QPoint()).y()
+            == (
+                f"{text('identity_enabled', language)} · {text('identity_auto_login', language)}"
             )
         )
-        QApplication.processEvents()
-        assert button.hasFocus()
-        assert users.table.horizontalScrollBar().maximum() == 0
-        for action in users.controls.values():
-            assert users.rect().contains(
-                QRect(action.mapTo(users, QPoint()), action.size())
-            )
-            assert action.height() >= Style.touch
-            if action.text():
-                assert_full_caption(action, action.text())
-                option = QStyleOptionButton()
-                action.initStyleOption(option)
-                content = action.style().subElementRect(
-                    QStyle.SubElement.SE_PushButtonContents, option, action
-                )
-                assert action.fontMetrics().height() <= content.height()
-        assert users.table.rowHeight(0) >= users.table.fontMetrics().height() + 12
-        users.setStyleSheet("")
-        until(
-            lambda: (
-                len({b.mapTo(users, QPoint()).y() for b in users.controls.values()})
-                == 1
-            )
+        rects = [
+            QRect(button.mapTo(users, QPoint()), button.size())
+            for button in users.controls.values()
+        ]
+        assert all(users.rect().contains(rect) for rect in rects)
+        assert all(
+            not left.intersects(right)
+            for i, left in enumerate(rects)
+            for right in rects[i + 1 :]
         )
-        assert button.hasFocus()
-    finally:
-        users.close()
-        host.close()
-
-
-def test_account_columns_depend_only_on_viewport_not_records_or_selection(
-    qapp: QApplication,
-) -> None:
-    host = QWidget()
-    apply_theme(host, "dark")
-    users = UsersDialog(host)
-    users.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-    users.present("en")
-    users.show()
-    try:
-        short = tuple(
-            Account(str(i), f"User{i}", Role.OPERATOR, True) for i in range(10)
-        )
-        long = tuple(
-            Account(str(i), f"{i}" + "LongUsername" * 5, Role.ENGINEER, i != 2)
-            for i in range(10)
-        )
-        expected: tuple[int, ...] | None = None
-        for records in ((), short[:2], short, long, short[:2], ()):
-            users.install_accounts(records)
-            until(
-                lambda: (
-                    sum(users.table.columnWidth(i) for i in range(4))
-                    == users.table.viewport().width()
-                )
-            )
-            widths = assert_account_table_columns(users)
-            if expected is None:
-                expected = widths
-            assert widths == expected
-            if records:
-                selected = select(users, records[-1].username)
-                spy = QSignalSpy(users.table.horizontalHeader().sectionResized)
-                users.present("zh")
-                QApplication.processEvents()
-                assert users.selected() == selected
-                assert assert_account_table_columns(users) == expected
-                assert spy.count() == 0
-        users.install_accounts(long)
-        select(users, long[1].username)
-        for language in ("zh", "en", "af", "ti"):
-            users.present(language)
-            QApplication.processEvents()
-            assert assert_account_table_columns(users) == expected
-            selected = users.selected()
-            assert selected is not None and selected.account_id == long[1].account_id
-        for pixels in (30, 48, 15):
-            users.table.setStyleSheet(f"QTableWidget {{font-size: {pixels}px;}}")
-            QApplication.processEvents()
-            assert assert_account_table_columns(users) == expected
-        users.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        until(lambda: tuple(users.table.columnWidth(i) for i in range(4)) != expected)
-        assert_account_table_columns(users)
-        selected = users.selected()
-        assert selected is not None and selected.account_id == long[1].account_id
-    finally:
-        users.close()
-        host.close()
-
-
-def test_users_long_translated_captions_wrap_with_full_accessibility(
-    qapp: QApplication, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    captions = {
-        "identity_change_role": "Change the selected account role",
-        "identity_disable": "Disable the selected user account",
-        "identity_enable": "Enable the selected user account",
-        "identity_reset": "Reset the selected account password",
-        "identity_role": "Configured account authorization role",
-        "identity_status": "Current account availability status",
-        "identity_set_auto_login": "Set automatic login for this account",
-        "identity_disable_auto_login": "Clear this account's automatic login",
-    }
-
-    def translated(key: str, language: Language) -> str:
-        return (
-            captions.get(key, text(key, language))
-            if language == "af"
-            else text(key, language)
-        )
-
-    monkeypatch.setattr(identity_ui_module, "text", translated)
-    host = QWidget()
-    apply_theme(host, "dark")
-    users = UsersDialog(host)
-    accounts = (Account("user", "Account", Role.OPERATOR, True),)
-    users.install_accounts(accounts)
-    users.present("af")
-    users.show()
-    users.resize(850, 500)
-    try:
-        until(
-            lambda: (
-                users.controls["identity_create"].mapTo(users, QPoint()).y()
-                < users.controls["identity_change_role"].mapTo(users, QPoint()).y()
-            )
-        )
-        for key in ("identity_change_role", "identity_disable", "identity_reset"):
-            button = users.controls[key]
-            assert_full_caption(button, captions[key])
-            assert button.toolTip() == button.accessibleName() == captions[key]
-            assert users.rect().contains(
-                QRect(button.mapTo(users, QPoint()), button.size())
-            )
-        for column in (1, 2):
-            heading = users.table.horizontalHeaderItem(column)
-            assert heading is not None
+        for button in users.controls.values():
             assert (
-                heading.toolTip()
-                == heading.data(Qt.ItemDataRole.AccessibleTextRole)
-                == heading.text()
+                button.height() >= Style.touch
+                and button.toolTip()
+                and button.accessibleName()
             )
-        assert users.table.horizontalScrollBar().maximum() == 0
-        auto = users.controls["identity_set_auto_login"]
-        assert_full_caption(auto, captions["identity_set_auto_login"])
-        slot = QRect(auto.mapTo(users, QPoint()), auto.size())
-        users.install_accounts(accounts, accounts[0].account_id)
-        QApplication.processEvents()
-        assert_full_caption(auto, captions["identity_disable_auto_login"])
-        assert (
-            auto.toolTip()
-            == auto.accessibleName()
-            == captions["identity_disable_auto_login"]
-        )
-        assert QRect(auto.mapTo(users, QPoint()), auto.size()) == slot
-        users.controls["identity_reset"].setFocus()
-        users.present("en")
-        until(
-            lambda: (
-                len({b.mapTo(users, QPoint()).y() for b in users.controls.values()})
-                == 1
-            )
-        )
-        assert users.controls["identity_reset"].hasFocus()
-        assert_full_caption(auto, "Clear Auto")
-        assert auto.accessibleName() == "Disable Auto Login"
-        item = users.table.item(0, 2)
-        assert item is not None and item.text() == "Auto login"
-        assert item.toolTip() == "Enabled · Auto Login"
+        users.controls["identity_change_role"].setFocus()
+        QTest.keyClick(users, Qt.Key.Key_Escape)
+        assert not users.isVisible()
     finally:
         users.close()
         host.close()

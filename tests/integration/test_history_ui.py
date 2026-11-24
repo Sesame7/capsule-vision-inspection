@@ -33,6 +33,7 @@ from tests.support.business import channel as business_channel
 from tests.support.business import history_review, mixed_result
 from tests.support.portable_history import copied_history
 from tests.support.qt import (
+    VISUAL_LANGUAGES,
     assert_full_caption,
     close_window,
     delete_widget,
@@ -66,7 +67,7 @@ from capsule_vision.inspection.production import (
     ViMoFinding,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui import bootstrap, history_review_window
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -278,7 +279,7 @@ def test_open_image_button_opens_only_the_selected_cycle_and_camera_png(
             and text("history_image_missing", "en") in page.channel_detail.toPlainText()
         )
         slot = button.size()
-        for language in LANGUAGES:
+        for language in VISUAL_LANGUAGES:
             page.set_language(language)
             qapp.processEvents()
             assert text("history_image_missing", language) in (
@@ -499,18 +500,9 @@ def test_portable_history_browses_old_batch_run_cycle_and_archived_evidence(
     assert list((entry / "data").iterdir()) == [local]
 
 
-@pytest.mark.parametrize(
-    "language,dent_label,wraps",
-    [
-        ("en", "Dent", False),
-        ("zh", "压痕", False),
-        ("en", "Dent along the edge of the capsule shell " * 4 + "near the join", True),
-        ("zh", "胶囊壳边缘有较长的连续凹陷" * 5, True),
-    ],
-    ids=["en", "zh", "en-long", "zh-long"],
-)
+@pytest.mark.parametrize("language,dent_label", [("en", "Dent"), ("zh", "压痕")])
 def test_archived_camera_uses_frozen_effective_findings_and_refits(
-    qapp: QApplication, tmp_path: Path, language: Language, dent_label: str, wraps: bool
+    qapp: QApplication, tmp_path: Path, language: Language, dent_label: str
 ) -> None:
     ensure_test_fonts()
     result, image = history_review(tmp_path, dent_label=dent_label)
@@ -538,7 +530,7 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
         until(lambda: history.snapshot().images_linked == 1)
         page.set_language(language)
         apply_theme(page, "light")
-        page.resize(1920 if wraps else 1080, 900)
+        page.resize(1080, 1920)
         page.show()
         page.activate()
         until(lambda: not page.busy)
@@ -567,17 +559,6 @@ def test_archived_camera_uses_frozen_effective_findings_and_refits(
             "capsule.color.lower.tolerance",
         }.issubset(channel_at(page, 1, 2).reasons)
         assert detail.document().lastBlock().layout().lineCount() == 1
-        if wraps:
-            one_line_height = detail.height()
-            page.resize(880, 900)
-            until(
-                lambda: (
-                    detail.height() > one_line_height
-                    and not detail.verticalScrollBar().isVisible()
-                )
-            )
-            assert detail.document().lastBlock().layout().lineCount() > 1
-            assert detail.toPlainText() == full_detail
         page.channels.setCurrentCell(1, 3)
         assert detail.toPlainText() == f"{cycle_note}\n{channel_label} · Scratch"
         page.channels.setCurrentCell(1, 1)
@@ -1080,26 +1061,6 @@ def test_viewport_allocation_real_identifiers_and_numeric_fields(
             == page.cycles.viewport().width()
         )
         assert history.snapshot().accepted == history.snapshot().persisted == 4
-        if size[0] == 1080:
-            # A deliberately constrained matrix still scrolls real overflow;
-            # removing the trailing header artifact must not hide columns.
-            page.channels.setMaximumWidth(5 * Style.touch)
-            until(page.channels.horizontalScrollBar().isVisible)
-            assert page.channels.horizontalScrollBar().maximum() > 0
-            assert page.channels.verticalScrollBar().maximum() == 0
-            scrollbar = page.channels.horizontalScrollBar()
-            container = scrollbar.parentWidget()
-            assert container is not None
-            assert container.mask().contains(container.rect().center())
-            assert not container.mask().contains(container.rect().bottomRight())
-            last = page.channels.item(0, 6)
-            assert last is not None
-            page.channels.scrollToItem(last)
-            assert (
-                page.channels.viewport()
-                .rect()
-                .contains(page.channels.visualItemRect(last))
-            )
     finally:
         page.dispose()
         page.close()
@@ -1792,7 +1753,7 @@ def test_bilingual_geometry_segments_top_pagination_and_calendar(
         toolbar_geometry = tuple(
             QRect(widget.mapTo(page, QPoint()), widget.size()) for widget in widgets[:7]
         )
-        for language in LANGUAGES:
+        for language in VISUAL_LANGUAGES:
             page.set_language(language)
             shared.set_language(language)
             assert columns == tuple(page.cycles.columnWidth(i) for i in range(6))

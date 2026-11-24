@@ -146,8 +146,9 @@ icon-only action names remain localized. Routine explanations that repeat labels
 states or other controls are omitted. Tooltips identify actions, explain essential
 operation limits, or retain elided identities and specific operator-recovery
 information. Routine runtime telemetry and diagnostic expansions are omitted.
-Layout is left-to-right; the supported minimum is
-1080 Qt logical pixels. Windows must provide fonts for the selected script,
+Layout is left-to-right. Qt visual acceptance uses the normal application fonts
+at the [portrait and landscape workstation profiles](field-ui-validation.md#native-screenshots-and-geometry).
+Windows must provide fonts for the selected script,
 including Georgian, Armenian, Vietnamese marks, Thai, Indic scripts, Sinhala,
 Ethiopic and Khmer.
 Qt uses existing Windows font fallback (such as Nirmala UI for Indic scripts and
@@ -348,7 +349,7 @@ bounded by the available screen work area on first display. Its read-only,
 single-selection table allocates its viewport width to Username / Role / Status /
 Last Login in 30% / 19% / 22% / 29% proportions. Shared column edges round to logical
 pixels and use the entire viewport, including after scrollbar changes. The shares
-stay fixed across language and font changes and are independent of account text
+stay fixed across language changes and are independent of account text
 and selection. Headers and cells align left; long text elides. Account count changes
 do not resize the dialog. Disabled accounts remain visible,
 additional accounts scroll, and refresh preserves selection by account ID. Full
@@ -360,8 +361,8 @@ the selected eligible Operator, replacing any prior authorization. Clear Auto
 revokes the selected Operator's authorization. Both captions share one action
 slot next to New User and icon-only Refresh. Chinese and English use compact
 captions. Other languages use their existing localized wording. Change Role,
-Enable/Disable User and Reset Password sit on the right. Constrained widths or
-enlarged fonts wrap the groups without overlapping controls.
+Enable/Disable User and Reset Password sit on the right. When localized captions
+need more width, the selected-account actions move together to a second row.
 Change Role opens a separate role selector with Save/Cancel; unchanged roles
 cannot be saved. Disabling requires a confirmation naming the target; enabling
 does not. Selecting any existing Administrator disables the account-specific
@@ -1198,9 +1199,8 @@ with a final-NG channel or a final-OK channel with a recorded Mask Area exclusio
 An unattributed group supplies no group-based request. Other modes evaluate
 `save_ng` per camera/Cycle. OK, ERROR and EMPTY always use the individual
 camera result. Overlapping switches share one original PNG.
-The responsive Image Archive card edits only this Recipe draft. The four labeled
-switches share one row with the directory/actions whenever the card's available
-width fits their requirements; otherwise they sit above the directory/actions.
+The Image Archive card edits only this Recipe draft. Its four labeled switches
+share a row with the directory and its actions in both workstation profiles.
 Label/padding clicks toggle the whole condition control. Browse selects a
 directory and Open Folder opens an existing directory without creating it.
 Save, Discard and lifecycle editing locks use the ordinary Recipe workflow.

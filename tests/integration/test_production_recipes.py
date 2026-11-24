@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 from tests.integration.test_process_preview import saved_target
 from tests.support.application import WAIT
 from tests.support.fins_tcp import TcpPeer
-from tests.support.qt import close_window, until
+from tests.support.qt import VISUAL_LANGUAGES, close_window, until
 from tests.support.recipe_ui import Screen, assert_inside
 from tests.support.recipe_ui import configured_screen as configured_screen
 from tests.support.startup import (
@@ -41,7 +41,6 @@ from capsule_vision.application.startup import load_startup
 from capsule_vision.configuration import RecipeDefinition, load_recipe, save_recipe
 from capsule_vision.configuration.preferences import load_preferences
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 
@@ -170,7 +169,7 @@ def test_selector_geometry_and_localization_fallback(
     window.resize(*size)
     picker = window.production_recipes
     expected_refresh = picker.refresh_button.size()
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert picker.refresh_button.size() == expected_refresh

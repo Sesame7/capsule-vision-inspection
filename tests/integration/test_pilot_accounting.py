@@ -14,8 +14,8 @@ from tests.integration.test_basler_production import (
 from tests.support.application import FakeSession
 from tests.support.business import mixed_result
 from tests.support.fins_tcp import TcpPeer
+from tests.support.qt import VISUAL_LANGUAGES, until
 from tests.support.qt import screen as screen
-from tests.support.qt import until
 from tests.support.startup import authenticated_startup, close, saved_data
 
 from capsule_vision.application import ApplicationError, ProductionCounters, _basler_sdk
@@ -32,7 +32,6 @@ from capsule_vision.communication.reporting import (
 )
 from capsule_vision.display import matching_camera
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.main_window import MainWindow
 
 
@@ -252,7 +251,7 @@ def test_group_metrics_use_group_duration_and_language_accessibility(
         latest_production_result=mixed_result(),
     )
     window.bridge.snapshot_changed.emit(snapshot)
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         window.set_language(language)
         QApplication.processEvents()
         assert len(window.metrics) == 5

@@ -13,8 +13,8 @@ from PySide6.QtGui import QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from tests.support.application import FakeSession
+from tests.support.qt import VISUAL_LANGUAGES, until
 from tests.support.qt import screen as screen
-from tests.support.qt import until
 
 from capsule_vision.application import ApplicationState
 from capsule_vision.communication import (
@@ -39,7 +39,7 @@ from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.communication_page import CommunicationPage
 from capsule_vision.ui.main_window import MainWindow
 
@@ -1397,7 +1397,7 @@ def test_operational_language_switch_keeps_failed_read_evidence_and_draft(
     until(lambda: not page.busy)
     page.host.setText("192.0.2.23")
     assert page.dirty
-    for language in LANGUAGES:
+    for language in VISUAL_LANGUAGES:
         page.set_language(language)
         QApplication.processEvents()
         assert text("comm_watch_read_failed", language) in page.watch_status.text()

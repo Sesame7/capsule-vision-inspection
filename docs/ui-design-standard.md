@@ -38,6 +38,9 @@ and [communication](communication.md).
   targets, themed icons and interaction states. Keep navigation and primary
   actions in stable positions across languages and state changes. When space
   is tight, wrap related controls together and keep labels with their values.
+- Design for the two [workstation profiles](field-ui-validation.md#native-screenshots-and-geometry)
+  with normal application fonts. Prefer native Qt layout and ordinary elision.
+  Add custom sizing only for a demonstrated need on those profiles.
 
 ## Localization and accessibility
 

@@ -229,6 +229,21 @@ Do not guess remote control coordinates from a remembered viewport.
 
 ## Native screenshots and geometry
 
+Use the application's normal fonts and these Windows display profiles for Qt
+visual acceptance. A maximized client can be smaller than the logical display
+because Windows reserves space for the frame and taskbar.
+
+| Profile | Logical display | Windows scaling | Physical display |
+| --- | --- | --- | --- |
+| Portrait | 1080 × 1920 | 100% | 1080 × 1920 |
+| Landscape | 1920 × 1080 | 200% | 3840 × 2160 |
+
+Exercise the changed workflow in Simplified Chinese, English and a representative
+longer translation or complex script. Distribute light and dark themes across
+those checks. Test catalog keys, placeholders and language identities across all
+64 locales. Test keyboard operation, permissions and the original values behind
+elided text independently of the visual sample.
+
 Capture in the active field session using its existing PySide6/native Windows
 backend. An observer can read the desktop without creating another application instance
 or importing the inference/camera adapters. The core of the native capture method is:
@@ -345,6 +360,10 @@ least `880x720` and no greater than `16777215` per dimension. Existing content/f
 minimum-size constraints still apply: requests below the current minimum fail
 visibly rather than silently changing size. The option does not save geometry or
 change configuration. `scripts/run_demo.py --size` remains a separate demo option.
+
+Smaller development windows can open within these limits. Visual acceptance uses
+the two workstation profiles above. Custom font sizes and simultaneous visibility
+of exceptionally long values fall outside that acceptance scope.
 
 The framed window is centered in the current screen's available work area where
 it fits. A request larger than the work area retains its logical size and may

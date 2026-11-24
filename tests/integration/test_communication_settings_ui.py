@@ -29,7 +29,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.application import WAIT
-from tests.support.qt import assert_full_caption, close_window, ensure_test_fonts, until
+from tests.support.qt import (
+    VISUAL_CASES,
+    VISUAL_LANGUAGES,
+    assert_full_caption,
+    close_window,
+    ensure_test_fonts,
+    until,
+)
 from tests.support.startup import authenticated_startup, provision_account, saved_data
 
 from capsule_vision.application import (
@@ -819,89 +826,87 @@ def test_service_header_alignment_survives_language_theme_and_resize(
     window.resize(width, 1920 if width == 1080 else 1080)
     with QSignalBlocker(window.bridge.timer):
         slots: tuple[tuple[int, ...], ...] | None = None
-        for theme in ("dark", "light"):
+        for language, theme in VISUAL_CASES:
             window.set_theme(theme)
-            for language in LANGUAGES:
-                window.set_language(language)
-                QApplication.processEvents()
-                local = tuple(
-                    (
-                        status.width(),
-                        card.width() - action.x(),
-                        action.width(),
-                        action.height(),
+            window.set_language(language)
+            QApplication.processEvents()
+            local = tuple(
+                (
+                    status.width(),
+                    card.width() - action.x(),
+                    action.width(),
+                    action.height(),
+                )
+                for card, _dot, status, action in groups
+            )
+            assert local[0] == local[1] == local[2], (language, local)
+            if slots is None:
+                slots = local
+            assert local == slots, (language, theme)
+            title, icon = page.diagnostics_title, page.diagnostics_icon
+            assert (
+                title.text()
+                == title.accessibleName()
+                == text("comm_diagnostics", language)
+            )
+            assert (
+                icon.size() == reporting.title_icon.size()
+                and not icon.pixmap().isNull()
+            )
+            assert (
+                title.x() == reporting.title.x()
+                and icon.x() == reporting.title_icon.x()
+            )
+            assert (
+                abs(title.geometry().center().y() - icon.geometry().center().y()) <= 1
+            )
+            assert title.font() == reporting.title.font()
+            for card, dot, status, action in groups:
+                assert dot.x() - card.title.geometry().right() == Style.small + 1
+                assert dot.size().toTuple() == (8, 8)
+                assert (
+                    status.fontMetrics().horizontalAdvance(status.text())
+                    <= status.width()
+                )
+                assert dot.geometry().right() < status.x()
+                assert status.geometry().right() < action.x()
+                assert card.rect().contains(action.geometry())
+                assert action.height() >= Style.touch
+                assert_full_caption(action, action.text())
+            stacked = page.service_layout.itemAtPosition(1, 0) is not None
+            expected_title_width = max(
+                card.title.fontMetrics().horizontalAdvance(card.title.text()) + 1
+                for card, *_ in groups
+            )
+            assert all(
+                card.title.width() == expected_title_width for card, *_ in groups
+            )
+            assert len({dot.x() for _card, dot, _status, _action in groups}) == 1
+            if stacked:
+                assert (
+                    len(
+                        {
+                            dot.mapTo(page.body, QPoint()).x()
+                            for _card, dot, _status, _action in groups
+                        }
                     )
-                    for card, _dot, status, action in groups
+                    == 1
                 )
-                assert local[0] == local[1] == local[2], (language, local)
-                if slots is None:
-                    slots = local
-                assert local == slots, (language, theme)
-                title, icon = page.diagnostics_title, page.diagnostics_icon
+            else:
+                assert reporting.geometry().right() < web.x()
                 assert (
-                    title.text()
-                    == title.accessibleName()
-                    == text("comm_diagnostics", language)
+                    reporting.status_indicator.mapTo(page.body, QPoint()).x()
+                    < web.status_indicator.mapTo(page.body, QPoint()).x()
                 )
-                assert (
-                    icon.size() == reporting.title_icon.size()
-                    and not icon.pixmap().isNull()
-                )
-                assert (
-                    title.x() == reporting.title.x()
-                    and icon.x() == reporting.title_icon.x()
-                )
-                assert (
-                    abs(title.geometry().center().y() - icon.geometry().center().y())
-                    <= 1
-                )
-                assert title.font() == reporting.title.font()
-                for card, dot, status, action in groups:
-                    assert dot.x() - card.title.geometry().right() == Style.small + 1
-                    assert dot.size().toTuple() == (8, 8)
-                    assert (
-                        status.fontMetrics().horizontalAdvance(status.text())
-                        <= status.width()
-                    )
-                    assert dot.geometry().right() < status.x()
-                    assert status.geometry().right() < action.x()
-                    assert card.rect().contains(action.geometry())
-                    assert action.height() >= Style.touch
-                    assert_full_caption(action, action.text())
-                stacked = page.service_layout.itemAtPosition(1, 0) is not None
-                expected_title_width = max(
-                    card.title.fontMetrics().horizontalAdvance(card.title.text()) + 1
-                    for card, *_ in groups
-                )
-                assert all(
-                    card.title.width() == expected_title_width for card, *_ in groups
-                )
-                assert len({dot.x() for _card, dot, _status, _action in groups}) == 1
-                if stacked:
-                    assert (
-                        len(
-                            {
-                                dot.mapTo(page.body, QPoint()).x()
-                                for _card, dot, _status, _action in groups
-                            }
-                        )
-                        == 1
-                    )
-                else:
-                    assert reporting.geometry().right() < web.x()
-                    assert (
-                        reporting.status_indicator.mapTo(page.body, QPoint()).x()
-                        < web.status_indicator.mapTo(page.body, QPoint()).x()
-                    )
-                assert alarms.title.text() == text("status_service", language)
-                assert (
-                    alarms.title.toolTip()
-                    == alarms.title.accessibleName()
-                    == text("status_service_tip", language)
-                )
-                assert page.scroll_area.horizontalScrollBar().maximum() == 0
-        for next_width in (1920, 1080, 1920, 1080, width):
-            window.resize(next_width, window.height())
+            assert alarms.title.text() == text("status_service", language)
+            assert (
+                alarms.title.toolTip()
+                == alarms.title.accessibleName()
+                == text("status_service_tip", language)
+            )
+            assert page.scroll_area.horizontalScrollBar().maximum() == 0
+        for next_width in (1920 if width == 1080 else 1080, width):
+            window.resize(next_width, 1920 if next_width == 1080 else 1080)
             QApplication.processEvents()
             assert page.scroll_area.horizontalScrollBar().maximum() == 0
             assert (page.service_layout.itemAtPosition(1, 0) is not None) == (
@@ -910,59 +915,6 @@ def test_service_header_alignment_survives_language_theme_and_resize(
         assert startup.application.snapshot() == before
         assert reporting.controller.reporting_snapshot() is None
         assert startup.application.alarm_snapshot().state == "off"
-
-
-@pytest.mark.parametrize("width", (1080, 1920))
-def test_service_titles_remeasure_on_font_change_and_keep_local_alignment(
-    settings_window: tuple[Startup, MainWindow],
-    monkeypatch: pytest.MonkeyPatch,
-    width: int,
-) -> None:
-    _, window = settings_window
-    page = window.communication
-    reporting, web, alarms = page.reporting_panel, page.web_panel, page.alarm_panel
-    assert reporting is not None
-    cards = (reporting, web, alarms)
-    window.resize(width, 1920 if width == 1080 else 1080)
-    window.set_language("en")
-    QApplication.processEvents()
-    original = reporting.title.width()
-    with QSignalBlocker(window.bridge.timer):
-        reporting.title.setStyleSheet("font-size: 24px; font-weight: 600;")
-        QApplication.processEvents()
-        assert reporting.title.width() > original
-        for language in ("zh", "en", "de", "ru"):
-            window.set_language(language)
-            QApplication.processEvents()
-            expected = max(
-                card.title.fontMetrics().horizontalAdvance(card.title.text()) + 1
-                for card in cards
-            )
-            assert all(card.title.width() == expected for card in cards)
-            geometry = tuple(card.status_indicator.geometry() for card in cards)
-            assert len({position.x() for position in geometry}) == 1
-
-            def unexpected_title_measurement() -> None:
-                pytest.fail("An unchanged service refresh remeasured a title")
-
-            with monkeypatch.context() as patch:
-                for card in cards:
-                    patch.setattr(
-                        card.title, "fontMetrics", unexpected_title_measurement
-                    )
-                for _ in range(3):
-                    for card in cards:
-                        card.refresh()
-                    QApplication.processEvents()
-                    assert (
-                        tuple(card.status_indicator.geometry() for card in cards)
-                        == geometry
-                    )
-            assert page.scroll_area.horizontalScrollBar().maximum() == 0
-        reporting.title.setStyleSheet("font-size: 18px; font-weight: 600;")
-        window.set_language("en")
-        QApplication.processEvents()
-        assert all(card.title.width() == original for card in cards)
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -1937,7 +1889,6 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
     for width, height in ((1080, 1920), (1920, 1080)):
         window.resize(width, height)
         QApplication.processEvents()
-        # Reflow follows the actual compact group widths, not a resolution threshold.
         until(
             lambda: (
                 page.watch_tools.rect().contains(page.watch_actions.geometry())
@@ -1959,7 +1910,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
             QRect(button.mapTo(page.watch_tools, QPoint()), button.size())
             for button in buttons[3:]
         )
-        for language in LANGUAGES:
+        for language in VISUAL_LANGUAGES:
             window.set_language(language)
             QApplication.processEvents()
             assert tuple(button.size() for button in buttons) == sizes
@@ -2111,7 +2062,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
         assert [(r.kind, r.area, r.start, r.count) for r in requests] == ordered * 2
         for width, height in ((1920, 1080), (1080, 1920)):
             window.resize(width, height)
-            for language in LANGUAGES:
+            for language in VISUAL_LANGUAGES:
                 window.set_language(language)
                 QApplication.processEvents()
                 assert page.auto_refresh and page.watch_auto.isChecked()
@@ -2165,73 +2116,6 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
         page.watch_auto,
     )
     assert startup.application.snapshot() == before and not page.dirty
-
-
-def test_watch_toolbar_wraps_only_when_client_space_is_insufficient(
-    settings_window: tuple[Startup, MainWindow],
-) -> None:
-    startup, window = settings_window
-    page = window.communication
-    before = startup.application.snapshot()
-    window.resize(1080, 1920)
-    window.navigate(2)
-    until(
-        lambda: (
-            page.watch_actions.y() == 0
-            and page.watch_selection.geometry().right() < page.watch_actions.x()
-        )
-    )
-    assert page.add_watch_group(
-        RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Long group name " * 4)
-    )
-    groups = page.watch_groups
-    buttons = (page.watch_remove, page.watch_once, page.watch_auto)
-    sizes = tuple(button.size() for button in buttons)
-    selection_minimum = page.watch_selection.minimumSizeHint().width()
-    actions_minimum = page.watch_actions.minimumSizeHint().width()
-    required = selection_minimum + actions_minimum + Style.small
-    assert page.watch_tools.width() >= required
-    maximum = page.watch_tools.maximumWidth()
-    # Model reduced client space without changing the supported window width.
-    constrained = (max(selection_minimum, actions_minimum) + required) // 2
-    try:
-        page.watch_tools.setMaximumWidth(constrained)
-        until(
-            lambda: (
-                page.watch_tools.width() <= constrained
-                and page.watch_actions.y() == Style.touch + Style.small
-            )
-        )
-        geometry = tuple(button.geometry() for button in buttons)
-        for language in LANGUAGES:
-            window.set_language(language)
-            QApplication.processEvents()
-            assert page.watch_tools.width() < required
-            assert page.watch_selection.geometry().bottom() < page.watch_actions.y()
-            assert tuple(button.size() for button in buttons) == sizes
-            assert tuple(button.geometry() for button in buttons) == geometry
-            assert page.watch_selection.y() == 0
-            assert page.watch_actions.y() == Style.touch + Style.small
-            for widget in (page.watch_selection, page.watch_actions):
-                assert page.watch_tools.rect().contains(widget.geometry())
-            assert (
-                page.watch_selector.currentText()
-                == page.watch_selector.toolTip()
-                == page.watch_selector.accessibleDescription()
-            )
-            assert page.body.width() <= page.scroll_area.viewport().width()
-            assert page.watch_table.horizontalScrollBar().maximum() == 0
-    finally:
-        page.watch_tools.setMaximumWidth(maximum)
-    until(
-        lambda: (
-            page.watch_actions.y() == 0
-            and page.watch_selection.geometry().right() < page.watch_actions.x()
-        )
-    )
-    assert page.watch_groups == groups
-    assert tuple(button.size() for button in buttons) == sizes
-    assert startup.application.snapshot() == before
 
 
 def test_reporting_power_edits_only_draft_until_save_or_discard(

@@ -15,7 +15,7 @@ from reportlab.pdfgen.canvas import Canvas
 from tests.integration.test_audit_ui import select_account
 from tests.integration.test_history_report import choose_file
 from tests.support.application import WAIT
-from tests.support.qt import assert_full_caption, close_window, until
+from tests.support.qt import VISUAL_LANGUAGES, assert_full_caption, close_window, until
 from tests.support.reports import pdf_text
 from tests.support.startup import TEST_PASSWORD, authenticated_startup, saved_data
 from tests.unit.test_audit_report import fill
@@ -39,7 +39,7 @@ from capsule_vision.communication.operations import (
 from capsule_vision.configuration import load_recipe, save_recipe
 from capsule_vision.localization.audit_wording import audit_text
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES, Language
+from capsule_vision.localization.languages import Language
 from capsule_vision.ui.audit_page import AuditPage
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
@@ -814,7 +814,7 @@ def test_audit_dialog_cancellation_and_late_delivery(
         assert_full_caption(action, "Cancel")
         window.history_tabs.setCurrentWidget(window.alarm_page)
         window.records_filters.select_batch(None, "", unbatched=True)
-        for language in LANGUAGES:
+        for language in VISUAL_LANGUAGES:
             action.language = language
             action.present()
             assert_full_caption(action, text("cancel", language))

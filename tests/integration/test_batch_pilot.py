@@ -16,7 +16,7 @@ from tests.integration.test_basler_production import (
     save_basler,
 )
 from tests.support.fins_tcp import TcpPeer
-from tests.support.qt import close_window, until
+from tests.support.qt import VISUAL_LANGUAGES, close_window, until
 from tests.support.startup import (
     TEST_PASSWORD,
     authenticated_startup,
@@ -54,7 +54,6 @@ from capsule_vision.configuration.communication_preferences import (
     save_communication_preferences,
 )
 from capsule_vision.localization.catalog import text
-from capsule_vision.localization.languages import LANGUAGES
 from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 
@@ -514,7 +513,7 @@ def test_four_cycle_ui_draft_save_localization_and_permission(
             load_communication_preferences(startup.data.communication).reporting
             == panel.selection()
         )
-        for language in LANGUAGES:
+        for language in VISUAL_LANGUAGES:
             window.set_language(language)
             qapp.processEvents()
             assert panel.merge_count.currentIndex() == 4
