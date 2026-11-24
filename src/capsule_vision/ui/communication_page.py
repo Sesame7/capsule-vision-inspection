@@ -341,6 +341,8 @@ class CommunicationPage(QWidget):
         self._web_issue_key = ""
         self._alarm_preview_attempted = False
         self._discard_dialog: QMessageBox | None = None
+        self._close_draft_dialog: QMessageBox | None = None
+        self._after_settings_save: Callable[[bool], None] | None = None
         self._watch_observations: list[CommunicationResponse | None] = []
         self._watch_fresh: set[int] = set()
         self._watch_pass = False
@@ -1030,9 +1032,14 @@ class CommunicationPage(QWidget):
         self._render_preferences()
 
     def identity_changed(self) -> None:
-        if self._discard_dialog is not None:
-            self._discard_dialog.reject()
+        self._cancel_settings_decisions()
         self._refresh()
+
+    def _cancel_settings_decisions(self) -> None:
+        self._after_settings_save = None
+        for dialog in (self._discard_dialog, self._close_draft_dialog):
+            if dialog is not None:
+                dialog.reject()
 
     def _effective_target_text(self) -> str:
         if self._diagnostics_reload_required:
@@ -1136,6 +1143,14 @@ class CommunicationPage(QWidget):
             and (dirty or self._settings_missing or (failed and not incomplete))
         )
         self.discard_settings.setEnabled(engineer and editable and (dirty or review))
+        dialog = self._close_draft_dialog
+        if (
+            dialog is not None
+            and dialog.standardButtons() & QMessageBox.StandardButton.Save
+        ):
+            dialog.button(QMessageBox.StandardButton.Save).setEnabled(
+                engineer and not self.busy
+            )
         self.discard_settings.setToolTip(
             text(
                 "comm_discard_question" if review else "comm_discard",
@@ -1208,7 +1223,7 @@ class CommunicationPage(QWidget):
         self._render_watch()
 
     @Slot()
-    def persist_settings(self) -> None:
+    def persist_settings(self, *, revision: int | None = None) -> None:
         if (
             self._preferences_path is None
             or self._closing
@@ -1218,7 +1233,7 @@ class CommunicationPage(QWidget):
         ):
             return
         try:
-            revision = self._authorize(None) if self._authorize else None
+            revision = self._authorize(revision) if self._authorize else None
             value = self._draft_preferences()
             path = self._preferences_path
             owner = self._reporting
@@ -1240,6 +1255,7 @@ class CommunicationPage(QWidget):
             self._saved_settings(result, None)
 
     def _saved_settings(self, value: object, error: BaseException | None) -> None:
+        after, self._after_settings_save = self._after_settings_save, None
         detail = ""
         if isinstance(value, _SettingsSaveFailure):
             error, detail = value.error, value.readback_detail
@@ -1260,6 +1276,8 @@ class CommunicationPage(QWidget):
         self._refresh()
         if self.reporting_panel is not None:
             self.reporting_panel.refresh()
+        if after is not None:
+            after(error is None and isinstance(value, CommunicationPreferences))
 
     def read_process_parameters(
         self,
@@ -1340,7 +1358,11 @@ class CommunicationPage(QWidget):
         self._refresh()
 
     def request_discard(self) -> None:
-        if self._discard_dialog is not None or not self.discard_settings.isEnabled():
+        if (
+            self._discard_dialog is not None
+            or self._close_draft_dialog is not None
+            or not self.discard_settings.isEnabled()
+        ):
             return
         dialog = QMessageBox(self)
         dialog.setWindowTitle(text("comm_discard", self.language))
@@ -1367,6 +1389,71 @@ class CommunicationPage(QWidget):
 
         dialog.finished.connect(finished)
         dialog.open()
+
+    def confirm_close_if_dirty(
+        self, proceed: Callable[[], None], show_failure: Callable[[str], None]
+    ) -> bool:
+        """Hold Close for a pending settings Save or a decision about a working draft."""
+        if (
+            self._close_draft_dialog is not None
+            or self._after_settings_save is not None
+        ):
+            return True
+        if self._discard_dialog is not None:
+            self._discard_dialog.reject()
+        saving = self._file_finished == self._saved_settings
+        if self._preferences_path is None or not (saving or self.dirty):
+            return False
+
+        app = self._application
+        revision = app.session_revision if app is not None else None
+
+        def saved(confirmed: bool) -> None:
+            if app is None or revision == app.session_revision:
+                if confirmed:
+                    proceed()
+                else:
+                    show_failure(self._settings_message)
+
+        if saving:
+            self._after_settings_save = saved
+            return True
+
+        dialog = QMessageBox(self)
+        dialog.setObjectName("connectionsCloseDraft")
+        dialog.setWindowTitle(text("nav_connections", self.language))
+        dialog.setText(text("unsaved", self.language))
+        save = None
+        if permits(app, Role.ENGINEER):
+            save = dialog.addButton(QMessageBox.StandardButton.Save)
+            save.setText(text("save", self.language))
+            save.setEnabled(not self.busy)
+        discard = dialog.addButton(QMessageBox.StandardButton.Discard)
+        discard.setText(text("discard", self.language))
+        cancel = dialog.addButton(QMessageBox.StandardButton.Cancel)
+        cancel.setText(text("cancel", self.language))
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        self._close_draft_dialog = dialog
+
+        def finished() -> None:
+            self._close_draft_dialog = None
+            chosen = dialog.clickedButton()
+            dialog.deleteLater()
+            if app is not None and revision != app.session_revision:
+                return
+            if chosen is discard:
+                self._show_preferences(self._preferences)
+                proceed()
+            elif save is not None and chosen is save and not self.busy:
+                if self._auto_refresh:
+                    self.stop_monitoring()
+                self._after_settings_save = saved
+                self.persist_settings(revision=revision)
+
+        dialog.finished.connect(finished)
+        dialog.open()
+        return True
 
     def reload_settings(self, *, revision: int | None = None) -> None:
         if (
@@ -2418,8 +2505,7 @@ class CommunicationPage(QWidget):
         if self._process_read_stop is not None:
             self._process_read_stop.set()
         self.stop_monitoring()
-        if self._discard_dialog is not None:
-            self._discard_dialog.reject()
+        self._cancel_settings_decisions()
         self._closing = True
         self._after_close = after
         if self.web_panel.runtime is not None:

@@ -871,7 +871,10 @@ application FAULT. Unresolved SDK cleanup retains its
 original owner for an explicit Disconnect/Close retry. There is no automatic
 reconnection. Source loss stops the bound session and remains visible in Vision;
 it does not fabricate results. Notification or timeout is not termination, and
-native calls are never forcibly cancelled. Qt Close stays asynchronous.
+native calls are never forcibly cancelled. Qt Close stays asynchronous. Before
+admission, the window resolves unsaved Connections, Cameras and Recipe edits.
+It rechecks Connections after asynchronous editor work. A recoverable Close
+failure retains completed draft decisions. See [Connections workspace controls](communication.md#workspace-controls).
 
 ## Production history
 

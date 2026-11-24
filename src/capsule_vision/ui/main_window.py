@@ -749,6 +749,8 @@ class MainWindow(QMainWindow):
                 self._history_tab_changed(self.history_tabs.currentIndex())
         if index == 0:
             self.production_recipes.reload()
+        if index == 2:
+            self._command_issues.pop("communication_save", None)
         self.pages.setCurrentIndex(index)
         self.navigation[index].setFocus(Qt.FocusReason.OtherFocusReason)
         self._refresh_theme_icons()
@@ -1102,6 +1104,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _communication_validated(self) -> None:
+        self._command_issues.pop("communication_save", None)
         self._retain_configuration_feedback(
             tuple(
                 key
@@ -2255,9 +2258,32 @@ class MainWindow(QMainWindow):
             raise RuntimeError("Window resource owners did not finish closing")
 
     def request_editing_close(self, final: Callable[[], None]) -> None:
-        self.editing.drain(
-            lambda: self.recipe_page.settle(lambda: self._guard_editing_close(final))
-        )
+        def proceed() -> None:
+            self._command_issues.pop("communication_save", None)
+            self.request_editing_close(final)
+
+        def show_failure(key: str) -> None:
+            if self.pages.currentWidget() is not self.communication:
+                # Reveal the settings failure without navigating away from another draft.
+                self._command_issues["communication_save"] = (key, None)
+                self._render()
+
+        def connections_pending() -> bool:
+            return self.communication.confirm_close_if_dirty(proceed, show_failure)
+
+        def admit() -> None:
+            # Other editors may have settled asynchronously since the first check.
+            if connections_pending():
+                self.editing.resume()
+            else:
+                final()
+
+        if not connections_pending():
+            self.editing.drain(
+                lambda: self.recipe_page.settle(
+                    lambda: self._guard_editing_close(admit)
+                )
+            )
 
     def _guard_editing_close(self, final: Callable[[], None]) -> None:
         # Jobs are actually joined before Save/Discard dialogs admit new work.

@@ -101,8 +101,25 @@ def assert_full_caption(button: QPushButton, caption: str) -> None:
 
 def close_window(window: MainWindow) -> None:
     """Settle owners and await Qt deletion before the next test's native work."""
+    from PySide6.QtWidgets import QMessageBox
+
+    def closed() -> bool:
+        # Test teardown explicitly abandons any remaining Connections draft.
+        for box in window.communication.findChildren(
+            QMessageBox, "connectionsCloseDraft"
+        ):
+            if box.isVisible():
+                discard = box.button(QMessageBox.StandardButton.Discard)
+                assert discard is not None
+                discard.click()
+        return (
+            window.bridge.closed
+            and window.communication.closed
+            and not window.isVisible()
+        )
+
     window.close()
-    until(lambda: window.bridge.closed and window.communication.closed)
+    until(closed)
     assert window.bridge.application.join(1)
     delete_widget(window)
 

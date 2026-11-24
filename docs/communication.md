@@ -636,9 +636,21 @@ Reloading leaves an unresolved Audit operation open.
 The fixed bottom bar offers Save, confirmed Discard and concise dirty/error status.
 Opening valid saved settings leaves the feedback area clear. An explicit
 successful Save or reload shows **Saved**.
-Discard strictly reloads/validates the actual file, not an earlier page snapshot;
-missing/invalid/unusable settings leave the draft intact with an error tooltip.
+The footer Discard reloads and validates the actual file. Missing, invalid or
+unusable settings leave the draft intact with an error tooltip.
 It does not persist, restart/stop any owner or undo earlier network operations.
+
+Closing the application with a Connections draft offers **Save**, **Discard** or
+**Cancel**. Guest and Operator can discard or cancel. Close Discard restores the
+last known settings in memory, including first-use defaults. It leaves files,
+running services and any unresolved Audit evidence intact. Cancel keeps the draft.
+Save uses the normal publication and Audit path and becomes available when the
+shared worker exits. Choosing Save between automatic Watch passes stops Watch
+before publication. Close waits for confirmation of an in-flight settings Save.
+A failed Save keeps the current workspace open. Its feedback stays in Connections
+and appears in the global status strip when another workspace is visible. A session
+change cancels the pending Close decision. Clean settings require no prompt.
+
 The default settings can be explicitly saved before any edits. Production/Web
 share a row when equally sized cards can accommodate their natural editor widths,
 and otherwise stack at full width. Diagnostics remains full width below them.
