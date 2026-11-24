@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 742 maintained keys across 64 locales. This includes
+Qt interface covers 743 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 94 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 908-key
+Authored coverage does not imply native-speaker verification. The full 909-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -1431,11 +1431,10 @@ only deletes the unchanged selected Recipe file inside its directory. It never
 deletes shared models/images. Success clears selection explicitly without choosing
 another Recipe or modifying application references. Runtime editing locks apply
 again when confirmed, and persistence errors stay observable.
-Vision owns source setup and canvas-first Machine ROI editing, numeric Apply,
-Common size and Distribute evenly. Those operations reject invalid bounds atomically;
-they never silently clamp.
-Vision stacks two subtly contrasted source and ROI containers. One rounded
-Folder/Camera track moves its selected thumb without animation; contextual Loop/FPS
+Cameras owns source setup and canvas-first Machine ROI editing. Apply ROI,
+Common size and Distribute evenly reject invalid bounds atomically.
+Cameras stacks two subtly contrasted source and ROI containers. One rounded
+Folder/Basler track moves its selected thumb without animation; contextual Loop/FPS
 or connection/discovery controls align right. Cards retain configured row-major order:
 two columns on narrow workspaces, three when at least 1092 logical pixels are
 available for cards. Camera headers use the same icon + numeric identity as
@@ -1478,7 +1477,7 @@ camera count. Camera counts come from actual connected CameraId/serial matches.
 Unsaved selections do not change that strip. Lifecycle transitions and errors keep
 precedence; source availability does not establish full inspection readiness.
 One visible Save action sits beside Discard. With the existing editing permissions
-and locks, Save is available for draft edits or the first publication of
+and locks, Save is available for draft edits, pending coordinates or the first publication of
 CameraSources or a complete MachineLayout. Unchanged drafts with their saved files
 leave Save disabled. Once CameraSources are saved, an uninitialized layout with no
 pending edits waits for ROI geometry. Connect and Disconnect update observed bounds
@@ -1486,22 +1485,30 @@ while preserving existing source values and ROI geometry. First-time ROI
 initialization counts as a layout edit. A compact status symbol exposes clean,
 dirty, saving or failed state through its symbol and localized accessible name,
 without a runtime tooltip.
-The image selector and previous/next browse Folder inputs. Import loads a temporary
+Previous, the image selector, Next and Refresh share the center of the image toolbar.
+Import, Runtime and Preview share its leading edge. Fit and 1:1 occupy the other edge.
+The selector and arrows browse Folder inputs. Import loads a temporary
 image; Use runtime image freezes the latest eligible same-camera/source display
 frame, with explicit refresh. Neither tracks live pixels. Fit and 1:1 retain their
 canvas transforms. The image toolbar center always describes the current canvas:
 real pixels show dimensions and the Folder index where applicable; a blank view
 shows known dimensions as `— · W×H`; an unbounded view with ROIs says `ROI ≈`, with
 its illustrative meaning in a tooltip. Without dimensions or initialized ROIs it
-shows `—`, with ROI editing unavailable until dimensions are known. The chooser
+shows `—`. An empty Folder reference is described as “No reference image”.
+ROI editing becomes available once the selected camera has initialized ROIs. The chooser
 retains image identity/blank-state meaning; the canvas does not duplicate it.
 The preview button describes Start or Stop in its tooltip and accessible name.
 Accepted preview pixels are identified as a preview frame in the image selector,
 including when retained after Stop. Capture errors use the global feedback strip.
 The chooser list is separate from this caption;
 source changes and asynchronous image delivery cannot reuse an old schematic caption.
-The canvas does not repeat status text. ROI channel selection changes
-the displayed slot; numeric Apply edits only the machine draft until Save.
+The ROI canvas has a localized accessible name. X/Y/W/H describe the displayed
+camera and channel. Apply ROI or Enter previews those coordinates in the draft.
+Save, including Save on navigation or Close, first validates pending coordinates
+through the same edit. Invalid input stays in the fields for correction and
+blocks both writes for that attempt. After validation the two files have independent
+publication outcomes. Selecting a different camera or ROI loads its own coordinates.
+Changing focus or refreshing the same ROI leaves pending text available.
 Mode selection edits the same CameraSources draft and requires explicit Save;
 selecting a card never changes saved sources or geometry. Runtime editing locks remain.
 Save permits structurally valid ROIs without canvas images; numeric

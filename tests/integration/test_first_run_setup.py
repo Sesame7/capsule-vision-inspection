@@ -217,6 +217,16 @@ def test_empty_vision_sources_save_independently_and_cam6_is_a_placeholder(
         for card in workspace.camera_cards.values()
     )
     assert not workspace.canvas.rois and workspace.canvas.model.size is None
+    assert workspace.canvas.accessibleName() == text("roi_workspace", window.language)
+    assert (
+        workspace.reference.toolTip()
+        == workspace.canvas.accessibleDescription()
+        == text("preview_no_reference", window.language)
+    )
+    assert (
+        workspace.reference.accessibleDescription()
+        == workspace.canvas.accessibleDescription()
+    )
     assert workspace.canvas.model.rect is None
     assert workspace.sources is not None and not workspace.sources.persisted
     assert not workspace.vision_dirty and not data.sources.exists()

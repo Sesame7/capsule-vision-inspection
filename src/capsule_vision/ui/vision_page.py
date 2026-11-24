@@ -8,7 +8,7 @@ from time import monotonic
 from typing import Literal, cast
 
 import numpy as np
-from PySide6.QtCore import QRectF, QSize, Qt, Signal, Slot
+from PySide6.QtCore import QRectF, QSignalBlocker, QSize, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QPainter,
@@ -57,10 +57,11 @@ from capsule_vision.configuration import (
 from capsule_vision.display import DisplayFrame, LatestDisplayFrameStore
 from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection import CameraId, CycleId, FrameId
+from capsule_vision.inspection.production import ChannelROI
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
-from .editing import EditingCoordinator
+from .editing import EditingCoordinator, PendingRoiInput
 from .future_delivery import FutureDelivery
 from .image_tools import ImageToolbar, image_icon
 from .permissions import failure_key, permits
@@ -426,7 +427,7 @@ class VisionPage(QWidget):
         for mode in source_modes:
             button = QPushButton()
             button.setCheckable(True)
-            button.setFixedSize(54, Style.touch)
+            button.setFixedHeight(Style.touch)
             button.setIconSize(QSize(Style.icon, Style.icon))
 
             def repaint_switch(_checked: bool) -> None:
@@ -497,16 +498,11 @@ class VisionPage(QWidget):
         self.buttons["vision_runtime"].clicked.connect(
             lambda: self.set_reference_mode("runtime")
         )
-        for key, tool in (
-            ("reference_previous", "previous"),
-            ("reference_next", "next"),
-        ):
-            button = self.button(key)
-            button.setText("")
-            button.setFixedSize(Style.touch, Style.touch)
-            button.setIcon(image_icon(tool))
-            button.setIconSize(QSize(24, 24))
-            references.addWidget(button)
+        browse_controls = QWidget()
+        browsing = QHBoxLayout(browse_controls)
+        browsing.setContentsMargins(0, 0, 0, 0)
+        browsing.setSpacing(Style.small)
+        browsing.addWidget(self.icon_button("reference_previous", "previous"))
         self.reference = QComboBox()
         self.reference.setMinimumHeight(Style.touch)
         self.reference.setMinimumContentsLength(16)
@@ -515,7 +511,9 @@ class VisionPage(QWidget):
         )
         self.reference.setMaximumWidth(360)
         self.reference.activated.connect(self.choose_image)
-        references.addWidget(self.icon_button("roi_refresh", "refresh"))
+        browsing.addWidget(self.reference)
+        browsing.addWidget(self.icon_button("reference_next", "next"))
+        browsing.addWidget(self.icon_button("roi_refresh", "refresh"))
         display_controls = QWidget()
         display = QHBoxLayout(display_controls)
         display.setContentsMargins(0, 0, 0, 0)
@@ -532,7 +530,7 @@ class VisionPage(QWidget):
             button.setFixedSize(Style.touch, Style.touch)
             display.addWidget(button)
         self.reference_toolbar = ImageToolbar(
-            reference_controls, self.reference, display_controls
+            reference_controls, browse_controls, display_controls
         )
         roi.addWidget(self.reference_toolbar)
         self.canvas = RoiCanvas(self.editable)
@@ -553,6 +551,7 @@ class VisionPage(QWidget):
             line.setFixedWidth(72)
             line.setMinimumHeight(Style.touch)
             line.returnPressed.connect(self.apply_geometry)
+            line.textChanged.connect(self._coordinates_edited)
             self.coordinates[key] = line
             geometry.addWidget(line)
         self.common_width, self.common_height = (
@@ -763,6 +762,7 @@ class VisionPage(QWidget):
             button.setAccessibleName(text(key, language))
             button.setToolTip(text(key, language))
         self.reference.setAccessibleName(text("vision_image_select", language))
+        self.canvas.setAccessibleName(text("roi_workspace", language))
         self.channel.setAccessibleName(text("vision_roi_select", language))
         for button, key in (
             (self.connect_source, "source_connect"),
@@ -774,9 +774,15 @@ class VisionPage(QWidget):
         self.mode_switch.setToolTip(
             text("cli_sources", language) if self.session.cli_sources else ""
         )
+        mode_width = button_width(
+            self.source_modes["folder"], ("source_folder_status",)
+        )
         for mode, button in self.source_modes.items():
             key = "vision_folder_mode" if mode == "folder" else "vision_basler_mode"
-            button.setText("")
+            caption = (
+                text("source_folder_status", language) if mode == "folder" else "Basler"
+            )
+            set_button_caption(button, caption, mode_width)
             button.setAccessibleName(text(key, language))
             button.setToolTip(text(key, language))
         for key, button in self.buttons.items():
@@ -798,6 +804,10 @@ class VisionPage(QWidget):
                 "roi_set_rect",
             ):
                 button.setText(text(key, language))
+        apply = self.buttons["roi_set_rect"]
+        set_button_caption(
+            apply, text("roi_apply", language), button_width(apply, ("roi_apply",))
+        )
         primary = self.buttons["save"]
         set_button_caption(
             primary,
@@ -863,7 +873,11 @@ class VisionPage(QWidget):
     def switch_camera(self) -> None:
         self.cancel_capture()
         self._reference_modes.pop(self.camera, None)
-        self.selected_index = 0
+        pending = self.editing.pending_roi_input
+        self.selected_index = (
+            pending.roi.slot if pending and pending.camera == self.camera else 0
+        )
+        self.sync_size(keep_input=True)
         if self.sources is not None:
             self.folder.setText(self.sources.definition.camera(self.camera).folder)
             self.loop.blockSignals(True)
@@ -1464,20 +1478,53 @@ class VisionPage(QWidget):
         self.canvas.cancel_gesture()
         self.selected_index = index
         self._error = ""
-        self.sync_size()
+        self.sync_size(keep_input=True)
         self.refresh()
 
-    def sync_size(self) -> None:
+    @staticmethod
+    def _draft_coordinates(roi: ChannelROI | None) -> tuple[str, ...]:
+        if roi is None:
+            return ("", "", "", "")
+        rect = roi.rect
+        return tuple(str(n) for n in (rect.x, rect.y, rect.width, rect.height))
+
+    @Slot()
+    def _coordinates_edited(self) -> None:
         rois = self.draft.rois(self.camera)
-        if not rois:
-            for line in self.coordinates.values():
-                line.clear()
-            return
-        rect = rois[self.selected_index].rect
-        for key, value in zip(
-            ("X", "Y", "W", "H"), (rect.x, rect.y, rect.width, rect.height), strict=True
+        roi = rois[self.selected_index] if rois else None
+        values = tuple(line.text() for line in self.coordinates.values())
+        was_pending = self.editing.pending_roi_input is not None
+        self.editing.pending_roi_input = (
+            PendingRoiInput(self.camera, roi, values)
+            if roi is not None and values != self._draft_coordinates(roi)
+            else None
+        )
+        if was_pending != (self.editing.pending_roi_input is not None):
+            self._changed()
+
+    def sync_size(self, *, keep_input: bool = False) -> None:
+        rois = self.draft.rois(self.camera)
+        roi = rois[self.selected_index] if rois else None
+        pending = self.editing.pending_roi_input
+        if (
+            keep_input
+            and pending
+            and (pending.camera, pending.roi) == (self.camera, roi)
         ):
-            self.coordinates[key].setText(str(value))
+            values = pending.values
+        else:
+            self.editing.pending_roi_input = None
+            values = self._draft_coordinates(roi)
+        for line, value in zip(self.coordinates.values(), values, strict=True):
+            if line.text() != value:
+                with QSignalBlocker(line):
+                    line.setText(value)
+        if (
+            keep_input
+            and pending is not None
+            and self.editing.pending_roi_input is None
+        ):
+            self._changed()
 
     def refresh(self) -> None:
         colors = theme_colors(self)
@@ -1623,7 +1670,7 @@ class VisionPage(QWidget):
             else "vision_error"
             if self._save_issue is not None
             else "unsaved"
-            if self.draft.dirty or (self.sources is not None and self.sources.dirty)
+            if self.vision_dirty
             else "UNCONFIGURED"
             if not self.draft.persisted
             or (self.sources is not None and not self.sources.persisted)
@@ -1708,6 +1755,11 @@ class VisionPage(QWidget):
             if self.frame is not None and self.reference_mode == "capture"
             else ""
         )
+        missing_key = (
+            "reference_unavailable"
+            if self.reference_mode == "runtime"
+            else "preview_no_reference"
+        )
         self.reference.setToolTip(
             str(paths[index])
             if self.frame is not None
@@ -1724,7 +1776,7 @@ class VisionPage(QWidget):
                 if self.frame is None
                 and self.canvas.model.size is None
                 and self.canvas.rois
-                else "reference_unavailable"
+                else missing_key
                 if self.frame is None
                 else "reference_runtime_tip",
                 self.language,
@@ -1761,7 +1813,7 @@ class VisionPage(QWidget):
                 width=self.canvas.model.size[0], height=self.canvas.model.size[1]
             )
             if self.frame is None and self.canvas.model.size is not None
-            else text("reference_unavailable", self.language)
+            else text(missing_key, self.language)
             if self.frame is None and not self.canvas.rois
             else text("vision_schematic", self.language)
             if self.frame is None
@@ -1809,11 +1861,13 @@ class VisionPage(QWidget):
 
     @property
     def vision_dirty(self) -> bool:
-        return self.draft.dirty or bool(self.sources is not None and self.sources.dirty)
+        return self.editing.vision_dirty
 
     def _has_save_work(self) -> bool:
-        return self.draft.needs_save or (
-            self.sources is not None and self.sources.needs_save
+        return (
+            self.editing.pending_roi_input is not None
+            or self.draft.needs_save
+            or (self.sources is not None and self.sources.needs_save)
         )
 
     def _can_discard(self) -> bool:
@@ -2132,7 +2186,7 @@ class VisionPage(QWidget):
                         self.frame.image.shape[0],
                     )
         if initialized:
-            self.sync_size()
+            self.sync_size(keep_input=True)
             self._changed()
 
     def operation(self, action: Callable[[], None]) -> bool:
@@ -2173,8 +2227,8 @@ class VisionPage(QWidget):
         if isinstance(value, BoundingRect) and self.canvas.model.can_drag:
             self.operation(lambda: self.set_rect(value))
 
-    def apply_geometry(self) -> None:
-        self.operation(
+    def apply_geometry(self) -> bool:
+        return self.operation(
             lambda: self.set_rect(
                 BoundingRect(
                     *(int(self.coordinates[key].text()) for key in ("X", "Y", "W", "H"))
@@ -2203,6 +2257,13 @@ class VisionPage(QWidget):
             self._report_error(exc, "vision_error")
             self.refresh()
             return
+        if self.editing.pending_roi_input is not None:
+            if not self.apply_geometry():
+                return
+            if not self._has_save_work():
+                if after is not None:
+                    after()
+                return
         self._preparing = True
         self._error = ""
         connection = self.connection.source_snapshot() if self.connection else None

@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 from threading import Event, get_ident
 from threading import enumerate as threads
@@ -1437,13 +1438,14 @@ def test_compact_icon_states_and_loop_click_preserve_configuration(
         assert button.text() == "" and not button.icon().isNull()
         assert button.accessibleName() == button.toolTip() == text(key, language)
     numeric_apply = workspace.buttons["roi_set_rect"]
-    assert numeric_apply.text() == "" and not numeric_apply.icon().isNull()
-    assert numeric_apply.width() == numeric_apply.height() == Style.touch
     assert (
-        numeric_apply.accessibleName()
-        == numeric_apply.toolTip()
-        == text("roi_set_rect", language)
+        numeric_apply.text()
+        == numeric_apply.accessibleName()
+        == text("roi_apply", language)
     )
+    assert not numeric_apply.icon().isNull() and numeric_apply.height() == Style.touch
+    assert numeric_apply.toolTip() == text("roi_set_rect", language)
+    assert workspace.canvas.accessibleName() == text("roi_workspace", language)
     assert workspace.buttons["save"].text() == text("save", language)
     assert workspace.draft.definition == geometry
     assert (
@@ -2456,6 +2458,23 @@ def _assert_source_layout(
     assert not window.event_label.text()
     assert workspace.reference_toolbar.height() <= Style.touch + Style.small
     assert workspace.geometry_toolbar.height() == Style.touch
+    buttons = workspace.buttons
+    for group in (
+        (buttons["vision_import"], buttons["vision_runtime"], workspace.capture),
+        (
+            buttons["reference_previous"],
+            workspace.reference,
+            buttons["reference_next"],
+            buttons["roi_refresh"],
+        ),
+        (buttons["roi_fit"], buttons["roi_actual"]),
+    ):
+        assert all(
+            control.parentWidget() is group[0].parentWidget() for control in group
+        )
+        visible = [control for control in group if control.isVisible()]
+        for left, right in pairwise(visible):
+            assert right.x() - left.geometry().right() - 1 == Style.small
     save = workspace.buttons["save"]
     for toolbar, center_control, right_control in (
         (
@@ -2469,11 +2488,7 @@ def _assert_source_layout(
             toolbar.width() - 1
         )
         if size[0] == 1920 and center_control.isVisible():
-            center = (
-                center_control
-                if center_control is workspace.reference
-                else center_control.parentWidget()
-            )
+            center = center_control.parentWidget()
             assert center is not None
             assert (
                 abs(

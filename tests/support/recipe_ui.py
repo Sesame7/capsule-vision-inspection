@@ -124,6 +124,7 @@ def camera_screen(
         yield window, workspace, engine
     finally:
         composition.editor.machine_editor.discard()
+        window.editing.pending_roi_input = None
         assert composition.editor.camera_sources is not None
         composition.editor.camera_sources.discard()
         close_window(window)

@@ -1005,12 +1005,26 @@ def test_multilingual_recipe_vision_actions_and_tuning_keep_stable_slots(
             button = workspace.buttons[key]
             assert button.size() == expected
             if key == "roi_set_rect":
-                assert button.text() == "" and not button.icon().isNull()
-                assert button.width() == button.height() == Style.touch
+                assert not button.icon().isNull() and button.height() == Style.touch
+                assert_full_caption(button, text("roi_apply", language))
             else:
                 assert_full_caption(button, text(key, language))
-            assert button.accessibleName() == button.toolTip() == text(key, language)
+            assert button.accessibleName() == button.text()
+            assert button.toolTip() == text(key, language)
             assert_inside(button, workspace)
+        for mode, button in workspace.source_modes.items():
+            caption = (
+                text("source_folder_status", language) if mode == "folder" else "Basler"
+            )
+            assert_full_caption(button, caption)
+            assert (
+                button.toolTip()
+                == button.accessibleName()
+                == text(
+                    "vision_folder_mode" if mode == "folder" else "vision_basler_mode",
+                    language,
+                )
+            )
     assert session.draft.to_recipe() == draft and not session.dirty and not runtimes
     assert window.bridge.application.snapshot() == before
 

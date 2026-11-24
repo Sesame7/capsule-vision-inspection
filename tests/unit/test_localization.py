@@ -1025,7 +1025,7 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 742
+    assert len(maintained) == 743
     assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
@@ -1479,7 +1479,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 908
+    assert len(STRINGS) == 909
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (
@@ -1499,6 +1499,7 @@ def test_language_identities_and_current_catalog_coverage() -> None:
     exceptions = {"zh": "中文", "zh-TW": "繁中", "sr-Latn": "SR", "az-Latn": "AZ"}
     for language in LANGUAGES:
         assert LANGUAGE_LABELS[language] == exceptions.get(language, language.upper())
+        assert text("page_vision", language) == text("nav_cameras", language)
         assert (
             text("history_group", language).casefold()
             != text("batch_id", language).casefold()
@@ -1805,6 +1806,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
         "preview_missing_body",
         "vision_folder_mode",
         "vision_basler_mode",
+        "roi_apply",
         "source_connect",
         "source_disconnect",
         "source_connected",

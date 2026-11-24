@@ -1020,8 +1020,8 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Inspection configuration invalid; check Recipe and machine configuration.",
     ),
     "startup_source_unavailable": (
-        "图片源不可用；请在视觉页检查文件夹。",
-        "Folder source unavailable; check folders on Vision.",
+        "图像源不可用，请在相机页检查文件夹。",
+        "Folder source unavailable. Check folders in Cameras.",
     ),
     "reference_runtime": ("运行帧", "Runtime"),
     "reference_runtime_tip": (
@@ -1058,6 +1058,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "roi_w": ("宽度（像素）", "Width (pixels)"),
     "roi_h": ("高度（像素）", "Height (pixels)"),
     "roi_set_rect": ("更新 ROI 草稿坐标", "Update draft ROI coordinates"),
+    "roi_apply": ("应用 ROI", "Apply ROI"),
     "setup_saving": ("保存中", "Saving"),
     "source_error": ("采集源错误", "Acquisition source error"),
     "vision_folder_mode": ("文件夹图像", "Folder images"),
@@ -1094,11 +1095,11 @@ STRINGS: dict[str, tuple[str, str]] = {
         "Device already assigned to another camera; clear that assignment first.",
     ),
     "vision_schematic": ("ROI 示意", "ROI schematic"),
-    "vision_discard": ("放弃视觉配置修改", "Discard Vision changes"),
+    "vision_discard": ("放弃修改", "Discard changes"),
     "vision_reloading": ("正在恢复…", "Restoring…"),
     "vision_discard_question": (
-        "放弃全部未保存的来源和 ROI 修改，并从已保存文件重新加载？不会应用到检测会话。",
-        "Discard all unsaved source and ROI changes and reload saved files? This will not apply to the inspection session.",
+        "放弃未保存的图像源和 ROI 修改？",
+        "Discard unsaved source and ROI changes?",
     ),
     "vision_reload_error": (
         "无法恢复已保存配置；草稿保留，请检查配置文件和详情。",
@@ -1191,7 +1192,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "page_recipe": ("配方", "Recipe"),
     "page_communication": ("通信", "Communication"),
     "page_history": ("历史", "History"),
-    "page_vision": ("视觉", "Vision"),
+    "page_vision": ("相机", "Cameras"),
     "start": ("开始检测", "Start inspection"),
     "stop": ("停止检测", "Stop inspection"),
     "replay_pause": ("暂停", "Pause"),

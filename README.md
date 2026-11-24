@@ -12,7 +12,7 @@ application.
 - Passive Basler acquisition and Folder Replay input
 - ViMo segmentation, mandatory Occupancy, and configurable Size (Length) and Color
   checks
-- Recipe, Production, Vision, Connections and History workspaces
+- Recipe, Production, Cameras, Connections and History workspaces
 - Omron FINS UDP/TCP and Modbus TCP result reporting
 - Multilingual Qt interface and an optional read-only Web observer
 
@@ -26,7 +26,7 @@ accuracy remain separate commissioning responsibilities.
 | --- | --- |
 | Production | Select and prepare saved Recipes; set or continue a Batch with optional product, specification and notes while idle (Operator or above); run inspection and review results |
 | Recipe | Edit and save Recipe definitions, models and inspection rules |
-| Vision | Configure sources, camera layouts and channel ROIs |
+| Cameras | Configure sources, camera layouts and channel ROIs |
 | Connections | Configure PLC reporting, the Web observer and status monitoring, or read and write diagnostic registers |
 | Records | All roles can browse named Batches, Runs and inspection records. NG Capsules shows four archived exposures for rejected channels and for final-OK channels with a recorded Mask Area exclusion. Operators and above can export a Production PDF from Batches, a Batch Defect PDF from a rejected capsule, and filtered Alarm records. Engineers and Administrators can review and export the local Audit Trail. |
 

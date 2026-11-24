@@ -68,8 +68,9 @@ ID, prepares the current saved dependencies on the existing bounded worker.
 Preparation uses saved definitions; only successful Start promotes a candidate.
 
 Prepared candidates retain immutable saved Recipe and Vision definitions and paths.
-Vision has one Save action with independent MachineLayout/CameraSources outcomes;
-it never enters Production preparation or emits a candidate-installation event.
+Cameras Save validates unapplied coordinates for the displayed ROI before either
+file can be written. MachineLayout and CameraSources then publish independently.
+Save never enters Production preparation or emits a candidate-installation event.
 Successful Save/reload observations mark a differing candidate as requiring
 re-preparation without replacing its Recipe identity or an active session. Identical
 parsed definitions leave a current candidate valid.
@@ -1611,8 +1612,8 @@ from the effective endpoint reveals the saved target above the operations.
 The main window title is `Capsule Vision Inspection` on every page. The five
 existing destinations (Production, Recipe, Communication, History and Vision)
 use the visible English captions Inspect, Recipe, Connections, Records and Cameras.
-Connections (连接 in Simplified Chinese) uses its full localized name on the
-button, in its tooltip and for assistive technology.
+Connections (连接 in Simplified Chinese) and Cameras (相机) use their localized
+destination names on the buttons, in tooltips and for assistive technology.
 Each page button centers its icon and localized caption together. The five
 slots use the same widths on both workstation profiles, ranging from 110 to
 142 logical pixels. Changing page, language or account preserves their
@@ -1687,9 +1688,10 @@ with full text retained in the model, tooltips and accessibility.
 Header space after Batch and selector width can shrink while preserving the player
 slots and common Batch IDs. Save actions reserve
 localized group budgets, borrowing flexible feedback/summary space. Conventional
-utilities use touch-sized icons with full localized tooltips/accessibility:
-History paging/refresh, Recipe color sampling, Vision numeric ROI Apply, and
-Communication group editing and advanced-settings disclosures.
+utilities such as History paging/refresh, Recipe color sampling, Communication
+group editing and advanced-settings disclosures use touch-sized icons with full
+localized tooltips and accessibility.
+Cameras pairs the coordinate check icon with a visible Apply ROI caption.
 The Watch toolbar starts with the group dropdown and square Add and Remove
 buttons. The selector uses the shared chevron. Read and Auto sit beside these
 controls and reserve their own localized caption widths. During automatic refresh

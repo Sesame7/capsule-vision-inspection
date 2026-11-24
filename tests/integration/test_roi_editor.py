@@ -140,6 +140,13 @@ def test_invalid_batch_is_atomic(
         dialog.canvas.model.can_drag
     )  # Invalid batch does not disable visual recovery.
     dialog.request_back()
+    box = next(b for b in dialog.findChildren(QMessageBox) if b.isVisible())
+    next(
+        b
+        for b in box.buttons()
+        if box.buttonRole(b) == QMessageBox.ButtonRole.DestructiveRole
+    ).click()
+    until(lambda: window.vision_workspace is None)
 
 
 def test_save_then_production_selection_start_and_no_running_edits(
@@ -148,7 +155,10 @@ def test_save_then_production_selection_start_and_no_running_edits(
     (window, session, runtimes), dialog = roi_screen
     page, bridge = window.recipe_page, window.bridge
     before = bridge.application.snapshot().candidate_prepared
-    dialog.commit_geometry(BoundingRect(42, 0, 8, 10))
+    dialog.coordinates["X"].setText("invalid")
+    drag(dialog, point(dialog, 44, 5), point(dialog, 46, 5))
+    assert dialog.canvas.model.rect == BoundingRect(42, 0, 8, 10)
+    assert dialog.coordinates["X"].text() == "42"
     assert bridge.application.snapshot().candidate_prepared is before
     dialog.buttons["save"].click()
     until(lambda: not page.busy)

@@ -588,9 +588,11 @@ class MainWindow(QMainWindow):
             or self.vision_workspace is not None
         ):
             return
+        pending = self.editing.pending_roi_input
+        cameras = session.machine_editor.camera_ids
         workspace = VisionPage(
             self.editing,
-            session.machine_editor.camera_ids[0],
+            pending.camera if pending and pending.camera in cameras else cameras[0],
             self.bridge.frames,
             self._vision_closed,
             language=self.language,
@@ -952,11 +954,7 @@ class MainWindow(QMainWindow):
     def _start_interaction_blocker(self) -> StartInteractionBlocker | None:
         if self._closing or self.editing.closing:
             return StartInteractionBlocker.CLOSING
-        session = self.editing.session
-        if session is not None and (
-            session.machine_editor.dirty
-            or (session.camera_sources is not None and session.camera_sources.dirty)
-        ):
+        if self.editing.vision_dirty:
             return StartInteractionBlocker.VISION_DRAFT
         return StartInteractionBlocker.EDITING if self.editing.busy else None
 
@@ -2306,15 +2304,7 @@ class MainWindow(QMainWindow):
     def _guard_editing_close(self, final: Callable[[], None]) -> None:
         # Jobs are actually joined before Save/Discard dialogs admit new work.
         self.editing.resume(notify=False)
-        session = self.editing.session
-        if (
-            self.vision_workspace is None
-            and session is not None
-            and (
-                session.machine_editor.dirty
-                or bool(session.camera_sources and session.camera_sources.dirty)
-            )
-        ):
+        if self.vision_workspace is None and self.editing.vision_dirty:
             self.open_vision()
         self.leave_vision(
             lambda: self.recipe_page.guard_dirty(

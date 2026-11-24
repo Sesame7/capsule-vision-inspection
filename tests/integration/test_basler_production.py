@@ -2974,6 +2974,13 @@ def test_vision_connect_locks_sources_but_allows_reference_free_roi_save(
             == text("roi_geometry_error", window.language)
         )
         window.navigate(0)
+        box = next(b for b in workspace.findChildren(QMessageBox) if b.isVisible())
+        next(
+            b
+            for b in box.buttons()
+            if box.buttonRole(b) == QMessageBox.ButtonRole.DestructiveRole
+        ).click()
+        until(lambda: window.vision_workspace is None)
         window.navigate(4)
         until(lambda: not window.recipe_page.busy)
         workspace = window.vision_workspace

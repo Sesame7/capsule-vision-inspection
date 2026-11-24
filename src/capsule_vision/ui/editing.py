@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from concurrent.futures import Future
+from dataclasses import dataclass
 from threading import Thread
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
@@ -12,9 +13,20 @@ from capsule_vision.application.audit import RevisionConfirmationError
 from capsule_vision.application.editing import RecipeEditorSession, RecipeSetupRequired
 from capsule_vision.application.identity_models import IdentityError
 from capsule_vision.configuration import ConfigurationError
+from capsule_vision.inspection import CameraId
+from capsule_vision.inspection.production import ChannelROI
 
 from .future_delivery import FutureDelivery
 from .production_bridge import QtProductionBridge
+
+
+@dataclass(frozen=True, slots=True)
+class PendingRoiInput:
+    """Unapplied text for one displayed ROI, retained across read-only navigation."""
+
+    camera: CameraId
+    roi: ChannelROI
+    values: tuple[str, ...]
 
 
 class EditingCoordinator(QObject):
@@ -31,6 +43,7 @@ class EditingCoordinator(QObject):
     ) -> None:
         super().__init__(parent)
         self.bridge, self.session = bridge, session
+        self.pending_roi_input: PendingRoiInput | None = None
         if session is not None and bridge.application.identity is not None:
             if (
                 session.identity is not None
@@ -60,6 +73,17 @@ class EditingCoordinator(QObject):
     @property
     def busy(self) -> bool:
         return self._thread is not None or self._process_completion is not None
+
+    @property
+    def vision_dirty(self) -> bool:
+        session = self.session
+        return self.pending_roi_input is not None or (
+            session is not None
+            and (
+                session.machine_editor.dirty
+                or (session.camera_sources is not None and session.camera_sources.dirty)
+            )
+        )
 
     def editable(self) -> bool:
         return (
