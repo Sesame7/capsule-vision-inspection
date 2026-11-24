@@ -1602,11 +1602,11 @@ Field labels use IPv4, units and short localized names.
 Full localized meanings remain in tooltips and
 accessibility text. Routine disabled services show localized Off captions; waiting for the next
 Start, active transitions, failures and ACK observations remain distinct. Idle
-diagnostics omit no-request prose. Watch success uses `OK` with its observation
-time. A failed automatic pass reports that refresh stopped; a failed manual pass
-reports the read failure. Any retained time is identified as the last successful
-read. Read/write failures remain visible. The diagnostic target stays
-explicit and is not evidence that an edited preference was saved or applied.
+diagnostics omit no-request prose. A successful Watch pass updates the table
+values and their last-read times. A failed manual read shows its cause. A failed
+automatic pass also reports that refresh stopped. Failure feedback identifies any
+retained timestamp as the last successful read. A diagnostic draft that differs
+from the effective endpoint reveals the saved target above the operations.
 
 The main window title is `Capsule Vision Inspection` on every page. The five
 existing destinations (Production, Recipe, Communication, History and Vision)
@@ -1689,24 +1689,18 @@ slots and common Batch IDs. Save actions reserve
 localized group budgets, borrowing flexible feedback/summary space. Conventional
 utilities use touch-sized icons with full localized tooltips/accessibility:
 History paging/refresh, Recipe color sampling, Vision numeric ROI Apply, and
-Communication group creation and advanced-settings disclosures.
-Watch removal, single read and automatic refresh form equal compact icon/text
-slots budgeted across languages and refresh states; Add remains a separate square.
-Automatic refresh keeps its one-second interval visible, a loop icon, a checked state and an explicit
-Stop caption while active, distinct from Production Stop. Manual writing retains
-a localized verb. Save and service power controls retain visible verbs.
-These compact action groups use four-pixel horizontal style padding and a
-two-pixel focus allowance beyond their shaped caption/icon budget. Watch peers
-use three-pixel gaps; their surrounding selector/Add spacing remains unchanged.
-Touch heights, fonts and translations are unchanged; widths remain content-based
-and stable across languages and action states.
-Action buttons never stretch into surplus row space;
-the Watch selector receives the remaining space. A single selector/Add/action row
-is preferred whenever the actual available logical width accommodates the controls.
-Dynamic group names do not enlarge its minimum or force wrapping; long values may
-elide, with their full text in tooltips/accessibility. When space is insufficient,
-the selector/Add stay above the three actions, leaving surplus space after that
-narrow action group. Reflow retains the same controls and Watch operations.
+Communication group editing and advanced-settings disclosures.
+The Watch toolbar starts with the group dropdown and square Add and Remove
+buttons. The selector uses the shared chevron. Read and Auto sit beside these
+controls and reserve their own localized caption widths. During automatic refresh
+the same slot shows a checked Stop action with the loop icon and one-second
+interval. The table stays in place between reads. When space is tight, Read
+and Auto wrap together below the group controls.
+Long group names retain their full tooltip and accessible description.
+Write has an explicit localized verb beside the register address and values.
+Save and service power controls retain visible verbs. Compact captioned actions
+keep stable widths across languages and states, with four-pixel horizontal
+padding and a two-pixel focus allowance.
 Watch columns reserve language-stable heading/value budgets before sharing surplus width.
 History wraps pagination below filters when their compact icon group cannot share
 a row. Date and filter budgets use that row's available space, retaining equal

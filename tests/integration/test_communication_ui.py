@@ -10,6 +10,7 @@ from threading import enumerate as threads
 import pytest
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from tests.support.application import FakeSession
 from tests.support.qt import screen as screen
@@ -252,6 +253,7 @@ def test_manual_watch_failure_preserves_last_read_without_claiming_auto_stopped(
     )
     assert "auto refresh" not in page.watch_status.text()
     assert "Last successful read" in page.watch_status.text()
+    assert page.watch_status.isVisible()
     assert not page.auto_refresh
     failed_watch = page.watch_status.text()
     fail = False
@@ -568,9 +570,23 @@ def test_compact_empty_and_bounded_populated_watch(
     page: CommunicationPage, qapp: QApplication
 ) -> None:
     assert page.watch_table.isHidden()
-    assert page.watch_empty.isVisible()
+    assert page.watch_selector.currentIndex() == -1
+    assert not page.watch_selector.isEnabled() and page.watch_editor_button.isEnabled()
+    assert page.watch_selector.placeholderText() == text(
+        "comm_watch_group", page.language
+    )
+    assert page.watch_status.isHidden() and not page.watch_remove.isEnabled()
     assert page.watch_editor.isHidden() and page.manual_body.isHidden()
     assert page.host.isVisible() and page.write_button.toolTip()
+    page.manual_button.click()
+    qapp.processEvents()
+    write_fields = (page.area, page.address, page.write_values, page.write_button)
+    assert len({field.geometry().center().y() for field in write_fields}) == 1
+    assert [field.x() for field in write_fields] == sorted(
+        field.x() for field in write_fields
+    )
+    assert page.write_button.text() == text("comm_write", page.language)
+    page.manual_button.click()
     page.watch_editor_button.click()
     assert page.watch_editor.isVisible()
     assert page.add_watch_group(
@@ -578,7 +594,7 @@ def test_compact_empty_and_bounded_populated_watch(
     )
     qapp.processEvents()
     short_height = page.watch_table.height()
-    assert page.watch_table.isVisible() and not page.watch_empty.isVisible()
+    assert page.watch_table.isVisible() and page.watch_status.isHidden()
     assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100, 20, "Other"))
     qapp.processEvents()
     assert page.watch_table.height() > short_height
@@ -595,7 +611,55 @@ def test_compact_empty_and_bounded_populated_watch(
     assert item is not None and "A long watch-group name" in item.toolTip()
     while page.watch_groups:
         assert page.remove_watch_group(0)
-    assert page.watch_table.isHidden() and page.watch_empty.isVisible()
+    assert page.watch_table.isHidden() and page.watch_selector.currentIndex() == -1
+    assert page.watch_selector.toolTip() == page.watch_selector.placeholderText()
+    assert not any(
+        button.isEnabled()
+        for button in (page.watch_remove, page.watch_once, page.watch_auto)
+    )
+
+
+def test_effective_target_follows_diagnostic_drafts_and_discard(
+    page: CommunicationPage,
+) -> None:
+    page.set_language("en")
+    assert page.manual_endpoint.isHidden()
+    page.timeout.setValue(0.5)
+    assert page.manual_endpoint.isVisible()
+    assert (
+        "Effective target · FINS/UDP · 127.0.0.1:9600 · Timeout 1 s"
+        == page.manual_endpoint.text()
+    )
+    page.timeout.setValue(1)
+    assert page.manual_endpoint.isHidden()
+    page.destination[1].setValue(7)
+    page.source[1].setValue(8)
+    assert "Destination 0.2.0" in page.manual_endpoint.text()
+    assert "Source 0.1.0" in page.manual_endpoint.text()
+    page.destination[1].setValue(2)
+    page.source[1].setValue(1)
+    assert page.manual_endpoint.isHidden()
+    page.host.setText("invalid")
+    page.set_language("zh")
+    assert (
+        page.manual_endpoint.isVisible()
+        and text("comm_effective_endpoint", "zh") in page.manual_endpoint.text()
+    )
+    assert page.manual_endpoint.accessibleName() == page.manual_endpoint.text()
+    page.reload_settings()
+    assert page.manual_endpoint.isHidden()
+    assert not page.manual_endpoint.text() and not page.manual_endpoint.accessibleName()
+    page.protocol.setCurrentIndex(2)
+    assert "FINS/UDP" in page.manual_endpoint.text()
+    page.persist_settings()
+    assert page.manual_endpoint.isHidden()
+    page.unit_id.setValue(17)
+    assert (
+        page.manual_endpoint.isVisible()
+        and "Modbus TCP · Unit ID 255" in page.manual_endpoint.text()
+    )
+    page.reload_settings()
+    assert page.unit_id.value() == 255 and page.manual_endpoint.isHidden()
 
 
 def test_settings_and_disclosure_do_not_dispatch_or_change_active_watch(
@@ -672,9 +736,12 @@ def test_saved_diagnostic_target_change_marks_retained_watch_readings_stale(
     observed = page.watch_table.item(0, 4)
     assert observed is not None
     stamp = observed.text()
-    assert page.watch_status.text().startswith("OK")
+    assert (
+        page.watch_status.isHidden()
+        and page.watch_table.accessibleDescription() == text("comm_watch_ok", "en")
+    )
     page.port.setValue(19600)
-    assert page.watch_status.text().startswith("OK")  # Only a draft.
+    assert page.manual_endpoint.isVisible() and page.watch_status.isHidden()
     page.persist_settings()
     until(lambda: not page.busy)
     assert len(requests) == 1
@@ -686,11 +753,15 @@ def test_saved_diagnostic_target_change_marks_retained_watch_readings_stale(
         "comm_watch_stale", "en"
     )
     assert page.watch_status.text().startswith(text("comm_watch_stale", "en"))
+    assert page.watch_status.isVisible() and page.manual_endpoint.isHidden()
     assert text("comm_last_read", "en") in page.watch_status.accessibleDescription()
     assert page.read_watch_once()
     until(lambda: not page.busy)
     assert requests[-1].endpoint.port == 19600
-    assert page.watch_status.text().startswith("OK")
+    assert (
+        page.watch_status.isHidden()
+        and page.watch_table.accessibleDescription() == text("comm_watch_ok", "en")
+    )
     current = page.watch_table.item(0, 0)
     assert current is not None and current.icon().isNull()
 
@@ -767,7 +838,10 @@ def test_watch_localhost_mixed_groups_read_once_and_thread_ownership(
     assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.W, 49, 4, "Reject"))
     assert page.add_watch_group(RegisterWatchGroup(FinsMemoryArea.DM, 100, 1))
     assert not calls
-    assert page.read_watch_once()
+    page.watch_selector.setFocus()
+    QTest.keyClick(page.watch_selector, Qt.Key.Key_Home)
+    assert page.watch_selector.currentIndex() == 0
+    QTest.keyClick(page.watch_once, Qt.Key.Key_Space)
     until(lambda: not page.busy)
     assert [(r.area, r.start, r.count, r.kind) for r, _ in calls] == [
         (FinsMemoryArea.W, 49, 4, RequestKind.READ),
@@ -821,6 +895,10 @@ def test_auto_slow_pass_no_overlap_or_tick_backlog_and_snapshot(
     try:
         until(entered.is_set)
         assert page.auto_refresh and page.busy and page.watch_auto.isEnabled()
+        assert page.watch_status.isHidden()
+        assert page.watch_table.accessibleDescription() == text(
+            "comm_watch_busy", page.language
+        )
         assert page.watch_auto.size() == auto_size
         assert (
             not page.refresh_timer.isActive() and page.refresh_timer.interval() == 1000
@@ -872,6 +950,10 @@ def test_auto_slow_pass_no_overlap_or_tick_backlog_and_snapshot(
         for r in requests
     )
     assert page.refresh_timer.isActive() and not page.host.isEnabled()
+    assert page.watch_status.isHidden()
+    assert page.watch_table.accessibleDescription() == text(
+        "comm_watch_wait", page.language
+    )
     assert not page.dispatch(RequestKind.READ)
     page.refresh_timer.stop()
     page.refresh_timer.timeout.emit()
@@ -992,7 +1074,7 @@ def test_watch_local_milliseconds_survive_invalid_read_and_match_auto_refresh(
         page, 0, 0
     )
     assert page.remove_watch_group(0)
-    assert not page.watch_table.isVisible() and page.watch_empty.isVisible()
+    assert page.watch_table.isHidden() and page.watch_selector.currentIndex() == -1
 
 
 @pytest.mark.parametrize("action", ["stop", "leave", "close"])

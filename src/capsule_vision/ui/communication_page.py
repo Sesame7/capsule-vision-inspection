@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLayout,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -127,6 +128,7 @@ from .image_tools import image_icon
 from .permissions import failure_key, permits
 from .reporting_panel import ReportingPanel
 from .style import (
+    ChevronComboBox,
     Style,
     button_width,
     navigation_icon,
@@ -290,6 +292,7 @@ class CommunicationPage(QWidget):
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         layout.addWidget(frame)
         diagnostics = QVBoxLayout(frame)
+        diagnostics.setVerticalSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         diagnostics.setContentsMargins(
             Style.space, Style.space, Style.space, Style.space
         )
@@ -335,12 +338,9 @@ class CommunicationPage(QWidget):
             common.setColumnStretch(column, 2 if column == 1 else 1)
             widget.setMinimumHeight(Style.touch)
         settings.addLayout(common)
-        test_row = QHBoxLayout()
-        test_row.addStretch()
         self.advanced_button = self._button("comm_advanced", self._toggle_advanced)
         self.advanced_button.setCheckable(True)
-        test_row.addWidget(self.advanced_button)
-        settings.addLayout(test_row)
+        common.addWidget(self.advanced_button, 1, 4)
         self.advanced = QWidget()
         routing = QGridLayout(self.advanced)
         routing.setContentsMargins(0, 0, 0, 0)
@@ -378,8 +378,9 @@ class CommunicationPage(QWidget):
         settings.addWidget(self.modbus_advanced)
         self.modbus_advanced.hide()
         watch = diagnostics
-        watch.addWidget(self._caption("comm_watch"))
         self.manual_endpoint = QLabel()
+        self.manual_endpoint.setTextFormat(Qt.TextFormat.PlainText)
+        self.manual_endpoint.setWordWrap(True)
         watch.addWidget(self.manual_endpoint)
         self.watch_editor_button = self._button(
             "comm_watch_edit", self._toggle_watch_editor
@@ -414,13 +415,14 @@ class CommunicationPage(QWidget):
         self.watch_tools_layout = QGridLayout(self.watch_tools)
         self.watch_tools_layout.setContentsMargins(0, 0, 0, 0)
         self.watch_tools_layout.setSpacing(Style.small)
-        self.watch_tools_layout.setColumnStretch(0, 1)
+        self.watch_tools_layout.setColumnStretch(2, 1)
         self._watch_wrapped: bool | None = None
         self.watch_selection = QWidget()
         selection = QHBoxLayout(self.watch_selection)
         selection.setContentsMargins(0, 0, 0, 0)
         selection.setSpacing(Style.small)
-        self.watch_selector = QComboBox()
+        self.watch_selector = ChevronComboBox()
+        self.watch_selector.setObjectName("watchGroup")
         self.watch_selector.setMinimumHeight(Style.touch)
         # Reserve compact group/register context, not the longest dynamic name.
         self.watch_selector.setMinimumContentsLength(24)
@@ -428,9 +430,10 @@ class CommunicationPage(QWidget):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.watch_selector.currentIndexChanged.connect(self._refresh)
-        self._inputs.append(self.watch_selector)
         selection.addWidget(self.watch_selector, 1)
         selection.addWidget(self.watch_editor_button)
+        self.watch_remove = self._button("comm_watch_remove", self._remove_watch)
+        selection.addWidget(self.watch_remove)
         self.watch_actions = QWidget()
         self.watch_actions.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
@@ -438,11 +441,10 @@ class CommunicationPage(QWidget):
         actions = QHBoxLayout(self.watch_actions)
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(Style.small // 2)
-        self.watch_remove = self._button("comm_watch_remove", self._remove_watch)
         self.watch_once = self._button("comm_watch_once", self.read_watch_once)
         self.watch_auto = self._button("comm_watch_auto", self._toggle_auto)
         self.watch_auto.setCheckable(True)
-        for button in (self.watch_remove, self.watch_once, self.watch_auto):
+        for button in (self.watch_once, self.watch_auto):
             button.setProperty("compactAction", True)
             actions.addWidget(button)
         watch.addWidget(self.watch_tools)
@@ -463,11 +465,6 @@ class CommunicationPage(QWidget):
         self.watch_table.setMinimumWidth(200)
         self.watch_table.setTextElideMode(Qt.TextElideMode.ElideRight)
         watch.addWidget(self.watch_table)
-        self.watch_empty = self._caption("comm_watch_empty")
-        self.watch_empty.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
-        )
-        watch.addWidget(self.watch_empty)
         self.watch_area.currentIndexChanged.connect(self._watch_area_changed)
         self._watch_area_changed()
 
@@ -475,42 +472,39 @@ class CommunicationPage(QWidget):
         self.manual_button.setCheckable(True)
         self.manual_button.setProperty("iconAlignment", "leading")
         diagnostics.addWidget(self.manual_button, 0, Qt.AlignmentFlag.AlignLeft)
-        operations = diagnostics
         self.manual_body = QWidget()
-        manual = QVBoxLayout(self.manual_body)
+        manual = QGridLayout(self.manual_body)
         manual.setContentsMargins(0, 0, 0, 0)
-        operations.addWidget(self.manual_body)
+        manual.setHorizontalSpacing(Style.space)
+        diagnostics.addWidget(self.manual_body)
         self.manual_body.hide()
-        register_row = QGridLayout()
         self.area = self._area_selector()
         self.address = self._spin(0, 32767, 100)
         self.address.setPrefix("D")
-        self._field(register_row, "comm_area", self.area, 0, 0)
-        self._field(register_row, "comm_address", self.address, 0, 1)
-        manual.addLayout(register_row)
-        write_row = QHBoxLayout()
         self.write_values = QLineEdit("4321")
         self.write_values.setMaxLength(7000)
-        self.write_values.setMinimumHeight(Style.touch)
         self._inputs.append(self.write_values)
-        write_row.addWidget(self._caption("comm_values"))
-        write_row.addWidget(self.write_values, 1)
+        self._field(manual, "comm_area", self.area, 0, 0)
+        self._field(manual, "comm_address", self.address, 0, 1)
+        self._field(manual, "comm_values", self.write_values, 0, 2)
+        manual.setColumnStretch(0, 1)
+        manual.setColumnStretch(1, 1)
+        manual.setColumnStretch(2, 2)
         self.write_button = self._button(
             "comm_write", lambda: self.dispatch(RequestKind.WRITE)
         )
-        write_row.addWidget(self.write_button)
-        manual.addLayout(write_row)
+        manual.addWidget(self.write_button, 1, 3)
         self.area.currentIndexChanged.connect(self._manual_area_changed)
         self._manual_area_changed()
 
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
-        manual.addWidget(self.status)
+        manual.addWidget(self.status, 2, 0, 1, 4)
         self.success = QLabel()
         self.success.setWordWrap(True)
         self.success.setTextFormat(Qt.TextFormat.PlainText)
-        manual.addWidget(self.success)
+        manual.addWidget(self.success, 3, 0, 1, 4)
         preferences_row = QHBoxLayout()
         self.preferences_status = QLabel()
         self.preferences_status.setWordWrap(True)
@@ -680,15 +674,13 @@ class CommunicationPage(QWidget):
         for widget in (self.watch_selection, self.watch_actions):
             self.watch_tools_layout.removeWidget(widget)
         self.watch_tools_layout.addWidget(
-            self.watch_selection, 0, 0, 1, 2 if wrapped else 1
+            self.watch_selection, 0, 0, Qt.AlignmentFlag.AlignLeft
         )
         self.watch_tools_layout.addWidget(
             self.watch_actions,
             1 if wrapped else 0,
             0 if wrapped else 1,
-            1,
-            2 if wrapped else 1,
-            Qt.AlignmentFlag.AlignLeft if wrapped else Qt.AlignmentFlag.AlignRight,
+            Qt.AlignmentFlag.AlignLeft,
         )
 
     def _size_watch_columns(self) -> None:
@@ -937,7 +929,37 @@ class CommunicationPage(QWidget):
             self._discard_dialog.reject()
         self._refresh()
 
+    def _effective_target_text(self) -> str:
+        saved = self._preferences.diagnostic
+        try:
+            if self.diagnostic_selection() == saved:
+                return ""
+        except ValueError:
+            pass  # An invalid draft still uses the saved target.
+        parts = [
+            text("comm_effective_endpoint", self.language),
+            protocol_name(saved),
+            f"{saved.host}:{saved.port}",
+        ]
+        if self.timeout.value() != saved.timeout:
+            parts.append(f"{text('short_timeout', self.language)} {saved.timeout:g} s")
+        if isinstance(saved, FinsUdpEndpoint) and self.protocol.currentIndex() == 0:
+            for key, route, fields in (
+                ("comm_destination", saved.destination, self.destination),
+                ("comm_source", saved.source, self.source),
+            ):
+                values = (route.network, route.node, route.unit)
+                if tuple(field.value() for field in fields) != values:
+                    parts.append(
+                        f"{text(key, self.language)} {'.'.join(map(str, values))}"
+                    )
+        return " · ".join(parts)
+
     def _render_preferences(self) -> None:
+        target = self._effective_target_text()
+        self.manual_endpoint.setText(target)
+        self.manual_endpoint.setAccessibleName(target)
+        self.manual_endpoint.setVisible(bool(target))
         dirty = self.dirty
         self.web_panel.saved = self._preferences.web
         try:
@@ -1508,7 +1530,6 @@ class CommunicationPage(QWidget):
                 if key == "comm_values"
                 else text(
                     {
-                        "comm_watch": "comm_watch_short",
                         "comm_count": "short_words",
                         "comm_address": "comm_word_address",
                         "comm_watch_name": "short_name",
@@ -1525,6 +1546,7 @@ class CommunicationPage(QWidget):
         for button in (
             self.watch_editor_button,
             self.watch_add,
+            self.watch_remove,
             self.advanced_button,
         ):
             button.setText("")
@@ -1535,28 +1557,22 @@ class CommunicationPage(QWidget):
             text("comm_registers", language),
             button_width(self.manual_button, ("comm_registers",)),
         )
-        self._watch_action_width = button_width(
+        self._watch_auto_width = button_width(
             self.watch_auto,
-            (
-                "comm_watch_remove",
-                "comm_watch_once_short",
-                "comm_watch_auto_short",
-                "comm_watch_stop_short",
-            ),
+            ("comm_watch_auto_short", "comm_watch_stop_short"),
             padding=2,
         )
-        for button, key in (
-            (self.watch_remove, "comm_watch_remove"),
-            (self.watch_once, "comm_watch_once"),
-        ):
-            set_button_caption(
-                button,
-                text(key if key == "comm_watch_remove" else key + "_short", language),
-                self._watch_action_width,
-            )
-            button.setAccessibleName(text(key, language))
-        for button in (self.watch_remove, self.watch_once, self.watch_auto):
+        set_button_caption(
+            self.watch_once,
+            text("comm_watch_once_short", language),
+            button_width(self.watch_once, ("comm_watch_once_short",), padding=2),
+        )
+        self.watch_once.setAccessibleName(text("comm_watch_once", language))
+        for button in (self.watch_once, self.watch_auto):
             button.setFixedHeight(Style.touch)
+        self.watch_tools.setAccessibleName(text("comm_watch_short", language))
+        self.watch_selector.setPlaceholderText(text("comm_watch_group", language))
+        self.watch_table.setAccessibleName(text("comm_watch", language))
         for key, widget in (
             ("comm_protocol", self.protocol),
             ("comm_host", self.host),
@@ -1707,7 +1723,9 @@ class CommunicationPage(QWidget):
         for index, (group, observation) in enumerate(
             zip(self._watch_groups, self._watch_observations, strict=True)
         ):
-            address = f"{group.area.prefix}{group.start}–{group.area.prefix}{group.start + group.count - 1}"
+            address = f"{group.area.prefix}{group.start}"
+            if group.count > 1:
+                address += f"–{group.area.prefix}{group.start + group.count - 1}"
             name = (
                 f"{index + 1} · {group.name}"
                 if group.name
@@ -1772,7 +1790,6 @@ class CommunicationPage(QWidget):
             min(max(0, selected), len(self._watch_groups) - 1)
         )
         self.watch_selector.blockSignals(blocked)
-        self.watch_empty.setVisible(not self._watch_groups)
         self._size_table(self.watch_table, 12)
 
     @staticmethod
@@ -2187,16 +2204,8 @@ class CommunicationPage(QWidget):
             self.manual_button,
         ):
             button.setEnabled(not (self._closing or self._disposed))
-        endpoint = self._preferences.diagnostic
-        endpoint_name = protocol_name(endpoint)
-        self.manual_endpoint.setText(
-            text("target", self.language)
-            + f" · {endpoint_name} · {endpoint.host}:{endpoint.port}"
-        )
-        self.manual_endpoint.setToolTip(text("comm_effective_endpoint", self.language))
-        self.manual_endpoint.setAccessibleName(self.manual_endpoint.text())
-        self.watch_remove.setEnabled(editable and bool(self._watch_groups))
-        self.watch_once.setEnabled(editable and bool(self._watch_groups))
+        for control in (self.watch_selector, self.watch_remove, self.watch_once):
+            control.setEnabled(editable and bool(self._watch_groups))
         self.watch_auto.setEnabled(
             not (self._closing or self._disposed)
             and (
@@ -2210,17 +2219,22 @@ class CommunicationPage(QWidget):
         set_button_caption(
             self.watch_auto,
             text(action_key + "_short", self.language),
-            self._watch_action_width,
+            self._watch_auto_width,
         )
         self.watch_auto.setAccessibleName(action)
         for button in (self.watch_remove, self.watch_once, self.watch_auto):
             tip = text("comm_watch", self.language) + " · " + button.accessibleName()
+            if button is self.watch_remove and self.watch_selector.currentText():
+                tip += "\n" + self.watch_selector.currentText()
             if not engineer and not (button is self.watch_auto and self._auto_refresh):
                 tip += "\n" + text("permission_engineer", self.language)
             button.setToolTip(tip)
             button.setAccessibleDescription(tip)
-        self.watch_selector.setToolTip(self.watch_selector.currentText())
-        self.watch_selector.setAccessibleDescription(self.watch_selector.currentText())
+        group = (
+            self.watch_selector.currentText() or self.watch_selector.placeholderText()
+        )
+        self.watch_selector.setToolTip(group)
+        self.watch_selector.setAccessibleDescription(group)
         self.write_button.setEnabled(editable)
         self.write_button.setToolTip(
             text("comm_write", self.language)
@@ -2264,32 +2278,42 @@ class CommunicationPage(QWidget):
                 if any(self._watch_observations)
                 else "comm_watch_idle"
             )
-        watch_text = (
-            "OK"
-            if watch_state in ("comm_watch_ok", "comm_watch_wait")
-            else text("web_stopped", self.language)
-            if watch_state == "comm_watch_stopped"
-            else text("comm_watch_once_short", self.language) + "…"
-            if watch_state == "comm_watch_busy"
-            else text(watch_state, self.language)
-        )
         watch_name = text(watch_state, self.language)
-        if watch_state == "comm_watch_failed":
+        watch_text = watch_name
+        if watch_state in (
+            "comm_watch_idle",
+            "comm_watch_empty",
+            "comm_watch_ok",
+            "comm_watch_wait",
+        ):
+            watch_text = ""
+        elif watch_state == "comm_watch_busy":
+            watch_text = (
+                ""
+                if self._auto_refresh
+                else text("comm_watch_once_short", self.language) + "…"
+            )
+        elif watch_state == "comm_watch_stopped":
+            watch_text = text("web_stopped", self.language)
+        elif watch_state == "comm_watch_failed":
             watch_name = watch_text = " · ".join(
                 text(key, self.language) for key in self._watch_failure
             )
         last_read = ""
-        if self._watch_success:
-            last_read = self._watch_success.astimezone().strftime("%H:%M:%S")
-            if watch_state not in ("comm_watch_ok", "comm_watch_wait"):
-                last_read = text("comm_last_read", self.language) + " " + last_read
+        if watch_text and self._watch_success:
+            last_read = (
+                text("comm_last_read", self.language)
+                + " "
+                + self._watch_success.astimezone().strftime("%H:%M:%S")
+            )
         self.watch_status.setText(watch_text + (" · " + last_read if last_read else ""))
         self.watch_status.setToolTip("")
         self.watch_status.setAccessibleDescription(last_read)
         self.watch_status.setAccessibleName(watch_name)
-        self.watch_status.setVisible(
-            bool(self._watch_groups) and watch_state != "comm_watch_idle"
+        self.watch_table.setAccessibleDescription(
+            self.watch_status.text() or watch_name
         )
+        self.watch_status.setVisible(bool(self._watch_groups) and bool(watch_text))
         colors = theme_colors(self)
         watch_color = (
             colors.warning

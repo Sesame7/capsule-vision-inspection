@@ -11,7 +11,7 @@ from threading import Event
 
 import pytest
 from PySide6.QtCore import QPoint, QRect, QSignalBlocker, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QFontMetricsF
+from PySide6.QtGui import QDesktopServices, QFontMetricsF, QPalette
 from PySide6.QtTest import QSignalSpy, QTest
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -1550,10 +1550,11 @@ def test_drafts_do_not_redirect_diagnostic_writes_or_reporting(
     monkeypatch.setattr(page, "_execute", execute)
     panel.enabled.setChecked(True)
     panel.port.setValue(19601)
+    assert page.dirty and page.manual_endpoint.isHidden()
     page.port.setValue(19602)
     assert page.dirty and page.discard_settings.isEnabled()
     assert panel.controller.reporting_selection() == saved.reporting
-    assert "9600" in page.manual_endpoint.text()
+    assert page.manual_endpoint.isVisible() and "9600" in page.manual_endpoint.text()
     assert page.dispatch(RequestKind.WRITE)
     assert "Writing" in page.status.text()
     until(lambda: not page.busy)
@@ -1563,6 +1564,7 @@ def test_drafts_do_not_redirect_diagnostic_writes_or_reporting(
     assert panel.controller.reporting_selection().enabled
     assert panel.controller.reporting_selection().settings.endpoint.port == 19601
     assert not page.dirty and not page.discard_settings.isEnabled()
+    assert page.manual_endpoint.isHidden()
     assert page.dispatch(RequestKind.WRITE)
     until(lambda: not page.busy)
     assert requests[-1].endpoint.port == 19602
@@ -1875,6 +1877,20 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
     assert page.add_watch_group(
         RegisterWatchGroup(FinsMemoryArea.DM, 32767, 1, "Other group")
     )
+    selector = page.watch_selector
+    QTest.mouseClick(
+        selector,
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(selector.width() - Style.touch // 2, selector.height() // 2),
+    )
+    until(lambda: selector.view().isVisible())
+    assert (
+        selector.view().palette().color(QPalette.ColorRole.HighlightedText).name()
+        == theme_colors(selector).primary
+    )
+    QTest.keyClick(selector.view(), Qt.Key.Key_Home)
+    QTest.keyClick(selector.view(), Qt.Key.Key_Return)
+    assert selector.currentIndex() == 0 and not selector.view().isVisible()
     group = page.watch_groups
     requests: list[CommunicationRequest] = []
     completed = datetime(2026, 10, 14, 13, 22, 35, 123456, tzinfo=UTC)
@@ -1901,15 +1917,8 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
             ("plc_enable", "plc_disable", "web_turn_on", "web_turn_off"),
         ),
         (page.save_settings, ("save",)),
-        (
-            page.watch_once,
-            (
-                "comm_watch_remove",
-                "comm_watch_once_short",
-                "comm_watch_auto_short",
-                "comm_watch_stop_short",
-            ),
-        ),
+        (page.watch_once, ("comm_watch_once_short",)),
+        (page.watch_auto, ("comm_watch_auto_short", "comm_watch_stop_short")),
     ):
         caption_width = ceil(
             max(
@@ -1936,28 +1945,16 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 and page.watch_selection.height() == Style.touch
                 and page.watch_actions.height() == Style.touch
                 and page.watch_selection.y() == 0
-                and (
-                    (
-                        page.watch_actions.y() == Style.touch + Style.small
-                        and page.watch_selection.geometry().bottom()
-                        < page.watch_actions.geometry().top()
-                    )
-                    or (
-                        page.watch_actions.y() == 0
-                        and page.watch_selection.geometry().right()
-                        < page.watch_actions.geometry().left()
-                    )
-                )
+                and page.watch_actions.x()
+                == page.watch_selection.geometry().right() + 1 + Style.small
             )
         )
         sizes = tuple(button.size() for button in buttons)
         assert tuple(button.size() for button in buttons[4:]) == action_sizes
-        assert page.watch_actions.width() == 3 * page.watch_once.width() + 2 * (
-            Style.small // 2
+        assert page.watch_actions.width() == (
+            page.watch_once.width() + Style.small // 2 + page.watch_auto.width()
         )
-        assert (
-            page.watch_remove.size() == page.watch_once.size() == page.watch_auto.size()
-        )
+        assert page.watch_remove.parentWidget() is page.watch_selection
         geometry = tuple(
             QRect(button.mapTo(page.watch_tools, QPoint()), button.size())
             for button in buttons[3:]
@@ -1973,6 +1970,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
             assert panel.enabled.size() == page.web_panel.power.size()
             for button in (
                 page.watch_editor_button,
+                page.watch_remove,
                 page.watch_add,
                 page.advanced_button,
                 panel.advanced_button,
@@ -2014,12 +2012,10 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 if label.accessibleName() == text("comm_timeout", language):
                     assert label.text() == text("short_timeout", language) + " · s"
                     assert label.toolTip() == text("comm_timeout", language)
-            assert text("target", language) in page.manual_endpoint.text()
-            assert (
-                text("comm_effective_endpoint", language)
-                in page.manual_endpoint.toolTip()
+            assert page.manual_endpoint.isHidden()
+            assert page.watch_selector.placeholderText() == text(
+                "comm_watch_group", language
             )
-            assert_full_caption(page.watch_remove, text("comm_watch_remove", language))
             assert_full_caption(
                 page.watch_once, text("comm_watch_once_short", language)
             )
@@ -2041,6 +2037,7 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 assert text("comm_watch", language) in button.toolTip()
                 assert button.accessibleDescription() == button.toolTip()
             page.watch_selector.setCurrentIndex(1 - page.watch_selector.currentIndex())
+            assert page.watch_selector.currentText() in page.watch_remove.toolTip()
             assert tuple(button.size() for button in buttons) == sizes
             assert (
                 page.watch_selector.currentText()
@@ -2060,10 +2057,8 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 page.watch_remove.mapTo(page.watch_tools, QPoint()),
                 page.watch_remove.size(),
             )
-            assert (
-                editor_rect.bottom() < remove_rect.top()
-                or editor_rect.right() < remove_rect.left()
-            )
+            assert remove_rect.top() == editor_rect.top()
+            assert remove_rect.left() == editor_rect.right() + 1 + Style.small
             assert page.body.width() <= page.scroll_area.viewport().width()
             assert page.watch_table.horizontalScrollBar().maximum() == 0
             widths = [page.watch_table.columnWidth(i) for i in range(5)]
@@ -2091,9 +2086,10 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                     header.fontMetrics().horizontalAdvance(item.text())
                     <= contents.width()
                 ), (language, column)
-            assert page.watch_status.text().startswith("OK · ")
-            assert not page.watch_status.toolTip()
-            assert text("comm_watch_ok", language) == page.watch_status.accessibleName()
+            assert page.watch_status.isHidden() and not page.watch_status.text()
+            assert page.watch_table.accessibleDescription() == text(
+                "comm_watch_ok", language
+            )
         slots[width] = geometry
         dimensions[width] = tuple(button.rect() for button in buttons)
         columns[width] = tuple(page.watch_table.columnWidth(i) for i in range(5))
@@ -2119,6 +2115,10 @@ def test_multilingual_communication_actions_preserve_slots_and_full_meaning(
                 window.set_language(language)
                 QApplication.processEvents()
                 assert page.auto_refresh and page.watch_auto.isChecked()
+                assert page.watch_status.isHidden()
+                assert page.watch_table.accessibleDescription() == text(
+                    "comm_watch_wait", language
+                )
                 assert_full_caption(panel.enabled, text("plc_disable", language))
                 assert_full_caption(
                     page.watch_auto, text("comm_watch_stop_short", language)

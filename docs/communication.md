@@ -575,10 +575,12 @@ Save removes protocol-inapplicable fields. The header power edits only the draft
 with Save and next-Start activation; it never interrupts an active worker.
 Diagnostics has its own independently saved endpoint and routing, grouped DM/WR or Holding Register
 watches and serialized manual/auto refresh, plus explicit one-shot writes.
-Requests always snapshot the saved/effective diagnostic endpoint, identified above
-the operations; draft edits never silently redirect them. The watch table has five
-columns: Group, Address, DEC, HEX and Last successful read. They reserve readable
-heading/value widths and share the remaining space, giving longer headings room.
+Requests snapshot the saved diagnostic endpoint. When the diagnostic draft differs,
+the effective target appears above Watch, including any differing timeout or
+FINS/UDP routing and the saved Unit ID for Modbus. The selector identifies the
+group to remove. Read and Auto read every configured Watch group in order.
+The table shows Group, Address, DEC, HEX and Last successful read. The columns
+reserve readable heading and value widths and share the remaining space.
 The last column shows local `HH:mm:ss.SSS` from the validated response's completion timestamp,
 not delayed Qt delivery. Failed/malformed reads retain the last successful values
 and timestamp, with an ERR marker on the affected group, a stale/error icon and
@@ -588,9 +590,10 @@ Unvisited groups remain explicitly stale. Saving or reloading a different
 Diagnostics endpoint marks retained Watch readings stale, with the last successful
 read time labeled as historical. A manual failure reports a failed read;
 an automatic failure reports that refresh stopped. In both cases an earlier
-timestamp describes the last successful read. An empty watch list has no empty
-table viewport. The **Write registers** disclosure opens the editor; **Write**
-dispatches the command. The UI distinguishes a proven pre-send failure, a valid
+timestamp describes the last successful read. An empty list shows **Watch group**
+in the selector and hides the table. **Write registers** opens the editor.
+**Write** sits beside the area, address and decimal values and dispatches the
+command. The UI distinguishes a proven pre-send failure, a valid
 PLC rejection, an uncertain outcome after a possible send, and a protocol ACK.
 It identifies the owner of a blocked Reporting or Status reservation. A retained
 **Last ACK** is a previous observation while a new attempt is pending or fails.

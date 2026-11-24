@@ -370,8 +370,9 @@ def stylesheet(theme: Theme = "dark") -> str:
     QComboBox {{ combobox-popup: 0; qproperty-maxVisibleItems: 24; }}
     QComboBox#language {{ qproperty-maxVisibleItems: {len(language_identity.LANGUAGES)}; }}
     QComboBox#language::down-arrow {{ image: none; width: 0; height: 0; }}
-    QComboBox#webAddress::drop-down, QComboBox#reportingMerge::drop-down {{ width: {Style.touch}px; }}
-    QComboBox#webAddress::down-arrow, QComboBox#reportingMerge::down-arrow {{ image: none; }}
+    QComboBox#webAddress::drop-down, QComboBox#reportingMerge::drop-down, QComboBox#watchGroup::drop-down {{ width: {Style.touch}px; }}
+    QComboBox#webAddress::down-arrow, QComboBox#reportingMerge::down-arrow, QComboBox#watchGroup::down-arrow {{ image: none; }}
+    QComboBox#watchGroup QAbstractItemView {{ selection-color: {c.primary}; }}
     QComboBox#reportingMerge QAbstractItemView::item:disabled {{ color: {c.secondary}; }}
     QPushButton#webPower, QPushButton#reportingPower, QPushButton#alarmPower,
     QPushButton#reportingPower:checked, QPushButton#alarmPower:checked {{ color: {c.primary}; border-color: {c.border}; background: {c.raised}; }}
