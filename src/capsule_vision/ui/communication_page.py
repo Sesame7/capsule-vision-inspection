@@ -122,7 +122,7 @@ from capsule_vision.configuration.communication_preferences import (
 from capsule_vision.configuration.process_parameters import ProcessCatalog
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import LANGUAGES, Language
-from capsule_vision.web.runtime import WebRuntime, WebState
+from capsule_vision.web.runtime import WebRuntime
 
 from .alarm_monitor_panel import AlarmMonitorPanel
 from .future_delivery import FutureDelivery
@@ -1136,7 +1136,14 @@ class CommunicationPage(QWidget):
         )
         self.alarm_panel.refresh_preview.setEnabled(editable)
         incomplete = self._settings_message == "configuration_confirmation_incomplete"
-        review = incomplete or self._diagnostics_reload_required
+        review = (
+            incomplete
+            or self._diagnostics_reload_required
+            or (
+                self._web_issue_key == "configuration_confirmation_incomplete"
+                and not self.web_panel.saved_available
+            )
+        )
         self.save_settings.setEnabled(
             engineer
             and editable
@@ -1557,10 +1564,14 @@ class CommunicationPage(QWidget):
             or self._closing
             or self._disposed
             or self._file_finished is not None
-            or (action == "power" and self.busy)
-            or runtime.snapshot().busy
-            or runtime.snapshot().closing
+            or (action in ("power", "retry") and self.busy)
         ):
+            return
+        observed = runtime.snapshot()
+        if observed.busy or observed.closing:
+            return
+        secondary = self.web_panel.secondary_action(observed)
+        if action != "power" and (not secondary or action != secondary):
             return
         if action == "apply" and (
             self.web_panel.dirty or not self.web_panel.saved_available
@@ -1573,7 +1584,7 @@ class CommunicationPage(QWidget):
             if action == "power":
                 if self._preferences_path is None:
                     raise ConfigurationError("No communication settings path")
-                target = not runtime.snapshot().owned
+                target = not (observed.owned or secondary == "retry")
                 path = self._preferences_path
                 defaults, missing = self._preferences, self._settings_missing
                 identity = self._application.identity if self._application else None
@@ -1625,6 +1636,9 @@ class CommunicationPage(QWidget):
                         OSError,
                         RuntimeError,
                     ) as exc:
+                        if isinstance(exc, RevisionConfirmationError):
+                            # Publication superseded the loaded settings before Audit failed.
+                            self.web_panel.saved_available = False
                         self.web_panel.operation_error = f"{type(exc).__name__}: {exc}"[
                             :2000
                         ]
@@ -1635,13 +1649,10 @@ class CommunicationPage(QWidget):
                     self._file_work(power_save, power_saved)
                 else:
                     power_saved(power_save(), None)
-            elif action == "apply":
-                observed = runtime.snapshot()
-                if (
-                    observed.state is WebState.RUNNING
-                    and observed.configuration != self._preferences.web
-                ):
-                    runtime.apply(self._preferences.web, revision=revision)
+            elif action == "retry":
+                runtime.start(self._preferences.web, revision=revision)
+            else:
+                runtime.apply(self._preferences.web, revision=revision)
         except (ConfigurationError, ValueError, OSError, RuntimeError) as exc:
             self.web_panel.operation_error = f"{type(exc).__name__}: {exc}"[:2000]
             self._web_issue_key = failure_key(exc, "web_power_failed")

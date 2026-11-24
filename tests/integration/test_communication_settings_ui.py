@@ -38,7 +38,14 @@ from tests.support.qt import (
     ensure_test_fonts,
     until,
 )
-from tests.support.startup import authenticated_startup, provision_account, saved_data
+from tests.support.startup import (
+    TEST_PASSWORD,
+    authenticated_startup,
+    close,
+    provision_account,
+    saved_data,
+)
+from tests.unit.test_web_runtime import HeldService
 
 from capsule_vision.application import (
     ApplicationState,
@@ -47,7 +54,12 @@ from capsule_vision.application import (
 )
 from capsule_vision.application.audit import AuditQuery
 from capsule_vision.application.identity_models import Role
-from capsule_vision.application.startup import ApplicationData, Startup, load_startup
+from capsule_vision.application.startup import (
+    ApplicationData,
+    Startup,
+    create_web_runtime,
+    load_startup,
+)
 from capsule_vision.communication import (
     FinsMemoryArea,
     FinsTcpEndpoint,
@@ -601,36 +613,227 @@ def test_web_power_save_failure_preserves_running_service_and_drafts(
     page.stop_monitoring()
 
 
-def test_web_power_bind_failure_keeps_saved_enablement_and_reports_actual_failure(
+def test_web_bind_failure_retries_saved_endpoint_without_publishing(
     settings_window: tuple[Startup, MainWindow],
 ) -> None:
     startup, window = settings_window
     page, panel = window.communication, window.communication.web_panel
-    runtime = WebRuntime(
-        lambda settings: ProductionSnapshotService(
+    owner = startup.application.identity
+    assert owner is not None
+    attempted: list[WebPreferences] = []
+
+    def factory(settings: WebPreferences) -> ProductionSnapshotService:
+        attempted.append(settings)
+        return ProductionSnapshotService(
             startup.application, startup.frames, host=settings.host, port=settings.port
         )
-    )
+
+    runtime = WebRuntime(factory)
     window.bind_web_runtime(runtime)
     with socket.socket() as occupied:
         occupied.bind(("127.0.0.1", 0))
         occupied.listen()
-        panel.port.setValue(occupied.getsockname()[1])
+        port = occupied.getsockname()[1]
+        panel.port.setValue(port)
         page.persist_settings()
         until(lambda: not page.busy)
-        panel.port.setValue(
-            available_port()
-        )  # This draft must never be used as fallback.
+        panel.host.setText("0.0.0.0")
+        panel.port.setValue(port - 1)
         panel.power.click()
+        until(
+            lambda: panel.apply_changes.isVisible() and panel.apply_changes.isEnabled()
+        )
+        settings = WebPreferences(enabled=True, port=port)
+        assert attempted == [settings] and panel.saved == settings
+        assert panel.power.text() == text("web_turn_off", window.language)
+        assert_full_caption(panel.apply_changes, text("web_retry", window.language))
+        assert f"127.0.0.1:{port}" in panel.apply_changes.accessibleDescription()
+        saved = startup.data.communication.read_bytes()
+        modified = startup.data.communication.stat().st_mtime_ns
+        audit = owner.audit.page(AuditQuery()).result(WAIT)
+        panel.apply_changes.click()
+        until(lambda: len(attempted) == 2 and not runtime.snapshot().busy)
+        until(lambda: runtime.snapshot().state is WebState.FAILED)
+        assert not runtime.snapshot().owned and runtime.snapshot().error
+        assert (
+            load_communication_preferences(startup.data.communication).web == settings
+        )
+        assert not panel.available and page.dirty
+    until(lambda: panel.apply_changes.isVisible() and panel.apply_changes.isEnabled())
+    panel.apply_changes.click()
+    until(lambda: panel.available and panel.apply_changes.isHidden())
+    assert attempted == [settings] * 3 and runtime.snapshot().configuration == settings
+    assert not runtime.snapshot().error
+    panel.requested.emit("retry")
+    assert not panel.operation_error and len(attempted) == 3
+    assert startup.data.communication.read_bytes() == saved
+    assert startup.data.communication.stat().st_mtime_ns == modified
+    assert owner.audit.page(AuditQuery()).result(WAIT) == audit
+    assert panel.host.text() == "0.0.0.0" and panel.port.value() == port - 1
+    assert startup.application.snapshot().generation == 0
+    assert startup.application.snapshot().counters == ProductionCounters()
+
+
+def test_failed_web_restoration_can_disable_next_launch(
+    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = saved_data(tmp_path)
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        saved = CommunicationPreferences(
+            web=WebPreferences(port=occupied.getsockname()[1])
+        )
+        save_communication_preferences(data.communication, saved)
+        startup = authenticated_startup(data)
+        delivery = FutureDelivery()
+        window = create_window(startup, delivery)
+        runtime = create_web_runtime(startup, restore_saved=True)
+        window.bind_web_runtime(runtime)
+        window.show()
+        window.navigate(2)
+        page, panel = window.communication, window.communication.web_panel
+        owner = startup.application.identity
+        assert owner is not None
+        try:
+            until(
+                lambda: (
+                    panel.apply_changes.isVisible() and panel.apply_changes.isEnabled()
+                )
+            )
+            failed = runtime.snapshot()
+            assert failed.state is WebState.FAILED and not failed.owned
+            panel.host.setText("192.0.2.10")
+            panel.port.setValue(saved.web.port - 1)
+            with monkeypatch.context() as block:
+
+                def refuse_publish(_src: Path, _dst: Path) -> None:
+                    raise PermissionError("isolated power publication failure")
+
+                block.setattr(
+                    "capsule_vision.configuration._io.os.replace", refuse_publish
+                )
+                panel.power.click()
+                until(lambda: not page.busy)
+            assert load_communication_preferences(data.communication) == saved
+            assert panel.saved.enabled and runtime.snapshot() == failed
+            assert "isolated power publication failure" in panel.operation_error
+            assert panel.power.text() == text("web_turn_off", window.language)
+            panel.power.click()
+            until(
+                lambda: not page.busy and runtime.snapshot().state is WebState.STOPPED
+            )
+            disabled = replace(saved, web=replace(saved.web, enabled=False))
+            assert load_communication_preferences(data.communication) == disabled
+            assert panel.saved == disabled.web and panel.apply_changes.isHidden()
+            assert (
+                panel.host.text() == "192.0.2.10"
+                and panel.port.value() == saved.web.port - 1
+            )
+            assert page.dirty and not panel.operation_error
+            success, failure = owner.audit.page(
+                AuditQuery(action="communication.web_power")
+            ).result(WAIT)
+            assert (success.outcome, failure.outcome) == ("success", "failed")
+            assert (success.operation.before, success.operation.after) == (
+                "True",
+                "False",
+            )
+            assert (
+                owner.audit.revision_content(success.operation.id).result(WAIT)
+                == data.communication.read_bytes()
+            )
+        finally:
+            close_window(window)
+            delivery.detach()
+    following = load_startup(data)
+    restored = create_web_runtime(following, restore_saved=True)
+    try:
+        assert restored.restoration is None
+        assert (
+            restored.snapshot().state is WebState.STOPPED
+            and not restored.snapshot().owned
+        )
+    finally:
+        restored.request_close()
+        assert restored.join(WAIT)
+        close(following)
+
+
+def test_web_retry_respects_permissions_workers_retained_owner_and_close(
+    settings_window: tuple[Startup, MainWindow], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    startup, window = settings_window
+    page, panel = window.communication, window.communication.web_panel
+    owner = startup.application.identity
+    assert owner is not None
+    provision_account(owner, "Engineer", Role.ENGINEER, TEST_PASSWORD)
+    saved = CommunicationPreferences(web=WebPreferences(port=8766))
+    save_communication_preferences(startup.data.communication, saved)
+    page.reload_settings()
+    service = HeldService(saved.web)
+    service.fail = True
+    runtime = WebRuntime(lambda _: service, initial_settings=saved.web)
+    window.bind_web_runtime(runtime)
+    until(lambda: panel.apply_changes.isVisible() and panel.apply_changes.isEnabled())
+    failed = runtime.snapshot()
+    assert failed.error and not failed.owned
+    entered, release = Event(), Event()
+
+    def held_read(request: CommunicationRequest) -> CommunicationResponse:
+        entered.set()
+        assert release.wait(WAIT)
+        return CommunicationResponse(request, (17,), 1, datetime.now(UTC))
+
+    monkeypatch.setattr(page, "_execute", held_read)
+    try:
+        assert page.dispatch(RequestKind.READ)
+        until(entered.is_set)
+        assert not panel.power.isEnabled() and not panel.apply_changes.isEnabled()
+        panel.requested.emit("retry")
+        assert runtime.snapshot() == failed and not panel.operation_error
+    finally:
+        release.set()
         until(lambda: not page.busy)
-        until(lambda: runtime.snapshot().state is WebState.FAILED)
-        until(lambda: runtime.snapshot().state is WebState.FAILED)
-        assert load_communication_preferences(startup.data.communication).web.enabled
-        assert panel.saved.enabled and not runtime.snapshot().owned
-        assert panel.power.text() == text("web_turn_on", window.language)
-        assert not panel.available and panel.apply_changes.isHidden() and page.dirty
-        assert startup.application.snapshot().generation == 0
-        assert startup.application.snapshot().counters == ProductionCounters()
+    assert panel.apply_changes.isEnabled()
+    owner.logout()
+    window.identity_controls.refresh()
+    assert not panel.apply_changes.isEnabled() and not panel.power.isEnabled()
+    panel.requested.emit("retry")
+    assert (
+        runtime.snapshot() == failed and "AuthorizationError" in panel.operation_error
+    )
+    # A restored Engineer can retry, but incomplete cleanup still owns the service.
+    owner.login("Engineer", TEST_PASSWORD).result(WAIT)
+    window.identity_controls.refresh()
+    service.entered.clear()
+    service.release_start.clear()
+    service.incomplete = True
+    try:
+        panel.apply_changes.click()
+        until(service.entered.is_set)
+        assert runtime.snapshot().busy and not panel.power.isEnabled()
+        panel.requested.emit("retry")
+        assert not panel.operation_error
+    finally:
+        service.release_start.set()
+        until(lambda: not runtime.snapshot().busy)
+        service.incomplete = False
+    retained = runtime.snapshot()
+    assert retained.state is WebState.FAILED and retained.owned
+    until(lambda: panel.apply_changes.isHidden() and panel.power.isEnabled())
+    panel.requested.emit("retry")
+    assert runtime.snapshot() == retained and not panel.operation_error
+    service.release_join.clear()
+    try:
+        window.close()
+        until(lambda: runtime.snapshot().closing)
+        assert not panel.power.isEnabled() and panel.apply_changes.isHidden()
+        panel.requested.emit("retry")
+        assert runtime.snapshot().owned and not panel.operation_error
+    finally:
+        service.release_join.set()
+    until(lambda: runtime.closed and not window.isVisible())
 
 
 def test_web_power_only_changes_enable_bit_in_actual_file(

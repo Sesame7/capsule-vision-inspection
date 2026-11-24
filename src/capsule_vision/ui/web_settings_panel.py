@@ -20,7 +20,7 @@ from capsule_vision.configuration.communication_preferences import WebPreference
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 from capsule_vision.web.hosts import local_ipv4_addresses
-from capsule_vision.web.runtime import WebRuntime, WebState
+from capsule_vision.web.runtime import WebRuntime, WebRuntimeSnapshot, WebState
 
 from .style import (
     ChevronComboBox,
@@ -127,10 +127,13 @@ class WebSettingsPanel(QFrame):
         root.addLayout(grid)
         actions = QHBoxLayout()
         actions.addStretch()
+        self._secondary_action = ""
         self.apply_changes = QPushButton()
         self.apply_changes.setProperty("iconAlignment", "leading")
         self.apply_changes.setMinimumHeight(Style.touch)
-        self.apply_changes.clicked.connect(lambda: self.requested.emit("apply"))
+        self.apply_changes.clicked.connect(
+            lambda: self.requested.emit(self._secondary_action)
+        )
         actions.addWidget(self.apply_changes)
         root.addLayout(actions)
         self.actual.setTextFormat(Qt.TextFormat.PlainText)
@@ -212,6 +215,21 @@ class WebSettingsPanel(QFrame):
         self.host.setToolTip(text("web_boundary", language))
         self.refresh()
 
+    def secondary_action(self, observed: WebRuntimeSnapshot | None) -> str:
+        """Resolve the displayed command and recheck it at click admission."""
+        if observed is None:
+            return ""
+        if (
+            observed.state is WebState.FAILED
+            and not observed.owned
+            and self.saved_available
+            and self.saved.enabled
+        ):
+            return "retry"
+        if observed.state is WebState.RUNNING and observed.configuration != self.saved:
+            return "apply"
+        return ""
+
     def refresh(self) -> None:
         observed = self.runtime.snapshot() if self.runtime else None
         colors = theme_colors(self)
@@ -268,9 +286,11 @@ class WebSettingsPanel(QFrame):
             or observed.closing
         )
         self.power.setIcon(production_icon("power", colors.primary))
+        self._secondary_action = self.secondary_action(observed)
+        retry = self._secondary_action == "retry"
         action = text(
             "web_turn_off"
-            if observed is not None and observed.owned
+            if retry or (observed is not None and observed.owned)
             else "web_turn_on",
             self.language,
         )
@@ -297,35 +317,44 @@ class WebSettingsPanel(QFrame):
         self.power.setAccessibleDescription(self.operation_error)
         if self.operation_error:
             self.power.setToolTip(self.power.toolTip() + "\n" + self.operation_error)
-        changed = (
-            observed is not None
-            and observed.state is WebState.RUNNING
-            and observed.configuration != self.saved
-        )
-        apply_key = "web_apply_changes" if self.saved.enabled else "web_apply_disabled"
-        self.apply_changes.setVisible(changed)
+        if retry:
+            apply_key = "web_retry"
+            captions = (apply_key,)
+        else:
+            apply_key = (
+                "web_apply_changes" if self.saved.enabled else "web_apply_disabled"
+            )
+            captions = ("web_apply_changes", "web_apply_disabled")
+        self.apply_changes.setVisible(bool(self._secondary_action))
         self.apply_changes.setIcon(production_icon("reset", colors.primary))
         set_button_caption(
             self.apply_changes,
             text(apply_key, self.language),
-            button_width(
-                self.apply_changes, ("web_apply_changes", "web_apply_disabled")
-            ),
+            button_width(self.apply_changes, captions),
         )
         self.apply_changes.setEnabled(
-            not blocked and not self.dirty and self.saved_available
+            bool(self._secondary_action)
+            and not blocked
+            and self.saved_available
+            and (self.settings_worker_available if retry else not self.dirty)
         )
-        self.apply_changes.setToolTip(
-            text(
-                "permission_engineer"
-                if not self.can_manage
-                else "web_save_first"
-                if self.dirty
-                else apply_key,
-                self.language,
-            )
+        tip = text(
+            "permission_engineer"
+            if not self.can_manage
+            else "web_save_first"
+            if self.dirty and not retry
+            else apply_key,
+            self.language,
         )
-        self.apply_changes.setAccessibleDescription(self.operation_error)
+        endpoint = (
+            f"{text('saved', self.language)} · {self.saved.host}:{self.saved.port}"
+            if retry
+            else ""
+        )
+        self.apply_changes.setToolTip("\n".join(filter(None, (tip, endpoint))))
+        self.apply_changes.setAccessibleDescription(
+            "\n".join(filter(None, (endpoint, self.operation_error)))
+        )
         self.address_refresh.setIcon(
             production_icon(
                 "reset", colors.warning if self._address_error else colors.secondary

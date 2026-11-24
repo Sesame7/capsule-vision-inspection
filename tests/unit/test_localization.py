@@ -1028,7 +1028,7 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 746
+    assert len(maintained) == 747
     assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
@@ -1487,7 +1487,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 912
+    assert len(STRINGS) == 913
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (
@@ -1831,6 +1831,7 @@ def test_catalog_essential_coverage_and_format_fields() -> None:
         "web_observer",
         "web_turn_on",
         "web_turn_off",
+        "web_retry",
         "web_apply_changes",
         "comm_save_settings",
         "comm_discard_question",

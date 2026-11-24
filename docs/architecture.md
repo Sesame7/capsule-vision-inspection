@@ -1824,6 +1824,9 @@ Normal startup owns a Qt-independent `WebRuntime` control thread and at most one
 Web publisher/serial HTTP pair. Production Stop/Start leaves Web independent.
 Missing communication preferences leave Web and PLC reporting disabled; valid
 saved settings restore independently of camera source mode.
+After failed startup with saved enablement and released service resources,
+Turn off can disable future startup. Retry submits a single Start to the Web
+owner using the loaded saved settings.
 On Connections, the Web header power action persists only Web enablement, then starts or
 stops using saved network settings. When the running configuration differs, the
 conditional action restarts Web with enabled saved settings or stops it with a

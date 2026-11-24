@@ -6,6 +6,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from typing import Never
 
 import pytest
 from PySide6.QtTest import QSignalSpy
@@ -38,6 +39,7 @@ from capsule_vision.configuration import (
     load_recipe,
 )
 from capsule_vision.configuration.communication_preferences import (
+    WebPreferences,
     load_communication_preferences,
 )
 from capsule_vision.localization.catalog import text
@@ -231,6 +233,46 @@ def test_communication_failed_save_does_not_claim_confirmed_revision(
     assert write.outcome == "success" and write.operation.after == "[17]"
     assert f"127.0.0.1:{expected_port}" in write.operation.target
     assert not startup.application.snapshot().runtime_owned
+
+
+def test_unconfirmed_web_power_off_invalidates_retry_until_reload(
+    settings_window: tuple[Startup, MainWindow],
+) -> None:
+    startup, window = settings_window
+    page, panel = window.communication, window.communication.web_panel
+    owner = startup.application.identity
+    assert owner is not None
+
+    def unavailable(_settings: WebPreferences) -> Never:
+        raise OSError("isolated Web startup failure")
+
+    runtime = WebRuntime(unavailable)
+    window.bind_web_runtime(runtime)
+    panel.power.click()
+    until(lambda: panel.apply_changes.isVisible() and panel.apply_changes.isEnabled())
+    failed = runtime.snapshot()
+    assert failed.error and not page.dirty
+    refuse(startup.data.audit, "completions", "communication.web_power")
+    panel.power.click()
+    until(lambda: not page.busy)
+    assert not load_communication_preferences(startup.data.communication).web.enabled
+    message = text("configuration_confirmation_incomplete", page.language)
+    assert message in page.preferences_status.text()
+    assert not panel.saved_available and panel.apply_changes.isHidden()
+    panel.requested.emit("retry")
+    assert runtime.snapshot() == failed and message in page.preferences_status.text()
+    assert page.discard_settings.isEnabled()
+    page.reload_settings()
+    assert (
+        panel.saved_available
+        and not panel.saved.enabled
+        and panel.apply_changes.isHidden()
+    )
+    assert runtime.snapshot() == failed
+    latest, _ = owner.audit.revisions("communication", "communication.json").result(
+        WAIT
+    )
+    assert not latest.confirmed
 
 
 @pytest.mark.parametrize(

@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 746 maintained keys across 64 locales. This includes
+Qt interface covers 747 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 94 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 912-key
+Authored coverage does not imply native-speaker verification. The full 913-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -859,10 +859,13 @@ ACKs, watches and current counters are not persisted as Communication settings.
 Terminal Production results have separate History storage. Saving does not alter the
 running Web service. The header power action changes saved enablement; a failed
 write prevents runtime action, while failed startup leaves saved enabled distinct
-from actual FAILED. Apply changes is available only for differing saved/running
-settings, after Web network drafts are saved/discarded. It uses the existing safe
-restart path. The next process launch restores saved enablement. Runtime settings
-and URL are presented separately from edited/saved values.
+from actual FAILED. Once the failed service releases its resources, **Turn off**
+can clear saved auto-start. **Retry** uses the loaded saved IPv4 and port while
+preserving the file and network drafts. A running service with different saved
+settings offers Apply changes after Web network drafts are saved or discarded.
+It uses the existing safe restart path. The next process launch restores saved
+enablement. Runtime settings and URL are presented separately from edited/saved
+values.
 
 ## MachineLayout
 

@@ -915,6 +915,7 @@ STRINGS: dict[str, tuple[str, str]] = {
     "web_stopped": ("已停止", "Stopped"),
     "web_turn_on": ("开启", "Turn on"),
     "web_turn_off": ("关闭", "Turn off"),
+    "web_retry": ("重试", "Retry"),
     "web_apply_changes": ("重启 Web", "Restart Web"),
     "web_apply_disabled": ("按已保存设置停止 Web", "Stop Web per saved settings"),
     "web_power_tip": (

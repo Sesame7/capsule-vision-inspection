@@ -4,6 +4,7 @@ from .languages import Language
 
 EXTRA_STRINGS: dict[Language, dict[str, str]] = {
     "ja": {
+        "web_retry": "再試行",
         "nav_connections": "接続",
         "recipe_min_area": "最小面積 · px²",
         "records_sort": "並べ替え",
@@ -752,6 +753,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "エンジニア権限が必要です",
     },
     "ko": {
+        "web_retry": "다시 시도",
         "nav_connections": "연결",
         "recipe_min_area": "최소 면적 · px²",
         "records_sort": "정렬",
@@ -1500,6 +1502,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "엔지니어 권한 필요",
     },
     "es": {
+        "web_retry": "Reintentar",
         "nav_connections": "Conexiones",
         "recipe_min_area": "Área mín. · px²",
         "records_sort": "Ordenar",
@@ -2248,6 +2251,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Se requiere el rol Ingeniero",
     },
     "pt-BR": {
+        "web_retry": "Tentar novamente",
         "nav_connections": "Conexões",
         "recipe_min_area": "Área mín. · px²",
         "records_sort": "Ordenar",
@@ -2996,6 +3000,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Requer o papel Engenheiro",
     },
     "it": {
+        "web_retry": "Riprova",
         "nav_connections": "Connessioni",
         "recipe_min_area": "Area min. · px²",
         "records_sort": "Ordina",
@@ -3744,6 +3749,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Richiede il ruolo Ingegnere",
     },
     "id": {
+        "web_retry": "Coba lagi",
         "nav_connections": "Koneksi",
         "recipe_min_area": "Luas min. · px²",
         "records_sort": "Urutkan",
@@ -4492,6 +4498,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Perlu peran Insinyur",
     },
     "fr": {
+        "web_retry": "Réessayer",
         "nav_connections": "Connexions",
         "recipe_min_area": "Aire min. · px²",
         "records_sort": "Trier",
@@ -5240,6 +5247,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Rôle Ingénieur requis",
     },
     "de": {
+        "web_retry": "Erneut versuchen",
         "nav_connections": "Verbindungen",
         "recipe_min_area": "Mindestfläche · px²",
         "records_sort": "Sortieren",
@@ -5988,6 +5996,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Rolle Ingenieur erforderlich",
     },
     "ru": {
+        "web_retry": "Повторить",
         "nav_connections": "Подключения",
         "recipe_min_area": "Мин. площадь · px²",
         "records_sort": "Сортировка",
@@ -6736,6 +6745,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Требуется роль «Инженер»",
     },
     "tr": {
+        "web_retry": "Yeniden dene",
         "nav_connections": "Bağlantılar",
         "recipe_min_area": "En küçük alan · px²",
         "records_sort": "Sırala",
@@ -7484,6 +7494,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Mühendis yetkisi gerekli",
     },
     "zh-TW": {
+        "web_retry": "重試",
         "nav_connections": "連線",
         "recipe_min_area": "最小面積 · px²",
         "records_sort": "排序",
@@ -8235,6 +8246,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "需要工程師權限",
     },
     "nl": {
+        "web_retry": "Opnieuw proberen",
         "nav_connections": "Verbindingen",
         "recipe_min_area": "Min. oppervlak · px²",
         "records_sort": "Sorteren",
@@ -8990,6 +9002,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Engineerrechten vereist",
     },
     "pl": {
+        "web_retry": "Ponów próbę",
         "nav_connections": "Połączenia",
         "recipe_min_area": "Min. pole · px²",
         "records_sort": "Sortuj",
@@ -9745,6 +9758,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Wymagana rola Inżynier",
     },
     "uk": {
+        "web_retry": "Повторити",
         "nav_connections": "З’єднання",
         "recipe_min_area": "Мін. площа · px²",
         "records_sort": "Сортування",
@@ -10500,6 +10514,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Вибрати збережений рецепт",
     },
     "ro": {
+        "web_retry": "Reîncearcă",
         "nav_connections": "Conexiuni",
         "recipe_min_area": "Arie min. · px²",
         "records_sort": "Sortare",
@@ -11255,6 +11270,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selectare rețetă salvată",
     },
     "cs": {
+        "web_retry": "Zkusit znovu",
         "nav_connections": "Připojení",
         "recipe_min_area": "Min. plocha · px²",
         "records_sort": "Seřadit",
@@ -12010,6 +12026,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vybrat uloženou recepturu",
     },
     "hu": {
+        "web_retry": "Újrapróbálás",
         "nav_connections": "Kapcsolatok",
         "recipe_min_area": "Min. terület · px²",
         "records_sort": "Rendezés",
@@ -12765,6 +12782,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Mentett recept kiválasztása",
     },
     "sv": {
+        "web_retry": "Försök igen",
         "nav_connections": "Anslutningar",
         "recipe_min_area": "Minsta area · px²",
         "records_sort": "Sortera",
@@ -13520,6 +13538,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Välj sparat recept",
     },
     "da": {
+        "web_retry": "Prøv igen",
         "nav_connections": "Forbindelser",
         "recipe_min_area": "Min. areal · px²",
         "records_sort": "Sortér",
@@ -14275,6 +14294,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vælg gemt recept",
     },
     "fi": {
+        "web_retry": "Yritä uudelleen",
         "nav_connections": "Yhteydet",
         "recipe_min_area": "Vähimmäisala · px²",
         "records_sort": "Lajittele",
@@ -15030,6 +15050,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Valitse tallennettu resepti",
     },
     "nb": {
+        "web_retry": "Prøv igjen",
         "nav_connections": "Tilkoblinger",
         "recipe_min_area": "Min. areal · px²",
         "records_sort": "Sorter",
@@ -15785,6 +15806,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Velg lagret oppskrift",
     },
     "sk": {
+        "web_retry": "Skúsiť znova",
         "nav_connections": "Pripojenia",
         "recipe_min_area": "Min. plocha · px²",
         "records_sort": "Zoradiť",
@@ -16540,6 +16562,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vybrať uloženú receptúru",
     },
     "bg": {
+        "web_retry": "Нов опит",
         "nav_connections": "Връзки",
         "recipe_min_area": "Мин. площ · px²",
         "records_sort": "Сортиране",
@@ -17295,6 +17318,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Избор на запазена рецепта",
     },
     "hr": {
+        "web_retry": "Pokušaj ponovno",
         "nav_connections": "Veze",
         "recipe_min_area": "Min. površina · px²",
         "records_sort": "Poredaj",
@@ -18050,6 +18074,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Odaberi spremljen recept",
     },
     "sr-Latn": {
+        "web_retry": "Pokušaj ponovo",
         "nav_connections": "Veze",
         "recipe_min_area": "Min. površina · px²",
         "records_sort": "Sortiraj",
@@ -18805,6 +18830,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Izaberi sačuvan recept",
     },
     "el": {
+        "web_retry": "Δοκιμή ξανά",
         "nav_connections": "Συνδέσεις",
         "recipe_min_area": "Ελάχ. εμβαδόν · px²",
         "records_sort": "Ταξινόμηση",
@@ -19560,6 +19586,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Επιλογή αποθηκευμένης συνταγής",
     },
     "pt-PT": {
+        "web_retry": "Tentar novamente",
         "nav_connections": "Ligações",
         "recipe_min_area": "Área mín. · px²",
         "records_sort": "Ordenar",
@@ -20315,6 +20342,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selecionar receita guardada",
     },
     "vi": {
+        "web_retry": "Thử lại",
         "nav_connections": "Kết nối",
         "recipe_min_area": "Diện tích tối thiểu · px²",
         "records_sort": "Sắp xếp",
@@ -21070,6 +21098,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "Cần quyền Kỹ sư",
     },
     "ms": {
+        "web_retry": "Cuba lagi",
         "nav_connections": "Sambungan",
         "recipe_min_area": "Luas minimum · px²",
         "records_sort": "Isih",
@@ -21825,6 +21854,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pilih resipi tersimpan",
     },
     "fil": {
+        "web_retry": "Subukan muli",
         "nav_connections": "Koneksyon",
         "recipe_min_area": "Pinakamaliit na lawak · px²",
         "records_sort": "Pagbukud-bukurin",
@@ -22580,6 +22610,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pumili ng naka-save na resipe",
     },
     "sw": {
+        "web_retry": "Jaribu tena",
         "nav_connections": "Miunganisho",
         "recipe_min_area": "Eneo la chini · px²",
         "records_sort": "Panga",
@@ -23335,6 +23366,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Chagua fomula iliyohifadhiwa",
     },
     "th": {
+        "web_retry": "ลองอีกครั้ง",
         "nav_connections": "การเชื่อมต่อ",
         "recipe_min_area": "พื้นที่ขั้นต่ำ · px²",
         "records_sort": "เรียงลำดับ",
@@ -24090,6 +24122,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "ต้องมีสิทธิ์วิศวกร",
     },
     "hi": {
+        "web_retry": "फिर प्रयास करें",
         "nav_connections": "कनेक्शन",
         "recipe_min_area": "न्यूनतम क्षेत्रफल · px²",
         "records_sort": "क्रमबद्ध करें",
@@ -24845,6 +24878,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "permission_engineer": "अभियंता की अनुमति ज़रूरी है",
     },
     "bn": {
+        "web_retry": "আবার চেষ্টা করুন",
         "nav_connections": "সংযোগ",
         "recipe_min_area": "ন্যূনতম ক্ষেত্রফল · px²",
         "records_sort": "সাজান",
@@ -25600,6 +25634,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "সংরক্ষিত রেসিপি বাছুন",
     },
     "ta": {
+        "web_retry": "மீண்டும் முயல்க",
         "nav_connections": "இணைப்புகள்",
         "recipe_min_area": "குறைந்தபட்சப் பரப்பளவு · px²",
         "records_sort": "வரிசைப்படுத்து",
@@ -26355,6 +26390,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "சேமித்த செய்முறையைத் தேர்வு செய்",
     },
     "te": {
+        "web_retry": "మళ్లీ ప్రయత్నించండి",
         "nav_connections": "కనెక్షన్లు",
         "recipe_min_area": "కనిష్ఠ వైశాల్యం · px²",
         "records_sort": "క్రమబద్ధీకరించు",
@@ -27110,6 +27146,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "సేవ్ చేసిన రెసిపీ ఎంచుకో",
     },
     "mr": {
+        "web_retry": "पुन्हा प्रयत्न करा",
         "nav_connections": "जोडण्या",
         "recipe_min_area": "किमान क्षेत्रफळ · px²",
         "records_sort": "क्रमवारी लावा",
@@ -27865,6 +27902,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "जतन केलेली रेसिपी निवडा",
     },
     "ne": {
+        "web_retry": "फेरि प्रयास गर्नुहोस्",
         "nav_connections": "जडानहरू",
         "recipe_min_area": "न्यूनतम क्षेत्रफल · px²",
         "records_sort": "क्रमबद्ध गर्नुहोस्",
@@ -28620,6 +28658,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "सुरक्षित रेसिपी छान्नुहोस्",
     },
     "si": {
+        "web_retry": "නැවත උත්සාහ කරන්න",
         "nav_connections": "සම්බන්ධතා",
         "recipe_min_area": "අවම වර්ගඵලය · px²",
         "records_sort": "අනුපිළිවෙළට සකසන්න",
@@ -29356,6 +29395,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "සුරැකි වට්ටෝරුව තෝරන්න",
     },
     "am": {
+        "web_retry": "እንደገና ሞክር",
         "nav_connections": "ግንኙነቶች",
         "recipe_min_area": "ዝቅተኛ ስፋት · px²",
         "records_sort": "ደርድር",
@@ -30100,6 +30140,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "የተቀመጠ አዘገጃጀት ምረጥ",
     },
     "km": {
+        "web_retry": "ព្យាយាមម្តងទៀត",
         "nav_connections": "ការតភ្ជាប់",
         "recipe_min_area": "ផ្ទៃក្រឡាអប្បបរមា · px²",
         "records_sort": "តម្រៀប",
@@ -30844,6 +30885,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "ជ្រើសរូបមន្តដែលបានរក្សាទុក",
     },
     "lt": {
+        "web_retry": "Bandyti dar kartą",
         "nav_connections": "Ryšiai",
         "recipe_min_area": "Min. plotas · px²",
         "records_sort": "Rikiuoti",
@@ -31599,6 +31641,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Pasirinkti įrašytą receptą",
     },
     "lv": {
+        "web_retry": "Mēģināt vēlreiz",
         "nav_connections": "Savienojumi",
         "recipe_min_area": "Min. laukums · px²",
         "records_sort": "Kārtot",
@@ -32354,6 +32397,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Atlasīt saglabātu recepti",
     },
     "et": {
+        "web_retry": "Proovi uuesti",
         "nav_connections": "Ühendused",
         "recipe_min_area": "Vähim pindala · px²",
         "records_sort": "Sordi",
@@ -33109,6 +33153,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Vali salvestatud retsept",
     },
     "sl": {
+        "web_retry": "Poskusi znova",
         "nav_connections": "Povezave",
         "recipe_min_area": "Najm. površina · px²",
         "records_sort": "Razvrsti",
@@ -33864,6 +33909,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Izberi shranjen recept",
     },
     "sq": {
+        "web_retry": "Provo përsëri",
         "nav_connections": "Lidhjet",
         "recipe_min_area": "Sipërfaqja min. · px²",
         "records_sort": "Rendit",
@@ -34619,6 +34665,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Zgjidh recetën e ruajtur",
     },
     "ca": {
+        "web_retry": "Torna-ho a provar",
         "nav_connections": "Connexions",
         "recipe_min_area": "Àrea mín. · px²",
         "records_sort": "Ordena",
@@ -35374,6 +35421,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Selecciona una recepta desada",
     },
     "af": {
+        "web_retry": "Probeer weer",
         "nav_connections": "Verbindings",
         "recipe_min_area": "Min. oppervlakte · px²",
         "records_sort": "Sorteer",
@@ -36129,6 +36177,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Kies gestoorde resep",
     },
     "zu": {
+        "web_retry": "Zama futhi",
         "nav_connections": "Ukuxhumeka",
         "recipe_min_area": "Indawo encane kakhulu · px²",
         "records_sort": "Hlunga",
@@ -36873,6 +36922,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Khetha iresiphi elondoloziwe",
     },
     "ha": {
+        "web_retry": "Sake gwadawa",
         "nav_connections": "Haɗe-haɗe",
         "recipe_min_area": "Mafi ƙarancin fili · px²",
         "records_sort": "Jera",
@@ -37617,6 +37667,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Zaɓi tsarin dubawa da aka ajiye",
     },
     "kk": {
+        "web_retry": "Қайталап көру",
         "nav_connections": "Қосылымдар",
         "recipe_min_area": "Ең кіші аудан · px²",
         "records_sort": "Сұрыптау",
@@ -38372,6 +38423,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Сақталған рецептті таңдау",
     },
     "uz": {
+        "web_retry": "Qayta urinish",
         "nav_connections": "Ulanishlar",
         "recipe_min_area": "Eng kichik yuza · px²",
         "records_sort": "Saralash",
@@ -39127,6 +39179,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saqlangan retseptni tanlash",
     },
     "mn": {
+        "web_retry": "Дахин оролдох",
         "nav_connections": "Холболтууд",
         "recipe_min_area": "Хамгийн бага талбай · px²",
         "records_sort": "Эрэмбэлэх",
@@ -39882,6 +39935,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Хадгалсан жор сонгох",
     },
     "so": {
+        "web_retry": "Isku day mar kale",
         "nav_connections": "Xiriirrada",
         "recipe_min_area": "Bedka ugu yar · px²",
         "records_sort": "Kala hormari",
@@ -40637,6 +40691,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Dooro habraac kaydsan",
     },
     "tk": {
+        "web_retry": "Gaýtadan synanyş",
         "nav_connections": "Birikmeler",
         "recipe_min_area": "Iň kiçi meýdan · px²",
         "records_sort": "Tertiple",
@@ -41383,6 +41438,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saklanan resepti saýla",
     },
     "tg": {
+        "web_retry": "Такроран кӯшиш кардан",
         "nav_connections": "Пайвастҳо",
         "recipe_min_area": "Масоҳати камтарин · px²",
         "records_sort": "Мураттабсозӣ",
@@ -42138,6 +42194,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Интихоби дастури захирашуда",
     },
     "az-Latn": {
+        "web_retry": "Yenidən cəhd et",
         "nav_connections": "Bağlantılar",
         "recipe_min_area": "Minimum sahə · px²",
         "records_sort": "Sırala",
@@ -42893,6 +42950,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Saxlanmış resepti seç",
     },
     "mg": {
+        "web_retry": "Andramo indray",
         "nav_connections": "Fifandraisana",
         "recipe_min_area": "Velarana farany ambany · px²",
         "records_sort": "Alaharo",
@@ -43637,6 +43695,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Fidio ny raikipohy voatahiry",
     },
     "ky": {
+        "web_retry": "Кайра аракет кылуу",
         "nav_connections": "Туташуулар",
         "recipe_min_area": "Эң кичине аянт · px²",
         "records_sort": "Иреттөө",
@@ -44392,6 +44451,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Сакталган рецептти тандоо",
     },
     "ka": {
+        "web_retry": "ხელახლა ცდა",
         "nav_connections": "კავშირები",
         "recipe_min_area": "მინ. ფართობი · px²",
         "records_sort": "დალაგება",
@@ -45147,6 +45207,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "შენახული რეცეპტის არჩევა",
     },
     "hy": {
+        "web_retry": "Կրկին փորձել",
         "nav_connections": "Կապեր",
         "recipe_min_area": "Նվազ. մակերես · px²",
         "records_sort": "Տեսակավորել",
@@ -45902,6 +45963,7 @@ EXTRA_STRINGS: dict[Language, dict[str, str]] = {
         "select_saved_recipe": "Ընտրել պահպանված բաղադրատոմսը",
     },
     "ti": {
+        "web_retry": "ዳግማይ ፈትን",
         "nav_connections": "ርክባት",
         "recipe_min_area": "ዝተሓተ ስፍሓት · px²",
         "records_sort": "ስራዕ",

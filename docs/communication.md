@@ -683,6 +683,16 @@ Communication worker. A Power request during that time leaves saved enablement,
 the Audit Trail, the Web runtime and its feedback unchanged. A running service
 keeps its browser link available during Diagnostics.
 
+If startup fails with auto-start enabled and the Web owner has released its
+service resources, **Turn off** clears saved auto-start through the usual
+audited Power action. **Retry** in the secondary action slot starts the loaded
+saved endpoint once. Its tooltip identifies that endpoint. Both actions preserve
+address and port drafts. Engineers and Administrators can retry when the
+Communication and Web workers are idle. A retained service requires cleanup
+before Retry can appear. If Power publishes but Audit confirmation fails, the
+failure stays visible. Discard/Reload can verify the saved settings before they
+are used again for Retry.
+
 **Restart Web** appears when saved enabled settings differ from the running Web
 configuration. If the saved selection is disabled, the action reads
 **Stop Web per saved settings**. Save or Discard Web network edits before
