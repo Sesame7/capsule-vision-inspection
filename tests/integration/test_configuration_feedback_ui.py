@@ -1,11 +1,13 @@
 """Page-local feedback and evidence-based retirement of startup warnings."""
 
+import json
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 from PySide6.QtWidgets import QApplication
+from tests.support.configuration import communication_document
 from tests.support.qt import close_window, ensure_test_fonts, until
 from tests.support.recipe_ui import edit, select_production_recipe
 from tests.support.startup import authenticated_startup, saved_data
@@ -23,7 +25,10 @@ from capsule_vision.ui.bootstrap import create_window
 from capsule_vision.ui.future_delivery import FutureDelivery
 from capsule_vision.ui.main_window import MainWindow
 
-INVALID_DOCUMENTS = ('{"schema_version":99}', '{"status":{"enabled":false}}')
+INVALID_DOCUMENTS = (
+    '{"schema_version":99}',
+    json.dumps(communication_document(status={"enabled": False})),
+)
 
 
 @contextmanager
@@ -51,7 +56,9 @@ def feedback_window(
         delivery.detach()
 
 
-@pytest.mark.parametrize("document", ("{}", *INVALID_DOCUMENTS))
+@pytest.mark.parametrize(
+    "document", (json.dumps(communication_document()), *INVALID_DOCUMENTS)
+)
 @pytest.mark.parametrize("language", ("zh", "en"))
 def test_recipe_save_feedback_is_independent_of_communication(
     qapp: QApplication, tmp_path: Path, document: str, language: Language

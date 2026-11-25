@@ -626,11 +626,23 @@ Communication warning; other startup warnings retain their existing lifecycle.
 Recipe's local status and tooltip exclude Communication warnings while preserving
 Recipe feedback and relevant setup diagnostics.
 
-The versionless object permits optional `reporting`, `diagnostic`, `web` and `status`
-sections; an existing `{}` means legacy UDP defaults, with reporting and Web
-disabled. Unknown or duplicate fields and invalid present types/ranges are rejected. Superseded
-`endpoint` envelopes, `transport` fields and protocol aliases are not accepted;
-startup reports them without rewriting the file. Explicit Save writes this format.
+Every saved Communication file requires two flat objects. `reporting` specifies
+an `enabled` boolean and explicit `mode` and `protocol` strings. `diagnostic` specifies its own
+`protocol`. Save always writes these fields, including when Reporting is disabled.
+`web` and `status` are optional. Saving the application defaults produces this
+versionless definition.
+
+```json
+{
+  "reporting": {"enabled": false, "mode": "four_cycle", "protocol": "fins_tcp"},
+  "diagnostic": {"protocol": "fins_tcp"}
+}
+```
+
+An empty top-level object, a missing required field, an unknown or duplicate field, or an
+invalid type or range fails validation. This includes old `endpoint` envelopes,
+`transport` fields and protocol aliases. Startup reports the issue and preserves
+the file for explicit recovery.
 
 The flat `status` section replaces the obsolete `alarm` section. It accepts
 `enabled` (false), `protocol` (`fins_tcp` only), numeric IPv4 `host`
@@ -676,7 +688,14 @@ its next-Start boundary. Runtime reservations also protect retiring status
 writes and frozen active reporting ranges. See the [status service contract](communication.md#plc-status-service-and-alarm-monitoring).
 
 ```json
-{"status": {"enabled": true, "protocol": "fins_tcp", "host": "192.168.251.1", "word_address": 18, "heartbeat_address": 46, "fault_address": 47, "running_address": 16}}
+{
+  "reporting": {"enabled": false, "mode": "four_cycle", "protocol": "fins_tcp"},
+  "diagnostic": {"protocol": "fins_tcp"},
+  "status": {
+    "enabled": true, "protocol": "fins_tcp", "host": "192.168.251.1",
+    "word_address": 18, "heartbeat_address": 46, "fault_address": 47, "running_address": 16
+  }
+}
 ```
 
 The Status card provides one common Protocol/IPv4/Port row, then equal-width
@@ -744,9 +763,9 @@ The codecs construct the same immutable protocol-specific endpoint values for
 Diagnostics and reporting. Reporting's address/capacity belong to its separate
 in-memory settings; this does not add an endpoint envelope to the saved format.
 
-Reporting and Diagnostics are flat endpoint objects. `protocol` is `fins_udp`
-(omitted default) or `fins_tcp`; `host` defaults to `127.0.0.1`, `port` to 9600
-(1–65535), and `timeout` to 1 second (0.05–30). UDP alone permits `destination`
+For either FINS protocol (`fins_udp` or `fins_tcp`), `host` defaults to
+`127.0.0.1`, `port` to 9600 (1–65535), and `timeout` to 1 second (0.05–30).
+UDP alone permits `destination`
 and `source` objects: defaults are network/node/unit 0/2/0 and 0/1/0 respectively;
 individual routing fields may be omitted, with existing FINS ranges enforced.
 TCP rejects persisted UDP routing fields and negotiates its nodes internally.
@@ -762,16 +781,18 @@ inapplicable to the selected protocol. For example, default port and
 Unit ID are omitted:
 
 ```json
-{"diagnostic": {"protocol": "modbus_tcp", "host": "192.168.1.20"}}
+{
+  "reporting": {"enabled": false, "mode": "four_cycle", "protocol": "fins_tcp"},
+  "diagnostic": {"protocol": "modbus_tcp", "host": "192.168.1.20"}
+}
 ```
 
 Holding Register addresses are zero-based, independent of FINS DM/WR. Watch
 groups remain session-only and are never implicitly converted by a protocol edit.
 
-Reporting additionally permits `enabled` (default false), `base_address` and
-`mode`. The only values are `per_cycle`, `single_cycle` and `four_cycle`; omitted `mode` in
-existing documents retains `per_cycle`. The Qt Merge choices 0, 1 and 4 map
-directly to these values; the other displayed counts are disabled. No numeric
+Reporting accepts `base_address`. Its required `mode` is one of `per_cycle`,
+`single_cycle` and `four_cycle`. The Qt Merge choices 0, 1 and 4 map
+directly to these values. The other displayed counts are disabled. No numeric
 group-count field is persisted. Single- and four-cycle modes are saved explicitly and
 require `protocol: "fins_tcp"` with base 49 or 149, even when disabled. Enabled
 single-/four-cycle Start additionally requires Basler. Counter reads use base−1, bitmap
@@ -799,20 +820,20 @@ For example, an enabled Modbus reporting selection with default port/timeout/Uni
 ID serializes as:
 
 ```json
-{"reporting": {"protocol": "modbus_tcp", "enabled": true, "base_address": 100}}
+{
+  "reporting": {"enabled": true, "mode": "per_cycle", "protocol": "modbus_tcp", "base_address": 100},
+  "diagnostic": {"protocol": "fins_tcp"}
+}
 ```
 
-Save omits fields and whole sections equal to the persisted schema's legacy
-defaults, independently of initial in-memory defaults. Newly saved FINS/TCP
-reporting and diagnostic sections always contain `"protocol": "fins_tcp"`, even
-when disabled and otherwise unchanged. Nondefault settings remain
-even when a service is disabled; endpoint sections written by Save identify their
-protocol explicitly. For example:
+Save retains nondefault endpoint and service settings even when a service is
+disabled. Reporting and Diagnostics may use different protocols.
 
 ```json
 {
   "reporting": {
     "protocol": "fins_tcp",
+    "mode": "per_cycle",
     "host": "192.168.251.1",
     "enabled": true,
     "base_address": 120
@@ -832,23 +853,22 @@ validation. Remove that key explicitly to load the file. The host must be
 unavailable adapter addresses; actual service startup checks local assignment and
 subnet validity. There is no DNS, wildcard fallback or automatic IP substitution.
 
-A missing file leaves reporting and Web disabled, without blocking valid
+A missing file leaves Reporting, Web and Status disabled, without blocking valid
 Production startup or creating a file. Connections shows **Defaults · not saved**;
 reporting initially selects `four_cycle`, FINS/TCP and W49, disabled. Diagnostics
 also initially uses FINS/TCP at 127.0.0.1:9600 with a one-second timeout, as does
 the reporting endpoint. Explicit engineering launchers retain their per-cycle
 defaults. The initial Web endpoint is 127.0.0.1:8765. These are editing defaults,
 not a saved Production destination. Camera source mode never selects a PLC endpoint.
-An existing empty or partially populated document still decodes omitted reporting
-and Diagnostics protocols as FINS/UDP.
 No PLC connection or reporting activity starts merely from loading initial values.
 Explicit Save establishes the file; Discard cannot reload a nonexistent file and
 preserves the draft with feedback. Valid files restore their exact saved
 settings, including enabled Web and PLC status communication, without rewriting them.
-Invalid top-level files remain unchanged, with visible recovery
-feedback; reporting and Web stay disabled in memory until reviewed. An explicit
-Save replaces the invalid file with validated settings. If a saved Web address is
-no longer assigned or its port cannot bind, optional service startup fails visibly
+Invalid top-level files produce visible recovery feedback and leave Reporting,
+Web and Status disabled. An authorized Save can replace the file with reviewed
+settings. Diagnostics requires a successful explicit Reload after a startup
+validation error. If a saved Web address is no longer assigned or its port
+cannot bind, optional service startup fails visibly
 without changing the file or invalidating Production readiness.
 
 Restored reporting selection is frozen at the next Production Start, never a

@@ -11,6 +11,7 @@ from time import monotonic
 import pytest
 from PySide6.QtWidgets import QApplication
 from tests.support.application import WAIT
+from tests.support.configuration import communication_document
 from tests.support.qt import close_window, until
 from tests.support.reporting import readback, seed, server
 from tests.support.startup import close, normal_replay, replay_state, saved_data
@@ -335,7 +336,7 @@ def test_obsolete_web_interval_is_rejected_without_overwriting_saved_settings(
 ) -> None:
     path = ApplicationData.at_entry(tmp_path).communication
     path.parent.mkdir(parents=True, exist_ok=True)
-    raw = json.dumps({"web": {"enabled": True, "interval_ms": 2000}})
+    raw = json.dumps(communication_document(web={"enabled": True, "interval_ms": 2000}))
     path.write_text(raw, encoding="utf-8")
     startup = load_startup(ApplicationData.at_entry(tmp_path))
     try:

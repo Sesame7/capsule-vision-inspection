@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from tests.support.application import WAIT
+from tests.support.configuration import communication_document
 from tests.support.qt import (
     VISUAL_CASES,
     VISUAL_LANGUAGES,
@@ -1540,7 +1541,12 @@ def test_reporting_base_draft_save_discard_and_protocol_visibility(
     until(lambda: not page.busy)
     assert not page.dirty
     stored = json.loads(startup.data.communication.read_text(encoding="utf-8"))
-    assert stored["reporting"] == {"protocol": "fins_tcp", "base_address": 120}
+    assert stored["reporting"] == {
+        "protocol": "fins_tcp",
+        "enabled": False,
+        "mode": "per_cycle",
+        "base_address": 120,
+    }
     assert stored["diagnostic"] == {"protocol": "fins_tcp"}
     assert panel.controller.reporting_selection().settings.base_address == 120
     assert not panel.controller.reporting_selection().enabled
@@ -1671,11 +1677,23 @@ def test_invalid_web_bind_and_atomic_failure_keep_previous_settings(
     assert "controlled save failure" in page.preferences_status.toolTip()
 
 
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"schema_version": 99},
+        {},
+        communication_document(
+            reporting={"mode": "four_cycle", "protocol": "fins_tcp"},
+            diagnostic={"protocol": "fins_tcp", "port": 9601},
+            web={"enabled": True},
+        ),
+    ],
+)
 def test_invalid_file_is_preserved_visible_and_recovers_without_network(
-    qapp: QApplication, tmp_path: Path
+    qapp: QApplication, tmp_path: Path, document: dict[str, object]
 ) -> None:
     data = saved_data(tmp_path)
-    data.communication.write_text('{"schema_version":99}', encoding="utf-8")
+    data.communication.write_text(json.dumps(document), encoding="utf-8")
     before = data.communication.read_bytes()
     startup = authenticated_startup(data)
     delivery = FutureDelivery()
@@ -1685,6 +1703,8 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
         assert startup.communication_error
         assert not startup.communication.web.enabled
         assert not startup.communication.reporting.enabled
+        assert not window.communication.web_panel.saved_available
+        assert not window.communication.watch_once.isEnabled()
         assert not window.communication.write_button.isEnabled()
         assert (
             startup.communication_error
@@ -1699,6 +1719,7 @@ def test_invalid_file_is_preserved_visible_and_recovers_without_network(
         assert (
             load_communication_preferences(data.communication) == startup.communication
         )
+        assert json.loads(data.communication.read_bytes()) == communication_document()
         assert not window.communication.write_button.isEnabled()
         window.communication.reload_settings()
         assert window.communication.write_button.isEnabled()
@@ -1767,10 +1788,7 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
         page.persist_settings()  # Explicitly establish neutral disabled settings.
         until(lambda: not page.busy)
         payload = data.communication.read_bytes()
-        assert json.loads(payload) == {
-            "reporting": {"protocol": "fins_tcp", "mode": "four_cycle"},
-            "diagnostic": {"protocol": "fins_tcp"},
-        }
+        assert json.loads(payload) == communication_document()
         assert not page.dirty and page.web_panel.saved_available
         assert page.preferences_status.text() == text("saved", window.language)
         assert not page.preferences_status.toolTip()
@@ -1790,16 +1808,15 @@ def test_missing_preferences_are_unsaved_disabled_and_source_independent(
     assert not sockets
 
 
-@pytest.mark.parametrize("protocol", [None, "fins_udp", "fins_tcp", "modbus_tcp"])
+@pytest.mark.parametrize("protocol", ["fins_udp", "fins_tcp", "modbus_tcp"])
 def test_existing_preferences_keep_protocol_in_both_panels(
-    qapp: QApplication, tmp_path: Path, protocol: str | None
+    qapp: QApplication, tmp_path: Path, protocol: str
 ) -> None:
     data = ApplicationData.at_entry(tmp_path)
     data.communication.parent.mkdir(parents=True)
-    raw = (
-        {section: {"protocol": protocol} for section in ("reporting", "diagnostic")}
-        if protocol is not None
-        else {}
+    raw = communication_document(
+        reporting={"protocol": protocol, "enabled": False, "mode": "per_cycle"},
+        diagnostic={"protocol": protocol},
     )
     data.communication.write_text(json.dumps(raw), encoding="utf-8")
     original = data.communication.read_bytes()
@@ -1809,9 +1826,9 @@ def test_existing_preferences_keep_protocol_in_both_panels(
     try:
         page, panel = window.communication, window.communication.reporting_panel
         assert panel is not None
-        expected = {"fins_udp": 0, "fins_tcp": 1, "modbus_tcp": 2}[
-            protocol or "fins_udp"
-        ]
+        assert not startup.communication_error
+        assert startup.communication.reporting.settings.mode is ReportingMode.PER_CYCLE
+        expected = {"fins_udp": 0, "fins_tcp": 1, "modbus_tcp": 2}[protocol]
         assert panel.protocol.currentIndex() == page.protocol.currentIndex() == expected
         assert panel.selection() == startup.communication.reporting
         assert page.diagnostic_selection() == startup.communication.diagnostic
@@ -2561,6 +2578,7 @@ def test_modbus_reporting_required_base_save_discard_and_protocol_fields(
     assert not page.dirty and "next" in text("plc_next_start", "en").lower()
     assert json.loads(saved.read_text(encoding="utf-8"))["reporting"] == {
         "protocol": "modbus_tcp",
+        "mode": "per_cycle",
         "enabled": True,
         "base_address": 0,
         "unit_id": 7,

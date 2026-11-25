@@ -100,7 +100,7 @@ class StatusPreferences:
 
 @dataclass(frozen=True, slots=True)
 class CommunicationPreferences:
-    """Initial editing values; persisted omissions retain their legacy defaults."""
+    """Application defaults for first use and optional configuration fields."""
 
     reporting: ReportingSelection = ReportingSelection(
         settings=ReportingSettings(
@@ -118,22 +118,17 @@ class CommunicationPreferences:
         self.status.validate_reporting(self.reporting.settings, running_only=True)
 
 
-# Existing documents, including {}, must keep their original UDP interpretation.
-# Save compares with these schema defaults so initial TCP sections are explicit.
-_PERSISTED_DEFAULTS = CommunicationPreferences(
-    reporting=ReportingSelection(),
-    diagnostic=FinsUdpEndpoint(),
-    web=WebPreferences(enabled=False),
-)
-
-
-def _object(value: object, fields: set[str], context: str) -> dict[str, object]:
+def _object(
+    value: object, fields: set[str], context: str, *, required: tuple[str, ...] = ()
+) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{context} must be an object")
     # JSON objects have string keys; keep the untyped decoder at this boundary.
     result = cast(dict[str, object], value)
     if set(result) - fields:
         raise ValueError(f"Unknown {context} fields: {sorted(set(result) - fields)}")
+    if missing := set(required) - result.keys():
+        raise ValueError(f"Missing {context} fields: {sorted(missing)}")
     return result
 
 
@@ -165,31 +160,41 @@ def _address(value: object, default: FinsAddress) -> FinsAddress:
     )
 
 
-def _endpoint(value: object) -> Endpoint:
+_ENDPOINT_DEFAULTS: dict[str, Endpoint] = {
+    endpoint.protocol: endpoint
+    for endpoint in (FinsUdpEndpoint(), FinsTcpEndpoint(), ModbusSettings())
+}
+
+
+def _endpoint(value: object, section: str) -> Endpoint:
     obj = _object(
         value,
         {"host", "port", "timeout", "protocol", "destination", "source", "unit_id"},
-        "endpoint",
+        section,
+        required=("protocol",),
     )
-    protocol = _text(obj.get("protocol", "fins_udp"), "protocol")
-    if protocol not in ("fins_udp", "fins_tcp", "modbus_tcp"):
+    protocol = _text(obj["protocol"], "protocol")
+    defaults = _ENDPOINT_DEFAULTS.get(protocol)
+    if defaults is None:
         raise ValueError("Unsupported endpoint protocol")
     if protocol != "fins_udp" and {"source", "destination"} & obj.keys():
         raise ValueError("UDP routing fields are applicable only to FINS/UDP")
     if protocol != "modbus_tcp" and "unit_id" in obj:
         raise ValueError("unit_id is applicable only to Modbus")
-    timeout = obj.get("timeout", 1.0)
+    timeout = obj.get("timeout", defaults.timeout)
     if type(timeout) not in (int, float) or not isinstance(timeout, (int, float)):
         raise ValueError("timeout must be numeric")
-    host = _text(obj.get("host", "127.0.0.1"), "host")
-    port = _integer(obj.get("port", 502 if protocol == "modbus_tcp" else 9600), "port")
-    if protocol == "modbus_tcp":
+    host = _text(obj.get("host", defaults.host), "host")
+    port = _integer(obj.get("port", defaults.port), "port")
+    if isinstance(defaults, ModbusSettings):
         return ModbusSettings(
-            host, port, float(timeout), _integer(obj.get("unit_id", 255), "unit_id")
+            host,
+            port,
+            float(timeout),
+            _integer(obj.get("unit_id", defaults.unit_id), "unit_id"),
         )
-    if protocol == "fins_tcp":
+    if isinstance(defaults, FinsTcpEndpoint):
         return FinsTcpEndpoint(host, port, float(timeout))
-    defaults = FinsUdpEndpoint()
     return FinsUdpEndpoint(
         host,
         port,
@@ -206,12 +211,13 @@ def _reporting(value: dict[str, object]) -> ReportingSettings:
                 key: item
                 for key, item in value.items()
                 if key not in ("enabled", "base_address", "mode")
-            }
+            },
+            "reporting",
         ),
         _integer(value["base_address"], "base_address")
         if "base_address" in value
         else None,
-        mode=ReportingMode(_text(value.get("mode", "per_cycle"), "reporting.mode")),
+        mode=ReportingMode(_text(value["mode"], "reporting.mode")),
     )
 
 
@@ -248,7 +254,8 @@ def _status(value: object) -> StatusPreferences:
                     "running_address",
                 )
             },
-        }
+        },
+        "status",
     )
     if not isinstance(endpoint, FinsTcpEndpoint):
         raise ValueError("PLC status requires FINS/TCP")
@@ -279,9 +286,10 @@ def load_communication_preferences(
             raw,
             {"reporting", "diagnostic", "web", "status"},
             "communication",
+            required=("reporting", "diagnostic"),
         )
         reporting = _object(
-            obj.get("reporting", {}),
+            obj["reporting"],
             {
                 "enabled",
                 "mode",
@@ -295,12 +303,14 @@ def load_communication_preferences(
                 "unit_id",
             },
             "reporting",
+            required=("enabled", "mode"),
         )
         web = _object(obj.get("web", {}), {"enabled", "host", "port"}, "web")
         selected_reporting = ReportingSelection(
-            _boolean(reporting.get("enabled", False), "reporting.enabled"),
+            _boolean(reporting["enabled"], "reporting.enabled"),
             _reporting(reporting),
         )
+        diagnostic = _endpoint(obj["diagnostic"], "diagnostic")
         try:
             status = _status(obj["status"]) if "status" in obj else StatusPreferences()
             if selected_reporting.enabled and status.enabled:
@@ -313,14 +323,14 @@ def load_communication_preferences(
             status = StatusPreferences()
             # Preserve valid reporting without creating a conflicting service.
             # The returned selection remains disabled; loading does not repair disk.
-        defaults = _PERSISTED_DEFAULTS
+        web_defaults = CommunicationPreferences().web
         return CommunicationPreferences(
             selected_reporting,
-            _endpoint(obj.get("diagnostic", {})),
+            diagnostic,
             WebPreferences(
-                _boolean(web.get("enabled", defaults.web.enabled), "web.enabled"),
-                _text(web.get("host", defaults.web.host), "web.host"),
-                _integer(web.get("port", defaults.web.port), "web.port"),
+                _boolean(web.get("enabled", web_defaults.enabled), "web.enabled"),
+                _text(web.get("host", web_defaults.host), "web.host"),
+                _integer(web.get("port", web_defaults.port), "web.port"),
             ),
             status,
         )
@@ -335,9 +345,7 @@ def load_communication_preferences(
 
 
 def _endpoint_json(settings: Endpoint) -> dict[str, object]:
-    default = (
-        ModbusSettings() if isinstance(settings, ModbusSettings) else FinsUdpEndpoint()
-    )
+    default = _ENDPOINT_DEFAULTS[settings.protocol]
     result: dict[str, object] = {"protocol": settings.protocol}
     for field in ("host", "port", "timeout"):
         if getattr(settings, field) != getattr(default, field):
@@ -371,22 +379,20 @@ def save_communication_preferences(path: Path, value: CommunicationPreferences) 
 def communication_publication(
     path: Path, value: CommunicationPreferences
 ) -> ConfigurationPublication:
-    defaults = _PERSISTED_DEFAULTS
-    payload: dict[str, object] = {}
-    if value.reporting != defaults.reporting:
-        reporting = _endpoint_json(value.reporting.settings.endpoint)
-        if value.reporting.enabled:
-            reporting["enabled"] = True
-        if value.reporting.settings.mode is not ReportingMode.PER_CYCLE:
-            reporting["mode"] = value.reporting.settings.mode.value
-        if value.reporting.settings.base_address is not None and (
-            isinstance(value.reporting.settings.endpoint, ModbusSettings)
-            or value.reporting.settings.base_address != 49
-        ):
-            reporting["base_address"] = value.reporting.settings.base_address
-        payload["reporting"] = reporting
-    if value.diagnostic != defaults.diagnostic:
-        payload["diagnostic"] = _endpoint_json(value.diagnostic)
+    defaults = CommunicationPreferences()
+    settings = value.reporting.settings
+    reporting = _endpoint_json(settings.endpoint)
+    reporting["enabled"] = value.reporting.enabled
+    reporting["mode"] = settings.mode.value
+    if settings.base_address is not None and (
+        isinstance(settings.endpoint, ModbusSettings)
+        or settings.base_address != defaults.reporting.settings.base_address
+    ):
+        reporting["base_address"] = settings.base_address
+    payload: dict[str, object] = {
+        "reporting": reporting,
+        "diagnostic": _endpoint_json(value.diagnostic),
+    }
     web = {
         field: getattr(value.web, field)
         for field in ("enabled", "host", "port")

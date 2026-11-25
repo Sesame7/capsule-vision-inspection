@@ -9,6 +9,7 @@ from threading import Event
 
 import pytest
 from tests.support.application import WAIT
+from tests.support.configuration import communication_document
 from tests.support.fins_tcp import TcpPeer
 from tests.support.startup import (
     TEST_PASSWORD,
@@ -139,9 +140,11 @@ def test_failed_group_does_not_publish_partial_values_or_retry(tmp_path: Path) -
         {"status": {"host": "0.0.0.0", "fault_address": 47}},
     ),
 )
-def test_invalid_target_rejects_before_transport(tmp_path: Path, raw: object) -> None:
+def test_invalid_target_rejects_before_transport(
+    tmp_path: Path, raw: dict[str, object]
+) -> None:
     path = tmp_path / "communication.json"
-    path.write_text(json.dumps(raw), encoding="utf-8")
+    path.write_text(json.dumps(communication_document(**raw)), encoding="utf-8")
     calls: list[CommunicationRequest] = []
 
     def forbidden(request: CommunicationRequest) -> CommunicationResponse:

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from tests.support.configuration import communication_document
 
 from capsule_vision.communication import (
     FinsAddress,
@@ -34,14 +35,15 @@ def test_modbus_reporting_sparse_round_trip_and_independent_diagnostics(
     path = tmp_path / "communication.json"
     path.write_text(
         json.dumps(
-            {
-                "reporting": {
+            communication_document(
+                reporting={
                     "protocol": "modbus_tcp",
+                    "mode": "per_cycle",
                     "host": "192.0.2.10",
                     "enabled": True,
                     "base_address": base,
                 }
-            }
+            )
         ),
         encoding="utf-8",
     )
@@ -61,10 +63,12 @@ def test_modbus_reporting_sparse_round_trip_and_independent_diagnostics(
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "reporting": {
             "protocol": "modbus_tcp",
+            "mode": "per_cycle",
             "host": "192.0.2.10",
             "enabled": True,
             "base_address": base,
-        }
+        },
+        "diagnostic": {"protocol": "fins_tcp"},
     }
     value = replace(
         value,
@@ -83,6 +87,7 @@ def test_modbus_reporting_sparse_round_trip_and_independent_diagnostics(
     assert load_communication_preferences(path) == value
     assert json.loads(path.read_text(encoding="utf-8"))["reporting"] == {
         "protocol": "modbus_tcp",
+        "mode": "per_cycle",
         "host": "192.0.2.10",
         "port": 1502,
         "timeout": 2,
@@ -103,10 +108,16 @@ def test_disabled_modbus_reporting_can_be_saved_without_choosing_a_base(
     )
     save_communication_preferences(path, value)
     assert json.loads(path.read_text(encoding="utf-8")) == {
-        "reporting": {"protocol": "modbus_tcp"},
+        "reporting": {"protocol": "modbus_tcp", "mode": "per_cycle", "enabled": False},
         "diagnostic": {"protocol": "fins_tcp"},
     }
     assert load_communication_preferences(path) == value
+
+    enabled = {"protocol": "modbus_tcp", "mode": "per_cycle", "enabled": True}
+    with pytest.raises(ConfigurationError, match="base"):
+        load_communication_preferences(
+            path, content=json.dumps(communication_document(reporting=enabled)).encode()
+        )
 
 
 @pytest.mark.parametrize(
@@ -137,11 +148,12 @@ def test_modbus_reporting_strict_fields_and_bounds(
     path = tmp_path / "communication.json"
     obj: dict[str, object] = {
         "protocol": "modbus_tcp",
+        "mode": "per_cycle",
         "enabled": True,
         "base_address": 100,
         field: value,
     }
-    path.write_text(json.dumps({"reporting": obj}), encoding="utf-8")
+    path.write_text(json.dumps(communication_document(reporting=obj)), encoding="utf-8")
     before = path.read_bytes()
     with pytest.raises(ConfigurationError):
         load_communication_preferences(path)
@@ -152,17 +164,15 @@ def test_modbus_sparse_diagnostic_defaults_and_explicit_settings(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "communication.json"
-    path.write_text(
-        '{"diagnostic":{"protocol":"modbus_tcp","host":"192.168.1.20"}}',
-        encoding="utf-8",
+    document = communication_document(
+        diagnostic={"protocol": "modbus_tcp", "host": "192.168.1.20"}
     )
+    path.write_text(json.dumps(document), encoding="utf-8")
     value = load_communication_preferences(path)
     assert value.diagnostic == ModbusSettings("192.168.1.20")
-    assert value.reporting == ReportingSelection()
+    assert value.reporting == CommunicationPreferences().reporting
     save_communication_preferences(path, value)
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "diagnostic": {"protocol": "modbus_tcp", "host": "192.168.1.20"}
-    }
+    assert json.loads(path.read_text(encoding="utf-8")) == document
     value = replace(value, diagnostic=ModbusSettings(port=1502, timeout=2, unit_id=7))
     save_communication_preferences(path, value)
     assert load_communication_preferences(path) == value
@@ -175,31 +185,32 @@ def test_modbus_sparse_diagnostic_defaults_and_explicit_settings(
 
 
 @pytest.mark.parametrize(
-    "raw",
+    "protocol,field,value",
     [
-        '{"reporting":{"protocol":"modbus_tcp","enabled":true}}',
-        '{"reporting":{"unit_id":255}}',
-        '{"diagnostic":{"protocol":"fins_udp","unit_id":1}}',
-        '{"diagnostic":{"protocol":"fins_tcp","unit_id":1}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","source":{}}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","destination":{}}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","base_address":49}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","unit_id":1,"unit_id":2}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","unit_id":true}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","unit_id":256}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","unit_id":-1}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","unit_id":"1"}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","timeout":false}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","timeout":31}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","port":0}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","port":true}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","host":"localhost"}}',
-        '{"diagnostic":{"protocol":"modbus_tcp","host":"0.0.0.0"}}',
+        ("fins_udp", "unit_id", 1),
+        ("fins_tcp", "unit_id", 1),
+        ("fins_tcp", "destination", {}),
+        ("modbus_tcp", "source", {}),
+        ("modbus_tcp", "destination", {}),
+        ("modbus_tcp", "base_address", 49),
+        ("modbus_tcp", "unit_id", True),
+        ("modbus_tcp", "unit_id", 256),
+        ("modbus_tcp", "unit_id", -1),
+        ("modbus_tcp", "unit_id", "1"),
+        ("modbus_tcp", "timeout", False),
+        ("modbus_tcp", "timeout", 31),
+        ("modbus_tcp", "port", 0),
+        ("modbus_tcp", "port", True),
+        ("modbus_tcp", "host", "localhost"),
+        ("modbus_tcp", "host", "0.0.0.0"),
     ],
 )
-def test_modbus_protocol_specific_strict_rejection(tmp_path: Path, raw: str) -> None:
+def test_diagnostic_protocol_specific_strict_rejection(
+    tmp_path: Path, protocol: str, field: str, value: object
+) -> None:
     path = tmp_path / "communication.json"
-    path.write_text(raw, encoding="utf-8")
+    document = communication_document(diagnostic={"protocol": protocol, field: value})
+    path.write_text(json.dumps(document), encoding="utf-8")
     before = path.read_bytes()
     with pytest.raises(ConfigurationError):
         load_communication_preferences(path)
@@ -241,6 +252,8 @@ def test_independent_endpoint_round_trip_and_definitions_only(
         ("endpoint", "protocol", "udp"),
         ("endpoint", "transport", "udp"),
         ("endpoint", "endpoint", {}),
+        ("endpoint", "unit_id", 255),
+        ("endpoint", "source", {}),
         ("endpoint", "base_address", True),
         ("endpoint", "base_address", -1),
         ("endpoint", "base_address", 509),
@@ -284,8 +297,7 @@ def test_invalid_preferences_rejected_without_rewriting(
         '{"web":{},"web":{}}',
         "[]",
         "{",
-        '{"reporting":{"protocol":"fins_tcp","source":{}}}',
-        '{"diagnostic":{"protocol":"fins_tcp","destination":{}}}',
+        '{"diagnostic":{"protocol":"modbus_tcp","unit_id":1,"unit_id":2}}',
     ],
 )
 def test_duplicate_missing_malformed_fields(tmp_path: Path, raw: str) -> None:
@@ -317,7 +329,7 @@ def test_missing_file_and_failed_atomic_replace(
     assert path.read_bytes() == before and set(tmp_path.iterdir()) == {path}
 
 
-def test_sparse_defaults_and_protocol_specific_endpoint_round_trip(
+def test_explicit_per_cycle_udp_and_protocol_specific_endpoint_round_trip(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "communication.json"
@@ -325,9 +337,10 @@ def test_sparse_defaults_and_protocol_specific_endpoint_round_trip(
         reporting=ReportingSelection(), diagnostic=FinsUdpEndpoint()
     )
     save_communication_preferences(path, defaults)
-    assert json.loads(path.read_text(encoding="utf-8")) == {}
-    assert load_communication_preferences(path) == defaults
-    path.write_text('{"reporting":{},"diagnostic":{},"web":{}}', encoding="utf-8")
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "reporting": {"protocol": "fins_udp", "mode": "per_cycle", "enabled": False},
+        "diagnostic": {"protocol": "fins_udp"},
+    }
     assert load_communication_preferences(path) == defaults
     value = replace(
         defaults,
@@ -344,6 +357,7 @@ def test_sparse_defaults_and_protocol_specific_endpoint_round_trip(
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "reporting": {
             "protocol": "fins_tcp",
+            "mode": "per_cycle",
             "host": "192.0.2.10",
             "enabled": True,
             "base_address": 120,
@@ -380,7 +394,11 @@ def test_sparse_defaults_and_protocol_specific_endpoint_round_trip(
     )
     save_communication_preferences(path, tcp)
     stored = json.loads(path.read_text(encoding="utf-8"))
-    assert stored["reporting"] == {"protocol": "fins_tcp"}
+    assert stored["reporting"] == {
+        "protocol": "fins_tcp",
+        "mode": "per_cycle",
+        "enabled": False,
+    }
     assert load_communication_preferences(path) == tcp
 
 
@@ -395,13 +413,15 @@ def test_initial_tcp_defaults_are_disabled_and_saved_explicitly(tmp_path: Path) 
     assert value.reporting.settings.base_address == 49
     assert value.reporting.settings.mode is ReportingMode.FOUR_CYCLE
     assert ReportingSettings().mode is ReportingMode.PER_CYCLE
-    assert not value.reporting.enabled and not value.web.enabled
+    assert ReportingSettings().endpoint == FinsUdpEndpoint()
+    assert (
+        not value.reporting.enabled
+        and not value.web.enabled
+        and not value.status.enabled
+    )
     path = tmp_path / "communication.json"
     save_communication_preferences(path, value)
-    assert json.loads(path.read_text(encoding="utf-8")) == {
-        "reporting": {"protocol": "fins_tcp", "mode": "four_cycle"},
-        "diagnostic": {"protocol": "fins_tcp"},
-    }
+    assert json.loads(path.read_text(encoding="utf-8")) == communication_document()
     assert load_communication_preferences(path) == value
 
 
@@ -413,7 +433,9 @@ def test_obsolete_reporting_modes_rejected_without_replacing_file(
     path = tmp_path / "communication.json"
     path.write_text(
         json.dumps(
-            {"reporting": {"protocol": "fins_tcp", "mode": mode, "enabled": enabled}}
+            communication_document(
+                reporting={"protocol": "fins_tcp", "mode": mode, "enabled": enabled}
+            )
         ),
         encoding="utf-8",
     )
@@ -459,13 +481,14 @@ def test_four_cycle_invalid_transport_or_base_rejected_even_disabled(
     path = tmp_path / "communication.json"
     path.write_text(
         json.dumps(
-            {
-                "reporting": {
+            communication_document(
+                reporting={
+                    "enabled": False,
                     "mode": mode,
                     "protocol": protocol,
                     "base_address": base,
                 }
-            }
+            )
         ),
         encoding="utf-8",
     )
@@ -476,25 +499,52 @@ def test_four_cycle_invalid_transport_or_base_rejected_even_disabled(
 
 
 @pytest.mark.parametrize(
-    "raw",
+    "raw,missing",
     [
-        {},
-        {"reporting": {}, "diagnostic": {}, "web": {}},
-        {"web": {"port": 8766}},
-        {"reporting": {"enabled": True}},
-        {"reporting": {"host": "192.0.2.10"}, "diagnostic": {"timeout": 2}},
-        {"reporting": {"protocol": "fins_udp"}, "diagnostic": {"protocol": "fins_udp"}},
+        ({}, "reporting"),
+        ({"web": {"enabled": True}}, "diagnostic"),
+        ({"diagnostic": {"protocol": "fins_tcp"}}, "reporting"),
+        (
+            {
+                "reporting": {
+                    "enabled": True,
+                    "mode": "four_cycle",
+                    "protocol": "fins_tcp",
+                }
+            },
+            "diagnostic",
+        ),
+        (
+            communication_document(
+                reporting={"mode": "four_cycle", "protocol": "fins_tcp"}
+            ),
+            "enabled",
+        ),
+        (
+            communication_document(
+                reporting={"enabled": False, "protocol": "fins_udp"}
+            ),
+            "mode",
+        ),
+        (
+            communication_document(reporting={"enabled": False, "mode": "per_cycle"}),
+            "protocol",
+        ),
+        (communication_document(diagnostic={"port": 9601}), "protocol"),
     ],
 )
-def test_legacy_omissions_stay_udp_and_loading_never_rewrites(
-    tmp_path: Path, raw: object
+def test_missing_sections_or_discriminators_rejected_without_rewriting(
+    tmp_path: Path, raw: object, missing: str
 ) -> None:
     path = tmp_path / "communication.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     before = path.read_bytes()
-    value = load_communication_preferences(path)
-    assert isinstance(value.reporting.settings.endpoint, FinsUdpEndpoint)
-    assert isinstance(value.diagnostic, FinsUdpEndpoint)
+    with pytest.raises(ConfigurationError, match=f"Missing .*{missing}"):
+        load_communication_preferences(path)
+    status_errors: list[str] = []
+    with pytest.raises(ConfigurationError, match=f"Missing .*{missing}"):
+        load_communication_preferences(
+            path, content=before, status_error=status_errors.append
+        )
+    assert not status_errors
     assert path.read_bytes() == before
-    save_communication_preferences(path, value)
-    assert load_communication_preferences(path) == value

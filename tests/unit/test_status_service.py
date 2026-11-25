@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Event, get_ident
 
 import pytest
+from tests.support.configuration import communication_document
 from tests.support.fins_tcp import Fault, Stage, TcpPeer
 from tests.unit.test_alarm_monitor import definitions, selection, signal
 from tests.unit.test_batch_reporting import wait
@@ -318,7 +319,7 @@ def test_strict_schema_never_migrates_or_repairs(
     tmp_path: Path, payload: dict[str, object]
 ) -> None:
     path = tmp_path / "communication.json"
-    saved = json.dumps(payload).encode()
+    saved = json.dumps(communication_document(**payload)).encode()
     path.write_bytes(saved)
     with pytest.raises(ConfigurationError):
         load_communication_preferences(path)
@@ -327,10 +328,13 @@ def test_strict_schema_never_migrates_or_repairs(
 
 def test_defaults_explicit_roundtrip_and_register_bounds(tmp_path: Path) -> None:
     path = tmp_path / "communication.json"
-    path.write_text("{}", encoding="utf-8")
+    path.write_text(json.dumps(communication_document()), encoding="utf-8")
     assert load_communication_preferences(path).status == StatusPreferences()
     assert load_communication_preferences(path).status.running_address == 16
-    path.write_text('{"status":{"fault_address":47}}', encoding="utf-8")
+    path.write_text(
+        json.dumps(communication_document(status={"fault_address": 47})),
+        encoding="utf-8",
+    )
     assert load_communication_preferences(path).status == StatusPreferences()
     for word, heartbeat, fault, running in (
         (0, 511, 510, 16),
@@ -468,6 +472,7 @@ def test_running_target_cannot_alias_configured_automatic_reporting(
                 "enabled": enabled,
             },
             "status": {"fault_address": 47, "running_address": base},
+            "diagnostic": {"protocol": "fins_tcp"},
         }
     ).encode()
     path.write_bytes(content)

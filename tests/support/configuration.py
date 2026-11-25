@@ -1,4 +1,4 @@
-"""Pure canonical MachineLayout and Model definition builders."""
+"""Canonical configuration fixtures."""
 
 from capsule_vision.configuration import (
     MachineLayoutDefinition,
@@ -44,3 +44,12 @@ def model(model_id: str = "general") -> ModelDefinition:
 
 def registry() -> ModelRegistry:
     return ModelRegistry((model("special"), model()))
+
+
+def communication_document(**sections: object) -> dict[str, object]:
+    """Minimal saved application settings with independently replaceable sections."""
+    return {
+        "reporting": {"enabled": False, "mode": "four_cycle", "protocol": "fins_tcp"},
+        "diagnostic": {"protocol": "fins_tcp"},
+        **sections,
+    }

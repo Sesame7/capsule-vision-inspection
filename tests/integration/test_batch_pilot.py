@@ -73,7 +73,8 @@ def test_obsolete_saved_mode_is_visible_and_preserved_on_normal_startup(
                         "enabled": True,
                         "port": peer.port,
                         "base_address": 149,
-                    }
+                    },
+                    "diagnostic": {"protocol": "fins_tcp"},
                 }
             ),
             encoding="utf-8",
@@ -472,7 +473,7 @@ def test_preferences_roundtrip_explicit_pilot(
     save_communication_preferences(path, value)
     assert load_communication_preferences(path) == value
     payload = json.loads(path.read_text())
-    assert payload["reporting"].get("mode", "per_cycle") == mode.value
+    assert payload["reporting"]["mode"] == mode.value
 
 
 def test_four_cycle_ui_draft_save_localization_and_permission(

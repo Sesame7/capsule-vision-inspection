@@ -115,7 +115,7 @@ def test_bundled_workbook_mapping_override_and_persisted_selection(
     assert local.origin == "equipment" and local.digest != asset.digest
     assert not local.signals[0].active_high
     comm = tmp_path / "communication.json"
-    comm.write_text("{}", encoding="utf-8")
+    save_communication_preferences(comm, CommunicationPreferences())
     old = load_communication_preferences(comm)
     assert not old.status.enabled and old.status.word_address == 18
     value = replace(
@@ -236,7 +236,12 @@ def test_invalid_alarm_preferences_are_explicit_and_isolated_at_startup(
         json.dumps(
             {
                 "status": {"word_address": 18, "fault_address": 47, **alarm},
-                "reporting": {"enabled": True, "protocol": "fins_tcp"},
+                "reporting": {
+                    "enabled": True,
+                    "mode": "per_cycle",
+                    "protocol": "fins_tcp",
+                },
+                "diagnostic": {"protocol": "fins_tcp"},
             }
         ),
         encoding="utf-8",
