@@ -3,7 +3,6 @@
 import json
 import sqlite3
 from collections.abc import Generator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -29,7 +28,6 @@ from capsule_vision.communication.endpoints import FinsTcpEndpoint
 from capsule_vision.communication.reporting import ReportOutcome
 from capsule_vision.configuration.alarm_definitions import (
     TEMPLATE,
-    create_local_alarm_definitions,
     load_alarm_definitions,
 )
 from capsule_vision.configuration.communication_preferences import (
@@ -165,28 +163,6 @@ def test_invalid_equipment_asset_is_never_replaced(
     assert path.read_bytes() == original
 
 
-def test_template_creation_is_exclusive_and_keeps_invalid_or_custom_local_files(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "equipment" / "alarm_definitions.json"
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        copies = [pool.submit(create_local_alarm_definitions, path) for _ in range(2)]
-        failures = [f.exception(3) for f in copies]
-    assert failures.count(None) == 1
-    assert sum(isinstance(e, FileExistsError) for e in failures) == 1
-    assert path.read_bytes() == TEMPLATE.read_bytes()
-    definitions(path, signal(zh="本机报警"))
-    before = path.read_bytes()
-    with pytest.raises(FileExistsError):
-        create_local_alarm_definitions(path)
-    assert path.read_bytes() == before
-    path.write_bytes(b"{invalid")
-    with pytest.raises(ConfigurationError):
-        create_local_alarm_definitions(path)
-    assert path.read_bytes() == b"{invalid"
-    assert list(path.parent.iterdir()) == [path]
-
-
 def test_exact_alarm_labels_and_bounded_optional_translations(tmp_path: Path) -> None:
     path = tmp_path / "alarm_definitions.json"
     definitions(
@@ -220,7 +196,7 @@ def test_exact_alarm_labels_and_bounded_optional_translations(tmp_path: Path) ->
         load_alarm_definitions(path)
 
 
-def test_unreadable_local_definitions_never_use_or_copy_the_bundle(
+def test_unreadable_local_definitions_never_use_the_bundle(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "alarm_definitions.json"
@@ -228,11 +204,10 @@ def test_unreadable_local_definitions_never_use_or_copy_the_bundle(
     with patch.object(
         Path, "open", autospec=True, side_effect=PermissionError("access denied")
     ) as opened:
-        for command in (load_alarm_definitions, create_local_alarm_definitions):
-            with pytest.raises(ConfigurationError) as failure:
-                command(path)
-            assert isinstance(failure.value.__cause__, PermissionError)
-        assert [call.args[0] for call in opened.call_args_list] == [path, path]
+        with pytest.raises(ConfigurationError) as failure:
+            load_alarm_definitions(path)
+        assert isinstance(failure.value.__cause__, PermissionError)
+        opened.assert_called_once_with(path, "rb")
     assert path.read_bytes() == b"local equipment data"
 
 

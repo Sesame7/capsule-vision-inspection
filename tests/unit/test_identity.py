@@ -150,7 +150,7 @@ def test_accounts_persist_casefold_id_role_and_enabled_state(database: Path) -> 
             and changed.username == account.username
         )
         owner.set_enabled(account.account_id, False).result(WAIT)
-        assert len(owner.list_accounts().result(WAIT)) == 2
+        assert len(owner.account_management().result(WAIT).accounts) == 2
     assert SECRET.encode() not in database.read_bytes()
     assert b"operator-secret" not in database.read_bytes()
     with opened(database) as owner:
@@ -178,7 +178,7 @@ def test_failed_authentication_preserves_current_session(
     with opened(database) as owner:
         owner.login("Admin", SECRET).result(WAIT)
         owner.create_account("Disabled", Role.OPERATOR, SECRET).result(WAIT)
-        accounts = owner.list_accounts().result(WAIT)
+        accounts = owner.account_management().result(WAIT).accounts
         disabled = next(a for a in accounts if a.username == "Disabled")
         owner.set_enabled(disabled.account_id, False).result(WAIT)
         before = owner.snapshot()
@@ -206,7 +206,7 @@ def test_management_boundary_and_self_password_change(database: Path) -> None:
             WAIT
         )
         for operation in (
-            lambda: owner.list_accounts(),
+            lambda: owner.account_management(),
             lambda: owner.create_account("Other", Role.OPERATOR, SECRET),
             lambda: owner.set_role(operator.account_id, Role.ADMINISTRATOR),
             lambda: owner.set_enabled(admin.account_id, False),
@@ -252,7 +252,7 @@ def test_administrators_cannot_modify_self_or_peers_and_last_admin_is_transactio
                 with pytest.raises(AuthorizationError):
                     work.result(WAIT)
         assert owner.snapshot() == session
-        assert set(owner.list_accounts().result(WAIT)) == {admin, second}
+        assert set(owner.account_management().result(WAIT).accounts) == {admin, second}
     store = AccountStore(database)
     try:
         store.update(second.account_id, enabled=False)
@@ -318,7 +318,9 @@ def test_late_management_cannot_commit_after_logout(
             with pytest.raises(StaleSessionError):
                 pending.result(WAIT)
             owner.login("Admin", SECRET).result(WAIT)
-            assert [a.username for a in owner.list_accounts().result(WAIT)] == ["Admin"]
+            assert [
+                a.username for a in owner.account_management().result(WAIT).accounts
+            ] == ["Admin"]
         finally:
             release.set()
 
@@ -450,9 +452,9 @@ def test_application_close_fences_pending_login_and_queued_account_change(
                 authenticated = fresh.result(WAIT)
                 assert authenticated.revision == revoked.revision + 1
                 assert authenticated.role is Role.ADMINISTRATOR
-                assert [a.username for a in owner.list_accounts().result(WAIT)] == [
-                    "Admin"
-                ]
+                assert [
+                    a.username for a in owner.account_management().result(WAIT).accounts
+                ] == ["Admin"]
                 app.fail_cleanup = False
                 retry = app.close()
                 assert retry is not closed
@@ -714,7 +716,10 @@ def test_offline_recovery_preserves_records_and_does_not_promote_operators(
         rotated = owner.rotate_password(
             "rotated secret", owner.snapshot().revision
         ).result(WAIT)
-        assert owner.list_accounts().result(WAIT) == (rotated.account, operator)
+        assert owner.account_management().result(WAIT).accounts == (
+            rotated.account,
+            operator,
+        )
 
 
 def test_maintenance_is_rejected_cross_process_even_when_database_missing(
@@ -778,4 +783,7 @@ def test_offline_recovery_can_enable_an_existing_disabled_administrator(
         rotated = owner.rotate_password(
             "permanent credential", owner.snapshot().revision
         ).result(WAIT)
-        assert owner.list_accounts().result(WAIT) == (rotated.account, second)
+        assert owner.account_management().result(WAIT).accounts == (
+            rotated.account,
+            second,
+        )

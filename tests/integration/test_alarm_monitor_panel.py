@@ -571,8 +571,7 @@ def test_all_roles_preview_offline_and_only_engineers_edit(
     assert identity is not None
     provision_account(identity, "Operator", Role.OPERATOR, TEST_PASSWORD)
     provision_account(identity, "Engineer", Role.ENGINEER, TEST_PASSWORD)
-    path = app.alarm_definitions_path()
-    path.write_bytes((EXAMPLES / "standard-11.json").read_bytes())
+    path = data.root / "alarm_definitions.json"
     original = app.preview_alarm_definitions
     reads: list[str] = []
 
@@ -613,7 +612,7 @@ def test_all_roles_preview_offline_and_only_engineers_edit(
             assert text("alarm_preview", "en") in panel.observation.text()
             assert cell(panel, 0, 2) == "—"
             panel.expand.click()
-        assert len(reads) == 4
+        assert len(reads) == 4 and not path.exists()
         path.write_bytes((EXAMPLES / "alternate-6.json").read_bytes())
         panel.expand.click()
         until(lambda: not page.busy and panel.table.rowCount() == 6)

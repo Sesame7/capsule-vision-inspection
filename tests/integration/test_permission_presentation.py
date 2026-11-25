@@ -539,7 +539,9 @@ def test_disabling_current_account_closes_draft_form_and_keeps_unsaved_data(
     session, owner = screen.editing.session, screen.bridge.application.identity
     assert session is not None and owner is not None and session.entry is not None
     author = next(
-        a for a in owner.list_accounts().result(WAIT) if a.role is Role.ENGINEER
+        a
+        for a in owner.account_management().result(WAIT).accounts
+        if a.role is Role.ENGINEER
     )
     login(screen, Role.ENGINEER)
     screen.navigate(1)

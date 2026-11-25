@@ -280,10 +280,8 @@ def test_group_categories_survive_retention_once_and_preserve_missing_coverage(
 def test_export_admission_rejects_unsupported_formats_and_scopes(
     tmp_path: Path,
 ) -> None:
-    app = ProductionApplication(
-        lambda _p, _g: FakeSession(),
-        history=ProductionHistory(tmp_path / "history.sqlite3"),
-    )
+    history = ProductionHistory(tmp_path / "history.sqlite3")
+    app = ProductionApplication(lambda _p, _g: FakeSession(), history=history)
     try:
         request = ReportRequest("defects", batch="explicit")
         for suffix in ("xlsx", "xls", "csv", "tmp"):
@@ -300,8 +298,20 @@ def test_export_admission_rejects_unsupported_formats_and_scopes(
                 ReportRequest(cast(ReportType, kind), batch="explicit")
         with pytest.raises(ValueError, match="Batch identity"):
             replace(request, batch="")
-        with pytest.raises(ValueError, match="Unsupported"):
-            app.export_report(cast(ReportRequest, object()), tmp_path / "bad.pdf", "en")
+        batch = history.select_batch("Existing Batch").result(WAIT)
+        assert batch
+        for invalid in (object(), batch.uuid):
+            with pytest.raises(ValueError, match="Unsupported"):
+                app.export_report(
+                    cast(ReportRequest, invalid), tmp_path / "bad.pdf", "en"
+                )
+            with pytest.raises(ValueError, match="Unsupported"):
+                history.capture_report(
+                    cast(ReportRequest, invalid), tmp_path / "bad.db", Event()
+                )
+        assert (
+            not (tmp_path / "bad.pdf").exists() and not (tmp_path / "bad.db").exists()
+        )
         with pytest.raises(ValueError, match="Batch unavailable"):
             app.export_report(request, tmp_path / "missing.pdf", "en").result(WAIT)
         assert not (tmp_path / "missing.pdf").exists()

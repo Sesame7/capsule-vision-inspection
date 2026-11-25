@@ -787,7 +787,7 @@ def test_audit_dialog_cancellation_and_late_delivery(
     stops: list[Event] = []
 
     def held(
-        batch: str | CustomerReport,
+        batch: CustomerReport,
         path: Path,
         language: Language,
         *,

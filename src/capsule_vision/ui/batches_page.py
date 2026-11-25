@@ -271,9 +271,8 @@ class BatchesPage(RecordsPage):
         self._delivery.watch(
             f"list/{self._list_version}",
             self.history.batch_page(
-                "",
-                self._cursor,
-                self._newer,
+                cursor=self._cursor,
+                newer=self._newer,
                 since=self.scope.since,
                 until=self.scope.until,
                 batch=self.scope.batch,

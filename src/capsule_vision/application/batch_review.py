@@ -209,7 +209,6 @@ def _overview(
 
 def page(
     db: sqlite3.Connection,
-    prefix: str,
     cursor: tuple[float, str] | None,
     newer: bool,
     since: int | None,
@@ -222,13 +221,8 @@ def page(
         return BatchList((), False)  # Absence is not a fictitious aggregate Batch.
     if since is not None and until is not None and since >= until:
         return BatchList((), False)
-    clauses = ["substr(b.label,1,length(:prefix))=:prefix"]
-    args: dict[str, object] = {
-        "prefix": prefix,
-        "since": since,
-        "until": until,
-        "now": now,
-    }
+    clauses: list[str] = []
+    args: dict[str, object] = {"since": since, "until": until, "now": now}
     if batch is not None:
         clauses.append("b.uuid=:batch")
         args["batch"] = batch
@@ -244,11 +238,9 @@ def page(
         )
         args["activity"], args["label"] = cursor
     order = "ASC" if newer else "DESC"
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
     records = db.execute(
-        _ROWS
-        + " WHERE "
-        + " AND ".join(clauses)
-        + f" ORDER BY activity {order},b.label {order} LIMIT 51",
+        _ROWS + where + f" ORDER BY activity {order},b.label {order} LIMIT 51",
         args,
     ).fetchall()
     rows = tuple(_overview(row) for row in records[:50])

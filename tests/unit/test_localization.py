@@ -328,8 +328,6 @@ PRIORITY_UI_KEYS = {
     "customer_audit_batch",
     "customer_batch",
     "customer_defects",
-    "customer_deferred",
-    "customer_positions",
     "customer_select_batch",
     "export_run",
     "export_value",
@@ -852,8 +850,6 @@ RECORDS_WORKFLOW_KEYS = {
     "customer_audit_batch",
     "customer_batch",
     "customer_defects",
-    "customer_deferred",
-    "customer_positions",
     "customer_select_batch",
     "export_run",
     "export_value",
@@ -989,12 +985,12 @@ def test_maintained_translation_coverage_has_only_reviewed_exceptions() -> None:
         - TECHNICAL_TOKEN_KEYS
         - OPTIONAL_NATIVE_KEYS
     )
-    assert len(maintained) == 747
+    assert len(maintained) == 745
     assert {"records_ng_capsules", "previous_capsule", "next_capsule"} <= maintained
     groups = (
         (OPERATIONAL_UI_KEYS, OPERATIONAL_REVIEW_BY_LANGUAGE, 75),
         (RECIPE_WORKFLOW_KEYS, RECIPE_REVIEW_BY_LANGUAGE, 62),
-        (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 155),
+        (RECORDS_WORKFLOW_KEYS, RECORDS_REVIEW_BY_LANGUAGE, 153),
     )
     covered: set[str] = set()
     for keys, _, count in groups:
@@ -1448,7 +1444,7 @@ def test_new_catalogs_use_the_requested_writing_systems() -> None:
 
 def test_language_identities_and_current_catalog_coverage() -> None:
     assert get_args(Language.__value__) == LANGUAGES == tuple(EXPECTED_LANGUAGE_NAMES)
-    assert len(STRINGS) == 874
+    assert len(STRINGS) == 872
     assert LANGUAGE_NAMES == EXPECTED_LANGUAGE_NAMES
     assert set(LANGUAGE_LABELS) == set(LANGUAGES)
     assert (

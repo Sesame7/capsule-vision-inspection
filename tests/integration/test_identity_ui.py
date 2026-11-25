@@ -545,7 +545,11 @@ def test_guest_login_wrong_disabled_switch_logout_and_self_password(
     submit(ui, old_password=SECRET, new_password=NEW_SECRET, confirm=NEW_SECRET)
     until(lambda: ui.form is None)
     assert owner.snapshot().role is Role.ADMINISTRATOR
-    worker = next(a for a in completed(owner.list_accounts()) if a.username == "Worker")
+    worker = next(
+        a
+        for a in completed(owner.account_management()).accounts
+        if a.username == "Worker"
+    )
     completed(owner.set_enabled(worker.account_id, False))
     current = owner.snapshot()
     ui.switch_user()
@@ -1165,7 +1169,7 @@ def test_live_identity_language_changes_preserve_open_forms_and_role(
     assert (
         next(
             a
-            for a in completed(owner.list_accounts())
+            for a in completed(owner.account_management()).accounts
             if a.account_id == worker.account_id
         ).role
         is Role.OPERATOR
@@ -1232,7 +1236,8 @@ def test_close_drains_pending_account_creation_before_releasing_storage(
         completed(reopened.ready)
         completed(reopened.login("Admin", SECRET))
         assert all(
-            a.username != "Uncommitted" for a in completed(reopened.list_accounts())
+            a.username != "Uncommitted"
+            for a in completed(reopened.account_management()).accounts
         )
     finally:
         reopened.request_stop()

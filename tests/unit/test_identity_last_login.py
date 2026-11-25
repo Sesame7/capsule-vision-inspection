@@ -257,7 +257,9 @@ def test_login_persists_utc_before_success_and_account_operations_preserve_it(
             timespec="microseconds"
         )
         worker = next(
-            a for a in owner.list_accounts().result(10) if a.username == "Worker"
+            a
+            for a in owner.account_management().result(10).accounts
+            if a.username == "Worker"
         )
         backup = owner.create_account(
             "Backup", Role.ADMINISTRATOR, SECRET, confirm_administrator=True

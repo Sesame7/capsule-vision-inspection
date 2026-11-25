@@ -86,7 +86,7 @@ Qt-independent `localization/languages.py`. Static base text/resolution and auth
 translations live in `localization/catalog.py` and `localization/translations.py`.
 Configuration preferences persist only the selected code and import that identity
 contract; visual styling and widgets consume Localization directly. The shared
-Qt interface covers 747 maintained keys across 64 locales. This includes
+Qt interface covers 745 maintained keys across 64 locales. This includes
 Production and Recipe actions, camera and Model setup, PLC settings and
 diagnostics, Records, Batch, Audit, Alarms and report export.
 Both the incomplete-selection guidance and unavailable recorded Recipe ID
@@ -99,7 +99,7 @@ The 94 English fallback entries cover specific technical explanations in
 phase/compensation captions. They include group timing, History clock
 observations and proven Batch/Audit association.
 The exact exceptions are in [localization tests](../tests/unit/test_localization.py).
-Authored coverage does not imply native-speaker verification. The full 874-key
+Authored coverage does not imply native-speaker verification. The full 872-key
 catalog also contains optional, dormant and report-output text outside this set.
 Missing optional text uses canonical English. An unknown key fails before
 fallback. Device and user names, stored identities and paths are shown as supplied.
@@ -690,12 +690,10 @@ the actual address without station identity; stored History/schema are unchanged
 
 The [bundled JSON template](../src/capsule_vision/configuration/alarm_definitions.json)
 maps bits 0–10 of W18/W118 from the approved equipment signal table dated
-2026-09-05. It is used when `data/alarm_definitions.json` is absent. The card has
-no Alarm file action or menu; equipment overrides are managed externally. The
-existing Application template-publication command remains Engineer/Administrator
-authorized, with a durable Audit Trail intent and exclusive file publication.
-Existing local files, including invalid ones, are preserved across repeat requests
-and software updates.
+2026-09-05. Equipment owners can supply `data/alarm_definitions.json` directly.
+When the file is absent, preview and monitor activation read the bundled template.
+Existing local files are preserved across software updates. Historical Alarm file
+creation events retain their action and target labels in Audit.
 
 A local override supplies a complete `version` and `signals` array
 with 1–16 definitions. Each signal has a unique stable `id`, unique word `bit`

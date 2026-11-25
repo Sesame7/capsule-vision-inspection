@@ -17,7 +17,6 @@ from capsule_vision.configuration import (
 from capsule_vision.configuration.alarm_definitions import (
     TEMPLATE,
     AlarmDefinitions,
-    create_local_alarm_definitions,
     load_alarm_definitions,
 )
 from capsule_vision.configuration.communication_preferences import (
@@ -64,7 +63,7 @@ from .models import (
 )
 from .process_application import apply_process, process_target
 from .recipe_dependencies import RecipePreparationRequired
-from .report_scope import ReportRequest, batch_report_request
+from .report_scope import ReportRequest, validate_batch_report_request
 from .run_configuration import RunConfiguration, capture_run
 from .session import (
     ProductionCycle,
@@ -235,29 +234,6 @@ class ProductionApplication:
                 "Alarm definitions unavailable for this launcher"
             )
         return load_alarm_definitions(self._alarms.definitions_path)
-
-    def alarm_definitions_path(self, revision: int | None = None) -> Path:
-        with self._condition, self._admission(Role.ENGINEER, revision):
-            if self._alarms is None:
-                raise ApplicationStateError(
-                    "Alarm definitions unavailable for this launcher"
-                )
-            return self._alarms.definitions_path
-
-    def create_alarm_definitions(self, revision: int | None = None) -> None:
-        """Worker command. Publishing a local copy does not activate the monitor."""
-        ticket = self.session_revision if revision is None else revision
-        with (
-            self.identity.change(
-                "alarm_definitions.create",
-                TEMPLATE.name,
-                ticket,
-                after="Bundled template",
-            )
-            if self.identity is not None
-            else nullcontext()
-        ):
-            create_local_alarm_definitions(self.alarm_definitions_path(ticket))
 
     def alarm_page(
         self, query: AlarmQuery, revision: int | None = None
@@ -648,7 +624,7 @@ class ProductionApplication:
 
     def export_report(
         self,
-        batch: str | ReportRequest | AuditReportRequest | AlarmReportRequest,
+        batch: ReportRequest | AuditReportRequest | AlarmReportRequest,
         path: Path,
         language: Language,
         *,
@@ -672,7 +648,7 @@ class ProductionApplication:
             if path.suffix.lower() != ".pdf":
                 raise ValueError("Select a .pdf file")
             if not isinstance(batch, (AuditReportRequest, AlarmReportRequest)):
-                batch = batch_report_request(batch)
+                validate_batch_report_request(batch)
             actor_revision = actor.revision if actor else None
             stop = cancel if cancel is not None else Event()
             future = _promise(Future[Path]())

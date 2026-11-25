@@ -26,7 +26,7 @@ def _check_cancel(cancel: Event) -> None:
 
 def write_report(
     history: ProductionHistory | None,
-    batch: str | ReportRequest | AuditReportRequest | AlarmReportRequest,
+    batch: ReportRequest | AuditReportRequest | AlarmReportRequest,
     destination: Path,
     language: Language,
     cancel: Event,

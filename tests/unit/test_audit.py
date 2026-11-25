@@ -213,7 +213,9 @@ def test_unavailable_intent_blocks_mutations_but_allows_login_run_stop(
             identity.create_account("Blocked", Role.OPERATOR, TEST_PASSWORD).result(
                 WAIT
             )
-        assert [a.username for a in identity.list_accounts().result(WAIT)] == ["Admin"]
+        assert [
+            a.username for a in identity.account_management().result(WAIT).accounts
+        ] == ["Admin"]
         request = CommunicationRequest(RequestKind.WRITE, FinsTcpEndpoint(), 5, 1, (7,))
         with pytest.raises(AuditUnavailable):
             execute_manual(
@@ -612,7 +614,7 @@ def test_actual_commits_differences_actor_and_independent_finalization_failure(
         identity.set_enabled(target.account_id, True).result(WAIT)
         assert next(
             a
-            for a in identity.list_accounts().result(WAIT)
+            for a in identity.account_management().result(WAIT).accounts
             if a.account_id == target.account_id
         ).enabled
         events = identity.audit_page(AuditQuery()).result(WAIT)
@@ -685,7 +687,7 @@ def test_account_mutation_stale_at_admission_and_after_same_role_switch(
         assert (
             next(
                 a.role
-                for a in identity.list_accounts().result(WAIT)
+                for a in identity.account_management().result(WAIT).accounts
                 if a.account_id == worker.account_id
             )
             is Role.OPERATOR
@@ -726,7 +728,8 @@ def test_stale_after_durable_intent_cannot_execute_as_next_user(
             and row.operation.actor_id == admitted.account.account_id
         )
         assert all(
-            a.username != "Rejected" for a in identity.list_accounts().result(WAIT)
+            a.username != "Rejected"
+            for a in identity.account_management().result(WAIT).accounts
         )
     finally:
         release.set()

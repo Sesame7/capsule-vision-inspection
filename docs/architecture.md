@@ -241,8 +241,10 @@ Administrator account management through this same service. The forced-change
 form is window-modal. Credential forms clear secrets on submission or dismissal.
 The service worker handles authentication and account IO. Qt receives results
 through its destruction-safe queue and ignores superseded sessions. The existing
-shell refresh observes role changes. Manage Users presents a read-only four-column
-table and captures account IDs in separate role and disable-confirmation dialogs.
+shell refresh observes role changes. Manage Users reads the accounts and the
+authorized auto-login account ID together through the Administrator-only
+`account_management()` snapshot. Its read-only four-column table supplies
+account IDs to the role and disable-confirmation dialogs.
 The Administrator also authorizes or revokes auto login through the worker's
 audited account mutation path. Account changes revoke a matching authorization
 in the account transaction. Switch User retains the current login until successful
@@ -1056,7 +1058,7 @@ time and Alarms uses event observation time. Selections
 persist across tabs and filter changes reset paging. Time cells expose the full
 local timestamp and UTC offset.
 
-The selector starts at All Batches. Its popup searches persisted labels across
+The selector starts at All Batches. Its popup matches substrings in stored labels across
 all matching Batches, with bounded 50-choice pages and explicit navigation. Choices
 require an overlapping recorded Run and sort by the latest matching Run's recorded
 activity; later Runs outside the interval do not reorder them. Labels remain full
@@ -1078,9 +1080,11 @@ longest shaped captions across supported languages. If the minimum width
 budget exceeds the viewport, columns share the available width down to Qt's
 minimum section size. Tooltips and accessible text provide their full meanings.
 
-Batches lists up to 50 named Batches per page. A date range matches any individual
-Run that started within the interval or continued into it. A Run ending exactly at midnight
-belongs to the preceding day, and a zero-duration Run belongs to its start day.
+Normal and portable Records use the same keyset pagination for up to 50 named
+Batches per page. Choosing a Batch in the shared picker filters the list by its
+exact UUID. A date range matches any individual Run that started within the
+interval or continued into it. A Run ending exactly at midnight belongs to the
+preceding day, and a zero-duration Run belongs to its start day.
 An open Run can overlap days through the time of the query. Gaps between Runs
 remain inactive. Batches without Runs are visible in the list when both bounds
 are empty, but do not appear among the Run-based selector choices. An unbatched
@@ -1332,9 +1336,12 @@ unavailable. Raw Batch categories cannot establish per-Run attribution or collap
 overlapping traditional reasons after detail expiry; no residual counts are assigned.
 
 Operators and higher roles can export Production, Defect and Alarm PDFs. Audit
-requires Engineer or Administrator. Export opens the native PDF Save dialog
-directly. The action captures the report identity or effective event filters,
-initiating session and UI language before opening Save. Simplified Chinese
+requires Engineer or Administrator. Application and History use a `ReportRequest`
+with the report type and persisted Batch UUID for Production and Defect exports.
+Audit and Alarm exports each use their own typed filter request. Export opens
+the native PDF Save dialog directly. The action captures the report identity or
+effective event filters, initiating session and UI language before opening Save.
+Simplified Chinese
 (`zh`) produces a Simplified Chinese PDF. All other UI languages produce English.
 
 - **Batch production report.** One statistics table covers the selected Batch,

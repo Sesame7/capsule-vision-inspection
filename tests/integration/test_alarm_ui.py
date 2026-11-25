@@ -1,6 +1,6 @@
 """Guest startup monitoring, authorized saves and History in the real shell."""
 
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -23,21 +23,11 @@ from tests.support.startup import (
 
 from capsule_vision.application.account_maintenance import initialize_administrator
 from capsule_vision.application.alarm_records import AlarmEvent, AlarmQuery, AlarmRecord
-from capsule_vision.application.audit import (
-    AuditOperation,
-    AuditQuery,
-    AuditUnavailable,
-    RevisionEvidence,
-)
-from capsule_vision.application.identity_models import (
-    AuthorizationError,
-    Role,
-    StaleSessionError,
-)
+from capsule_vision.application.audit import AuditQuery
+from capsule_vision.application.identity_models import AuthorizationError, Role
 from capsule_vision.application.models import ConfigurationIdentity
 from capsule_vision.application.startup import load_startup
 from capsule_vision.communication.endpoints import FinsTcpEndpoint
-from capsule_vision.configuration import ConfigurationError
 from capsule_vision.configuration.alarm_definitions import TEMPLATE
 from capsule_vision.configuration.communication_preferences import (
     CommunicationPreferences,
@@ -110,9 +100,6 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
                     window.history_tabs.indexOf(window.alarm_page)
                 )
             )
-            for command in (app.create_alarm_definitions, app.alarm_definitions_path):
-                with pytest.raises(AuthorizationError):
-                    command()
             assert not page.alarm_panel.findChildren(QMenu)
             with pytest.raises(AuthorizationError):
                 app.alarm_page(AlarmQuery())
@@ -133,25 +120,23 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
                     window.history_tabs.indexOf(window.alarm_page)
                 )
             )
-            with pytest.raises(AuthorizationError):
-                app.create_alarm_definitions()
             assert not window.history_tabs.isTabEnabled(
                 window.history_tabs.indexOf(window.audit_page)
             )
             app.start_batch("Batch P").result(WAIT)
             identity.login("Tech", TEST_PASSWORD).result(WAIT)
             window.identity_controls.refresh()
-            with ThreadPoolExecutor(max_workers=1) as worker:
-                worker.submit(app.create_alarm_definitions).result(WAIT)
-            path = app.alarm_definitions_path()
-            assert path.read_bytes() == TEMPLATE.read_bytes()
+            path = data.root / "alarm_definitions.json"
+            frozen = app.alarm_snapshot().definitions
+            assert frozen and frozen.origin == "bundled" and not path.exists()
             assert len(app.alarm_page(AlarmQuery()).result(WAIT)) == 1
             # Editing while live does not reactivate it. A saved target change does.
-            content = path.read_text(encoding="utf-8").replace(
+            content = TEMPLATE.read_text(encoding="utf-8").replace(
                 '"en": "Start inhibited: homing required"',
                 '"en": "Start inhibited: homing required", "translations": {"de": "Referenzfahrt erforderlich"}',
             )
             path.write_text(content, encoding="utf-8")
+            assert app.alarm_snapshot().definitions == frozen
             page.alarm_port.setValue(second.port)
             page.alarm_address.setValue(211)
             assert page.alarm_address.value() == 211
@@ -229,105 +214,6 @@ def test_saved_monitor_runs_across_guest_login_start_stop_and_saved_changes(
         finally:
             close_window(window)
             delivery.detach()
-
-
-def test_alarm_file_commands_remain_authorized_without_a_card_menu(
-    qapp: QApplication, tmp_path: Path
-) -> None:
-    data = saved_data(tmp_path)
-    startup = authenticated_startup(data)
-    app, identity = startup.application, startup.application.identity
-    assert identity is not None
-    delivery = FutureDelivery()
-    window = create_window(startup, delivery)
-    page, path = window.communication, app.alarm_definitions_path()
-    try:
-        assert not page.alarm_panel.findChildren(QMenu)
-        page.alarm_port.setValue(10001)
-        with ThreadPoolExecutor(max_workers=1) as worker:
-            assert (
-                worker.submit(app.preview_alarm_definitions).result(WAIT).origin
-                == "bundled"
-            )
-            worker.submit(app.create_alarm_definitions).result(WAIT)
-            assert path.read_bytes() == TEMPLATE.read_bytes() and page.dirty
-            with pytest.raises(FileExistsError):
-                worker.submit(app.create_alarm_definitions).result(WAIT)
-            path.write_bytes(b"{broken")
-            with pytest.raises(ConfigurationError):
-                worker.submit(app.create_alarm_definitions).result(WAIT)
-            assert path.read_bytes() == b"{broken"
-            with pytest.raises(ConfigurationError):
-                worker.submit(app.preview_alarm_definitions).result(WAIT)
-        ops = identity.audit_page(AuditQuery(action="alarm_definitions.create")).result(
-            WAIT
-        )
-        assert [row.outcome for row in ops] == ["failed", "failed", "success"]
-        assert all(
-            row.operation.target == path.name and row.operation.username == "TestAdmin"
-            for row in ops
-        )
-        assert not data.communication.exists() and app.alarm_snapshot().state == "off"
-        identity.logout()
-        with pytest.raises(AuthorizationError):
-            app.alarm_definitions_path()
-        with pytest.raises(AuthorizationError):
-            app.create_alarm_definitions()
-        assert path.read_bytes() == b"{broken"
-    finally:
-        close_window(window)
-        delivery.detach()
-
-
-def test_creating_alarm_file_requires_durable_intent_and_current_session(
-    qapp: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    startup = authenticated_startup(saved_data(tmp_path))
-    app, identity = startup.application, startup.application.identity
-    assert identity is not None
-    delivery = FutureDelivery()
-    window = create_window(startup, delivery)
-    path = app.alarm_definitions_path()
-    try:
-        gate: Future[None] = Future()
-        entered = Event()
-
-        def pending(
-            _op: AuditOperation, evidence: RevisionEvidence | None = None
-        ) -> Future[None]:
-            assert evidence is None
-            entered.set()
-            return gate
-
-        with monkeypatch.context() as held, ThreadPoolExecutor(max_workers=1) as worker:
-            held.setattr(identity.audit, "intent", pending)
-            creating = worker.submit(app.create_alarm_definitions)
-            try:
-                until(entered.is_set)
-                identity.logout()
-                window.identity_controls.refresh()
-            finally:
-                gate.set_result(None)
-            with pytest.raises(StaleSessionError):
-                creating.result(WAIT)
-            assert not path.exists()
-        identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
-
-        def no_audit(
-            _op: AuditOperation, evidence: RevisionEvidence | None = None
-        ) -> Future[None]:
-            assert evidence is None
-            unavailable: Future[None] = Future()
-            unavailable.set_exception(AuditUnavailable("isolated audit failure"))
-            return unavailable
-
-        monkeypatch.setattr(identity.audit, "intent", no_audit)
-        with pytest.raises(AuditUnavailable):
-            app.create_alarm_definitions()
-        assert not path.exists()
-    finally:
-        close_window(window)
-        delivery.detach()
 
 
 def test_alarm_review_scoped_filters_pagination_and_stale_delivery(

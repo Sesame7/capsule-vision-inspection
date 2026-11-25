@@ -105,12 +105,9 @@ class ReportRequest:
             raise ValueError("A persisted Batch identity is required")
 
 
-def batch_report_request(value: object) -> ReportRequest:
-    if isinstance(value, str):
-        return ReportRequest("batch", batch=value)
-    if isinstance(value, ReportRequest):
-        return value
-    raise ValueError("Unsupported report request")
+def validate_batch_report_request(request: object) -> None:
+    if not isinstance(request, ReportRequest):
+        raise ValueError("Unsupported report request")
 
 
 def capture_report(

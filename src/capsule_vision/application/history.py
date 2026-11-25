@@ -61,9 +61,9 @@ from .records_query import BatchChoices, RecordsScope
 from .report_scope import HistoryQuery as HistoryQuery
 from .report_scope import (
     ReportRequest,
-    batch_report_request,
     capture_report,
     register_result_filter,
+    validate_batch_report_request,
 )
 from .report_scope import ResultFilter as ResultFilter
 
@@ -153,10 +153,9 @@ class HistoryReader(Protocol):
 
     def batch_page(
         self,
-        prefix: str = "",
+        *,
         cursor: tuple[float, str] | None = None,
         newer: bool = False,
-        *,
         since: int | None = None,
         until: int | None = None,
         batch: str | None = None,
@@ -961,10 +960,9 @@ class ProductionHistory:
 
     def batch_page(
         self,
-        prefix: str = "",
+        *,
         cursor: tuple[float, str] | None = None,
         newer: bool = False,
-        *,
         since: int | None = None,
         until: int | None = None,
         batch: str | None = None,
@@ -972,7 +970,7 @@ class ProductionHistory:
     ) -> Future[BatchList]:
         return self._command(
             lambda db: batch_review.page(
-                db, prefix, cursor, newer, since, until, self.clock(), batch, unbatched
+                db, cursor, newer, since, until, self.clock(), batch, unbatched
             ),
             read_only=True,
         )
@@ -1053,16 +1051,16 @@ class ProductionHistory:
         return self._command(write, reserved=False)
 
     def capture_report(
-        self, batch: str | ReportRequest, snapshot: Path, cancel: Event
+        self, batch: ReportRequest, snapshot: Path, cancel: Event
     ) -> Future[None]:
-        request = batch_report_request(batch)
+        validate_batch_report_request(batch)
 
         def capture(db: sqlite3.Connection) -> None:
             with self._lock:
                 loss_run = self._loss_run
             capture_report(
                 db,
-                request,
+                batch,
                 snapshot,
                 self.clock(),
                 loss_run,

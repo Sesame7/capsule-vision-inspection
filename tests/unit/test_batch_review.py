@@ -35,6 +35,7 @@ from capsule_vision.application.batch_review import (
     StartAccount,
 )
 from capsule_vision.application.history import HistoryContext, ProductionHistory
+from capsule_vision.application.history_review import open_history_review
 from capsule_vision.application.identity import LocalIdentity
 from capsule_vision.application.identity_models import (
     AuthorizationError,
@@ -167,7 +168,7 @@ def test_review_legacy_evidence_retention_exact_segments_and_unbatched_runs(
             finish(history)
 
 
-def test_batch_search_and_recent_activity_keyset_with_equal_timestamps(
+def test_batch_filters_and_recent_activity_keyset_with_equal_timestamps(
     tmp_path: Path,
 ) -> None:
     now = 1000.0
@@ -179,33 +180,40 @@ def test_batch_search_and_recent_activity_keyset_with_equal_timestamps(
             if i:
                 history.start_run(row.uuid, f"shift-{i}", RECIPE, None).result(WAIT)
                 history.finish_run(f"shift-{i}", "stopped", False).result(WAIT)
-        history.select_batch("lot-01").result(WAIT)
+        other = history.select_batch("lot-01").result(WAIT)
+        assert other
         batch = history.select_batch("LOT-00").result(WAIT)
         assert batch
         now += 10
         history.start_run(batch.uuid, "new-run", RECIPE, None).result(WAIT)
-        first = history.batch_page("LOT-").result(WAIT)
+        first = history.batch_page().result(WAIT)
         assert (
             first.more
             and first.rows[0].uuid == batch.uuid
             and first.rows[0].last is None
         )
-        second = history.batch_page("LOT-", first.rows[-1].cursor).result(WAIT)
-        assert not second.more and len(second.rows) == 1
-        assert len({r.uuid for r in (*first.rows, *second.rows)}) == 51
+        second = history.batch_page(cursor=first.rows[-1].cursor).result(WAIT)
+        assert not second.more and len(second.rows) == 2
+        assert len({r.uuid for r in (*first.rows, *second.rows)}) == 52
         assert (
-            history.batch_page("LOT-", second.rows[0].cursor, True).result(WAIT).rows
+            history.batch_page(cursor=second.rows[0].cursor, newer=True)
+            .result(WAIT)
+            .rows
             == first.rows
         )
-        assert not history.batch_page("%").result(WAIT).rows
-        day = history.batch_page("LOT-", since=1000, until=2000).result(WAIT)
-        assert day == first
+        (selected,) = history.batch_page(batch=other.uuid).result(WAIT).rows
+        assert (selected.uuid, selected.label) == (other.uuid, "lot-01")
+        day = history.batch_page(since=1000, until=2000).result(WAIT)
+        assert day.more and len(day.rows) == 50 and day.rows[0] == first.rows[0]
         next_day_page = history.batch_page(
-            "LOT-", day.rows[-1].cursor, since=1000, until=2000
+            cursor=day.rows[-1].cursor, since=1000, until=2000
         ).result(WAIT)
-        assert next_day_page == second
+        assert not next_day_page.more
+        assert day.rows + next_day_page.rows == tuple(
+            r for r in first.rows + second.rows if r.uuid != other.uuid
+        )
         previous = history.batch_page(
-            "LOT-", next_day_page.rows[0].cursor, True, since=1000, until=2000
+            cursor=next_day_page.rows[0].cursor, newer=True, since=1000, until=2000
         ).result(WAIT)
         assert previous.rows == day.rows and not previous.more
         history.finish_run("new-run", "stopped", False).result(WAIT)
@@ -226,6 +234,16 @@ def test_batch_search_and_recent_activity_keyset_with_equal_timestamps(
         assert history.batch_detail(batch.uuid).result(WAIT).run_count == 52
     finally:
         finish(history)
+
+    with open_history_review(tmp_path) as portable:
+        page = portable.batch_page(since=1000, until=2000).result(WAIT)
+        assert page.more and [r.uuid for r in page.rows] == [r.uuid for r in day.rows]
+        tail = portable.batch_page(
+            cursor=page.rows[-1].cursor, since=1000, until=2000
+        ).result(WAIT)
+        assert tail == next_day_page
+        assert portable.batch_page(batch=other.uuid).result(WAIT).rows == (selected,)
+        assert not portable.batch_page(batch=other.uuid, since=1000).result(WAIT).rows
 
 
 def test_run_overlap_and_activity_use_individual_recorded_runs(tmp_path: Path) -> None:

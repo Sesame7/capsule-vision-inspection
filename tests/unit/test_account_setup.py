@@ -64,7 +64,7 @@ def test_online_first_administrator_is_exclusive_and_does_not_login(
             and owner.storage_snapshot().state is StorageState.READY
         )
         assert owner.login("First", SECRET).result(WAIT).role is Role.ADMINISTRATOR
-        assert len(owner.list_accounts().result(WAIT)) == 1
+        assert len(owner.account_management().result(WAIT).accounts) == 1
     with closing(sqlite3.connect(path.with_name("audit.sqlite3"))) as db:
         assert db.execute(
             "SELECT actor_id,target,outcome FROM operations JOIN completions USING(id) WHERE action='account.create' AND outcome='success'"
@@ -191,7 +191,7 @@ def test_rotation_is_durable_restricted_and_revision_fenced(
         with pytest.raises(AuthorizationError):
             owner.login("Admin", SECRET)
         with pytest.raises(AuthorizationError):
-            owner.list_accounts()
+            owner.account_management()
         with pytest.raises(AuthorizationError):
             owner.change_password("temporary credential", SECRET)
         with pytest.raises(PasswordReuseError):

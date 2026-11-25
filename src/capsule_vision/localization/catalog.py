@@ -93,7 +93,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "customer_audit_required": ("必需证据", "Required evidence"),
     "customer_audit_slot": ("位置", "Slot"),
     "customer_audit_capacity": ("待处理上限", "Pending limit"),
-    "customer_positions": ("受影响胶囊位置数", "Affected capsule positions"),
     "customer_first": ("首次检测", "First inspection"),
     "customer_last": ("最近检测", "Latest inspection"),
     "customer_prepared": (
@@ -119,10 +118,6 @@ STRINGS: dict[str, tuple[str, str]] = {
     "customer_errors": (
         "技术异常：{count} 次。",
         "Technical errors: {count}.",
-    ),
-    "customer_deferred": (
-        "此记录类型暂不支持导出",
-        "Export is not available for this record type",
     ),
     "customer_select_batch": ("请选择一个批次", "Select a Batch"),
     "export_batch": ("批次汇总", "Batch summary"),

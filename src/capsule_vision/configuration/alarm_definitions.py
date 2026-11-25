@@ -8,7 +8,7 @@ from typing import BinaryIO, cast
 
 from capsule_vision.localization.languages import Language, is_language
 
-from ._io import atomic_write, decode_json
+from ._io import decode_json
 from .errors import ConfigurationError
 
 CATEGORIES = ("equipment", "interlock", "startup", "software")
@@ -134,9 +134,7 @@ def _decode(raw: bytes, origin: str) -> AlarmDefinitions:
     )
 
 
-def load_alarm_definitions(
-    local: Path, *, bundled_fallback: bool = True
-) -> AlarmDefinitions:
+def load_alarm_definitions(local: Path) -> AlarmDefinitions:
     origin = "equipment"
     try:
         try:
@@ -144,8 +142,6 @@ def load_alarm_definitions(
         except FileNotFoundError as exc:
             if local.is_symlink():
                 raise ValueError("Local alarm definition link has no target") from exc
-            if not bundled_fallback:
-                raise
             origin = "bundled"
             stream = TEMPLATE.open("rb")
         with stream:
@@ -154,21 +150,3 @@ def load_alarm_definitions(
         raise ConfigurationError(
             f"Invalid alarm definitions ({local if origin == 'equipment' else TEMPLATE}): {exc}"
         ) from exc
-
-
-def create_local_alarm_definitions(local: Path) -> None:
-    """Publish the exact bundled file once, including in a race with an external editor."""
-    try:
-        local.lstat()
-    except FileNotFoundError:
-        with TEMPLATE.open("rb") as stream:
-            raw = _read(stream)
-        _decode(raw, "bundled")
-        local.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            atomic_write(local, raw.decode("utf-8"), exclusive=True, newline="")
-            return
-        except FileExistsError:
-            pass  # Inspect the file that won the publication race.
-    load_alarm_definitions(local, bundled_fallback=False)
-    raise FileExistsError(f"Local alarm file already exists: {local}")

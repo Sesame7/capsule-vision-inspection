@@ -451,9 +451,6 @@ class LocalIdentity:
 
             return self._enqueue(execute)
 
-    def list_accounts(self) -> Future[tuple[Account, ...]]:
-        return self._admin(lambda store: store.accounts())
-
     def account_management(self) -> Future[AccountManagementSnapshot]:
         def read(store: AccountStore) -> AccountManagementSnapshot:
             accounts = store.accounts()

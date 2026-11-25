@@ -187,10 +187,9 @@ class HistoryReview:
 
     def batch_page(
         self,
-        prefix: str = "",
+        *,
         cursor: tuple[float, str] | None = None,
         newer: bool = False,
-        *,
         since: int | None = None,
         until: int | None = None,
         batch: str | None = None,
@@ -198,7 +197,7 @@ class HistoryReview:
     ) -> Future[BatchList]:
         return self._submit(
             lambda db: batch_review.page(
-                db, prefix, cursor, newer, since, until, time(), batch, unbatched
+                db, cursor, newer, since, until, time(), batch, unbatched
             )
         )
 

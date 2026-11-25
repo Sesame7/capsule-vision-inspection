@@ -278,14 +278,15 @@ def test_batch_pdf_requires_current_query_and_keeps_admitted_batch(
     try:
         history = startup.application.history
         assert history is not None
+        pages: list[BatchList] = []
         for label in ("Lot Alpha", "Lot Beta"):
             lot = history.select_batch(label).result(WAIT)
             assert lot
             run = f"run-{label}"
             history.start_run(lot.uuid, run, RECIPE, FOUR_CYCLE).result(WAIT)
             history.finish_run(run, "stopped", False).result(WAIT)
-        alpha_page = history.batch_page("Lot Alpha").result(WAIT)
-        beta_page = history.batch_page("Lot Beta").result(WAIT)
+            pages.append(history.batch_page(batch=lot.uuid).result(WAIT))
+        alpha_page, beta_page = pages
         alpha, beta = alpha_page.rows[0], beta_page.rows[0]
         window.show()
         window.set_language("en")

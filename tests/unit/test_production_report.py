@@ -108,7 +108,8 @@ def test_pdf_uses_only_selected_batch_and_persisted_physical_outcomes(
             6,
             4,
         )
-        path = app.export_report(batch.uuid, tmp_path / "report.pdf", language).result(
+        request = ReportRequest("batch", batch=batch.uuid)
+        path = app.export_report(request, tmp_path / "report.pdf", language).result(
             WAIT
         )
         body = pdf_text(path)
@@ -118,7 +119,7 @@ def test_pdf_uses_only_selected_batch_and_persisted_physical_outcomes(
         assert "Other" not in body and str(first) not in body and "CH01" not in body
         assert context.run_id not in body and RECIPE.model_sha256 not in body
         snapshot = tmp_path / "summary.db"
-        history.capture_report(batch.uuid, snapshot, Event()).result(WAIT)
+        history.capture_report(request, snapshot, Event()).result(WAIT)
         with closing(sqlite3.connect(snapshot)) as db:
             data = ReportData(db, language, Event())
             (table,) = data.tables()
@@ -182,7 +183,9 @@ def test_expiry_interruption_and_empty_batch_do_not_invent_detail(
         empty = history.select_batch("No Runs").result(WAIT)
         assert empty
         empty_text = pdf_text(
-            app.export_report(empty.uuid, tmp_path / "empty.pdf", "ja").result(WAIT)
+            app.export_report(
+                ReportRequest("batch", batch=empty.uuid), tmp_path / "empty.pdf", "ja"
+            ).result(WAIT)
         )
         assert (
             "Batch Production Report" in empty_text
@@ -200,7 +203,9 @@ def test_expiry_interruption_and_empty_batch_do_not_invent_detail(
         assert "Batch Total" in empty_matrix and "Run 1" not in empty_matrix
         assert "Inspected" in empty_matrix and empty_matrix.count("—") == 2
         expired = pdf_text(
-            app.export_report(batch.uuid, tmp_path / "expired.pdf", "en").result(WAIT)
+            app.export_report(
+                ReportRequest("batch", batch=batch.uuid), tmp_path / "expired.pdf", "en"
+            ).result(WAIT)
         )
         assert "20.00%" in expired and "First inspection" in expired
         assert (
@@ -240,10 +245,11 @@ def test_active_export_is_a_consistent_snapshot_and_releases_actual_worker(
         app.start().result(WAIT)
         batch = app.snapshot().batch_uuid
         assert batch
-        export = app.export_report(batch, target, "en", cancel=cancel)
+        request = ReportRequest("batch", batch=batch)
+        export = app.export_report(request, target, "en", cancel=cancel)
         assert entered.wait(WAIT)
         with pytest.raises(ApplicationStateError, match="already"):
-            app.export_report(batch, target, "en")
+            app.export_report(request, target, "en")
         cycle = app.begin_cycle(CycleId(1))
         session.cycles[0].accepted.set_result(None)
         session.cycles[0].result.set_result(mixed_result(1))
@@ -292,7 +298,7 @@ def test_session_replacement_prevents_unpublished_report(
         app.start_batch("Selected").result(WAIT)
         batch = app.snapshot().batch_uuid
         assert batch
-        result = app.export_report(batch, target, "en")
+        result = app.export_report(ReportRequest("batch", batch=batch), target, "en")
         assert entered.wait(WAIT)
         identity.login("TestAdmin", TEST_PASSWORD).result(WAIT)
         release.set()
@@ -332,7 +338,8 @@ def test_compact_export_omits_exposure_rows_and_releases_spools_on_disk_failure(
     app = ProductionApplication(lambda _p, _g: FakeSession(), history=history)
     target = tmp_path / "combined.pdf"
     try:
-        body = pdf_text(app.export_report(batch.uuid, target, "en").result(WAIT))
+        request = ReportRequest("batch", batch=batch.uuid)
+        body = pdf_text(app.export_report(request, target, "en").result(WAIT))
         assert "20.00%" in body and "CH01" not in body and "116" not in body
         before = target.read_bytes()
 
@@ -342,7 +349,7 @@ def test_compact_export_omits_exposure_rows_and_releases_spools_on_disk_failure(
         with monkeypatch.context() as patch:
             patch.setattr(Canvas, "save", disk_full)
             with pytest.raises(OSError, match="Archive full"):
-                app.export_report(batch.uuid, target, "en").result(WAIT)
+                app.export_report(request, target, "en").result(WAIT)
         assert target.read_bytes() == before
         assert not list(tmp_path.glob("*.tmp"))
     finally:
