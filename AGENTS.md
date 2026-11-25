@@ -58,8 +58,9 @@ for interactive-desktop evidence, normal launch/Close and protected-asset checks
 - Production is passive to external hardware triggers and never commands W10.7.
   Preserve early serial inspection, channel identity and configured FINS/Modbus
   reporting, including the default FINS W49–W52 layout.
-  Result/accounting delivery must not depend on UI/Web speed. Display overlays
-  require matching generation, cycle, complete FrameId and image dimensions.
+  Result/accounting delivery must not depend on UI/Web speed. Frame-specific
+  display evidence requires matching generation, cycle, complete FrameId and
+  image dimensions.
 - Qt never infers or waits on unfinished `Future.result()`/`join()`. Worker
   callbacks never mutate widgets; use queued delivery. Bound latest display/Web
   caches and keep artifact hashing outside GUI dispatch.

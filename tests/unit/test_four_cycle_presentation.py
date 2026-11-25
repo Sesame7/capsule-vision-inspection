@@ -173,7 +173,7 @@ def test_fourth_display_delayed_publication_missing_camera_and_newer_frames(
     assert rows[0]["result_status"] == "matched"
     assert rows[2]["image_status"] == "unavailable"
     assert rows[2]["group_channels"][2]["states"] == ["ng"] * 4
-    # Pending next group keeps the old eligible picture and its own overlays.
+    # Pending next group keeps the eligible fourth frame and its matching result.
     store.select_fourth(1, CycleId(8))
     store.retain_fourth_result(1, mixed_result(8))
     store.publish(source_frame(cameras[2], cycle=8), generation=1)

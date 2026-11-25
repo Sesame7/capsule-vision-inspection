@@ -185,7 +185,15 @@ def test_nonblocking_start_polling_commands_and_deferred_close(
     assert not window.isVisible()
 
 
-def test_frames_match_identity_bgr_and_clear_stale_overlay(
+def _assert_viewport_color(card: CameraCard, color: QColor) -> None:
+    painted = card.viewport.grab().toImage()
+    assert not painted.isNull()
+    expected = painted.copy()
+    expected.fill(color)
+    assert painted == expected
+
+
+def test_frames_show_source_pixels_and_match_channel_results_by_identity(
     screen: tuple[MainWindow, FakeSession],
 ) -> None:
     window, session = screen
@@ -200,7 +208,7 @@ def test_frames_match_identity_bgr_and_clear_stale_overlay(
     store.publish(frame, generation=1)
     receipt = window.bridge.application.begin_cycle(CycleId(1))
     session.cycles[0].accepted.set_result(None)
-    # Golden synthetic production has a real lightweight defect bbox in CAM1.
+    # One effective finding and one unassigned finding on the same CAM1 frame.
     from capsule_vision.inference import BoundingRect
     from capsule_vision.inspection.production import (
         ChannelId,
@@ -239,9 +247,10 @@ def test_frames_match_identity_bgr_and_clear_stale_overlay(
     assert receipt.result.done()
     until(lambda: window.cards[0].result is not None)
     card = window.cards[0]
-    assert card.viewport.boxes == (finding.bounding_rect,)
-    assert card.viewport.overlays == ((finding.bounding_rect, "label-0 · 12 px²"),)
-    assert card.viewport.accessibleDescription() == "label-0 · 12 px²"
+    assert card.result is not None and card.result.assigned_findings == assigned
+    assert text("ng", window.language) in card.indicators[0].accessibleName()
+    card.viewport.setFixedSize(360, 120)  # Exact aspect ratio of the 60×20 source.
+    _assert_viewport_color(card, QColor(210, 34, 12))
     # A candidate layout change must not relabel the retained matching result.
     original_layout = card.camera_layout
     card.camera_layout = replace(
@@ -298,7 +307,7 @@ def test_frames_match_identity_bgr_and_clear_stale_overlay(
     assert card.viewport.conversions == count
     store.publish(source_frame(cycle=2), generation=1)
     until(lambda: card.result is None)
-    assert not card.viewport.boxes and card.viewport.conversions == count + 1
+    assert card.viewport.conversions == count + 1
     assert all(not button.pixmap().isNull() for button in card.indicators)
     # Correct camera address, independent of arrival ordering.
     store.publish(source_frame(CameraId("CAM6"), cycle=2), generation=1)
@@ -960,8 +969,8 @@ def test_initial_reference_pixels_are_not_production_frames(
     window.bridge.refresh()
     assert len(window.bridge.frames.snapshot().frames) == 6
     for card in window.cards:
-        assert card.viewport.image.isNull() and not card.viewport.message
-        assert card.result is None and not card.viewport.boxes
+        assert card.viewport.image.isNull()
+        assert card.result is None
         assert all(
             text("pending", window.language) in b.accessibleName()
             for b in card.indicators
@@ -985,12 +994,12 @@ def test_retained_stop_frames_and_generation_suppression(
     until(lambda: receipt.result.done() and window.cards[0].result is not None)
     card = window.cards[0]
     conversions = card.viewport.conversions
+    pixels = card.viewport.image.copy()
     counts = window.snapshot.counters
     window.buttons["stop"].click()
     until(lambda: window.snapshot.state is ApplicationState.READY)
-    assert not card.viewport.image.isNull()
+    assert not pixels.isNull() and card.viewport.image == pixels
     assert card.result is not None
-    assert not card.viewport.message
     assert window.snapshot.counters == counts
     # Immutable snapshot presentation: a new session never reuses old result indicators.
     window.bridge.snapshot_changed.emit(
@@ -1001,11 +1010,10 @@ def test_retained_stop_frames_and_generation_suppression(
             latest_production_result=None,
         )
     )
-    assert card.result is None and not card.viewport.boxes
+    assert card.result is None
     assert all(
         text("pending", window.language) in b.accessibleName() for b in card.indicators
     )
-    assert not card.viewport.message
     assert card.viewport.conversions == conversions
     assert (
         card.viewport.image.isNull()
@@ -1022,7 +1030,7 @@ def test_retained_stop_frames_and_generation_suppression(
     )  # Even an identical cycle/sequence needs the new generation.
     window.bridge.frames.publish(source_frame(), generation=2)
     window.bridge.frames_changed.emit(window.bridge.frames.snapshot())
-    assert card.result is not None and not card.viewport.message
+    assert card.result is not None
 
 
 def test_active_recipe_name_and_unactivated_replacement(
@@ -1738,9 +1746,10 @@ def test_quiet_empty_canvas_does_not_misclassify_valid_dark_pixels(
     window, _ = screen
     window.set_language(language)
     card = window.cards[0]
+    card.viewport.setFixedSize(360, 120)
     assert card.viewport.image.isNull()
     assert text("no_display_frame", language) in card.viewport.accessibleName()
-    assert not card.viewport.message
+    _assert_viewport_color(card, QColor("#0d0f12"))
     # The shared seed is black; publish transfers an independent owned display copy.
     frame = source_frame()
     assert np.count_nonzero(frame.image) == 0
@@ -1753,13 +1762,15 @@ def test_quiet_empty_canvas_does_not_misclassify_valid_dark_pixels(
     assert card.viewport.image.pixelColor(0, 0) == QColor(0, 0, 0)
     assert text("no_display_frame", language) not in card.viewport.accessibleName()
     assert card.result is None
-    assert card.viewport.message == text("pending", language)
+    _assert_viewport_color(card, QColor(0, 0, 0))
+    assert text("pending", language) in card.indicators[0].accessibleName()
     assert window.snapshot.counters == ProductionCounters()
     # A new generation suppresses old pixels; lack of evidence alone did not.
     window.bridge.snapshot_changed.emit(
         replace(window.snapshot, state=ApplicationState.STARTING, generation=2)
     )
-    assert card.viewport.image.isNull() and not card.viewport.message
+    assert card.viewport.image.isNull()
+    _assert_viewport_color(card, QColor("#0d0f12"))
     assert text("no_display_frame", language) in card.viewport.accessibleName()
 
 
@@ -2031,7 +2042,6 @@ def _assert_camera_header_stability(
         assert button.size() == QSize(Style.touch, Style.touch)
         assert str(camera.layout.slots[index].channel_id) in button.accessibleName()
         assert group.rect().contains(button.geometry())
-    assert not card.viewport.message
     assert text("execution_error", window.language) in window.event_label.text()
 
 

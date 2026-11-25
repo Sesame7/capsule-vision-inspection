@@ -720,8 +720,8 @@ Inspection keeps each otherwise eligible representative below its minimum as
 separate area-filtered evidence for four-exposure archiving and review. It carries
 the original FrameId, channel assignment, label, rectangle and whole SDK area.
 Inspection, PLC reporting and Batch classification consume effective channel
-results. Live defect overlays show the retained rectangles with captions such as
-`Dent · 423 px²`. See the
+results. Records shows stored ViMo rectangles on archived images. Their captions
+include the Mask Area when recorded, for example `Dent · 423 px²`. See the
 [PLC projection contract](communication.md#first-station-registers) for reject bits.
 
 Occupancy always measures the centered `max(1, width*70//100)` portion of the saved
@@ -1726,7 +1726,9 @@ fault-recovery action. Basler control only affects software admission, never
 equipment or PLC mode. Empty canvases and routine acquisition waits stay quiet.
 Read-only channel symbols show camera, channel and the short observed state in
 tooltips and accessibility, without expanding runtime evidence.
-Only identity-matched results draw defect boxes.
+Each Inspect viewport fits the unannotated source image in its original aspect
+ratio and orientation. An unavailable image leaves the viewport blank. Camera
+identity, channel indicators and timing appear in the card header.
 
 Production shows localized Cycles, `OK`, `NG`, `EMPTY` and `Δt` captions for completed
 cycles, channel occurrences and last inspection duration. Counts come directly
@@ -1754,7 +1756,7 @@ retain the effective mode. Selecting or restoring a Batch adopts its recorded
 mode when available and retains the current mode otherwise. Both cumulative stores
 survive Stop/Start and Recipe changes and remain separate across mode changes.
 Selecting a Batch loads its summaries and last eligible group duration and clears
-current result overlays and group progress. Retained pixels do not carry the
+current result indications and group progress. Retained pixels do not carry the
 cleared judgments.
 Confirmed unbatched clearing resets both counter sets, recent result indications
 and group duration in memory. It preserves the effective counting mode and any
@@ -1774,7 +1776,9 @@ detailed diagnostic evidence remains in the stored record.
 
 Rendering is not result completion or accounting. The display store owns separate
 bounded latest-per-camera copies with generation, cycle, complete FrameId,
-dimensions and source key. Only matching evidence may overlay those pixels.
+dimensions and source key. Camera timing and per-Cycle channel results require
+a matching frame. Inspect retains the last image on Stop and hides prior-generation
+pixels during a new Start.
 Single-cycle PLC groups use the ordinary identity-matched single-Cycle image and
 single-result indicators, with authoritative physical-group counters. Group
 counting and four-exposure display are separate snapshot facts.
@@ -1784,11 +1788,11 @@ camera, plus their matching fourth result evidence. Eligibility promotes only
 matching fourth pixels and clears cameras whose fourth frame is absent or invalid.
 An exact fourth callback arriving late may fill its missing image; an earlier or
 later frame cannot substitute. During the next incomplete group, the previous
-eligible image retains its own fourth result/overlays and identity tooltip. New
-generation/configuration boundaries invalidate compatibility; pending copies are
-released on session cleanup. The display store keeps only the fourth-exposure
-candidate and eligible image. The [archive worker](#image-archiving) owns the
-originals retained for group archiving.
+eligible image keeps its fourth-frame timing and identity tooltip while the
+channel lamps follow the new group's progress. Generation and configuration
+changes invalidate incompatible frames. Session cleanup releases pending copies.
+The display store keeps only the fourth-exposure candidate and eligible image.
+The [archive worker](#image-archiving) owns the originals retained for group archiving.
 
 The Qt camera header centers six four-cycle channel groups in configured order
 between camera identity and timing. Each 28×28 logical-pixel slot holds a 2×2

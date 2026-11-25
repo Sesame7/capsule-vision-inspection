@@ -1,4 +1,4 @@
-"""Six-channel card with owned QImage and image-space hollow evidence boxes."""
+"""Inspect camera card with a source image and six channel indicators."""
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPaintEvent, QPen
@@ -14,17 +14,14 @@ from PySide6.QtWidgets import (
 
 from capsule_vision.application import ApplicationState, ProductionApplicationSnapshot
 from capsule_vision.display import DisplayFrame, matching_camera
-from capsule_vision.inference import BoundingRect
 from capsule_vision.inspection.production import (
     CameraInspectionResult,
     CameraLayout,
-    ProductJudgment,
     TechnicalStatus,
 )
 from capsule_vision.localization.catalog import text
 from capsule_vision.localization.languages import Language
 
-from .finding_overlay import draw_findings, finding_caption
 from .production_presentation import (
     Indicator,
     channel_indicator,
@@ -47,12 +44,6 @@ class CameraViewport(QWidget):
         self.image = QImage()
         self.revision = -1
         self.conversions = 0
-        self.overlays: tuple[tuple[BoundingRect, str], ...] = ()
-        self.message = ""
-
-    @property
-    def boxes(self) -> tuple[BoundingRect, ...]:
-        return tuple(rect for rect, _ in self.overlays)
 
     def set_frame(self, frame: DisplayFrame | None) -> None:
         revision = frame.revision if frame else -1
@@ -85,16 +76,6 @@ class CameraViewport(QWidget):
             painter.drawImage(
                 QRectF(transform.x, transform.y, transform.width, transform.height),
                 self.image,
-            )
-            draw_findings(painter, transform, self.overlays)
-        if self.message:
-            painter.setPen(QColor(Style.secondary))
-            painter.drawText(
-                self.rect().adjusted(
-                    Style.space, Style.small, -Style.space, -Style.small
-                ),
-                Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-                self.message,
             )
         painter.end()
 
@@ -140,7 +121,6 @@ class CameraCard(QFrame):
         self.camera_layout = layout
         self.setObjectName("camera")
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
-        self._frame: DisplayFrame | None = None
         self._snapshot: ProductionApplicationSnapshot | None = None
         self.result: CameraInspectionResult | None = None
         self.language: Language = "zh"
@@ -206,9 +186,9 @@ class CameraCard(QFrame):
             for indicator in self.indicators:
                 indicator.setFixedSize(size, size)
             self.indicator_group.updateGeometry()
-        self._frame, self._snapshot, self.language = frame, snapshot, language
+        self._snapshot, self.language = snapshot, language
         # Retain Stop pixels, but hide a previous generation during new runtime work.
-        stale = (
+        if (
             frame is not None
             and frame.generation != snapshot.generation
             and snapshot.state
@@ -217,12 +197,13 @@ class CameraCard(QFrame):
                 ApplicationState.RUNNING,
                 ApplicationState.STOPPING,
             )
-        )
-        self.viewport.set_frame(None if stale else frame)
+        ):
+            frame = None
+        self.viewport.set_frame(frame)
         self.result = matching_camera(frame, snapshot)
-        self._render_card()
+        self._render_card(frame)
 
-    def _render_card(self) -> None:
+    def _render_card(self, frame: DisplayFrame | None) -> None:
         palette = theme_colors(self)
         if self._icon_color != palette.primary:
             self._icon_color = palette.primary
@@ -314,42 +295,13 @@ class CameraCard(QFrame):
             )
             else "--"
         )
-        labels: dict[BoundingRect, list[str]] = {}
-        if result:
-            for item in result.assigned_findings:
-                f = item.finding
-                labels.setdefault(f.bounding_rect, []).append(
-                    finding_caption(f.label, f.area)
-                )
-            for row in result.channels:
-                for check in row.checks:
-                    if check.assessment.judgment is ProductJudgment.NG:
-                        for reason in check.reasons:
-                            if reason.bounding_rect is not None:
-                                labels.setdefault(reason.bounding_rect, [])
-        self.viewport.overlays = tuple(
-            (rect, ", ".join(dict.fromkeys(values))) for rect, values in labels.items()
-        )
-        self.viewport.setAccessibleDescription(
-            "\n".join(caption for _, caption in self.viewport.overlays if caption)
-        )
-        self.viewport.message = (
-            text("pending", self.language)
-            if self._frame is not None
-            and self._snapshot is not None
-            and self._snapshot.state is ApplicationState.RUNNING
-            and self._frame.generation == self._snapshot.generation
-            and result is None
-            else ""
-        )
         self.viewport.setAccessibleName(
             f"{name} · {text('no_display_frame', self.language)}"
             if self.viewport.image.isNull()
             else name
         )
         self.viewport.setToolTip(
-            f"{name} · #{self._frame.frame_id.cycle_id} · {self._frame.frame_id.sequence}"
-            if self._frame is not None and not self.viewport.image.isNull()
+            f"{name} · #{frame.frame_id.cycle_id} · {frame.frame_id.sequence}"
+            if frame is not None and not self.viewport.image.isNull()
             else name
         )
-        self.viewport.update()

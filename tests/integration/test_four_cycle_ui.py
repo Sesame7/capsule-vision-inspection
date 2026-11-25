@@ -61,7 +61,7 @@ def test_single_group_uses_matching_single_frame_and_physical_metrics(
         row = payload["cameras"][0]
         assert row["result_status"] == "matched" and "group_channels" not in row
         assert row["image_identity"]["cycle_id"] == 11 and len(row["channels"]) == 6
-        # Advancing results never overlays an earlier image, even within one group mode.
+        # The new result cannot supply channel status for the preceding frame.
         source.value = replace(source.value, latest_production_result=mixed_result(12))
         card.present(frame, source.value, "en")
         assert card.result is None
@@ -121,6 +121,8 @@ def test_lamps_do_not_depend_on_camera_image_and_keep_fourth_evidence(
                 assert all(f"#{cycle}:" in description for cycle in range(1, 5))
                 assert button.accessibleName() == description
             height = card.indicator_group.height()
+            fourth_pixels = card.viewport.grab().toImage()
+            assert card.viewport.toolTip().endswith("· #4 · 7")
             # New incomplete progress leaves image evidence at Cycle 4.
             new = completed(5)
             pending = ReportingGroupProgress(
@@ -133,6 +135,7 @@ def test_lamps_do_not_depend_on_camera_image_and_keep_fourth_evidence(
             )
             card.present(store.snapshot().frames[0], source.value, language)
             assert card.result == result.cameras[0]
+            assert card.viewport.grab().toImage() == fourth_pixels
             assert card.indicators[0].states == ("ok", "pending", "pending", "pending")
             # Blank camera at new eligibility keeps valid group progress.
             store.select_fourth(1, CycleId(8))
@@ -148,7 +151,7 @@ def test_lamps_do_not_depend_on_camera_image_and_keep_fourth_evidence(
                 ),
             )
             card.present(None, source.value, language)
-            assert card.viewport.image.isNull() and not card.viewport.boxes
+            assert card.viewport.image.isNull()
             assert card.indicator_group.height() == height
             publisher.publish()
             publication = publisher.latest()

@@ -150,7 +150,10 @@ implemented attribution, reject projection and completion timing; the
 - Single-Cycle groups retain ordinary single-result indicators and the matching
   single-Cycle image, with physical-group counters.
 - Keep 5/6 responsive camera cards and their six channels per camera. In four-Cycle mode each channel is represented by a stable **2 × 2 mini-tile**. Populate one cell per completed attributable Cycle: first top-left, second top-right, third bottom-left, fourth bottom-right. Green OK, red reject/NG, grey confirmed EMPTY, neutral for not-yet-observed. A new group's first completed Cycle resets the tile sequence.
-- In four-Cycle mode, update each camera's displayed image **once per completed group**, using the corresponding **fourth** frame. Overlays apply only to that displayed frame, never aggregate bounding boxes from earlier frames. The image may therefore remain from the preceding group while the new group's mini-tile advances; the UI must not misrepresent its identity.
+- Inspect displays unannotated source images in every mode. In four-Cycle mode,
+  update each camera's image **once per completed group**, using its matching
+  **fourth** frame. The image keeps its identity while the new group's mini-tile
+  advances.
 - A new eligible group clears any camera lacking its valid matching fourth frame to the startup empty-image state; other cameras display normally. Never substitute another exposure. Incomplete/invalidated groups do not count; phase loss neutralizes unconfirmed progress without retracting prior eligible completions or their retained images.
 - Maintain bounded presentation work; do not add an image cache of all four frames just to animate the UI. Per-Cycle and Folder presentation retain suitable current per-Cycle behavior.
 - Preserve **per-exposure** image saving with independent Recipe OK/NG/ERROR/EMPTY selections, with or without a Batch. After NG and technical ERROR take precedence, a complete camera image with at least one OK capsule and only OK or confirmed EMPTY channels qualifies for OK archiving. Six confirmed EMPTY channels qualify for EMPTY archiving. See [image archiving](architecture.md#image-archiving) for evidence and file codes.
