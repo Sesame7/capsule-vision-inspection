@@ -2,9 +2,11 @@
 
 import sqlite3
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from shutil import copyfile
+from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
 
 from .identity_models import (
@@ -21,10 +23,12 @@ from .identity_models import (
 from .passwords import PasswordVerifier
 
 APPLICATION_ID = 0x43564953
-_COLUMNS_V1 = "account_id, username, username_key, role, enabled, password_version, iterations, salt, digest"
-_COLUMNS_V2 = _COLUMNS_V1 + ", last_login_utc"
-_COLUMNS = _COLUMNS_V2 + ", must_change_password"
-_SCHEMA_V1 = """
+_SCHEMA_VERSION = 4
+_COLUMNS = (
+    "account_id, username, username_key, role, enabled, password_version, "
+    "iterations, salt, digest, last_login_utc, must_change_password"
+)
+_SCHEMA = """
 CREATE TABLE accounts (
     account_id TEXT PRIMARY KEY NOT NULL,
     username TEXT NOT NULL,
@@ -34,16 +38,11 @@ CREATE TABLE accounts (
     password_version INTEGER NOT NULL,
     iterations INTEGER NOT NULL,
     salt BLOB NOT NULL,
-    digest BLOB NOT NULL
+    digest BLOB NOT NULL,
+    last_login_utc TEXT,
+    must_change_password INTEGER NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1))
 );
 """
-_SCHEMA_V2 = _SCHEMA_V1.replace(
-    "digest BLOB NOT NULL", "digest BLOB NOT NULL,\n    last_login_utc TEXT"
-)
-_ROTATION_COLUMN = "must_change_password INTEGER NOT NULL DEFAULT 0 CHECK(must_change_password IN (0,1))"
-_SCHEMA = _SCHEMA_V2.replace(
-    "last_login_utc TEXT", "last_login_utc TEXT, " + _ROTATION_COLUMN
-)
 _AUTO_LOGIN_SCHEMA = """
 CREATE TABLE auto_login (
     slot INTEGER PRIMARY KEY CHECK (slot = 1),
@@ -53,10 +52,46 @@ CREATE TABLE auto_login (
 
 
 def _schema_text(sql: str) -> str:
-    # ALTER TABLE changes whitespace around the appended column's punctuation.
+    # Previously upgraded v4 files can have a space before a comma or parenthesis.
     return (
         " ".join(sql.strip().rstrip(";").split()).replace(" ,", ",").replace(" )", ")")
     )
+
+
+def _require_current_version(connection: sqlite3.Connection) -> None:
+    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    if version != _SCHEMA_VERSION:
+        raise SecurityStorageError(f"Unsupported account schema version {version}")
+
+
+def _check_existing_version(path: Path) -> None:
+    wal = path.with_name(path.name + "-wal")
+    journal = path.with_name(path.name + "-journal")
+    if journal.is_file():
+        # The header can contain an uncommitted version. Let SQLite resolve the
+        # journal on a private copy before admitting recovery of the original.
+        with TemporaryDirectory(dir=path.parent) as directory:
+            probe = Path(directory) / path.name
+            copyfile(path, probe)
+            copyfile(journal, probe.with_name(journal.name))
+            if wal.is_file():
+                copyfile(wal, probe.with_name(wal.name))
+            with closing(sqlite3.connect(probe)) as db:
+                _require_current_version(db)
+        return
+
+    has_wal = wal.is_file()
+    mode = "rw" if has_wal else "ro&immutable=1"
+    with closing(
+        sqlite3.connect(f"{path.as_uri()}?mode={mode}", uri=True, timeout=0.2)
+    ) as db:
+        if has_wal:
+            # Use a private WAL index under the security lease. Closing the
+            # probe must not checkpoint or remove an unsupported file's WAL.
+            db.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+            db.execute("PRAGMA locking_mode=EXCLUSIVE")
+            db.execute("PRAGMA query_only=ON")
+        _require_current_version(db)
 
 
 def _login_time(value: object) -> datetime | None:
@@ -77,15 +112,17 @@ def _login_time(value: object) -> datetime | None:
 
 class AccountStore:
     def __init__(self, path: Path, *, initialize: bool = False) -> None:
-        # mode=rw never repairs or creates a missing database during normal use.
         if path.is_symlink():
             raise SecurityStorageError("Security database must not be a symlink")
+        path = path.resolve()
         if initialize:
             # Never initialize a file that appeared after the missing-file check.
             with path.open("xb"):
                 pass
+        else:
+            _check_existing_version(path)
         self.connection = sqlite3.connect(
-            path.resolve().as_uri() + ("?mode=rwc" if initialize else "?mode=rw"),
+            path.as_uri() + ("?mode=rwc" if initialize else "?mode=rw"),
             uri=True,
             timeout=0.2,
             isolation_level=None,
@@ -96,7 +133,7 @@ class AccountStore:
                     self.connection.execute(_SCHEMA)
                     self.connection.execute(_AUTO_LOGIN_SCHEMA)
                     self.connection.execute(f"PRAGMA application_id={APPLICATION_ID}")
-                    self.connection.execute("PRAGMA user_version=4")
+                    self.connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
             self.validate()
         except BaseException:
             self.connection.close()
@@ -117,38 +154,16 @@ class AccountStore:
             raise
 
     def validate(self) -> None:
-        # Validation and migration share one write transaction, including rollback
-        # of DDL. No invalid v1 database is upgraded, repaired or replaced.
         with self.transaction():
-            version: object = self.connection.execute("PRAGMA user_version").fetchone()[
-                0
-            ]
-            if version not in (1, 2, 3, 4):
-                raise SecurityStorageError("Corrupt or unsupported security database")
-            self._validate_schema(version)
-            if version == 1:
-                self.connection.execute(
-                    "ALTER TABLE accounts ADD COLUMN last_login_utc TEXT"
-                )
-                self.connection.execute("PRAGMA user_version=2")
-                self._validate_schema(2)
-            if version in (1, 2):
-                self.connection.execute(
-                    "ALTER TABLE accounts ADD COLUMN " + _ROTATION_COLUMN
-                )
-                self.connection.execute("PRAGMA user_version=3")
-                self._validate_schema(3)
-            if version in (1, 2, 3):
-                self.connection.execute(_AUTO_LOGIN_SCHEMA)
-                self.connection.execute("PRAGMA user_version=4")
-                self._validate_schema(4)
+            _require_current_version(self.connection)
+            self._validate_schema()
             # BEGIN IMMEDIATE alone can succeed on a read-only connection.
             # This requires write access while changing no rows or metadata.
             self.connection.execute(
                 "UPDATE accounts SET last_login_utc=last_login_utc WHERE 0"
             )
 
-    def _validate_schema(self, version: int) -> None:
+    def _validate_schema(self) -> None:
         if self.connection.execute("PRAGMA application_id").fetchone()[
             0
         ] != APPLICATION_ID or self.connection.execute(
@@ -158,20 +173,15 @@ class AccountStore:
         columns: list[tuple[object, ...]] = self.connection.execute(
             "PRAGMA table_info(accounts)"
         ).fetchall()
-        names, ddl = {
-            1: (_COLUMNS_V1, _SCHEMA_V1),
-            2: (_COLUMNS_V2, _SCHEMA_V2),
-            3: (_COLUMNS, _SCHEMA),
-            4: (_COLUMNS, _SCHEMA),
-        }[version]
-        if [row[1] for row in columns] != names.split(", "):
+        if [row[1] for row in columns] != _COLUMNS.split(", "):
             raise SecurityStorageError("Unsupported account schema")
         schema: list[tuple[object, ...]] = self.connection.execute(
             "SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','view','trigger')"
         ).fetchall()
-        expected = {("table", "accounts", _schema_text(ddl))}
-        if version == 4:
-            expected.add(("table", "auto_login", _schema_text(_AUTO_LOGIN_SCHEMA)))
+        expected = {
+            ("table", "accounts", _schema_text(_SCHEMA)),
+            ("table", "auto_login", _schema_text(_AUTO_LOGIN_SCHEMA)),
+        }
         actual = {
             (kind, name, _schema_text(sql))
             for kind, name, sql in schema
@@ -180,11 +190,10 @@ class AccountStore:
         if len(schema) != len(expected) or actual != expected:
             raise SecurityStorageError("Unsupported account schema")
         rows: list[tuple[object, ...]] = self.connection.execute(
-            f"SELECT {names} FROM accounts"
+            f"SELECT {_COLUMNS} FROM accounts"
         ).fetchall()
         for row in rows:
-            suffix = (None, 0) if version == 1 else (0,) if version == 2 else ()
-            self.decode(row + suffix)
+            self.decode(row)
 
     @staticmethod
     def decode(row: tuple[object, ...]) -> tuple[Account, PasswordVerifier]:

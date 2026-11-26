@@ -181,13 +181,13 @@ Operator < Engineer < Administrator. Usernames are 1–64 printable characters w
 edge whitespace; uniqueness uses Unicode `casefold`, independently of SQLite's
 ASCII-only NOCASE. No username renaming or account deletion is provided.
 
-Account schema version 4 adds one optional auto-login authorization containing
-only the selected immutable account ID. Opening a valid v1, v2 or v3 database
-validates its schema and rows before migrating in one SQLite transaction.
-Existing IDs, verifiers, roles, enabled state, Last Login and rotation flags
-are preserved where present. Missing `must_change_password` flags default to
-false. Migrated and new stores start with auto login disabled. Failed migrations
-roll back.
+`security.sqlite3` must use account schema version 4. Fresh and previously
+upgraded v4 stores use the same validation. Startup and offline maintenance
+reject other versions, including 1–3, and leave their files intact. Even an
+empty unsupported store is unavailable for first Administrator setup.
+The v4 store has one optional auto-login authorization containing the selected
+immutable account ID. New stores start with auto login disabled.
+
 The verifier remains PBKDF2-HMAC-SHA256 version 1, with a random 16-byte salt,
 32-byte digest and iteration count. New passwords use 600,000 iterations; supported
 stored counts are bounded to 100,000–2,000,000. Passwords are nonempty UTF-8 text,

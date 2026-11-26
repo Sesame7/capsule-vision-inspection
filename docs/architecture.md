@@ -198,9 +198,12 @@ administrative work from replacing a newer session decision. Password work stays
 outside the session lock; short authorized transactions and their session
 publication are serialized together.
 
-The private account store validates v1/v2/v3 records and migrates them to v4 in one
-transaction, preserving IDs, verifiers, Last Login and rotation flags. The v4
-store has one optional slot for an authorized Operator account ID. LocalIdentity
+The private account store accepts only schema version 4 and validates the
+application ID, table definitions, account records and write access. Unsupported
+versions leave storage unavailable and the database intact. When a rollback
+journal is present, the owner checks the committed version on a temporary copy
+in the security directory before allowing SQLite to recover a v4 store.
+The v4 store has one optional slot for an authorized Operator account ID. LocalIdentity
 owns first setup and subsequent online mutations under its existing lease and
 audit owner. Setup leaves the session anonymous. A verified temporary password
 commits Last Login and publishes a restricted revision. Role-based commands
